@@ -1,0 +1,6 @@
+{
+  "name": "Company Management System",
+  "description": "Centralized company management web application for 4 products and Digital Marketing services with lead CRM, client database, content workflow, task tracking, payments, subscriptions, and role-based access control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

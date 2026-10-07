@@ -1,0 +1,422 @@
+@import "tailwindcss";
+
+:root {
+  /* Central Website Font & Colors:
+     Change here or via Theme Settings to update the entire application.
+     Automatic contrast text is dynamically computed for light and dark backgrounds.
+  */
+  --font-family-base: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Primary Brand Palette */
+  --primary: #33077C;
+  --primary-contrast: #ffffff;
+  --primary-dark: #432eb5;
+  --primary-light: #6a55e0;
+  --primary-surface: #4833be;
+  --primary-subtle: rgba(83, 60, 204, 0.08);
+
+  /* Accent / Action Palette */
+  --accent: #4309A2;
+  --accent-contrast: #ffffff;
+  --accent-hover: #e67e00;
+  --accent-light: #fff4e6;
+  --accent-dark: #cc7201;
+  --accent-subtle: rgba(255, 142, 1, 0.12);
+
+  /* Canvas & Surface */
+  --bg: #F5F7FA;
+  --bg-contrast: #0F172A;
+  --surface: #FFFFFF;
+  --surface-contrast: #0F172A;
+
+  /* Typography & Borders */
+  --text: #0F172A;
+  --text-muted: #64748B;
+  --border: #E2E8F0;
+}
+
+@theme {
+  --font-sans: var(--font-family-base);
+  --font-serif: var(--font-family-base);
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-primary: var(--primary);
+  --color-primary-contrast: var(--primary-contrast);
+  --color-primary-dark: var(--primary-dark);
+  --color-primary-light: var(--primary-light);
+  --color-primary-surface: var(--primary-surface);
+  --color-primary-subtle: var(--primary-subtle);
+
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-light: var(--accent-light);
+  --color-accent-dark: var(--accent-dark);
+  --color-accent-subtle: var(--accent-subtle);
+
+  --color-bg: var(--bg);
+  --color-bg-contrast: var(--bg-contrast);
+  --color-surface: var(--surface);
+  --color-surface-contrast: var(--surface-contrast);
+  --color-border: var(--border);
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 10px;
+  --radius-2xl: 10px;
+  --radius-3xl: 10px;
+  --radius: 10px;
+}
+
+html {
+  font-size: 16.5px;
+}
+
+html, body, #root {
+  font-family: var(--font-family-base);
+  font-size: 15px;
+  line-height: 1.6;
+  background-color: var(--bg);
+  color: var(--text);
+  transition: background-color 0.2s ease, color 0.2s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* High-contrast text selection specifically for dark, purple, and gradient containers (Modal Headers, Sidebar, Dark Badges) */
+.text-white *::selection,
+.text-white::selection,
+[style*="background: linear-gradient"] *::selection,
+[style*="background: linear-gradient"]::selection,
+[style*="linear-gradient"] *::selection,
+[style*="linear-gradient"]::selection,
+.bg-\[\#33077C\] *::selection,
+.bg-\[\#33077C\]::selection,
+.bg-\[\#4309A2\] *::selection,
+.bg-\[\#4309A2\]::selection,
+.sidebar-container *::selection,
+aside *::selection,
+aside::selection {
+  background-color: rgba(255, 255, 255, 0.35) !important;
+  color: #ffffff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.text-white *::-moz-selection,
+.text-white::-moz-selection,
+[style*="background: linear-gradient"] *::-moz-selection,
+[style*="background: linear-gradient"]::-moz-selection,
+[style*="linear-gradient"] *::-moz-selection,
+[style*="linear-gradient"]::-moz-selection,
+.bg-\[\#33077C\] *::-moz-selection,
+.bg-\[\#33077C\]::-moz-selection,
+.bg-\[\#4309A2\] *::-moz-selection,
+.bg-\[\#4309A2\]::-moz-selection,
+.sidebar-container *::-moz-selection,
+aside *::-moz-selection,
+aside::-moz-selection {
+  background-color: rgba(255, 255, 255, 0.35) !important;
+  color: #ffffff !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.tabular-nums,
+table td,
+table th {
+  font-family: var(--font-family-base) !important;
+}
+
+/* Global border-radius rules:
+   - Form fields (inputs, selects, textareas) and standard buttons = 4px
+   - All Cards, stat cards, panels, and modals = 10px
+*/
+button:not(.rounded-full):not(.dropdown-item):not(.sidebar-link):not(.sidebar-sublink),
+input:not([type="checkbox"]):not([type="radio"]):not(.rounded-full),
+select,
+textarea,
+.btn {
+  border-radius: 4px !important;
+}
+
+.card,
+.modal-card,
+.stat-card,
+.rounded-xl,
+.rounded-2xl {
+  border-radius: 10px !important;
+}
+
+.dropdown-menu {
+  border-radius: 12px !important;
+}
+
+.dropdown-item {
+  border-radius: 8px !important;
+}
+
+/* Ensure all buttons, inputs, textareas, selects, and nested components inherit the font and line-height */
+input, select, textarea, button, optgroup, table {
+  font-family: inherit;
+  line-height: inherit;
+}
+
+/* Dynamic Brand Utility Classes with Automatic Contrast Text */
+.bg-brand, .bg-primary {
+  background-color: var(--primary) !important;
+  color: var(--primary-contrast) !important;
+}
+
+.text-brand, .text-primary {
+  color: var(--primary) !important;
+}
+
+.border-brand, .border-primary {
+  border-color: var(--primary) !important;
+}
+
+.bg-accent {
+  background-color: var(--accent) !important;
+  color: var(--accent-contrast) !important;
+}
+
+.text-accent {
+  color: var(--accent) !important;
+}
+
+.border-accent {
+  border-color: var(--accent) !important;
+}
+
+.bg-surface {
+  background-color: var(--surface) !important;
+  color: var(--surface-contrast) !important;
+}
+
+.bg-app {
+  background-color: var(--bg) !important;
+  color: var(--bg-contrast) !important;
+}
+
+.text-primary-contrast {
+  color: var(--primary-contrast) !important;
+}
+
+.text-accent-contrast {
+  color: var(--accent-contrast) !important;
+}
+
+.text-surface-contrast {
+  color: var(--surface-contrast) !important;
+}
+
+.text-bg-contrast {
+  color: var(--bg-contrast) !important;
+}
+
+.card {
+  background: var(--surface);
+  color: var(--surface-contrast);
+  border: 1px solid var(--border);
+  border-radius: 10px !important;
+}
+
+.sidebar-container {
+  background-color: #33077C;
+  color: #FFFFFF;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 14px;
+  color: rgba(255, 255, 255, 0.75);
+  opacity: 1;
+  font-size: 14.5px;
+  line-height: 1.5;
+  font-weight: 500;
+  border-radius: 10px;
+  text-decoration: none;
+  background: transparent;
+  transition: all 0.15s ease-in-out;
+}
+
+.sidebar-link:hover {
+  opacity: 1;
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-link.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.15);
+  font-weight: 800 !important;
+  color: #FFFFFF !important;
+  box-shadow: none;
+  border: none;
+}
+
+.sidebar-link.active span {
+  font-weight: 800 !important;
+  color: #FFFFFF !important;
+}
+
+.sidebar-sublink {
+  padding-left: 36px !important;
+}
+
+.stat-icon {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  padding: 10px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badge-status {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+/* Custom geometric scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar,
+#main-sidebar nav::-webkit-scrollbar {
+  display: none;
+  width: 0px;
+  background: transparent;
+}
+.no-scrollbar,
+#main-sidebar nav {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+/* ========================================================================= */
+/* PRINT STYLESHEET: HIGH-FIDELITY INVOICE PRINTING */
+/* ========================================================================= */
+@media print {
+  /* Suppresses browser default headers and footers (URL, title, date, page numbers) */
+  @page {
+    size: A4 portrait;
+    margin: 0mm !important;
+  }
+
+  /* 1. Force all background colors, gradients, and borders to print exactly */
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 2. Reset document root and layout containers & hide all scrollbars */
+  *,
+  *::before,
+  *::after {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+  *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  .overflow-x-auto,
+  div[class*="overflow-"] {
+    overflow: visible !important;
+  }
+
+  html,
+  body,
+  #root {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 13.5px !important;
+  }
+
+  /* 3. Hide all non-printable UI: Sidebar, Header, Toasts, Action buttons */
+  aside,
+  header,
+  nav,
+  #main-sidebar,
+  .sidebar,
+  .navbar,
+  .print-hidden,
+  [data-no-print],
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+
+  /* 4. Reset flex containers to avoid overflow clipping */
+  .flex.h-screen,
+  .flex-1.flex.flex-col,
+  .flex-1.overflow-y-auto,
+  main {
+    display: block !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: transparent !important;
+  }
+
+  /* 5. Printable Invoice Container with clean page padding */
+  .invoice-printable-document {
+    display: block !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 10mm 14mm 10mm 14mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 6. Prevent awkward page breaks */
+  .break-inside-avoid,
+  .invoice-ribbon-header,
+  .invoice-summary-ribbon,
+  .invoice-signature-section,
+  tr,
+  table {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
