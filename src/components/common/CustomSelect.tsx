@@ -78,8 +78,23 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
     <div ref={containerRef} className={`relative select-none ${className} ${isOpen ? 'z-50' : 'z-auto'}`}>
       {/* Select Trigger Box */}
       <div
+        tabIndex={0}
+        role="button"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
         onClick={toggleDropdown}
-        className={`w-full ${size === 'sm' ? 'h-9 px-3 text-xs' : 'h-11 px-4 text-xs sm:text-[13px]'} bg-white hover:bg-slate-50/60 border font-medium text-slate-800 rounded-xl flex items-center justify-between cursor-pointer transition-all ${
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleDropdown();
+          } else if (e.key === 'Escape' && isOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsOpen(false);
+          }
+        }}
+        className={`w-full ${size === 'sm' ? 'h-9 px-3 text-xs' : 'h-11 px-4 text-xs sm:text-[13px]'} bg-white hover:bg-slate-50/60 border font-medium text-slate-800 rounded-xl flex items-center justify-between cursor-pointer transition-all focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 ${
           isOpen
             ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 shadow-xs'
             : 'border-slate-200 hover:border-slate-300'

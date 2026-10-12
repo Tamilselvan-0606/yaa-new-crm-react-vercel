@@ -27,12 +27,15 @@ import {
   Camera,
   User,
   RotateCcw,
+  Loader2,
+  FileCheck2,
 } from "lucide-react";
 import {
   useSalesManagementStore,
   SalePaymentIn,
   PaymentInType,
   SalesCustomer,
+  SaleTransaction,
 } from "../../../store/useSalesManagementStore";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -40,7 +43,17 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { UniversalShareDropdown, formatPaymentInShare } from "../../../utils/shareUtils";
 import { toast } from "sonner";
+import {
+  commercePaymentInApi,
+  mapApiPaymentInToSalePaymentIn,
+  mapSalePaymentInToApiPayload,
+  UUID_REGEX,
+  PaymentInFilterParams,
+} from "../../../api/commerce/paymentInApi";
+import { customerApi, mapApiCustomerToSalesCustomer } from "../../../api/commerce/customerApi";
+import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from "../../../api/commerce/invoiceApi";
 
 // Helper for DD/MM/YYYY <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -156,11 +169,22 @@ const PERIOD_OPTIONS = [
 export const PaymentInView: React.FC = () => {
   const {
     customers,
-    paymentIns = [],
+    setCustomersList,
+    sales,
+    setSalesList,
     savePaymentIn,
-    deletePaymentIn,
+    deletePaymentIn: deleteStorePaymentIn,
     saveCustomer,
   } = useSalesManagementStore();
+
+  // API & List State
+  const [paymentIns, setPaymentIns] = useState<SalePaymentIn[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [serverTotal, setServerTotal] = useState(0);
+  const isFetchingRef = useRef(false);
+  const hasLoadedPrereqs = useRef(false);
 
   // Filter States
   const [selectedPeriod, setSelectedPeriod] = useState<string>("This Month");
@@ -178,6 +202,14 @@ export const PaymentInView: React.FC = () => {
   const [selectedPaymentType, setSelectedPaymentType] = useState<string>("All");
   const [pendingSearch, setPendingSearch] = useState<string>("");
   const [appliedSearch, setAppliedSearch] = useState<string>("");
+
+  // Debounce search query to prevent excessive API invocations
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppliedSearch(pendingSearch.trim());
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [pendingSearch]);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -218,6 +250,8 @@ export const PaymentInView: React.FC = () => {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedCustomerObj, setSelectedCustomerObj] =
     useState<SalesCustomer | null>(null);
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
+  const [selectedInvoiceNo, setSelectedInvoiceNo] = useState("");
   const [formPaymentType, setFormPaymentType] = useState<PaymentInType>("Cash");
   const [formReceiptNo, setFormReceiptNo] = useState("");
   const [formDate, setFormDate] = useState(
@@ -226,8 +260,8 @@ export const PaymentInView: React.FC = () => {
   const [formReceivedAmount, setFormReceivedAmount] = useState("");
   const [formReferenceNo, setFormReferenceNo] = useState("");
   const [formStatus, setFormStatus] = useState<
-    "Received" | "Cleared" | "In Process"
-  >("Received");
+    "Completed" | "Received" | "Cleared" | "In Process"
+  >("Completed");
   const [formDescription, setFormDescription] = useState("");
   const [imageAttachment, setImageAttachment] = useState<string | null>(null);
 
@@ -251,6 +285,109 @@ export const PaymentInView: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const partySelectDropdownRef = useRef<HTMLDivElement>(null);
+
+  // -------------------------------------------------------------
+  // API: Fetch Payment-In list with current filters and pagination
+  // -------------------------------------------------------------
+  const fetchPaymentIns = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    setIsFetching(true);
+    try {
+      const params: PaymentInFilterParams = {
+        page_no: currentPage,
+        page_size: pageSize,
+        pagination_required: true,
+        sortOrder: "desc",
+      };
+
+      if (appliedSearch) {
+        params.search = appliedSearch;
+      }
+      if (startDate) params.from = startDate;
+      if (endDate) params.to = endDate;
+
+      if (
+        selectedPeriod &&
+        selectedPeriod !== "All Time" &&
+        selectedPeriod !== "Custom"
+      ) {
+        const pMap: Record<string, string> = {
+          Today: "today",
+          "This Week": "this_week",
+          "This Month": "this_month",
+          "Last Month": "last_month",
+          "This Quarter": "this_quarter",
+          "This Year": "this_year",
+        };
+        if (pMap[selectedPeriod]) params.period = pMap[selectedPeriod];
+      }
+
+      if (selectedPaymentType && selectedPaymentType !== "All") {
+        params.paymentType = selectedPaymentType;
+      }
+
+      if (selectedFirm && selectedFirm !== "All" && UUID_REGEX.test(selectedFirm)) {
+        params.customerId = selectedFirm;
+      }
+
+      const res = await commercePaymentInApi.getPaymentIns(params);
+      if (res?.success && Array.isArray(res.data)) {
+        const mapped = res.data.map(mapApiPaymentInToSalePaymentIn);
+        setPaymentIns(mapped);
+        if (res.pagination?.totalRecords !== undefined) {
+          setServerTotal(res.pagination.totalRecords);
+        } else {
+          setServerTotal(mapped.length);
+        }
+      }
+    } catch (err: any) {
+      console.warn("Commerce Payments In API returned error:", err?.message || err);
+    } finally {
+      setIsFetching(false);
+      setIsInitialLoading(false);
+      isFetchingRef.current = false;
+    }
+  }, [
+    currentPage,
+    pageSize,
+    appliedSearch,
+    startDate,
+    endDate,
+    selectedPeriod,
+    selectedPaymentType,
+    selectedFirm,
+  ]);
+
+  // Load Customers & Invoices for linking if not loaded (Runs once on mount)
+  useEffect(() => {
+    if (hasLoadedPrereqs.current) return;
+    hasLoadedPrereqs.current = true;
+    const loadPrerequisites = async () => {
+      try {
+        const [custRes, invRes] = await Promise.all([
+          customerApi.getCustomers({ pagination_required: false }),
+          commerceInvoiceApi.getInvoices({ pagination_required: false }),
+        ]);
+        if (custRes?.success && Array.isArray(custRes.data)) {
+          const mappedCusts = custRes.data.map(mapApiCustomerToSalesCustomer);
+          setCustomersList(mappedCusts);
+        }
+        if (invRes?.success && Array.isArray(invRes.data)) {
+          const mappedInvs = invRes.data.map(mapApiInvoiceToSaleTransaction);
+          setSalesList(mappedInvs);
+        }
+      } catch (e) {
+        console.warn("Prerequisites fetch failed:", e);
+      }
+    };
+    loadPrerequisites();
+  }, [setCustomersList, setSalesList]);
+
+  // Trigger list fetch on dependency changes
+  useEffect(() => {
+    fetchPaymentIns();
+  }, [fetchPaymentIns]);
 
   // Close dropdowns on outside click or scroll
   useEffect(() => {
@@ -340,14 +477,15 @@ export const PaymentInView: React.FC = () => {
       setStartDate(start.toISOString().split("T")[0]);
       setEndDate(end.toISOString().split("T")[0]);
     } else if (period === "All Time") {
-      setStartDate("2020-01-01");
-      setEndDate("2030-12-31");
+      setStartDate("");
+      setEndDate("");
     }
+    setCurrentPage(1);
   };
 
   // Calculate Next Receipt Number
   const getNextReceiptNo = useCallback((): string => {
-    if (paymentIns.length === 0) return "1";
+    if (paymentIns.length === 0) return `PAY-${new Date().getFullYear()}-0001`;
     const numbers = paymentIns
       .map((p) => {
         const num = parseInt(p.receiptNo.replace(/\D/g, ""), 10);
@@ -355,7 +493,7 @@ export const PaymentInView: React.FC = () => {
       })
       .filter((n) => n > 0);
     const max = numbers.length > 0 ? Math.max(...numbers) : 0;
-    return String(max + 1);
+    return `PAY-${new Date().getFullYear()}-${String(max + 1).padStart(4, "0")}`;
   }, [paymentIns]);
 
   // Open Create Modal
@@ -363,13 +501,15 @@ export const PaymentInView: React.FC = () => {
     setEditingPaymentIn(null);
     setSelectedCustomerId(customer?.id || "");
     setSelectedCustomerObj(customer || null);
+    setSelectedInvoiceId("");
+    setSelectedInvoiceNo("");
     setFormPartyQuery(customer ? customer.name : "");
     setFormPaymentType("Cash");
     setFormReceiptNo(getNextReceiptNo());
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormReceivedAmount("");
     setFormReferenceNo("");
-    setFormStatus("Received");
+    setFormStatus("Completed");
     setFormDescription("");
     setImageAttachment(null);
     setIsCreateModalOpen(true);
@@ -385,16 +525,48 @@ export const PaymentInView: React.FC = () => {
         c.name.toLowerCase() === item.partyName.toLowerCase(),
     );
     setSelectedCustomerObj(foundCust || null);
+    setSelectedInvoiceId(item.invoiceId || "");
+    setSelectedInvoiceNo(item.invoiceNo || "");
     setFormPartyQuery(item.partyName);
-    setFormPaymentType(item.paymentType);
+    setFormPaymentType(item.paymentType || "Cash");
     setFormReceiptNo(item.receiptNo);
     setFormDate(item.date ? item.date.split("T")[0] : new Date().toISOString().split("T")[0]);
     setFormReceivedAmount(String(item.receivedAmount));
     setFormReferenceNo(item.referenceNo || "");
-    setFormStatus((item.status as any) || "Received");
-    setFormDescription(item.description || "");
+    setFormStatus((item.status as any) || "Completed");
+    setFormDescription(item.description || item.notes || "");
     setImageAttachment(item.imageAttachment || null);
     setIsCreateModalOpen(true);
+  };
+
+  // Handle Linked Invoice selection change
+  const handleInvoiceSelect = (invId: string) => {
+    setSelectedInvoiceId(invId);
+    if (!invId) {
+      setSelectedInvoiceNo("");
+      return;
+    }
+    const inv = sales.find((s) => s.id === invId);
+    if (inv) {
+      setSelectedInvoiceNo(inv.invoiceNo);
+      if (!selectedCustomerId) {
+        setSelectedCustomerId(inv.customerId);
+        const cust = customers.find((c) => c.id === inv.customerId);
+        if (cust) {
+          setSelectedCustomerObj(cust);
+          setFormPartyQuery(cust.name);
+        } else {
+          setFormPartyQuery(inv.customerName);
+        }
+      }
+      if (!formReceivedAmount || Number(formReceivedAmount) <= 0) {
+        const bal = inv.balance > 0 ? inv.balance : inv.grandTotal;
+        setFormReceivedAmount(String(bal));
+      }
+      if (!formDescription) {
+        setFormDescription(`Payment against Invoice ${inv.invoiceNo}`);
+      }
+    }
   };
 
   // Filtered Customer Candidates for Modal Dropdown
@@ -410,7 +582,7 @@ export const PaymentInView: React.FC = () => {
   }, [customers, formPartyQuery]);
 
   // Handle Create Quick Customer
-  const handleCreateQuickCustomer = () => {
+  const handleCreateQuickCustomer = async () => {
     if (!newCustomerName.trim()) {
       toast.error("Customer name is required");
       return;
@@ -439,10 +611,33 @@ export const PaymentInView: React.FC = () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    saveCustomer(newCust);
-    setSelectedCustomerId(newCust.id);
-    setSelectedCustomerObj(newCust);
-    setFormPartyQuery(newCust.name);
+
+    try {
+      const res = await customerApi.createCustomer({
+        name: newCust.name,
+        phone: newCust.phone !== "N/A" ? newCust.phone : undefined,
+        company: newCust.company || undefined,
+        customerType: "Business",
+      });
+      if (res?.success && res.data) {
+        const mapped = mapApiCustomerToSalesCustomer(res.data);
+        saveCustomer(mapped);
+        setSelectedCustomerId(mapped.id);
+        setSelectedCustomerObj(mapped);
+        setFormPartyQuery(mapped.name);
+      } else {
+        saveCustomer(newCust);
+        setSelectedCustomerId(newCust.id);
+        setSelectedCustomerObj(newCust);
+        setFormPartyQuery(newCust.name);
+      }
+    } catch {
+      saveCustomer(newCust);
+      setSelectedCustomerId(newCust.id);
+      setSelectedCustomerObj(newCust);
+      setFormPartyQuery(newCust.name);
+    }
+
     setIsQuickCustomerOpen(false);
     setNewCustomerName("");
     setNewCustomerPhone("");
@@ -490,7 +685,19 @@ export const PaymentInView: React.FC = () => {
   };
 
   // Print Receipt Slip
-  const handlePrintReceipt = useCallback((item: SalePaymentIn) => {
+  const handlePrintReceipt = useCallback(async (item: SalePaymentIn) => {
+    let activeItem = item;
+    if (UUID_REGEX.test(item.id)) {
+      try {
+        const singleRes = await commercePaymentInApi.getPaymentInById(item.id);
+        if (singleRes?.success && singleRes.data) {
+          activeItem = mapApiPaymentInToSalePaymentIn(singleRes.data);
+        }
+      } catch (e) {
+        console.warn("Could not fetch latest receipt details for print:", e);
+      }
+    }
+
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast.error("Popup blocked. Please allow popups for this site.");
@@ -500,7 +707,7 @@ export const PaymentInView: React.FC = () => {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Payment Receipt #${item.receiptNo}</title>
+        <title>Payment Receipt #${activeItem.receiptNo}</title>
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
           body {
@@ -563,34 +770,35 @@ export const PaymentInView: React.FC = () => {
             <div class="title">PAYMENT RECEIPT</div>
             <div style="font-size: 12px; color: #64748b; margin-top: 4px;">OFFICIAL CASH/BANK VOUCHER</div>
           </div>
-          <div class="badge">RECEIPT #${item.receiptNo}</div>
+          <div class="badge">RECEIPT #${activeItem.receiptNo}</div>
         </div>
 
         <div class="grid">
           <div class="card">
             <div class="label">Received From (Party)</div>
-            <div class="val">${item.partyName}</div>
-            ${item.customerCompany ? `<div style="font-size:12px; color:#64748b; margin-top:2px;">${item.customerCompany}</div>` : ""}
-            ${item.customerPhone ? `<div style="font-size:12px; color:#64748b;">${item.customerPhone}</div>` : ""}
+            <div class="val">${activeItem.partyName}</div>
+            ${activeItem.customerCompany ? `<div style="font-size:12px; color:#64748b; margin-top:2px;">${activeItem.customerCompany}</div>` : ""}
+            ${activeItem.customerPhone ? `<div style="font-size:12px; color:#64748b;">${activeItem.customerPhone}</div>` : ""}
           </div>
           <div class="card">
             <div class="label">Receipt Details</div>
-            <div style="font-size:13px; margin-bottom:4px;"><strong>Date:</strong> ${isoToDdmmyyyy(item.date)}</div>
-            <div style="font-size:13px;"><strong>Mode:</strong> ${item.paymentType}</div>
+            <div style="font-size:13px; margin-bottom:4px;"><strong>Date:</strong> ${isoToDdmmyyyy(activeItem.date)}</div>
+            <div style="font-size:13px; margin-bottom:4px;"><strong>Mode:</strong> ${activeItem.paymentType}</div>
+            ${activeItem.invoiceNo ? `<div style="font-size:13px;"><strong>Linked Invoice:</strong> ${activeItem.invoiceNo}</div>` : ""}
           </div>
         </div>
 
         <div class="amount-box">
           <div class="label" style="color:#33077C;">Amount Received</div>
-          <div class="amount">₹ ${item.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-          <div class="words">${numberToWords(item.receivedAmount)}</div>
+          <div class="amount">₹ ${activeItem.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
+          <div class="words">${numberToWords(activeItem.receivedAmount)}</div>
         </div>
 
         ${
-          item.description
+          activeItem.description
             ? `<div class="card" style="margin-bottom:24px;">
                 <div class="label">Remarks / Description</div>
-                <div style="font-size:13px; color:#334155;">${item.description}</div>
+                <div style="font-size:13px; color:#334155;">${activeItem.description}</div>
                </div>`
             : ""
         }
@@ -636,6 +844,7 @@ export const PaymentInView: React.FC = () => {
         `Date: ${isoToDdmmyyyy(item.date)}\n` +
         `Payment Mode: ${item.paymentType}\n` +
         `Amount Received: ₹${item.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n` +
+        (item.invoiceNo ? `Linked Invoice: ${item.invoiceNo}\n` : "") +
         (item.referenceNo
           ? `Reference / Cheque No: ${item.referenceNo}\n`
           : "") +
@@ -658,6 +867,7 @@ export const PaymentInView: React.FC = () => {
         `*Date:* ${isoToDdmmyyyy(item.date)}\n` +
         `*Payment Mode:* ${item.paymentType}\n` +
         `*Amount Received:* ₹${item.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n` +
+        (item.invoiceNo ? `*Linked Invoice:* ${item.invoiceNo}\n` : "") +
         (item.referenceNo ? `*Ref / Txn No:* ${item.referenceNo}\n` : "") +
         (item.description ? `*Note:* ${item.description}\n` : "") +
         `\nThank you for choosing YAA CRM!`,
@@ -669,35 +879,61 @@ export const PaymentInView: React.FC = () => {
     toast.success(`Opening WhatsApp for Receipt #${item.receiptNo}`);
   };
 
-  // Delete Payment Record
-  const handleDeletePayment = (id: string, receiptNo: string) => {
+  // Delete / Void Payment Record via Backend API
+  const handleDeletePayment = async (id: string, receiptNo: string) => {
     if (
       window.confirm(
-        `Are you sure you want to delete payment receipt #${receiptNo}?`,
+        `Are you sure you want to void payment receipt #${receiptNo}? This will mark it cancelled and re-open any linked invoice balance.`,
       )
     ) {
-      deletePaymentIn(id);
-      toast.success(`Payment-In #${receiptNo} deleted`);
+      try {
+        if (UUID_REGEX.test(id)) {
+          await commercePaymentInApi.deletePaymentIn(id);
+        }
+        setPaymentIns((prev) => prev.filter((p) => p.id !== id));
+        deleteStorePaymentIn(id);
+        toast.success(`Payment-In #${receiptNo} voided successfully`);
+        fetchPaymentIns();
+      } catch (err: any) {
+        console.error("Failed to void payment:", err);
+        const msg =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          "Failed to void payment receipt";
+        toast.error(msg);
+      }
     }
   };
 
   // Duplicate Payment Record
   const handleDuplicatePayment = (item: SalePaymentIn) => {
     const nextNo = getNextReceiptNo();
-    const duplicated: SalePaymentIn = {
-      ...item,
-      id: `payin_${Date.now()}`,
-      receiptNo: nextNo,
-      date: new Date().toISOString().split("T")[0],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    savePaymentIn(duplicated);
-    toast.success(`Duplicated Payment-In #${item.receiptNo} as #${nextNo}!`);
+    setEditingPaymentIn(null);
+    setSelectedCustomerId(item.customerId || "");
+    const foundCust = customers.find(
+      (c) =>
+        c.id === item.customerId ||
+        c.name.toLowerCase() === item.partyName.toLowerCase(),
+    );
+    setSelectedCustomerObj(foundCust || null);
+    setSelectedInvoiceId(item.invoiceId || "");
+    setSelectedInvoiceNo(item.invoiceNo || "");
+    setFormPartyQuery(item.partyName);
+    setFormPaymentType(item.paymentType || "Cash");
+    setFormReceiptNo(nextNo);
+    setFormDate(new Date().toISOString().split("T")[0]);
+    setFormReceivedAmount(String(item.receivedAmount));
+    setFormReferenceNo("");
+    setFormStatus("Completed");
+    setFormDescription(item.description ? `Copy: ${item.description}` : "");
+    setImageAttachment(null);
+    setIsCreateModalOpen(true);
+    toast.info(`Configuring duplicate of Receipt #${item.receiptNo}`);
   };
 
-  // Save / Submit Payment-In
-  const handleSavePayment = useCallback(() => {
+  // Save / Submit Payment-In (Create or Update via Backend API)
+  const handleSavePayment = useCallback(async () => {
     if (!selectedCustomerId && !formPartyQuery.trim()) {
       toast.error("Please select or enter a party / customer name");
       return;
@@ -724,34 +960,72 @@ export const PaymentInView: React.FC = () => {
           c.name.toLowerCase() === partyName.toLowerCase(),
       );
 
-    const paymentRecord: SalePaymentIn = {
-      id: editingPaymentIn ? editingPaymentIn.id : `payin_${Date.now()}`,
-      receiptNo: formReceiptNo.trim(),
-      customerId: matchedCustomer?.id || selectedCustomerId || undefined,
-      partyName,
-      customerPhone: matchedCustomer?.phone || undefined,
-      customerCompany: matchedCustomer?.company || undefined,
-      date: formDate,
-      paymentType: formPaymentType,
-      receivedAmount: amountNum,
-      referenceNo: formReferenceNo.trim() || undefined,
-      description: formDescription.trim() || undefined,
-      imageAttachment: imageAttachment || undefined,
-      status: (formStatus as any) || "Received",
-      createdAt: editingPaymentIn
-        ? editingPaymentIn.createdAt
-        : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    } as any;
+    setIsSaving(true);
+    try {
+      const payload = mapSalePaymentInToApiPayload({
+        receiptNo: formReceiptNo.trim(),
+        customerId:
+          matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id)
+            ? matchedCustomer.id
+            : selectedCustomerId && UUID_REGEX.test(selectedCustomerId)
+              ? selectedCustomerId
+              : undefined,
+        partyName,
+        customerPhone: matchedCustomer?.phone || undefined,
+        customerCompany: matchedCustomer?.company || undefined,
+        date: formDate,
+        paymentType: formPaymentType,
+        receivedAmount: amountNum,
+        referenceNo: formReferenceNo.trim() || undefined,
+        description: formDescription.trim() || undefined,
+        notes: formDescription.trim() || undefined,
+        imageAttachment: imageAttachment || undefined,
+        status: formStatus || "Completed",
+        invoiceNo: selectedInvoiceNo || undefined,
+        invoiceId:
+          selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId)
+            ? selectedInvoiceId
+            : undefined,
+      });
 
-    savePaymentIn(paymentRecord);
-    setIsCreateModalOpen(false);
+      if (
+        editingPaymentIn &&
+        editingPaymentIn.id &&
+        UUID_REGEX.test(editingPaymentIn.id)
+      ) {
+        const res = await commercePaymentInApi.updatePaymentIn(
+          editingPaymentIn.id,
+          payload,
+        );
+        if (res?.success && res.data) {
+          const mapped = mapApiPaymentInToSalePaymentIn(res.data);
+          setPaymentIns((prev) => prev.map((p) => (p.id === mapped.id ? mapped : p)));
+          savePaymentIn(mapped);
+          toast.success(`Payment-In #${mapped.receiptNo} updated successfully!`);
+        }
+      } else {
+        const res = await commercePaymentInApi.createPaymentIn(payload);
+        if (res?.success && res.data) {
+          const mapped = mapApiPaymentInToSalePaymentIn(res.data);
+          setPaymentIns((prev) => [mapped, ...prev]);
+          savePaymentIn(mapped);
+          toast.success(`Payment-In #${mapped.receiptNo} recorded successfully!`);
+        }
+      }
 
-    toast.success(
-      editingPaymentIn
-        ? `Payment-In #${paymentRecord.receiptNo} updated successfully`
-        : `Payment-In #${paymentRecord.receiptNo} created successfully`,
-    );
+      setIsCreateModalOpen(false);
+      fetchPaymentIns();
+    } catch (err: any) {
+      console.error("Failed to save payment receipt:", err);
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to save payment receipt";
+      toast.error(msg);
+    } finally {
+      setIsSaving(false);
+    }
   }, [
     selectedCustomerId,
     formPartyQuery,
@@ -766,14 +1040,17 @@ export const PaymentInView: React.FC = () => {
     formDescription,
     imageAttachment,
     formStatus,
+    selectedInvoiceNo,
+    selectedInvoiceId,
     savePaymentIn,
+    fetchPaymentIns,
   ]);
 
   // Keyboard shortcut: Alt+S or Ctrl+S to save modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.altKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
-        if (isCreateModalOpen) {
+        if (isCreateModalOpen && !isSaving) {
           e.preventDefault();
           handleSavePayment();
         }
@@ -781,93 +1058,41 @@ export const PaymentInView: React.FC = () => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isCreateModalOpen, handleSavePayment]);
+  }, [isCreateModalOpen, isSaving, handleSavePayment]);
 
-  // Filtered Payments Calculation with robust date parsing
-  const filteredPaymentIns = useMemo(() => {
-    return paymentIns.filter((item) => {
-      const itemDateStr = (item.date || "").split("T")[0];
-
-      // Date filter
-      if (startDate && itemDateStr < startDate) return false;
-      if (endDate && itemDateStr > endDate) return false;
-
-      // Firm / Customer filter
-      if (selectedFirm !== "All") {
-        const selectedCust = customers.find((c) => c.id === selectedFirm);
-        const matchId = item.customerId === selectedFirm;
-        const matchName =
-          selectedCust &&
-          item.partyName?.toLowerCase() === selectedCust.name.toLowerCase();
-        if (!matchId && !matchName) return false;
-      }
-
-      // Payment Type filter
-      if (
-        selectedPaymentType !== "All" &&
-        item.paymentType !== selectedPaymentType
-      ) {
-        return false;
-      }
-
-      // Search Query filter
-      if (appliedSearch && appliedSearch.trim()) {
-        const q = appliedSearch.toLowerCase().trim();
-        const matchParty = item.partyName?.toLowerCase().includes(q);
-        const matchReceipt = item.receiptNo?.toLowerCase().includes(q);
-        const matchPhone = item.customerPhone?.toLowerCase().includes(q);
-        const matchDesc = item.description?.toLowerCase().includes(q);
-        if (!matchParty && !matchReceipt && !matchPhone && !matchDesc) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-  }, [
-    paymentIns,
-    customers,
-    startDate,
-    endDate,
-    selectedFirm,
-    selectedPaymentType,
-    appliedSearch,
-  ]);
-
-  // Aggregate Metrics
+  // Aggregate Metrics directly from the fetched payments
   const totalAmount = useMemo(() => {
-    return filteredPaymentIns.reduce(
+    return paymentIns.reduce(
       (acc, curr) => acc + (curr.receivedAmount || 0),
       0,
     );
-  }, [filteredPaymentIns]);
+  }, [paymentIns]);
 
   const cashCollections = useMemo(() => {
-    return filteredPaymentIns
+    return paymentIns
       .filter((p) => p.paymentType === "Cash")
       .reduce((acc, curr) => acc + (curr.receivedAmount || 0), 0);
-  }, [filteredPaymentIns]);
+  }, [paymentIns]);
 
   const onlineCollections = useMemo(() => {
-    return filteredPaymentIns
+    return paymentIns
       .filter((p) => p.paymentType !== "Cash")
       .reduce((acc, curr) => acc + (curr.receivedAmount || 0), 0);
-  }, [filteredPaymentIns]);
+  }, [paymentIns]);
 
-  // Paged Payments
+  // The backend already handles pagination, so paymentIns contains the current page slice
   const pagedPaymentIns = useMemo(() => {
-    const startIdx = (currentPage - 1) * pageSize;
-    return filteredPaymentIns.slice(startIdx, startIdx + pageSize);
-  }, [filteredPaymentIns, currentPage, pageSize]);
+    return paymentIns;
+  }, [paymentIns]);
 
   // Export to Excel
   const handleExportCSV = () => {
-    if (filteredPaymentIns.length === 0) {
+    if (paymentIns.length === 0) {
       toast.error("No payment records to export");
       return;
     }
 
-    const excelRows = filteredPaymentIns.map((p, idx) => ({
+    const excelRows = paymentIns.map((p, idx) => ({
       srNo: idx + 1,
       receiptNo: p.receiptNo,
       date: isoToDdmmyyyy(p.date),
@@ -875,7 +1100,7 @@ export const PaymentInView: React.FC = () => {
       customerPhone: p.customerPhone || "-",
       paymentType: p.paymentType,
       receivedAmount: Number(p.receivedAmount || 0),
-      status: p.status || "Received",
+      status: p.status || "Completed",
       description: p.description || "-",
     }));
 
@@ -883,7 +1108,7 @@ export const PaymentInView: React.FC = () => {
       filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Payment Receipts",
       title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${filteredPaymentIns.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
@@ -914,13 +1139,13 @@ export const PaymentInView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         srNo: "TOTAL",
-        partyName: `${filteredPaymentIns.length} Receipts`,
+        partyName: `${paymentIns.length} Receipts`,
         receivedAmount: totalAmount,
       },
     });
 
     toast.success(
-      `Payment-In Excel report downloaded (${filteredPaymentIns.length} records)!`,
+      `Payment-In Excel report downloaded (${paymentIns.length} records)!`,
     );
   };
 
@@ -947,8 +1172,11 @@ export const PaymentInView: React.FC = () => {
                 Payment-In
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {paymentIns.length} total
+                {serverTotal || paymentIns.length} total
               </span>
+              {isFetching && (
+                <Loader2 className="w-4 h-4 text-[#33077C] animate-spin" />
+              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Record customer payment receipts, track cash in counter, and monitor digital settlements.
@@ -995,40 +1223,40 @@ export const PaymentInView: React.FC = () => {
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {filteredPaymentIns.length} recorded payments
+              {paymentIns.length} recorded receipts
             </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-            <CreditCard className="w-5 h-5" />
+          <div className="w-11 h-11 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold">
+            <IndianRupee className="w-5 h-5 stroke-[2.5]" />
           </div>
         </div>
 
-        {/* Card 2: Cash Received */}
+        {/* Card 2: Cash in Hand */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4.5 sm:p-5 shadow-xs flex items-center justify-between">
           <div>
-            <div className="text-[11px] sm:text-xs font-bold text-emerald-700 uppercase tracking-wider">
-              Cash Received
+            <div className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Cash In Hand
             </div>
-            <div className="text-xl sm:text-2xl font-black text-emerald-700 mt-1">
+            <div className="text-xl sm:text-2xl font-black text-emerald-600 mt-1">
               ₹
               {cashCollections.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              Cash in counter
+              Cash drawer deposits
             </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
-            <IndianRupee className="w-5 h-5" />
+          <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+            <TrendingUp className="w-5 h-5 stroke-[2.5]" />
           </div>
         </div>
 
-        {/* Card 3: Online / Digital */}
+        {/* Card 3: Online Collections */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4.5 sm:p-5 shadow-xs flex items-center justify-between">
           <div>
-            <div className="text-[11px] sm:text-xs font-bold text-blue-600 uppercase tracking-wider">
-              Online / Bank / UPI
+            <div className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Online / Digital
             </div>
             <div className="text-xl sm:text-2xl font-black text-blue-600 mt-1">
               ₹
@@ -1037,11 +1265,11 @@ export const PaymentInView: React.FC = () => {
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              Digital settlements
+              UPI, Bank NEFT, Card
             </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold shrink-0">
-            <TrendingUp className="w-5 h-5" />
+          <div className="w-11 h-11 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+            <CreditCard className="w-5 h-5 stroke-[2.5]" />
           </div>
         </div>
 
@@ -1049,46 +1277,48 @@ export const PaymentInView: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4.5 sm:p-5 shadow-xs flex items-center justify-between">
           <div>
             <div className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Avg. Per Receipt
+              Avg. Receipt Size
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
               ₹
-              {filteredPaymentIns.length > 0
-                ? (totalAmount / filteredPaymentIns.length).toLocaleString(
+              {paymentIns.length > 0
+                ? (totalAmount / paymentIns.length).toLocaleString(
                     "en-IN",
-                    { maximumFractionDigits: 0 },
+                    {
+                      maximumFractionDigits: 0,
+                    },
                   )
                 : "0"}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              Average collection size
+              Per collection voucher
             </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
+            <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
           </div>
         </div>
       </div>
 
-      {/* 3. SEARCH BAR & FILTER ROW */}
+      {/* 3. FILTER BAR */}
       <SearchBar
         value={pendingSearch}
         onChange={(val) => {
           setPendingSearch(val);
-          setAppliedSearch(val);
-        }}
-        placeholder="Search by party name, receipt #, phone, notes..."
-        onSubmit={() => {
-          setAppliedSearch(pendingSearch);
           setCurrentPage(1);
         }}
-        onReset={handleResetFilters}
+        onSubmit={(val) => {
+          setPendingSearch(val);
+          setAppliedSearch(val.trim());
+          setCurrentPage(1);
+        }}
+        placeholder="Search by party, receipt #, phone, or remarks..."
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               options={PERIOD_OPTIONS}
               value={selectedPeriod}
-              onChange={(val) => handlePeriodChange(val)}
+              onChange={handlePeriodChange}
               placeholder="Period : This Month"
             />
             <FilterDropdown
@@ -1097,19 +1327,25 @@ export const PaymentInView: React.FC = () => {
                 ...availablePaymentTypes.map((t) => ({ label: t, value: t })),
               ]}
               value={selectedPaymentType}
-              onChange={(val) => setSelectedPaymentType(val)}
+              onChange={(val) => {
+                setSelectedPaymentType(val);
+                setCurrentPage(1);
+              }}
               placeholder="Payment Mode : All"
             />
             <FilterDropdown
               options={[
                 { label: "Customer : All", value: "All" },
                 ...customers.map((c) => ({
-                  label: c.name || c.company,
+                  label: c.name || c.company || "Unnamed",
                   value: c.id,
                 })),
               ]}
               value={selectedFirm}
-              onChange={(val) => setSelectedFirm(val)}
+              onChange={(val) => {
+                setSelectedFirm(val);
+                setCurrentPage(1);
+              }}
               placeholder="Customer : All"
             />
           </div>
@@ -1119,7 +1355,7 @@ export const PaymentInView: React.FC = () => {
             <span className="text-xs font-semibold text-slate-500">
               Total Receipts :{" "}
               <span className="text-[#33077C] font-bold">
-                {filteredPaymentIns.length}
+                {serverTotal || paymentIns.length}
               </span>
             </span>
           </div>
@@ -1127,70 +1363,78 @@ export const PaymentInView: React.FC = () => {
       />
 
       {/* 4. MAIN CONTENT: EMPTY STATE OR TRANSACTIONS TABLE */}
-      {paymentIns.length === 0 ? (
-        /* Total Empty State */
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-16 sm:p-20 flex flex-col items-center justify-center text-center">
-          <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-3xl bg-purple-50/70 border border-purple-100 flex items-center justify-center mb-6 relative shadow-inner">
-            <div className="w-18 h-20 bg-[#33077C]/80 rounded-2xl p-3 flex flex-col justify-between shadow-md">
-              <div className="flex items-center gap-1.5 border-b border-purple-400/50 pb-2">
-                <div className="w-4 h-4 rounded-full bg-white/90" />
-                <div className="w-8 h-2 bg-white/90 rounded-full" />
+      {isInitialLoading && paymentIns.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-16 flex flex-col items-center justify-center text-center">
+          <Loader2 className="w-10 h-10 text-[#33077C] animate-spin mb-3" />
+          <h3 className="text-base font-bold text-slate-800">Loading Payment Receipts...</h3>
+          <p className="text-xs text-slate-400 mt-1">Connecting to Commerce API</p>
+        </div>
+      ) : paymentIns.length === 0 ? (
+        appliedSearch || selectedFirm !== "All" || selectedPaymentType !== "All" || selectedPeriod !== "This Month" ? (
+          /* Filter Empty State */
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-12 sm:p-16 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center mb-4">
+              <Search className="w-8 h-8 stroke-[1.8]" />
+            </div>
+            <h3 className="text-base sm:text-lg font-bold text-slate-900">
+              No payment receipts match your filters
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md">
+              Try adjusting your search terms, date range, payment mode, or party filters.
+            </p>
+            <div className="mt-6">
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={handleResetFilters}
+                icon={<RotateCcw className="w-4 h-4" />}
+              >
+                Reset Filters
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* Total Empty State */
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-16 sm:p-20 flex flex-col items-center justify-center text-center">
+            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-purple-50/70 border border-purple-100 flex items-center justify-center mb-6 relative shadow-inner">
+              <div className="w-14 h-16 bg-[#33077C]/80 rounded-2xl p-2.5 flex flex-col justify-between shadow-md">
+                <div className="flex items-center gap-1.5 border-b border-purple-400/50 pb-1.5">
+                  <div className="w-3.5 h-3.5 rounded-full bg-white/90" />
+                  <div className="w-6 h-1.5 bg-white/90 rounded-full" />
+                </div>
+                <div className="space-y-1">
+                  <div className="w-full h-1.5 bg-purple-300/80 rounded-full" />
+                  <div className="w-3/4 h-1.5 bg-purple-300/80 rounded-full" />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <div className="w-full h-2 bg-purple-300/80 rounded-full" />
-                <div className="w-3/4 h-2 bg-purple-300/80 rounded-full" />
+              <div className="absolute -bottom-2 -right-2 w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold shadow-md">
+                <Check className="w-4 h-4 stroke-[3]" />
               </div>
             </div>
-            <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold shadow-md">
-              <Check className="w-5 h-5 stroke-[3]" />
+
+            <h3 className="text-lg sm:text-xl font-bold text-slate-900">
+              No Payment Receipts Found
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1.5 max-w-md">
+              You haven't recorded any customer payment receipts yet. Click below to record your first incoming payment.
+            </p>
+
+            <div className="mt-8">
+              <Button
+                variant="primary"
+                size="lg"
+                onClick={() => handleOpenCreateModal()}
+                icon={<Plus className="w-5 h-5 text-white" />}
+                className="bg-[#33077C] hover:bg-[#280563]"
+              >
+                Add Payment-In
+              </Button>
             </div>
           </div>
-
-          <h3 className="text-lg sm:text-xl font-bold text-slate-900">
-            No Transactions to show
-          </h3>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1.5 max-w-md">
-            You haven't added any payment transactions yet. Click below to
-            record your first incoming payment.
-          </p>
-
-          <div className="mt-8">
-            <Button
-              variant="primary"
-              size="lg"
-              onClick={() => handleOpenCreateModal()}
-              icon={<Plus className="w-5 h-5 text-white" />}
-            >
-              Add Payment-In
-            </Button>
-          </div>
-        </div>
-      ) : filteredPaymentIns.length === 0 ? (
-        /* Filter Empty State */
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-12 sm:p-16 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center mb-4">
-            <Search className="w-8 h-8 stroke-[1.8]" />
-          </div>
-          <h3 className="text-base sm:text-lg font-bold text-slate-900">
-            No payment receipts match your filters
-          </h3>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md">
-            Try adjusting your search terms, date range, payment mode, or party filters.
-          </p>
-          <div className="mt-6">
-            <Button
-              variant="secondary"
-              size="md"
-              onClick={handleResetFilters}
-              icon={<RotateCcw className="w-4 h-4" />}
-            >
-              Reset Filters
-            </Button>
-          </div>
-        </div>
+        )
       ) : (
         /* Transactions Table */
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        <div className={`bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden transition-opacity duration-200 ${isFetching ? "opacity-75" : "opacity-100"}`}>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[760px]">
               <thead>
@@ -1255,6 +1499,12 @@ export const PaymentInView: React.FC = () => {
                             {item.customerPhone}
                           </div>
                         )}
+                        {item.invoiceNo && (
+                          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] mt-1 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/60">
+                            <FileCheck2 className="w-3 h-3" />
+                            <span>Inv #{item.invoiceNo}</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Payment Type Badge */}
@@ -1295,7 +1545,7 @@ export const PaymentInView: React.FC = () => {
 
                       {/* Description */}
                       <td className="py-4 px-4 text-slate-600 border-r border-slate-200 max-w-xs truncate">
-                        {item.description || (
+                        {item.description || item.notes || (
                           <span className="text-slate-300 italic">None</span>
                         )}
                       </td>
@@ -1314,132 +1564,15 @@ export const PaymentInView: React.FC = () => {
                           </button>
 
                           {/* 2. Share Dropdown Button */}
-                          <div className="payment-in-share-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              title="Share / Forward"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                                if (activeShareDropdownId === item.id) {
-                                  setActiveShareDropdownId(null);
-                                  setShareDropdownPos(null);
-                                } else {
-                                  const btnRect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - btnRect.bottom;
-                                  if (spaceBelow < 160) {
-                                    setShareDropdownPos({
-                                      bottom:
-                                        window.innerHeight - btnRect.top + 4,
-                                      right:
-                                        window.innerWidth - btnRect.right - 10,
-                                    });
-                                  } else {
-                                    setShareDropdownPos({
-                                      top: btnRect.bottom + 4,
-                                      right:
-                                        window.innerWidth - btnRect.right - 10,
-                                    });
-                                  }
-                                  setActiveShareDropdownId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4 stroke-[2.2] text-[#2563EB]" />
-                            </button>
-
-                            {/* Share Popover Popup */}
-                            {activeShareDropdownId === item.id &&
-                              shareDropdownPos && (
-                                <div
-                                  className="payment-in-share-dropdown-menu share-dropdown-menu fixed z-[9999] w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                  style={{
-                                    top:
-                                      shareDropdownPos.top !== undefined
-                                        ? `${shareDropdownPos.top}px`
-                                        : "auto",
-                                    bottom:
-                                      shareDropdownPos.bottom !== undefined
-                                        ? `${shareDropdownPos.bottom}px`
-                                        : "auto",
-                                    right: `${shareDropdownPos.right}px`,
-                                  }}
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <div className="text-xs font-bold text-slate-800 mb-2.5 px-1">
-                                    Share
-                                  </div>
-                                  <div className="flex items-center justify-around gap-3 pt-0.5 pb-0.5">
-                                    {/* Email Option */}
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleShareEmail(item);
-                                      }}
-                                      className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-none"
-                                      title="Share via Email"
-                                    >
-                                      <div className="w-11 h-11 rounded-xl border-2 border-blue-200 group-hover:border-blue-400 bg-white group-hover:bg-blue-50/50 flex items-center justify-center transition-all shadow-2xs group-hover:scale-105">
-                                        <svg
-                                          viewBox="0 0 24 24"
-                                          className="w-5.5 h-5.5"
-                                          fill="none"
-                                        >
-                                          <path
-                                            d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
-                                            stroke="#EA4335"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            fill="#fff"
-                                          />
-                                          <path
-                                            d="M22 6l-10 7L2 6"
-                                            stroke="#EA4335"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                        </svg>
-                                      </div>
-                                      <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">
-                                        Email
-                                      </span>
-                                    </button>
-
-                                    {/* WhatsApp Option */}
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleShareWhatsApp(item);
-                                      }}
-                                      className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-none"
-                                      title="Share via WhatsApp"
-                                    >
-                                      <div className="w-11 h-11 rounded-xl border border-emerald-100 group-hover:border-emerald-300 bg-white group-hover:bg-emerald-50/50 flex items-center justify-center transition-all shadow-2xs group-hover:scale-105">
-                                        <svg
-                                          viewBox="0 0 24 24"
-                                          className="w-6.5 h-6.5"
-                                          fill="#25D366"
-                                        >
-                                          <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 6.46 17.5 2 12.04 2ZM12.04 20.15C10.56 20.15 9.11 19.76 7.85 19.01L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.8 13.47 3.8 11.91C3.8 7.37 7.5 3.67 12.04 3.67C16.58 3.67 20.28 7.37 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15ZM16.56 14.39C16.31 14.27 15.09 13.67 14.86 13.59C14.63 13.5 14.47 13.46 14.31 13.71C14.14 13.95 13.67 14.51 13.53 14.67C13.39 14.84 13.25 14.86 13 14.73C12.75 14.61 11.95 14.35 11 13.5C10.26 12.84 9.76 12.03 9.62 11.78C9.48 11.54 9.6 11.41 9.73 11.28C9.84 11.17 9.98 10.99 10.1 10.85C10.23 10.71 10.27 10.6 10.35 10.44C10.43 10.28 10.39 10.14 10.33 10.02C10.27 9.9 9.78 8.7 9.58 8.2C9.38 7.72 9.18 7.78 9.03 7.77L8.56 7.76C8.4 7.76 8.13 7.82 7.9 8.07C7.68 8.32 7.04 8.92 7.04 10.14C7.04 11.36 7.93 12.54 8.05 12.7C8.17 12.87 9.8 15.38 12.28 16.45C12.87 16.71 13.33 16.86 13.69 16.97C14.29 17.16 14.83 17.14 15.26 17.07C15.74 17 16.74 16.47 16.95 15.89C17.15 15.3 17.15 14.8 17.09 14.7C17.03 14.6 16.81 14.52 16.56 14.39Z" />
-                                        </svg>
-                                      </div>
-                                      <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">
-                                        WhatsApp
-                                      </span>
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                          </div>
+                          <UniversalShareDropdown
+                            id={item.id}
+                            activeShareId={activeShareDropdownId}
+                            setActiveShareId={setActiveShareDropdownId}
+                            sharePos={shareDropdownPos}
+                            setSharePos={setShareDropdownPos}
+                            getShareData={() => formatPaymentInShare(item)}
+                            title="Share Payment Receipt"
+                          />
 
                           {/* 3. 3-Dots Menu Button */}
                           <div className="payment-in-dropdown-container relative inline-block text-left">
@@ -1510,7 +1643,7 @@ export const PaymentInView: React.FC = () => {
                                   View/Edit
                                 </button>
 
-                                {/* 2. Open PDF */}
+                                {/* 2. Open PDF / Receipt */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1535,7 +1668,7 @@ export const PaymentInView: React.FC = () => {
                                   Print
                                 </button>
 
-                                {/* 4. Delete */}
+                                {/* 4. Delete / Void */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1547,7 +1680,7 @@ export const PaymentInView: React.FC = () => {
                                   }}
                                   className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-rose-600 transition-colors cursor-pointer block"
                                 >
-                                  Delete
+                                  Void / Delete
                                 </button>
 
                                 {/* 5. Duplicate */}
@@ -1589,7 +1722,7 @@ export const PaymentInView: React.FC = () => {
           <div className="p-4 sm:p-5 border-t border-slate-200">
             <Pagination
               currentPage={currentPage}
-              total={filteredPaymentIns.length}
+              total={serverTotal || paymentIns.length}
               pageSize={pageSize}
               onPageChange={setCurrentPage}
               onPageSizeChange={(sz) => {
@@ -1602,7 +1735,7 @@ export const PaymentInView: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* 5. ADD / EDIT PAYMENT-IN MODAL (Matching Exact CRM Section-Card System)   */}
+      {/* 5. ADD / EDIT PAYMENT-IN MODAL                                            */}
       {/* ========================================================================= */}
       {isCreateModalOpen && (
         <Modal
@@ -1624,7 +1757,14 @@ export const PaymentInView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsCreateModalOpen(false)}
         >
-          <div className="space-y-6 max-h-[75vh] overflow-y-auto p-2 sm:p-4 text-xs animate-in fade-in duration-150">
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSavePayment();
+            }}
+            className="space-y-6 max-h-[75vh] overflow-y-auto p-2 sm:p-4 text-xs animate-in fade-in duration-150"
+          >
             {/* Section 1: Party & Basic Voucher Info */}
             <div>
               <div className="flex items-center gap-2 mb-3 pb-2 border-b border-purple-100">
@@ -1783,9 +1923,28 @@ export const PaymentInView: React.FC = () => {
                     type="text"
                     value={formReceiptNo}
                     onChange={(e) => setFormReceiptNo(e.target.value)}
-                    placeholder="e.g. 1001"
+                    placeholder="e.g. PAY-2026-0001"
                     className="w-full h-11 px-4 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
+                </div>
+
+                {/* Linked Invoice Selector */}
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
+                    Linked Invoice (Optional)
+                  </label>
+                  <select
+                    value={selectedInvoiceId}
+                    onChange={(e) => handleInvoiceSelect(e.target.value)}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
+                  >
+                    <option value="">No Linked Invoice</option>
+                    {sales.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Date */}
@@ -1827,23 +1986,6 @@ export const PaymentInView: React.FC = () => {
                         {type}
                       </option>
                     ))}
-                  </select>
-                </div>
-
-                {/* Settlement Status */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Voucher Status
-                  </label>
-                  <select
-                    value={formStatus}
-                    onChange={(e) => setFormStatus(e.target.value as any)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="Received">Received / Cleared</option>
-                    <option value="In Process">
-                      In Process / Pending Clearing
-                    </option>
                   </select>
                 </div>
               </div>
@@ -1888,13 +2030,13 @@ export const PaymentInView: React.FC = () => {
                 {/* Reference Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Cheque / UPI / Ref No. (Optional)
+                    Cheque / UPI / Ref No.
                   </label>
                   <input
                     type="text"
                     value={formReferenceNo}
                     onChange={(e) => setFormReferenceNo(e.target.value)}
-                    placeholder="e.g. UPI-98302198"
+                    placeholder="e.g. UPI-UTR-9918237192"
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
                 </div>
@@ -1976,19 +2118,22 @@ export const PaymentInView: React.FC = () => {
                 size="md"
                 type="button"
                 onClick={() => setIsCreateModalOpen(false)}
+                disabled={isSaving}
               >
                 Cancel
               </Button>
               <Button
                 variant="primary"
                 size="md"
-                type="button"
-                onClick={() => handleSavePayment()}
+                type="submit"
+                disabled={isSaving}
+                className="bg-[#33077C] hover:bg-[#280563]"
+                icon={isSaving ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Check className="w-4 h-4 text-white" />}
               >
-                {editingPaymentIn ? "Update Payment" : "Save Payment"}
+                {isSaving ? "Saving..." : editingPaymentIn ? "Update Payment" : "Save Payment"}
               </Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
@@ -2007,7 +2152,14 @@ export const PaymentInView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsQuickCustomerOpen(false)}
         >
-          <div className="p-2 space-y-4 text-xs sm:text-sm">
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCreateQuickCustomer();
+            }}
+            className="p-2 space-y-4 text-xs sm:text-sm"
+          >
             <div>
               <label className="block font-bold text-slate-700 mb-1.5">
                 Customer Name <span className="text-rose-500">*</span>
@@ -2016,7 +2168,7 @@ export const PaymentInView: React.FC = () => {
                 type="text"
                 value={newCustomerName}
                 onChange={(e) => setNewCustomerName(e.target.value)}
-                placeholder="e.g. Anand Supermarket"
+                placeholder="e.g. Acme Technologies Pvt Ltd"
                 className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#33077C]"
               />
             </div>
@@ -2029,7 +2181,7 @@ export const PaymentInView: React.FC = () => {
                 type="text"
                 value={newCustomerCompany}
                 onChange={(e) => setNewCustomerCompany(e.target.value)}
-                placeholder="e.g. Anand Trading Pvt Ltd"
+                placeholder="e.g. Acme Group"
                 className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none focus:border-[#33077C]"
               />
             </div>
@@ -2042,7 +2194,7 @@ export const PaymentInView: React.FC = () => {
                 type="text"
                 value={newCustomerPhone}
                 onChange={(e) => setNewCustomerPhone(e.target.value)}
-                placeholder="e.g. +91 98400 12345"
+                placeholder="e.g. +91 98765 43210"
                 className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none focus:border-[#33077C]"
               />
             </div>
@@ -2059,13 +2211,13 @@ export const PaymentInView: React.FC = () => {
               <Button
                 variant="primary"
                 size="md"
-                type="button"
-                onClick={handleCreateQuickCustomer}
+                type="submit"
+                className="bg-[#33077C] hover:bg-[#280563]"
               >
                 Save Party
               </Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
@@ -2084,7 +2236,14 @@ export const PaymentInView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsAddPaymentTypeOpen(false)}
         >
-          <div className="p-2 space-y-4 text-xs sm:text-sm">
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleAddPaymentType();
+            }}
+            className="p-2 space-y-4 text-xs sm:text-sm"
+          >
             <div>
               <label className="block font-bold text-slate-700 mb-1.5">
                 Payment Type Name <span className="text-rose-500">*</span>
@@ -2110,13 +2269,13 @@ export const PaymentInView: React.FC = () => {
               <Button
                 variant="primary"
                 size="md"
-                type="button"
-                onClick={handleAddPaymentType}
+                type="submit"
+                className="bg-[#33077C] hover:bg-[#280563]"
               >
                 Add Type
               </Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
@@ -2196,6 +2355,14 @@ export const PaymentInView: React.FC = () => {
                     {selectedPaymentIn.paymentType}
                   </span>
                 </div>
+                {selectedPaymentIn.invoiceNo && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Linked Invoice:</span>
+                    <span className="font-bold text-[#33077C]">
+                      {selectedPaymentIn.invoiceNo}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2242,6 +2409,7 @@ export const PaymentInView: React.FC = () => {
                 type="button"
                 onClick={() => handlePrintReceipt(selectedPaymentIn)}
                 icon={<Printer className="w-4 h-4" />}
+                className="bg-[#33077C] hover:bg-[#280563]"
               >
                 Print Receipt
               </Button>
@@ -2307,7 +2475,7 @@ export const PaymentInView: React.FC = () => {
                       {historyPaymentIn.paymentType}
                     </div>
                     <div className="text-slate-400 text-[10px] mt-0.5">
-                      Recorded by System Admin
+                      Recorded via CRM Sales Hub
                     </div>
                   </div>
                 </div>
@@ -2321,7 +2489,7 @@ export const PaymentInView: React.FC = () => {
                     </div>
                     <div className="text-slate-500 text-[11px] mt-0.5">
                       Voucher #{historyPaymentIn.receiptNo} marked as{" "}
-                      {historyPaymentIn.status || "Received"}
+                      {historyPaymentIn.status || "Completed"}
                     </div>
                     <div className="text-slate-400 text-[10px] mt-0.5">
                       Timestamp:{" "}
@@ -2337,7 +2505,7 @@ export const PaymentInView: React.FC = () => {
                   <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-300 ring-4 ring-slate-100" />
                   <div>
                     <div className="font-bold text-slate-700">
-                      Last Verified
+                      Last Synchronized
                     </div>
                     <div className="text-slate-400 text-[10px] mt-0.5">
                       Updated:{" "}

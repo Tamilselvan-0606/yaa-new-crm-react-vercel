@@ -914,7 +914,7 @@ export const PendingDuesView: React.FC = () => {
         title={editingDue ? 'Edit Pending Due Record' : 'Record New Pending Due'}
         maxWidth="md"
       >
-        <form onSubmit={handleSaveDue} className="space-y-4">
+        <form noValidate onSubmit={handleSaveDue} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
               Customer / Company Name <span className="text-rose-500">*</span>
@@ -1131,8 +1131,7 @@ export const PendingDuesView: React.FC = () => {
         maxWidth="md"
       >
         {selectedDue && (
-          <form
-            onSubmit={(e) => {
+          <form noValidate onSubmit={(e) => {
               e.preventDefault();
               const payAmt = parseFloat(paymentAmountInput) || 0;
               if (payAmt <= 0) {

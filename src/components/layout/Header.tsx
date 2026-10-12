@@ -20,11 +20,15 @@ import {
   ShieldCheck,
   Sparkles,
   KeyRound,
+  UsersRound,
+  ShoppingCart,
 } from 'lucide-react';
 
 import { api } from '../../services/api';
 import { Branch } from '../../types';
 import { INITIAL_BRANCHES } from '../../data/initialData';
+import { subOrganizationApi, branchApi } from '../../api';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
 interface HeaderProps {
   currentTab?: string;
@@ -65,11 +69,29 @@ export const Header: React.FC<HeaderProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isBranchAdmin = currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com';
+  const userRole = (currentUser?.role || role || '').toString().toUpperCase();
+  const isBranchAdmin =
+    (userRole === 'BRANCH_ADMIN' ||
+      userRole === 'BRANCHADMIN' ||
+      currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com') &&
+    userRole !== 'ORG_ADMIN' &&
+    userRole !== 'ORGADMIN' &&
+    userRole !== 'ADMIN' &&
+    userRole !== 'SUPER_ADMIN' &&
+    userRole !== 'SUPERADMIN';
+
+  const isOrgAdmin =
+    isOrgSuperAdmin ||
+    userRole === 'ORG_ADMIN' ||
+    userRole === 'ORGADMIN' ||
+    userRole === 'ADMIN' ||
+    currentUser?.email?.toLowerCase() === 'orgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'orgsuperadmin@gmail.com';
 
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isUserSwitcherOpen, setIsUserSwitcherOpen] = useState(false);
   const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
+  const [isSubOrgDropdownOpen, setIsSubOrgDropdownOpen] = useState(false);
   const [isOrgDropdownOpen, setIsOrgDropdownOpen] = useState(false);
   const [isProductDropdownOpen, setIsProductDropdownOpen] = useState(false);
   const [isOrgTypeDropdownOpen, setIsOrgTypeDropdownOpen] = useState(false);
@@ -80,13 +102,22 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'sales_management', name: 'Sales Management' },
   ];
 
-  const [selectedOrgType, setSelectedOrgType] = useState<string>(() => {
-    const saved = localStorage.getItem('active_org_type_orgsuperadmin');
-    if (saved && (saved === 'Client Management' || saved === 'Sales Management')) {
-      return saved;
-    }
-    return 'Client Management';
-  });
+  const {
+    activeOrgType,
+    setOrgType,
+    isSaleManagement,
+    isClientManagement,
+    isAll: isOrgAll,
+    isSaleOnly,
+    isClientOnly,
+  } = useActiveOrgType();
+
+  const selectedOrgType = activeOrgType;
+  const orgCaps = {
+    isAll: isOrgAll,
+    isSaleOnly,
+    isClientOnly,
+  };
 
   // Organization / Product suites under Yaa Creations
   const [productsList, setProductsList] = useState<any[]>([
@@ -106,38 +137,133 @@ export const Header: React.FC<HeaderProps> = ({
   });
 
   const [selectedOrg, setSelectedOrg] = useState<string>(() => {
-    if (isOrgSuperAdmin) {
+    if (isOrgSuperAdmin || isOrgAdmin) {
       const savedOrgSuper = localStorage.getItem('active_organization_orgsuperadmin');
       if (savedOrgSuper && savedOrgSuper !== 'All' && !savedOrgSuper.toLowerCase().includes('yaa connect')) {
         return savedOrgSuper;
       }
-      return 'yaa Academy';
+      return currentUser?.name || 'Yaa Creations';
     }
     const saved = localStorage.getItem('active_organization');
+    if (saved) return saved;
+    return currentUser?.name || 'All';
+  });
+
+  // Track branch changes across components
+  const [branchChangeTrigger, setBranchChangeTrigger] = useState(0);
+
+  useEffect(() => {
+    const handleBranchesChanged = () => {
+      setBranchChangeTrigger((prev) => prev + 1);
+    };
+    window.addEventListener('branchesChanged', handleBranchesChanged);
+    return () => window.removeEventListener('branchesChanged', handleBranchesChanged);
+  }, []);
+
+  const isSalesMode = isSaleManagement;
+
+  const [apiBranches, setApiBranches] = useState<Branch[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchApiBranches = async () => {
+      try {
+        const res = await branchApi.getBranches({
+          page_no: 1,
+          page_size: 100,
+          pagination_required: 'false',
+        });
+        if (isMounted && res && Array.isArray(res.data)) {
+          const mapped: Branch[] = res.data.map((item: any) => ({
+            id: item.id || '',
+            name: item.name || '',
+            code: item.code || item.id || '',
+            createdAt: item.createdAt || '',
+            location: item.location || item.city || '',
+            city: item.city || item.location || '',
+            organizationType: item.organizationType || item.organizationTypeName || '',
+            status: item.status || 'Active',
+          }));
+          setApiBranches(mapped);
+        }
+      } catch (err) {
+        // Fallback gracefully
+      }
+    };
+    fetchApiBranches();
+    return () => {
+      isMounted = false;
+    };
+  }, [branchChangeTrigger, currentUser]);
+
+  // Dynamically compute branches belonging strictly to the active suite (Sales vs Client Management)
+  const branches = useMemo<Branch[]>(() => {
+    const bMap = new Map<string, Branch>();
+
+    const isMatch = (bTypeStr?: string) => {
+      const bType = (bTypeStr || '').toLowerCase();
+      return isSalesMode
+        ? bType.includes('sale')
+        : bType.includes('client') || !bType.includes('sale');
+    };
+
+    const mockBranchNames = [
+      'chennai hq branch', 'bangalore tech center', 'mumbai central clinic hub',
+      'hyderabad health city', 'coimbatore smile center', 'coimbatore dental studio',
+      'chennai central retail mart', 'madurai wholesale depot', 'trichy distribution hub',
+      'salem supply center', 'coimbatore mega warehouse'
+    ];
+
+    // 1. API branches
+    apiBranches.forEach((b) => {
+      const lower = (b.name || '').toLowerCase().trim();
+      if (isMatch(b.organizationType) && lower && !mockBranchNames.includes(lower)) {
+        bMap.set(lower, b);
+      }
+    });
+
+    // 2. Locally created catalog branches
+    const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+    if (savedCatalog) {
+      try {
+        const parsed = JSON.parse(savedCatalog);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((b: any) => !mockBranchNames.includes((b.name || '').toLowerCase()));
+          filtered.forEach((b: any) => {
+            const lower = (b.name || '').toLowerCase().trim();
+            if (isMatch(b.organizationType) && lower && !bMap.has(lower)) {
+              bMap.set(lower, b);
+            }
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    return Array.from(bMap.values());
+  }, [isSalesMode, branchChangeTrigger, apiBranches]);
+
+  const [selectedBranch, setSelectedBranch] = useState<string>(() => {
+    const isSales = selectedOrgType.toLowerCase().includes('sale');
+    const savedKey = isSales ? 'active_branch_sales' : 'active_branch_client';
+    const saved = localStorage.getItem(savedKey) || localStorage.getItem('active_branch');
     if (saved) return saved;
     return 'All';
   });
 
-  // Product and branch dropdowns use initialized options without making unintegrated network requests
-  const [branches, setBranches] = useState<Branch[]>(INITIAL_BRANCHES);
-  const [selectedBranch, setSelectedBranch] = useState<string>(() => {
-    const saved = localStorage.getItem('active_branch');
-    if (saved) {
-      if (saved.toLowerCase().includes('all')) return 'All';
-      if (saved.toLowerCase().includes('chennai')) return 'Chennai';
-      if (saved.toLowerCase().includes('bangalore')) return 'Bangalore';
-      if (saved.toLowerCase().includes('coimbatore')) return 'Coimbatore';
-      if (saved.toLowerCase().includes('mumbai')) return 'Mumbai';
-      if (saved.toLowerCase().includes('hyderabad')) return 'Hyderabad';
-      if (saved.toLowerCase().includes('kochi')) return 'Kochi';
-      return saved;
-    }
-    return 'All';
-  });
+  // Keep selectedBranch in sync when suite mode changes
+  useEffect(() => {
+    const savedKey = isSalesMode ? 'active_branch_sales' : 'active_branch_client';
+    const saved = localStorage.getItem(savedKey) || 'All';
+    setSelectedBranch(saved);
+    localStorage.setItem('active_branch', saved);
+  }, [isSalesMode]);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const branchRef = useRef<HTMLDivElement>(null);
+  const subOrgRef = useRef<HTMLDivElement>(null);
   const orgRef = useRef<HTMLDivElement>(null);
   const prodRef = useRef<HTMLDivElement>(null);
   const orgTypeRef = useRef<HTMLDivElement>(null);
@@ -150,6 +276,9 @@ export const Header: React.FC<HeaderProps> = ({
       }
       if (userRef.current && !userRef.current.contains(event.target as Node)) {
         setIsUserSwitcherOpen(false);
+      }
+      if (subOrgRef.current && !subOrgRef.current.contains(event.target as Node)) {
+        setIsSubOrgDropdownOpen(false);
       }
       if (branchRef.current && !branchRef.current.contains(event.target as Node)) {
         setIsBranchDropdownOpen(false);
@@ -205,42 +334,231 @@ export const Header: React.FC<HeaderProps> = ({
     return list;
   }, [branches]);
 
+  // Only sync suite mode if user navigates to an exclusive suite-specific sub-route
+  useEffect(() => {
+    if (location.pathname.startsWith('/sale-management')) {
+      if (isClientOnly) {
+        navigate('/');
+      } else if (!isSaleManagement) {
+        setOrgType('Sales Management');
+      }
+    } else if (
+      location.pathname.startsWith('/leads') ||
+      location.pathname.startsWith('/quotes') ||
+      location.pathname.startsWith('/proforma') ||
+      location.pathname.startsWith('/sales') ||
+      location.pathname.startsWith('/customers') ||
+      location.pathname.startsWith('/digital-marketing') ||
+      location.pathname.startsWith('/content') ||
+      location.pathname.startsWith('/tasks') ||
+      location.pathname.startsWith('/payments') ||
+      location.pathname.startsWith('/subscriptions')
+    ) {
+      if (isSaleOnly) {
+        navigate('/');
+      } else if (isSaleManagement) {
+        setOrgType('Client Management');
+      }
+    }
+  }, [location.pathname, isSaleManagement, isClientOnly, isSaleOnly, setOrgType, navigate]);
+
+  // Track sub-organization changes across components
+  const [subOrgChangeTrigger, setSubOrgChangeTrigger] = useState(0);
+
+  useEffect(() => {
+    const handleSubOrgChanged = () => {
+      setSubOrgChangeTrigger((prev) => prev + 1);
+    };
+    window.addEventListener('subOrgChanged', handleSubOrgChanged);
+    window.addEventListener('orgChanged', handleSubOrgChanged);
+    window.addEventListener('organizationsChanged', handleSubOrgChanged);
+    window.addEventListener('subOrganizationsChanged', handleSubOrgChanged);
+    window.addEventListener('storage', handleSubOrgChanged);
+    return () => {
+      window.removeEventListener('subOrgChanged', handleSubOrgChanged);
+      window.removeEventListener('orgChanged', handleSubOrgChanged);
+      window.removeEventListener('organizationsChanged', handleSubOrgChanged);
+      window.removeEventListener('subOrganizationsChanged', handleSubOrgChanged);
+      window.removeEventListener('storage', handleSubOrgChanged);
+    };
+  }, []);
+
+  const [apiSubOrgs, setApiSubOrgs] = useState<{ id: string; name: string; organizationType?: string }[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchApiSubOrgs = async () => {
+      try {
+        const res = await subOrganizationApi.getSubOrganizations({
+          page_no: 1,
+          page_size: 100,
+          pagination_required: 'false',
+        });
+        if (isMounted && res && Array.isArray(res.data)) {
+          const mapped = res.data.map((item: any) => ({
+            id: item.id,
+            name: item.name,
+            organizationType: item.organizationType || item.organizationTypeName,
+          }));
+          setApiSubOrgs(mapped);
+        }
+      } catch (err) {
+        // Fallback gracefully
+      }
+    };
+    fetchApiSubOrgs();
+    return () => {
+      isMounted = false;
+    };
+  }, [subOrgChangeTrigger, currentUser]);
+
+  // Build clean sub-organization options strictly differentiated by Client Management vs Sale Management
+  const subOrgOptions = useMemo(() => {
+    const list: { id: string; name: string; organizationType?: string }[] = [
+      { id: 'all', name: 'All' },
+    ];
+
+    const isSales = isSalesMode;
+    const seenNames = new Set<string>(['all']);
+
+    const isMatch = (typeStr?: string) => {
+      const t = (typeStr || '').toLowerCase();
+      if (isSales) {
+        return t.includes('sale');
+      } else {
+        return t.includes('client') || !t.includes('sale');
+      }
+    };
+
+    const mockNames = [
+      'yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions',
+      'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'
+    ];
+
+    // 1. API Sub-Organizations
+    apiSubOrgs.forEach((s) => {
+      const lower = (s.name || '').toLowerCase().trim();
+      if (isMatch(s.organizationType) && lower && !mockNames.includes(lower) && !seenNames.has(lower)) {
+        seenNames.add(lower);
+        list.push({
+          id: s.id,
+          name: s.name.trim(),
+          organizationType: isSales ? 'Sales Management' : 'Client Management',
+        });
+      }
+    });
+
+    // 2. Locally created Sub-Organizations
+    const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
+    if (savedCatalog) {
+      try {
+        const parsed = JSON.parse(savedCatalog);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const filtered = parsed.filter((o: any) => !mockNames.includes((o.name || '').toLowerCase()));
+          filtered.forEach((o: any) => {
+            const lower = (o.name || '').toLowerCase().trim();
+            if (isMatch(o.organizationType) && lower && !seenNames.has(lower)) {
+              seenNames.add(lower);
+              list.push({
+                id: o.id || `sub_${lower}`,
+                name: o.name.trim(),
+                organizationType: isSales ? 'Sales Management' : 'Client Management',
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error reading sub org catalog:', e);
+      }
+    }
+
+    return list;
+  }, [isSalesMode, subOrgChangeTrigger, apiSubOrgs]);
+
+  const [selectedSubOrg, setSelectedSubOrg] = useState<string>(() => {
+    const isSales = selectedOrgType.toLowerCase().includes('sale');
+    const savedKey = isSales ? 'active_sub_organization_sales' : 'active_sub_organization_client';
+    return localStorage.getItem(savedKey) || localStorage.getItem('active_sub_organization') || 'All';
+  });
+
+  // Keep selectedSubOrg in sync when suite mode changes
+  useEffect(() => {
+    const savedKey = isSalesMode ? 'active_sub_organization_sales' : 'active_sub_organization_client';
+    const saved = localStorage.getItem(savedKey) || 'All';
+    setSelectedSubOrg(saved);
+    localStorage.setItem('active_sub_organization', saved);
+  }, [isSalesMode]);
+
+  // Ensure selectedSubOrg is valid
+  useEffect(() => {
+    if (selectedSubOrg !== 'All') {
+      const exists = subOrgOptions.some((s) => s.name.toLowerCase() === selectedSubOrg.toLowerCase());
+      if (!exists && subOrgOptions.length > 0) {
+        setSelectedSubOrg('All');
+        localStorage.setItem('active_sub_organization', 'All');
+      }
+    }
+  }, [subOrgOptions, selectedSubOrg]);
+
+  const handleSelectSubOrg = (subOrgName: string) => {
+    setSelectedSubOrg(subOrgName);
+    localStorage.setItem('active_sub_organization', subOrgName);
+    if (isSalesMode) {
+      localStorage.setItem('active_sub_organization_sales', subOrgName);
+    } else {
+      localStorage.setItem('active_sub_organization_client', subOrgName);
+    }
+    setIsSubOrgDropdownOpen(false);
+    showToast?.('success', 'Sub-Organization Switched', `Active sub-organization set to ${subOrgName}`);
+    window.dispatchEvent(
+      new CustomEvent('subOrgChanged', {
+        detail: {
+          name: subOrgName,
+          organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
+        },
+      })
+    );
+  };
+
   // Build clean organization options
+  // Build clean organization options strictly differentiated by Client Management vs Sale Management
   const orgOptions = useMemo(() => {
-    if (isOrgSuperAdmin) {
-      const defaultOrgList = [
-        { id: 'org_yaa_academy', name: 'yaa Academy', organizationType: 'Client Management' },
-        { id: 'org_fts_academy', name: 'FTS Academy', organizationType: 'Sales Management' },
-        { id: 'org_nextgen_academy', name: 'Next Gen Academy', organizationType: 'Client Management' },
-        { id: 'org_yaa_care', name: 'yaa Care', organizationType: 'Client Management' },
-        { id: 'org_fyndus_academy', name: 'Fyndus Academy', organizationType: 'Sales Management' },
+    if (isOrgSuperAdmin || isOrgAdmin) {
+      const currentOrgName = currentUser?.name || 'Yaa Creations';
+      const isSalesMode = selectedOrgType.toLowerCase().includes('sale');
+
+      const targetList: { id: string; name: string; organizationType?: string }[] = [
+        { id: 'org_current', name: currentOrgName, organizationType: isSalesMode ? 'Sales Management' : 'Client Management' },
       ];
 
-      let allSuperOrgs = defaultOrgList;
       const saved = localStorage.getItem('organizations_catalog_orgsuperadmin');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            allSuperOrgs = parsed.map((o: any) => ({
-              id: o.id || o.name,
-              name: o.name,
-              organizationType: o.organizationType || (
-                ['FTS Academy', 'Fyndus Academy'].includes(o.name) ? 'Sales Management' : 'Client Management'
-              ),
-            }));
+            const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
+            const filtered = parsed.filter((o: any) => !mockNames.includes((o.name || '').toLowerCase()));
+            filtered.forEach((o: any) => {
+              const oType = (o.organizationType || '').toLowerCase();
+              const isMatch = isSalesMode
+                ? oType.includes('sale')
+                : oType.includes('client') || !oType.includes('sale');
+
+              if (isMatch && !targetList.some((existing) => existing.name.toLowerCase() === (o.name || '').toLowerCase())) {
+                targetList.push({
+                  id: o.id || o.name,
+                  name: o.name,
+                  organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
+                });
+              }
+            });
           }
         } catch (e) {
           console.error(e);
         }
       }
 
-      // Filter by selectedOrgType
-      const filtered = allSuperOrgs.filter(
-        (o) => (o.organizationType || 'Client Management').toLowerCase() === selectedOrgType.toLowerCase()
-      );
-
-      return filtered.length > 0 ? filtered : allSuperOrgs;
+      return targetList;
     }
 
     // Default for Admin login
@@ -272,23 +590,34 @@ export const Header: React.FC<HeaderProps> = ({
 
   // Ensure Org Super Admin always has a valid organization from orgOptions (defaulting to 1st organization)
   useEffect(() => {
-    if (isOrgSuperAdmin) {
+    if (isOrgSuperAdmin || isOrgAdmin) {
       const validNames = orgOptions.map((o) => o.name.toLowerCase());
       if (!selectedOrg || selectedOrg === 'All' || !validNames.includes(selectedOrg.toLowerCase())) {
-        const defaultFirstOrg = orgOptions[0]?.name || 'yaa Academy';
+        const defaultFirstOrg = orgOptions[0]?.name || currentUser?.name || 'Yaa Creations';
         setSelectedOrg(defaultFirstOrg);
         localStorage.setItem('active_organization_orgsuperadmin', defaultFirstOrg);
       }
     }
-  }, [isOrgSuperAdmin, selectedOrg, orgOptions]);
+  }, [isOrgSuperAdmin, isOrgAdmin, selectedOrg, orgOptions, currentUser]);
 
   const handleSelectOrgType = (typeName: string) => {
-    setSelectedOrgType(typeName);
-    localStorage.setItem('active_org_type_orgsuperadmin', typeName);
+    setOrgType(typeName as any);
+    setSelectedBranch('All');
+    localStorage.setItem('active_branch', 'All');
     setIsOrgTypeDropdownOpen(false);
     showToast?.('success', 'Organisation Type Switched', `Active organisation type set to ${typeName}`);
-    window.dispatchEvent(new CustomEvent('orgTypeChanged', { detail: typeName }));
   };
+
+  // Ensure selectedBranch remains valid for the active suite
+  useEffect(() => {
+    if (selectedBranch !== 'All') {
+      const exists = branchOptions.some((b) => b.name.toLowerCase() === selectedBranch.toLowerCase());
+      if (!exists && branchOptions.length > 1) {
+        setSelectedBranch('All');
+        localStorage.setItem('active_branch', 'All');
+      }
+    }
+  }, [selectedOrgType, branchOptions, selectedBranch]);
 
   const handleSelectOrg = (orgName: string) => {
     setSelectedOrg(orgName);
@@ -300,11 +629,11 @@ export const Header: React.FC<HeaderProps> = ({
 
     const matched = orgOptions.find((o) => o.name.toLowerCase() === orgName.toLowerCase());
     const orgType = (matched as any)?.organizationType || (
-      ['fts academy', 'fyndus academy', 'polihills'].includes(orgName.toLowerCase()) ? 'Sales Management' : 'Client Management'
+      orgName.toLowerCase().includes('sale') ? 'Sales Management' : 'Client Management'
     );
 
     if (isOrgSuperAdmin && orgType !== selectedOrgType) {
-      setSelectedOrgType(orgType);
+      setOrgType(orgType);
       localStorage.setItem('active_org_type_orgsuperadmin', orgType);
     }
 
@@ -317,8 +646,14 @@ export const Header: React.FC<HeaderProps> = ({
   const handleSelectBranch = (branchName: string) => {
     setSelectedBranch(branchName);
     localStorage.setItem('active_branch', branchName);
+    if (isSalesMode) {
+      localStorage.setItem('active_branch_sales', branchName);
+    } else {
+      localStorage.setItem('active_branch_client', branchName);
+    }
     setIsBranchDropdownOpen(false);
     showToast?.('success', 'Branch Switched', `Active branch set to ${branchName}`);
+    window.dispatchEvent(new CustomEvent('branchChanged', { detail: { branch: branchName } }));
   };
 
   const handleSelectProduct = (productName: string) => {
@@ -375,7 +710,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (path.startsWith('/sale-management/purchase/expense') || currentTab === 'purchase-expense' || currentTab === 'billing-purchase-expense') return 'Expense';
 
     // Sale Management - Reports
-    if (path.startsWith('/sale-management/reports') || currentTab === 'sm-reports') return 'Sale Management Reports';
+    if (path.startsWith('/sale-management/reports') || currentTab === 'sm-reports') return 'Sale Report';
 
     return 'Dashboard';
   };
@@ -421,95 +756,77 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Organization Selector, Branch Selector, Notification Bell & User Avatar */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 lg:gap-3 min-w-0 justify-end">
-        {/* Org Super Admin Header Filters: Organization Type, Organization, Branch, Product */}
-        {isOrgSuperAdmin ? (
+        {/* Top Module Switcher for Organization Type 0 (ALL) - Hidden for Super Admin and Organisation Admin */}
+        {!isSuperAdmin && !isOrgAdmin && !isOrgSuperAdmin && orgCaps.isAll && (
+          <div className="hidden sm:flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/90 shadow-2xs shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSelectOrgType('Client Management')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
+                selectedOrgType === 'Client Management'
+                  ? 'bg-white text-[#33077C] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <UsersRound className="w-3.5 h-3.5 text-[#33077C]" />
+              <span>Client Management</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectOrgType('Sales Management')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
+                selectedOrgType === 'Sales Management'
+                  ? 'bg-white text-[#33077C] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ShoppingCart className="w-3.5 h-3.5 text-[#33077C]" />
+              <span>Sale Management</span>
+            </button>
+          </div>
+        )}
+
+        {/* Organisation Admin Header Filters: Sub-Org Dropdown, Branch Dropdown, Products Dropdown (Client only) */}
+        {isOrgSuperAdmin || isOrgAdmin ? (
           <>
-            {/* Organisation Type Selector */}
-            <div className="relative hidden lg:block shrink-0" ref={orgTypeRef}>
+            {/* Sub-Organization Selector (Converted from Org Dropdown) */}
+            <div className="relative shrink-0" ref={subOrgRef}>
               <button
-                id="org-type-selector-button"
+                id="suborg-selector-button"
                 type="button"
-                onClick={() => setIsOrgTypeDropdownOpen(!isOrgTypeDropdownOpen)}
+                onClick={() => setIsSubOrgDropdownOpen(!isSubOrgDropdownOpen)}
                 className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
-                title="Select Organisation Type"
+                title="Select Sub-Organization"
               >
-                <span className="whitespace-nowrap truncate max-w-[110px] xl:max-w-none">
-                  <span className="hidden xl:inline text-slate-500 font-normal">Type: </span>
-                  <span className="text-slate-700 font-semibold">{selectedOrgType}</span>
+                <span className="whitespace-nowrap truncate max-w-[100px] sm:max-w-[130px] xl:max-w-none">
+                  <span className="hidden xl:inline text-slate-500 font-normal">Sub Org: </span>
+                  <span className="text-slate-700 font-semibold">{selectedSubOrg}</span>
                 </span>
                 <ChevronDown
-                  className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${isOrgTypeDropdownOpen ? 'rotate-180 text-slate-600' : ''}`}
+                  className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${isSubOrgDropdownOpen ? 'rotate-180 text-slate-600' : ''}`}
                 />
               </button>
 
-              {isOrgTypeDropdownOpen && (
+              {isSubOrgDropdownOpen && (
                 <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[200px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
+                  className="absolute top-full mt-1.5 right-0 min-w-[190px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
                 >
-                  {orgTypeOptions.map((opt) => {
+                  {subOrgOptions.map((sub) => {
                     const isActive =
-                      selectedOrgType.toLowerCase() === opt.name.toLowerCase();
+                      selectedSubOrg.toLowerCase() === sub.name.toLowerCase();
 
                     return (
                       <button
-                        key={opt.id}
+                        key={sub.id}
                         type="button"
-                        onClick={() => handleSelectOrgType(opt.name)}
+                        onClick={() => handleSelectSubOrg(sub.name)}
                         className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
                           isActive
                             ? 'bg-[#33077C]/10 text-[#33077C]'
                             : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                         }`}
                       >
-                        <span className="truncate">{opt.name}</span>
-                        {isActive && (
-                          <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Organization Selector */}
-            <div className="relative hidden sm:block shrink-0" ref={orgRef}>
-              <button
-                id="organization-selector-button"
-                type="button"
-                onClick={() => setIsOrgDropdownOpen(!isOrgDropdownOpen)}
-                className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
-                title="Select Organization"
-              >
-                <span className="whitespace-nowrap truncate max-w-[90px] md:max-w-[120px] xl:max-w-none">
-                  <span className="hidden xl:inline text-slate-500 font-normal">Org: </span>
-                  <span className="text-slate-700 font-semibold">{selectedOrg}</span>
-                </span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${isOrgDropdownOpen ? 'rotate-180 text-slate-600' : ''}`}
-                />
-              </button>
-
-              {isOrgDropdownOpen && (
-                <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[190px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
-                >
-                  {orgOptions.map((org) => {
-                    const isActive =
-                      selectedOrg.toLowerCase() === org.name.toLowerCase();
-
-                    return (
-                      <button
-                        key={org.id}
-                        type="button"
-                        onClick={() => handleSelectOrg(org.name)}
-                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                          isActive
-                            ? 'bg-[#33077C]/10 text-[#33077C]'
-                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
-                      >
-                        <span className="truncate">{org.name}</span>
+                        <span className="truncate">{sub.name}</span>
                         {isActive && (
                           <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
                         )}
@@ -540,7 +857,7 @@ export const Header: React.FC<HeaderProps> = ({
 
               {isBranchDropdownOpen && (
                 <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
+                  className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
                 >
                   {branchOptions.map((b) => {
                     const isActive =
@@ -569,53 +886,55 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </div>
 
-            {/* Product Selector */}
-            <div className="relative hidden xl:block shrink-0" ref={prodRef}>
-              <button
-                id="product-selector-button"
-                type="button"
-                onClick={() => setIsProductDropdownOpen(!isProductDropdownOpen)}
-                className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
-                title="Select Product"
-              >
-                <span className="whitespace-nowrap truncate max-w-[100px] xl:max-w-none">
-                  <span className="hidden xl:inline text-slate-500 font-normal">Product: </span>
-                  <span className="text-slate-700 font-semibold">{selectedProduct}</span>
-                </span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${isProductDropdownOpen ? 'rotate-180 text-slate-600' : ''}`}
-                />
-              </button>
-
-              {isProductDropdownOpen && (
-                <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
+            {/* Products Selector: Only Rendered in Client Management, Removed in Sale Management */}
+            {!isSalesMode && (
+              <div className="relative shrink-0" ref={prodRef}>
+                <button
+                  id="product-selector-button"
+                  type="button"
+                  onClick={() => setIsProductDropdownOpen(!isProductDropdownOpen)}
+                  className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
+                  title="Select Products"
                 >
-                  {productOptions.map((prod) => {
-                    const isActive =
-                      selectedProduct.toLowerCase() === prod.name.toLowerCase();
+                  <span className="whitespace-nowrap truncate max-w-[90px] xl:max-w-none">
+                    <span className="hidden xl:inline text-slate-500 font-normal">Products: </span>
+                    <span className="text-slate-700 font-semibold">{selectedProduct}</span>
+                  </span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-150 ${isProductDropdownOpen ? 'rotate-180 text-slate-600' : ''}`}
+                  />
+                </button>
 
-                    return (
-                      <button
-                        key={prod.id}
-                        type="button"
-                        onClick={() => handleSelectProduct(prod.name)}
-                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                          isActive
-                            ? 'bg-[#33077C]/10 text-[#33077C]'
-                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
-                      >
-                        <span className="truncate">{prod.name}</span>
-                        {isActive && (
-                          <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                {isProductDropdownOpen && (
+                  <div
+                    className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
+                  >
+                    {productOptions.map((prod) => {
+                      const isActive =
+                        selectedProduct.toLowerCase() === prod.name.toLowerCase();
+
+                      return (
+                        <button
+                          key={prod.id}
+                          type="button"
+                          onClick={() => handleSelectProduct(prod.name)}
+                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
+                            isActive
+                              ? 'bg-[#33077C]/10 text-[#33077C]'
+                              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                          }`}
+                        >
+                          <span className="truncate">{prod.name}</span>
+                          {isActive && (
+                            <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -896,7 +1215,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </>
                 ) : (
                   <>
-                    {isOrgSuperAdmin && (
+                    {(isOrgSuperAdmin || isOrgAdmin) && (
                       <button
                         onClick={() => {
                           setIsUserSwitcherOpen(false);

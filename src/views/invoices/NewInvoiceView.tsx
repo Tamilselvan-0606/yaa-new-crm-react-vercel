@@ -27,14 +27,27 @@ import {
   FolderPlus,
   Boxes,
   ArrowLeft,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useCustomers, useProducts } from '../../hooks/useQueries';
+import { customerApi, mapApiCustomerToSalesCustomer } from '../../api/commerce/customerApi';
 import { Customer } from '../../types';
 import { CustomerFormModal } from '../../components/forms/CustomerFormModal';
 import { useInvoiceStore, SavedInvoice } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
+import {
+  proformaInvoiceApi,
+  CreateProformaRequest,
+  UpdateProformaRequest,
+  invoiceApi,
+  CreateInvoiceRequest,
+  UpdateInvoiceRequest,
+  InvoiceApiItem,
+  organizationApi,
+  OrganizationApiItem,
+  subscriptionPlanApi,
+} from '../../api';
 
 interface BankAccount {
   id: string;
@@ -71,8 +84,45 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const { addProformaInvoice } = useProformaInvoiceStore();
   const addInvoice = isProforma ? addProformaInvoice : addStandardInvoice;
 
-  const { data: customers = [] } = useCustomers();
-  const { data: products = [] } = useProducts();
+  const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
+
+  useEffect(() => {
+    // Platform Administrator invoices work directly with Organizations, not commerce customers
+    if (isSuperAdmin) {
+      return;
+    }
+
+    let isMounted = true;
+    const fetchCustomers = async () => {
+      try {
+        const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
+            id: sc.id,
+            clientId: sc.customerCode || sc.id,
+            name: sc.name,
+            company: sc.company || sc.name,
+            contactPerson: sc.name,
+            phone: sc.phone || '',
+            email: sc.email || '',
+            location: [sc.city, sc.state].filter(Boolean).join(', '),
+            address: sc.address || '',
+            status: sc.status || 'Active',
+            linkedProducts: [],
+            gstin: sc.gstNumber || '',
+            taxId: sc.gstNumber || '',
+          })) as unknown as Customer[];
+          setCommerceCustomers(mapped);
+        }
+      } catch (err) {
+        console.warn('Failed to load commerce customers in NewInvoiceView:', err);
+      }
+    };
+    fetchCustomers();
+    return () => {
+      isMounted = false;
+    };
+  }, [isSuperAdmin]);
 
   // Top Action: Active Mode ('new' | 'existing')
   const [saleMode, setSaleMode] = useState<'new' | 'existing'>('new');
@@ -95,20 +145,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const companyProductDropdownRef = useRef<HTMLDivElement>(null);
 
   // Column 1: Invoice Number & Description
-  const generateInvoiceNo = () => {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    return isProforma ? `PI-2026-${randomSuffix}` : `INV-2026-${randomSuffix}`;
-  };
-  const [invoiceNumber, setInvoiceNumber] = useState(generateInvoiceNo());
-  const [invoiceDate, setInvoiceDate] = useState('2026-09-02');
-  const [invoiceDescription, setInvoiceDescription] = useState(
-    isProforma
-      ? 'Proforma invoice for enterprise solution provisioning, license seats, and dedicated services retainer.'
-      : 'Monthly enterprise software license subscription, cloud hosting, and implementation retainer.'
-  );
+  const [invoiceNumber, setInvoiceNumber] = useState(invoiceToEdit?.invoiceNumber || '');
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [invoiceDescription, setInvoiceDescription] = useState('');
 
   // Column 1: Reference Number(s)
-  const [referenceNumbers, setReferenceNumbers] = useState<string[]>([isProforma ? 'REF-PROFORMA-1' : 'PO-NEW-SALE']);
+  const [referenceNumbers, setReferenceNumbers] = useState<string[]>([]);
 
   // Field Labels (Customizable)
   const [invoiceNumberLabel, setInvoiceNumberLabel] = useState(isProforma ? 'Proforma Invoice Number' : 'Invoice Number');
@@ -142,51 +184,20 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [editFieldType, setEditFieldType] = useState<'text' | 'date' | 'textarea'>('text');
   const [editFieldValue, setEditFieldValue] = useState('');
 
-  // Bank Accounts Management State (Multiple Banks)
-  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([
-    {
-      id: 'bank_1',
-      bankName: 'HDFC Bank Ltd',
-      accountName: 'Yaa Creations',
-      accountNumber: '50200098412356',
-      ifscCode: 'HDFC0001234',
-      branchName: 'Business Bay, Mumbai',
-      upiId: 'yaacreations@hdfcbank',
-      isDefault: true,
-    },
-    {
-      id: 'bank_2',
-      bankName: 'ICICI Bank',
-      accountName: 'Yaa Creations',
-      accountNumber: '001105023984',
-      ifscCode: 'ICIC0000011',
-      branchName: 'Nariman Point, Mumbai',
-      upiId: 'yaacreations@icici',
-      isDefault: false,
-    },
-    {
-      id: 'bank_3',
-      bankName: 'State Bank of India',
-      accountName: 'Yaa Creations',
-      accountNumber: '38920194820',
-      ifscCode: 'SBIN0004521',
-      branchName: 'Corporate Banking Branch',
-      upiId: 'yaacreations@sbi',
-      isDefault: false,
-    },
-  ]);
-  const [selectedBankId, setSelectedBankId] = useState<string>('bank_1');
+  // Bank Accounts Management State (starts empty, user configures via Add Bank)
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [selectedBankId, setSelectedBankId] = useState<string>('');
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
   const [newBank, setNewBank] = useState<Partial<BankAccount>>({
     bankName: '',
-    accountName: 'Yaa Creations',
+    accountName: '',
     accountNumber: '',
     ifscCode: '',
     branchName: '',
     upiId: '',
   });
 
-  const selectedBank = bankAccounts.find((b) => b.id === selectedBankId) || bankAccounts[0];
+  const selectedBank = bankAccounts.find((b) => b.id === selectedBankId) || (bankAccounts.length > 0 ? bankAccounts[0] : null);
 
   const handleSaveNewBank = (e: React.FormEvent) => {
     e.preventDefault();
@@ -197,10 +208,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     const created: BankAccount = {
       id: `bank_${Date.now()}`,
       bankName: newBank.bankName.trim(),
-      accountName: newBank.accountName?.trim() || 'Yaa Creations',
+      accountName: newBank.accountName?.trim() || '',
       accountNumber: newBank.accountNumber.trim(),
-      ifscCode: (newBank.ifscCode || 'IFSC0000').toUpperCase().trim(),
-      branchName: newBank.branchName?.trim() || 'Main Branch',
+      ifscCode: (newBank.ifscCode || '').toUpperCase().trim(),
+      branchName: newBank.branchName?.trim() || '',
       upiId: newBank.upiId?.trim() || '',
     };
     setBankAccounts([...bankAccounts, created]);
@@ -208,7 +219,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     setIsAddBankModalOpen(false);
     setNewBank({
       bankName: '',
-      accountName: 'Yaa Creations',
+      accountName: '',
       accountNumber: '',
       ifscCode: '',
       branchName: '',
@@ -217,32 +228,75 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     showToast('success', 'Bank Account Added', `Added and selected ${created.bankName}.`);
   };
 
-  const SUPER_ADMIN_ORGS = ['YaaCreations', 'Polihills', 'Enmin Labs'];
-  const SUPER_ADMIN_ORGS_DATA: Record<string, { name: string; email: string; phone: string; location: string }> = {
-    'yaacreations': { name: 'Alex Rivera', email: 'yaaadmin@gmail.com', phone: '+91 98765 43210', location: 'Hyderabad, TG' },
-    'polihills': { name: 'Sarah Jenkins', email: 'info@polihills.com', phone: '+91 98765 43211', location: 'Hyderabad, TG' },
-    'enmin labs': { name: 'Vikram Malhotra', email: 'hello@enminlabs.io', phone: '+91 98765 43212', location: 'Hyderabad, TG' },
-  };
+  // Live platform organizations
+  const [platformOrgs, setPlatformOrgs] = useState<OrganizationApiItem[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const superAdminClients: Customer[] = SUPER_ADMIN_ORGS.map((orgName, index) => {
-    const existing = customers.find(
-      (c) => (c.company || '').trim().toLowerCase() === orgName.toLowerCase()
-    );
-    const fallback = SUPER_ADMIN_ORGS_DATA[orgName.toLowerCase()];
-    return {
-      id: existing ? existing.id : `super_org_${index + 1}`,
-      name: existing?.name || fallback?.name || orgName,
-      company: orgName,
-      email: existing?.email || fallback?.email || `contact@${orgName.toLowerCase().replace(/\s+/g, '')}.com`,
-      phone: existing?.phone || fallback?.phone || '+91 98765 43210',
-      location: existing?.location || fallback?.location || 'Hyderabad, TG',
-      address: existing?.address || 'Corporate Tech Park, Hyderabad, TG',
-      status: 'Active' as const,
-      linkedProducts: existing?.linkedProducts || [],
+  useEffect(() => {
+    let isMounted = true;
+    const fetchOrgs = async () => {
+      try {
+        const res = await organizationApi.getOrganizations(1, 100);
+        if (isMounted && res.data) {
+          setPlatformOrgs(res.data);
+        }
+      } catch (err) {
+        console.error('Failed to load organizations in NewInvoiceView:', err);
+      }
     };
-  });
+    fetchOrgs();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
-  const availableCustomers = isSuperAdmin ? superAdminClients : customers;
+  const mappedPlatformClients: Customer[] = platformOrgs.map((org) => ({
+    id: org.id,
+    name: org.name,
+    company: org.name,
+    email: org.email || '',
+    phone: org.phone || '',
+    location: '',
+    address: '',
+    status: 'Active' as const,
+    linkedProducts: [],
+    gstin: org.gstNumber || '',
+    taxId: org.gstNumber || '',
+  }));
+
+  const availableCustomers = mappedPlatformClients.length > 0 ? mappedPlatformClients : commerceCustomers;
+
+  // Live Subscription Plans from Platform API
+  const [platformPlans, setPlatformPlans] = useState<
+    Array<{ id: string; name: string; price: number; hsn: string; taxPercent: number; description?: string }>
+  >([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchPlans = async () => {
+      try {
+        const res = await subscriptionPlanApi.getSubscriptionPlans({ limit: 100 });
+        if (isMounted && res.data) {
+          setPlatformPlans(
+            res.data.map((plan) => ({
+              id: plan.id,
+              name: plan.name,
+              hsn: '998314',
+              price: Number(plan.monthlyPrice || plan.annualPrice || 0),
+              taxPercent: Number(plan.gstRate) || 18,
+              description: plan.description || '',
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Failed to load subscription plans in NewInvoiceView:', err);
+      }
+    };
+    fetchPlans();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Column 2: Client Selection & Dropdown
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -255,12 +309,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   useEffect(() => {
     if (!hasInitializedCustomerRef.current && availableCustomers.length > 0) {
       hasInitializedCustomerRef.current = true;
-      const defaultCust =
-        availableCustomers.find((c) => (c.company || '').toLowerCase() === 'yaacreations') ||
-        availableCustomers[0];
-      if (defaultCust) {
-        setSelectedCustomer(defaultCust);
-      }
     }
   }, [availableCustomers]);
 
@@ -274,117 +322,26 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   // Client Projects Association & State
-  const [clientProjectsMap, setClientProjectsMap] = useState<Record<string, Array<{ id: string; name: string; hsn: string; price: number; taxPercent: number; description?: string }>>>({
-    super_org_1: [
-      { id: 'cp_yaa_1', name: 'YaaCreations - Enterprise Software Retainer', hsn: '998313', price: 1499, taxPercent: 18, description: 'Dedicated enterprise SaaS suite and support' },
-      { id: 'cp_yaa_2', name: 'YaaCreations - Cloud Infrastructure & Hosting', hsn: '998314', price: 899, taxPercent: 18, description: 'Managed dedicated cloud infrastructure' },
-    ],
-    super_org_2: [
-      { id: 'cp_poli_1', name: 'Polihills - Enterprise Software Retainer', hsn: '998313', price: 1499, taxPercent: 18, description: 'Dedicated enterprise SaaS suite and support' },
-      { id: 'cp_poli_2', name: 'Polihills - Cloud Infrastructure & Hosting', hsn: '998314', price: 899, taxPercent: 18, description: 'Managed dedicated cloud infrastructure' },
-    ],
-    super_org_3: [
-      { id: 'cp_enmin_1', name: 'Enmin Labs - Enterprise Software Retainer', hsn: '998313', price: 1499, taxPercent: 18, description: 'Dedicated enterprise SaaS suite and support' },
-      { id: 'cp_enmin_2', name: 'Enmin Labs - Cloud Infrastructure & Hosting', hsn: '998314', price: 899, taxPercent: 18, description: 'Managed dedicated cloud infrastructure' },
-    ],
-    cust_103: [
-      { id: 'cp_103_1', name: 'HealthSync Telehealth Integration', hsn: '998314', price: 1899, taxPercent: 18, description: 'EMR sync and HIPAA video consultations module' },
-      { id: 'cp_103_2', name: 'PulseAnalytics Healthcare Tier', hsn: '998313', price: 899, taxPercent: 18, description: 'Clinical KPIs and patient intake telemetry' },
-      { id: 'cp_103_3', name: 'Doc motez Hospital Deployment', hsn: '998315', price: 1499, taxPercent: 18, description: 'Custom HIS/EMR database integration' },
-    ],
-    cust_104: [
-      { id: 'cp_104_1', name: 'OmniFlow Kitchen POS & ERP', hsn: '998313', price: 1499, taxPercent: 18, description: 'Multi-outlet cloud kitchen management and automated inventory' },
-      { id: 'cp_104_2', name: 'Delivery Aggregator Hub Integration', hsn: '998314', price: 799, taxPercent: 18, description: 'Zomato/Swiggy/UberEats unified order dispatcher' },
-      { id: 'cp_104_3', name: 'PulseAnalytics Kitchen Dashboards', hsn: '998319', price: 599, taxPercent: 18, description: 'Real-time kitchen order ticket analytics' },
-    ],
-  });
+  const [clientProjectsMap, setClientProjectsMap] = useState<
+    Record<string, Array<{ id: string; name: string; hsn: string; price: number; taxPercent: number; description?: string }>>
+  >({});
 
   const [isAddClientProjectModalOpen, setIsAddClientProjectModalOpen] = useState(false);
   const [targetItemIdForProject, setTargetItemIdForProject] = useState<string | null>(null);
   const [newClientProject, setNewClientProject] = useState({
     name: '',
-    hsn: '998313',
-    price: 999,
+    hsn: '998314',
+    price: 0,
     taxPercent: 18,
     description: '',
   });
 
-  // Get projects associated with the selected client (or standard catalog fallback)
+  // Get projects associated with the selected client (or live platform plans)
   const getActiveClientProjects = () => {
-    if (isSuperAdmin) {
-      if (!selectedCustomer) {
-        return SUPER_ADMIN_ORGS.map((orgName, idx) => ({
-          id: `super_proj_${idx + 1}`,
-          name: orgName,
-          hsn: '998313',
-          price: 1499,
-          taxPercent: 18,
-          description: `Enterprise solution and dedicated service retainer for ${orgName}`,
-        }));
-      }
-
-      const orgMatchKey = Object.keys(clientProjectsMap).find(
-        (key) =>
-          key === selectedCustomer.id ||
-          SUPER_ADMIN_ORGS.find(
-            (o, i) =>
-              o.toLowerCase() === selectedCustomer.company?.toLowerCase() &&
-              key === `super_org_${i + 1}`
-          )
-      );
-
-      if (orgMatchKey && clientProjectsMap[orgMatchKey]?.length) {
-        return clientProjectsMap[orgMatchKey];
-      }
-
-      return [
-        {
-          id: `cp_super_${selectedCustomer.id || '1'}`,
-          name: selectedCustomer.company,
-          hsn: '998313',
-          price: 1499,
-          taxPercent: 18,
-          description: `Enterprise solution and dedicated service retainer for ${selectedCustomer.company}`,
-        },
-      ];
-    }
-
-    if (!selectedCustomer) {
-      return products.map((p) => ({
-        id: p.id,
-        name: p.name,
-        hsn: p.code ? `HSN-${p.code.replace('PROD_', '9983')}` : '998313',
-        price: p.plans?.[0]?.price || 499,
-        taxPercent: 18,
-        description: p.tagline || p.description || '',
-      }));
-    }
-
-    if (clientProjectsMap[selectedCustomer.id]?.length) {
+    if (selectedCustomer && clientProjectsMap[selectedCustomer.id]?.length) {
       return clientProjectsMap[selectedCustomer.id];
     }
-
-    if (selectedCustomer.linkedProducts && selectedCustomer.linkedProducts.length > 0) {
-      return selectedCustomer.linkedProducts.map((lp, idx) => ({
-        id: `cp_${selectedCustomer.id}_${idx}`,
-        name: lp.productName,
-        hsn: '998313',
-        price: lp.amount || 999,
-        taxPercent: 18,
-        description: `${lp.planName || 'Standard'} for ${selectedCustomer.company}`,
-      }));
-    }
-
-    return [
-      {
-        id: `cp_init_${selectedCustomer.id}`,
-        name: `${selectedCustomer.company} Dedicated Services`,
-        hsn: '998313',
-        price: 1200,
-        taxPercent: 18,
-        description: `Custom implementation & support for ${selectedCustomer.company}`,
-      },
-    ];
+    return platformPlans;
   };
 
   const handleSaveClientProject = (e: React.FormEvent) => {
@@ -496,19 +453,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     );
   });
 
-  // Section 2: Line Items / Products Breakdown
-  const [items, setItems] = useState<SaleItem[]>([
-    {
-      id: 'item-1',
-      name: 'OmniFlow ERP - Enterprise Subscription',
-      description: '',
-      hsnCode: '998313',
-      qty: 1,
-      taxPercent: 18,
-      unitPrice: 1499,
-      discount: 0,
-    }
-  ]);
+  // Section 2: Line Items / Products Breakdown (starts empty, user adds items on demand)
+  const [items, setItems] = useState<SaleItem[]>([]);
 
   // Discount type state: global for all rows
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
@@ -575,10 +521,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const handleProductChange = (itemId: string, productName: string) => {
     const activeProjects = getActiveClientProjects();
     const foundClientProj = activeProjects.find((p) => p.name === productName);
-    const foundProd = products.find((p) => p.name === productName);
 
-    const defaultHsn = foundClientProj?.hsn || (foundProd?.code ? `HSN-${foundProd.code.replace('PROD_', '9983')}` : '998313');
-    const defaultPrice = foundClientProj?.price || foundProd?.plans?.[0]?.price || 499;
+    const defaultHsn = foundClientProj?.hsn || '998313';
+    const defaultPrice = foundClientProj?.price || 499;
     const defaultTax = foundClientProj?.taxPercent || 18;
 
     setItems((prev) =>
@@ -607,24 +552,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   };
 
   const handleAddItem = () => {
-    const activeProjects = getActiveClientProjects();
-    const defaultProj = activeProjects[0];
-    const defaultProdName = defaultProj?.name || 'OmniFlow ERP - Enterprise Subscription';
-    const defaultHsn = defaultProj?.hsn || '998313';
-    const defaultPrice = defaultProj?.price || 499;
-
     const newItem: SaleItem = {
       id: `item-${Date.now()}`,
-      name: defaultProdName,
+      name: '',
       description: '',
-      hsnCode: defaultHsn,
+      hsnCode: '998314',
       qty: 1,
       taxPercent: 18,
-      unitPrice: defaultPrice,
+      unitPrice: 0,
       discount: 0,
     };
     setItems((prev) => [...prev, newItem]);
-    showToast('info', 'Line Item Added', 'New line item added. Click + Add Description to specify details.');
+    showToast('info', 'Line Item Added', 'New line item added. Select or enter item details.');
   };
 
   const handleRemoveItem = (id: string) => {
@@ -665,59 +604,50 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     roundMode === 'up' ? roundUpDiff : roundMode === 'down' ? roundDownDiff : 0;
   const grandTotal = rawGrandTotal + roundOffAmount;
 
-  // Mock Existing Invoices
-  const existingInvoices = [
-    {
-      id: 'inv_1',
-      invoiceNumber: 'INV-2026-0891',
-      client: 'Horizon Fleet Logistics',
-      contact: 'Marcus Vance',
-      date: '2026-08-28',
-      amount: 1499,
-      status: 'Paid',
-      itemsCount: 2,
-    },
-    {
-      id: 'inv_2',
-      invoiceNumber: 'INV-2026-0892',
-      client: 'Nordic Glow Apparel',
-      contact: 'Sarah Lindqvist',
-      date: '2026-08-25',
-      amount: 899,
-      status: 'Paid',
-      itemsCount: 1,
-    },
-    {
-      id: 'inv_3',
-      invoiceNumber: 'INV-2026-0893',
-      client: 'Zenith Health Systems',
-      contact: 'Kavita Reddy',
-      date: '2026-08-20',
-      amount: 2499,
-      status: 'Pending',
-      itemsCount: 3,
-    },
-    {
-      id: 'inv_4',
-      invoiceNumber: 'INV-2026-0894',
-      client: 'OmniBite Cloud Kitchens',
-      contact: 'Gregory Paul',
-      date: '2026-08-15',
-      amount: 1200,
-      status: 'Paid',
-      itemsCount: 2,
-    },
-  ];
+  // Live Existing Invoices
+  const [existingInvoices, setExistingInvoices] = useState<InvoiceApiItem[]>([]);
+  const [isLoadingExistingInvoices, setIsLoadingExistingInvoices] = useState(false);
 
-  const handleSelectExistingInvoice = (inv: (typeof existingInvoices)[0]) => {
+  const handleOpenExistingInvoicesModal = async () => {
+    setIsExistingInvoiceModalOpen(true);
+    setIsLoadingExistingInvoices(true);
+    try {
+      const res = await invoiceApi.getInvoices({ limit: 50, sortBy: 'createdAt', sortOrder: 'desc' });
+      if (res.data) {
+        setExistingInvoices(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to load existing invoices:', err);
+    } finally {
+      setIsLoadingExistingInvoices(false);
+    }
+  };
+
+  const handleSelectExistingInvoice = (inv: InvoiceApiItem) => {
     setInvoiceNumber(inv.invoiceNumber);
-    setInvoiceDate(inv.date);
-    const foundClient = customers.find((c) => c.company.toLowerCase() === inv.client.toLowerCase()) || null;
+    setInvoiceDate(inv.invoiceDate ? inv.invoiceDate.split('T')[0] : new Date().toISOString().split('T')[0]);
+    const foundClient = availableCustomers.find(
+      (c) => c.id === inv.customerId || (c.company || '').toLowerCase() === (inv.customerName || '').toLowerCase()
+    ) || null;
     if (foundClient) {
       setSelectedCustomer(foundClient);
     }
-    setInvoiceDescription(`Recurring sales invoice for ${inv.client} - Order ref #${inv.invoiceNumber}`);
-    setReferenceNumbers([`REF-${inv.invoiceNumber}`]);
+    setInvoiceDescription(inv.notes || `Recurring sales invoice for ${inv.customerName} - Order ref #${inv.invoiceNumber}`);
+    setReferenceNumbers([inv.sourceId ? `REF-${inv.sourceId.slice(0, 8)}` : `REF-${inv.invoiceNumber}`]);
+    if (inv.items && inv.items.length > 0) {
+      setItems(
+        inv.items.map((it, idx) => ({
+          id: it.id || `item_${idx + 1}`,
+          name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+          description: it.itemDescription || '',
+          hsnCode: it.hsnCode || '998314',
+          qty: Number(it.quantity) || 1,
+          unitPrice: Number(it.unitPrice) || 0,
+          taxPercent: Number(it.gstPercent) || 18,
+          discount: 0,
+        }))
+      );
+    }
     setSaleMode('existing');
     setIsExistingInvoiceModalOpen(false);
     showToast('success', 'Invoice Loaded', `Loaded existing invoice "${inv.invoiceNumber}".`);
@@ -1034,39 +964,27 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 </button>
               </div>
 
-              <div className="space-y-3.5 text-[13px]">
-                <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                  <span className="font-bold text-slate-800">Invoice Number</span>
-                  <span className="text-slate-700">: {invoiceNumber}</span>
-                </div>
-                <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                  <span className="font-bold text-slate-800">Invoice Date</span>
-                  <span className="text-slate-700">: {invoiceDate}</span>
-                </div>
-                <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                  <span className="font-bold text-slate-800">Reference Number</span>
-                  <span className="text-slate-700">: {referenceNumbers[0] || 'PO-NEW-SALE'}</span>
-                </div>
-
-                {/* Additional Custom Fields */}
-                {customInvoiceFields.map((field) => (
-                  <div key={field.id} className="grid grid-cols-[140px_1fr] gap-2 items-center group">
-                    <span className="font-bold text-slate-800">{field.label}</span>
-                    <div className="text-slate-700 flex items-center justify-between">
-                      <span>: {field.value}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomInvoiceFields(customInvoiceFields.filter(f => f.id !== field.id));
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-all cursor-pointer shrink-0"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+              {customInvoiceFields.length > 0 && (
+                <div className="space-y-3.5 text-[13px]">
+                  {customInvoiceFields.map((field) => (
+                    <div key={field.id} className="grid grid-cols-[140px_1fr] gap-2 items-center group">
+                      <span className="font-bold text-slate-800">{field.label}</span>
+                      <div className="text-slate-700 flex items-center justify-between">
+                        <span>: {field.value}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomInvoiceFields(customInvoiceFields.filter(f => f.id !== field.id));
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-all cursor-pointer shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
 
               {isAddFieldModalOpen && (
                 <div className="flex items-start gap-3 mt-2">
@@ -1112,7 +1030,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
           <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between">
             <div className="flex items-center gap-3.5">
               <h2 className="text-base font-bold text-white tracking-tight">
-                Client & Billing Party
+                Organization / Bill To
               </h2>
             </div>
             {selectedCustomer && (
@@ -1132,11 +1050,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
           {/* Card Body */}
           <div className="p-8 space-y-8 flex-1 flex flex-col">
-            {/* Client Searchable Dropdown */}
+            {/* Organizations Searchable Dropdown */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Client / Customer <span className="text-rose-500">*</span>
+                  Organization <span className="text-rose-500">*</span>
                 </label>
               </div>
 
@@ -1146,7 +1064,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   <Search className="w-4 h-4 text-slate-400 absolute left-4 pointer-events-none" />
                   <input
                     type="text"
-                    value={isClientDropdownOpen ? clientSearchQuery : (selectedCustomer?.company || clientSearchQuery)}
+                    value={isClientDropdownOpen ? clientSearchQuery : (selectedCustomer?.company || selectedCustomer?.name || clientSearchQuery)}
                     onChange={(e) => {
                       const val = e.target.value;
                       setClientSearchQuery(val);
@@ -1161,27 +1079,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         setClientSearchQuery(selectedCustomer.company);
                       }
                     }}
-                    placeholder="Search or select client / customer..."
+                    placeholder="Search or select organization..."
                     className={`w-full h-11 pl-11 pr-16 bg-white border rounded-xl text-sm font-semibold transition-all shadow-2xs outline-none ${isClientDropdownOpen
                       ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 text-slate-900'
                       : 'border-slate-200 hover:border-slate-300 text-slate-800'
                       }`}
                   />
                   <div className="absolute right-3 flex items-center gap-1.5">
-                    {(selectedCustomer || clientSearchQuery) && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedCustomer(null);
-                          setClientSearchQuery('');
-                        }}
-                        className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
-                        title="Clear selection"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => setIsClientDropdownOpen(!isClientDropdownOpen)}
@@ -1195,27 +1099,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </div>
                 </div>
 
-                {/* Dropdown Menu Popup: Direct List of Clients with Add New Client Option */}
+                {/* Dropdown Menu Popup: Direct List of Organizations */}
                 {isClientDropdownOpen && (
                   <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-[320px] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
-                    {!isSuperAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsClientDropdownOpen(false);
-                          setIsAddClientModalOpen(true);
-                        }}
-                        className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#33077C] hover:bg-[#4309A2] transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.99]"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-white stroke-[2.5]" />
-                        <span>Add New Client</span>
-                      </button>
-                    )}
-
                     <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
                       {filteredCustomers.length === 0 ? (
                         <div className="py-4 text-center text-xs text-slate-400">
-                          No matching clients found for "{clientSearchQuery}".
+                          No matching organizations found for "{clientSearchQuery}".
                         </div>
                       ) : (
                         filteredCustomers.map((cust) => {
@@ -1226,16 +1116,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                               type="button"
                               onClick={() => {
                                 setSelectedCustomer(cust);
-                                setClientSearchQuery(cust.company);
+                                setClientSearchQuery(cust.company || cust.name);
                                 setIsClientDropdownOpen(false);
-                                showToast('success', 'Client Selected', `Selected "${cust.company}".`);
+                                showToast('success', 'Organization Selected', `Selected "${cust.company || cust.name}".`);
                               }}
                               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                 ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
                                 : 'hover:bg-slate-50 text-slate-800 font-medium'
                                 }`}
                             >
-                              <span className="truncate">{cust.company}</span>
+                              <div className="min-w-0">
+                                <span className="truncate block font-semibold text-slate-800">{cust.company || cust.name}</span>
+                              </div>
                               {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
                             </button>
                           );
@@ -1247,22 +1139,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             </div>
 
-            {/* Selected Client Card Details or Empty State */}
+            {/* Selected Organization Card Details or Empty State */}
             {selectedCustomer ? (
               <div className="pt-2 flex-1 flex flex-col justify-between">
                 <div>
                   <div className="space-y-3.5 text-[13px]">
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">Company Name</span>
-                      <span className="text-slate-700">: {selectedCustomer.company}</span>
+                      <span className="font-bold text-slate-800">Organization</span>
+                      <span className="text-slate-700 font-semibold">: {selectedCustomer.company || selectedCustomer.name}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
-                      <span className="text-slate-700">: {(selectedCustomer as any).gstin || (selectedCustomer as any).taxId || '27AABCT8892K1Z5'}</span>
-                    </div>
-                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">PAN Number</span>
-                      <span className="text-slate-700">: {(selectedCustomer as any).pan || 'ABCDE1234F'}</span>
+                      <span className="text-slate-700">: {(selectedCustomer as any).gstin || (selectedCustomer as any).taxId || 'N/A'}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">Phone Number</span>
@@ -1270,27 +1158,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">Email</span>
-                      <span className="text-slate-700">: {selectedCustomer.email}</span>
-                    </div>
-                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">Industry</span>
-                      <span className="text-slate-700">: {selectedCustomer.industry || 'Technology'}</span>
-                    </div>
-                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">Location / Region</span>
-                      <span className="text-slate-700">: {selectedCustomer.location || 'India (Domestic)'}</span>
+                      <span className="text-slate-700">: {selectedCustomer.email || 'N/A'}</span>
                     </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="p-8 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/40 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
-                <div className="w-12 h-12 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center mx-auto border border-purple-100 shadow-2xs">
-                  <UsersRound className="w-6 h-6 text-[#4309A2]" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-slate-800">No Client Selected Yet</h4>
-                </div>
+              <div className="py-6 text-center text-sm text-slate-400 font-medium">
+                No organization selected
               </div>
             )}
           </div>
@@ -1339,7 +1214,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </colgroup>
               <thead>
                 <tr className="bg-[#33077C] border-b border-[#33077C]/30 text-[11px] font-bold uppercase tracking-wider text-white">
-                  <th className="px-5 py-4 text-left border border-[#33077C]/30 bg-[#33077C] text-white">Projects</th>
+                  <th className="px-5 py-4 text-left border border-[#33077C]/30 bg-[#33077C] text-white">Item / Service Name</th>
                   <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">HSN Code</th>
                   <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">Qty</th>
                   <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">GST (%)</th>
@@ -1377,258 +1252,232 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 </tr>
               </thead>
               <tbody className="text-sm">
-                {items.map((item) => {
-                  const lineSubtotal = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
-                  const lineDiscount = discountType === 'percent'
-                    ? (lineSubtotal * (Number(item.discount) || 0)) / 100
-                    : Number(item.discount) || 0;
-                  const lineTaxable = Math.max(0, lineSubtotal - lineDiscount);
-                  const lineTax = (lineTaxable * (Number(item.taxPercent) || 0)) / 100;
-                  const lineTotal = lineTaxable + lineTax;
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-sm text-slate-400 font-medium bg-slate-50/20">
+                      No line items added
+                    </td>
+                  </tr>
+                ) : (
+                  items.map((item) => {
+                    const lineSubtotal = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
+                    const lineDiscount = discountType === 'percent'
+                      ? (lineSubtotal * (Number(item.discount) || 0)) / 100
+                      : Number(item.discount) || 0;
+                    const lineTaxable = Math.max(0, lineSubtotal - lineDiscount);
+                    const lineTax = (lineTaxable * (Number(item.taxPercent) || 0)) / 100;
+                    const lineTotal = lineTaxable + lineTax;
 
-                  const isDropdownOpen = openProductDropdownId === item.id;
-
-                  return (
-                    <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                      {/* 1. Product (Custom Dropdown styled as per Reference Image) */}
-                      <td className="px-5 py-4 align-top border border-slate-200 relative">
-                        <div className="space-y-2 product-dropdown-container relative">
-                          {/* Trigger Button */}
-                          <button
-                            type="button"
-                            ref={(el) => { triggerRefs.current[item.id] = el; }}
-                            onClick={() => {
-                              if (isDropdownOpen) {
-                                setOpenProductDropdownId(null);
-                                setDropdownRect(null);
-                              } else {
-                                const btn = triggerRefs.current[item.id];
-                                if (btn) {
-                                  const rect = btn.getBoundingClientRect();
-                                  setDropdownRect({ top: rect.bottom + 6, left: rect.left, width: rect.width });
-                                }
-                                setOpenProductDropdownId(item.id);
-                              }
-                            }}
-                            className={`w-full h-10 px-3.5 bg-slate-50/70 hover:bg-white rounded-xl text-left flex items-center justify-between transition-all cursor-pointer text-xs font-bold text-slate-900 border ${isDropdownOpen
-                              ? 'border-[#4309A2] ring-3 ring-[#4309A2]/10 bg-white shadow-xs'
-                              : 'border-slate-200 hover:border-slate-300 shadow-2xs'
-                              }`}
-                          >
-                            <span className="truncate">{item.name || 'Select Project'}</span>
-                            <ChevronDown
-                              className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-1.5 ${isDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
-                                }`}
-                            />
-                          </button>
-
-                          {/* Dropdown Popup via Portal (fixed positioning to escape overflow-x-auto) */}
-                          {isDropdownOpen && dropdownRect && createPortal(
-                            <div
-                              style={{ position: 'fixed', top: dropdownRect.top, left: dropdownRect.left, width: Math.max(dropdownRect.width, 280), zIndex: 9999 }}
-                              className="bg-white rounded-2xl border border-slate-100 shadow-2xl p-2 space-y-1 animate-in fade-in zoom-in-95 duration-100"
-                            >
-                              {selectedCustomer ? (
-                                <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
-                                  <span className="truncate">Projects for {selectedCustomer.company}</span>
-                                  <span className="shrink-0 ml-1 text-slate-500 font-semibold">{getActiveClientProjects().length} Projects</span>
-                                </div>
-                              ) : (
-                                <div className="px-3 py-1.5 text-[10px] font-bold text-amber-700 bg-amber-50/80 rounded-xl mb-1 flex items-center gap-1.5">
-                                  <Info className="w-3 h-3 text-amber-600 shrink-0" />
-                                  <span>Select a client above to filter client projects</span>
-                                </div>
-                              )}
-
-                              <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
-                                {getActiveClientProjects().map((p) => {
-                                  const isSelected = item.name === p.name;
-                                  return (
-                                    <button
-                                      key={p.id}
-                                      type="button"
-                                      onClick={() => {
-                                        handleProductChange(item.id, p.name);
-                                        setOpenProductDropdownId(null);
-                                        setDropdownRect(null);
-                                      }}
-                                      className={`w-full text-left px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer block truncate ${isSelected
-                                        ? 'bg-[#E8F8F0] text-[#00A859] font-bold'
-                                        : 'text-slate-800 hover:bg-slate-50 font-medium'
-                                        }`}
-                                    >
-                                      <div className="flex items-center justify-between gap-2">
-                                        <span className="truncate">{p.name}</span>
-                                        <span className="text-[11px] font-semibold text-slate-400 shrink-0">₹{p.price}</span>
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-
-                              {/* Option to Add New Project to Client (Admin only) */}
-                              {!isSuperAdmin && (
-                                <div className="pt-1.5 border-t border-slate-100">
-                                  {selectedCustomer ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setTargetItemIdForProject(item.id);
-                                        setIsAddClientProjectModalOpen(true);
-                                        setOpenProductDropdownId(null);
-                                        setDropdownRect(null);
-                                      }}
-                                      className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#33077C] hover:bg-[#4309A2] transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.99]"
-                                    >
-                                      <Plus className="w-3.5 h-3.5 text-white stroke-[2.5]" />
-                                      <span>Add Project to {selectedCustomer.company}</span>
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setIsClientDropdownOpen(true);
-                                        setOpenProductDropdownId(null);
-                                        setDropdownRect(null);
-                                        showToast('info', 'Select Client First', 'Please select a client to associate a new project.');
-                                      }}
-                                      className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#33077C] hover:bg-[#4309A2] transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.99]"
-                                    >
-                                      <Plus className="w-3.5 h-3.5 text-white stroke-[2.5]" />
-                                      <span>Select a client first</span>
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>,
-                            document.body
-                          )}
-
-                          {/* Description Preview & Edit trigger */}
-                          <div className="min-h-[22px] flex items-center">
-                            {item.description ? (
-                              <div
-                                onClick={() => {
-                                  setDescriptionModalItem({
-                                    id: item.id,
-                                    name: item.name,
-                                    description: item.description,
-                                  });
-                                  setTempDescription(item.description);
-                                }}
-                                className="group inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50/80 hover:bg-amber-100/90 border border-amber-200/80 rounded-lg text-xs text-amber-900 font-medium cursor-pointer transition-all max-w-[260px] truncate shadow-2xs"
-                                title="Click to edit description"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-[#4309A2] shrink-0" />
-                                <span className="truncate max-w-[210px] italic text-[11px] text-amber-900">
-                                  {item.description}
-                                </span>
-                                <Pencil className="w-3 h-3 text-amber-600 opacity-60 group-hover:opacity-100 shrink-0 ml-0.5" />
-                              </div>
-                            ) : (
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                        {/* 1. Item / Service Name (Organization Custom Dropdown) */}
+                        <td className="px-4 py-4 align-top border border-slate-200">
+                          <div className="space-y-2">
+                            <div className="relative product-dropdown-container">
                               <button
                                 type="button"
+                                ref={(el) => { triggerRefs.current[item.id] = el; }}
                                 onClick={() => {
-                                  setDescriptionModalItem({
-                                    id: item.id,
-                                    name: item.name,
-                                    description: '',
-                                  });
-                                  setTempDescription('');
+                                  if (openProductDropdownId === item.id) {
+                                    setOpenProductDropdownId(null);
+                                  } else {
+                                    const rect = triggerRefs.current[item.id]?.getBoundingClientRect();
+                                    if (rect) {
+                                      setDropdownRect({
+                                        top: rect.bottom + window.scrollY,
+                                        left: rect.left + window.scrollX,
+                                        width: rect.width,
+                                      });
+                                    }
+                                    setOpenProductDropdownId(item.id);
+                                  }
                                 }}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-slate-400 hover:text-[#4309A2] hover:bg-orange-50/60 rounded-lg transition-all cursor-pointer"
+                                className={`w-full h-10 px-3.5 bg-slate-50/70 hover:bg-white focus:bg-white border rounded-xl text-xs font-semibold text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs ${
+                                  openProductDropdownId === item.id
+                                    ? 'border-[#4309A2] ring-3 ring-[#4309A2]/10 bg-white text-slate-900'
+                                    : 'border-slate-200 hover:border-slate-300 text-slate-800'
+                                }`}
                               >
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>Add Description</span>
+                                <span className="truncate block font-semibold text-slate-800">
+                                  {item.name || <span className="text-slate-400 font-normal">Select organization...</span>}
+                                </span>
+                                <ChevronDown
+                                  className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-1.5 ${
+                                    openProductDropdownId === item.id ? 'rotate-180 text-[#4309A2]' : ''
+                                  }`}
+                                />
                               </button>
-                            )}
+
+                              {/* Custom Dropdown Popup Menu (Floating overlay outside table clipping) */}
+                              {openProductDropdownId === item.id && dropdownRect && (
+                                <div
+                                  style={{
+                                    top: `${dropdownRect.top + 6}px`,
+                                    left: `${dropdownRect.left}px`,
+                                    width: `${Math.max(260, dropdownRect.width)}px`,
+                                  }}
+                                  className="fixed z-[999] bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100"
+                                >
+                                  <div className="max-h-60 overflow-y-auto space-y-0.5">
+                                    {availableCustomers.length === 0 ? (
+                                      <div className="py-3 text-center text-xs text-slate-400">
+                                        No organizations found
+                                      </div>
+                                    ) : (
+                                      availableCustomers.map((org) => {
+                                        const orgName = org.company || org.name;
+                                        const isSelected = item.name === orgName;
+                                        return (
+                                          <button
+                                            key={org.id}
+                                            type="button"
+                                            onClick={() => {
+                                              updateItem(item.id, 'name', orgName);
+                                              setOpenProductDropdownId(null);
+                                            }}
+                                            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                              isSelected
+                                                ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                                                : 'hover:bg-slate-50 text-slate-700 font-medium'
+                                            }`}
+                                          >
+                                            <span className="truncate">{orgName}</span>
+                                            {isSelected && <Check className="w-3.5 h-3.5 text-[#33077C] stroke-[2.5] shrink-0" />}
+                                          </button>
+                                        );
+                                      })
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Description Preview & Edit trigger */}
+                            <div className="min-h-[22px] flex items-center">
+                              {item.description ? (
+                                <div
+                                  onClick={() => {
+                                    setDescriptionModalItem({
+                                      id: item.id,
+                                      name: item.name,
+                                      description: item.description,
+                                    });
+                                    setTempDescription(item.description);
+                                  }}
+                                  className="group inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50/80 hover:bg-amber-100/90 border border-amber-200/80 rounded-lg text-xs text-amber-900 font-medium cursor-pointer transition-all max-w-[260px] truncate shadow-2xs"
+                                  title="Click to edit description"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-[#4309A2] shrink-0" />
+                                  <span className="truncate max-w-[210px] italic text-[11px] text-amber-900">
+                                    {item.description}
+                                  </span>
+                                  <Pencil className="w-3 h-3 text-amber-600 opacity-60 group-hover:opacity-100 shrink-0 ml-0.5" />
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDescriptionModalItem({
+                                      id: item.id,
+                                      name: item.name,
+                                      description: '',
+                                    });
+                                    setTempDescription('');
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-slate-400 hover:text-[#4309A2] hover:bg-orange-50/60 rounded-lg transition-all cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add Description</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </td>
+                        </td>
 
-                      {/* 2. HSCN Code */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <input
-                          type="text"
-                          value={item.hsnCode || ''}
-                          onChange={(e) => updateItem(item.id, 'hsnCode', e.target.value)}
-                          placeholder="998313"
-                          className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                        />
-                      </td>
+                        {/* 2. HSN Code */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <input
+                            type="text"
+                            value={item.hsnCode || ''}
+                            onChange={(e) => updateItem(item.id, 'hsnCode', e.target.value)}
+                            placeholder="998314"
+                            className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
 
-                      {/* 3. Quantity */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <input
-                          type="number"
-                          min="1"
-                          value={item.qty}
-                          onChange={(e) => updateItem(item.id, 'qty', Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                        />
-                      </td>
+                        {/* 3. Quantity */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.qty}
+                            onChange={(e) => updateItem(item.id, 'qty', Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
 
-                      {/* 4. GST (%) */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={item.taxPercent}
-                          onChange={(e) => updateItem(item.id, 'taxPercent', Math.max(0, parseFloat(e.target.value) || 0))}
-                          className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                        />
-                      </td>
+                        {/* 4. GST (%) */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={item.taxPercent}
+                            onChange={(e) => updateItem(item.id, 'taxPercent', Math.max(0, parseFloat(e.target.value) || 0))}
+                            className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
 
-                      {/* 5. Price (₹) */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={item.unitPrice}
-                          onChange={(e) => updateItem(item.id, 'unitPrice', Math.max(0, parseFloat(e.target.value) || 0))}
-                          className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                        />
-                      </td>
+                        {/* 5. Price (₹) */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={item.unitPrice}
+                            onChange={(e) => updateItem(item.id, 'unitPrice', Math.max(0, parseFloat(e.target.value) || 0))}
+                            className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-bold text-center text-slate-900 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
 
-                      {/* 7. Discount */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={item.discount || 0}
-                          onChange={(e) => updateItem(item.id, 'discount', Math.max(0, parseFloat(e.target.value) || 0))}
-                          className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                        />
-                      </td>
+                        {/* 6. Discount */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={item.discount || 0}
+                            onChange={(e) => updateItem(item.id, 'discount', Math.max(0, parseFloat(e.target.value) || 0))}
+                            className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
 
-                      {/* 8. Total (₹) */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <div className="h-10 flex items-center justify-center">
-                          <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100/90 font-bold text-xs shadow-2xs font-sans min-w-[90px] text-center">
-                            ₹{lineTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      </td>
+                        {/* 7. Total (₹) */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <div className="h-10 flex items-center justify-center">
+                            <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100/90 font-bold text-xs shadow-2xs font-sans min-w-[90px] text-center">
+                              ₹{lineTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </td>
 
-                      {/* 9. Action */}
-                      <td className="px-2 py-4 align-top border border-slate-200">
-                        <div className="h-10 flex items-center justify-center">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(item.id)}
-                            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-all cursor-pointer"
-                            title="Delete Line Item"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        {/* 8. Action */}
+                        <td className="px-2 py-4 align-top border border-slate-200">
+                          <div className="h-10 flex items-center justify-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(item.id)}
+                              className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-all cursor-pointer"
+                              title="Delete Line Item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1669,143 +1518,157 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
               {/* Body */}
               <div className="p-7 space-y-6 flex-1">
-                {/* Select Receiving Bank (Custom Roomy Dropdown) */}
-                <div className="relative" ref={bankDropdownRef}>
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
-                    Select Receiving Bank Account
-                  </label>
+                {bankAccounts.length === 0 ? (
+                  <div className="py-6 text-center text-sm text-slate-400 font-medium">
+                    No bank accounts found
+                  </div>
+                ) : (
+                  <>
+                    {/* Select Receiving Bank (Custom Roomy Dropdown) */}
+                    <div className="relative" ref={bankDropdownRef}>
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                        Select Receiving Bank Account
+                      </label>
 
-                  {/* Trigger Button */}
-                  <button
-                    type="button"
-                    onClick={() => setIsBankDropdownOpen(!isBankDropdownOpen)}
-                    className="w-full h-12 px-4 bg-white hover:bg-slate-50/70 border border-slate-200 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-7 h-7 rounded-lg bg-orange-50 text-[#4309A2] flex items-center justify-center shrink-0 border border-orange-100">
-                        <Landmark className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="truncate">
-                        <span className="text-sm font-bold text-slate-900">
-                          {selectedBank.bankName}
-                        </span>
-                        <span className="text-xs text-slate-500 font-medium ml-2">
-                          &bull;&bull;&bull;&bull;{selectedBank.accountNumber.slice(-4)} ({selectedBank.branchName})
-                        </span>
-                      </div>
-                    </div>
-                    <ChevronDown
-                      className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-2 ${isBankDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
-                        }`}
-                    />
-                  </button>
+                      {/* Trigger Button */}
+                      <button
+                        type="button"
+                        onClick={() => setIsBankDropdownOpen(!isBankDropdownOpen)}
+                        className="w-full h-12 px-4 bg-white hover:bg-slate-50/70 border border-slate-200 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-7 h-7 rounded-lg bg-orange-50 text-[#4309A2] flex items-center justify-center shrink-0 border border-orange-100">
+                            <Landmark className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="truncate">
+                            <span className="text-sm font-bold text-slate-900">
+                              {selectedBank?.bankName || 'Select Bank Account'}
+                            </span>
+                            {selectedBank && (
+                              <span className="text-xs text-slate-500 font-medium ml-2">
+                                &bull;&bull;&bull;&bull;{selectedBank.accountNumber.slice(-4)} {selectedBank.branchName ? `(${selectedBank.branchName})` : ''}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <ChevronDown
+                          className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-2 ${isBankDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
+                            }`}
+                        />
+                      </button>
 
-                  {/* Custom Dropdown Popup Menu */}
-                  {isBankDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full space-y-1 animate-in fade-in zoom-in-95 duration-100">
-                      <div className="px-3 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
-                        <span>Configured Accounts</span>
-                        <span>{bankAccounts.length} Available</span>
-                      </div>
+                      {/* Custom Dropdown Popup Menu */}
+                      {isBankDropdownOpen && (
+                        <div className="absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                          <div className="px-3 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
+                            <span>Configured Accounts</span>
+                            <span>{bankAccounts.length} Available</span>
+                          </div>
 
-                      <div className="max-h-64 overflow-y-auto space-y-1 pt-1">
-                        {bankAccounts.map((b) => {
-                          const isSelected = b.id === selectedBankId;
-                          return (
-                            <button
-                              key={b.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedBankId(b.id);
-                                setIsBankDropdownOpen(false);
-                                showToast('success', 'Bank Selected', `Receiving bank set to ${b.bankName}.`);
-                              }}
-                              className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
-                                ? 'bg-[#E8F8F0] border border-emerald-200/80 text-[#00A859]'
-                                : 'hover:bg-slate-50 border border-transparent text-slate-800'
-                                }`}
-                            >
-                              <div className="flex items-center gap-3.5 min-w-0">
-                                <div
-                                  className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 border ${isSelected
-                                    ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                    : 'bg-orange-50 text-[#4309A2] border-orange-100'
+                          <div className="max-h-64 overflow-y-auto space-y-1 pt-1">
+                            {bankAccounts.map((b) => {
+                              const isSelected = b.id === selectedBankId;
+                              return (
+                                <button
+                                  key={b.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedBankId(b.id);
+                                    setIsBankDropdownOpen(false);
+                                    showToast('success', 'Bank Selected', `Receiving bank set to ${b.bankName}.`);
+                                  }}
+                                  className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
+                                    ? 'bg-[#E8F8F0] border border-emerald-200/80 text-[#00A859]'
+                                    : 'hover:bg-slate-50 border border-transparent text-slate-800'
                                     }`}
                                 >
-                                  <Landmark className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-bold truncate">
-                                    {b.bankName}
+                                  <div className="flex items-center gap-3.5 min-w-0">
+                                    <div
+                                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 border ${isSelected
+                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                        : 'bg-orange-50 text-[#4309A2] border-orange-100'
+                                        }`}
+                                    >
+                                      <Landmark className="w-4 h-4" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold truncate">
+                                        {b.bankName}
+                                      </div>
+                                      <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
+                                        A/C: <span className="font-semibold text-slate-700">&bull;&bull;&bull;&bull;{b.accountNumber.slice(-4)}</span> {b.branchName ? `• ${b.branchName}` : ''}
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
-                                    A/C: <span className="font-semibold text-slate-700">&bull;&bull;&bull;&bull;{b.accountNumber.slice(-4)}</span> &bull; {b.branchName}
-                                  </div>
-                                </div>
-                              </div>
 
-                              {isSelected && (
-                                <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
-                                  <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                </div>
-                              )}
+                                  {isSelected && (
+                                    <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Quick Add Bank Footer Button */}
+                          <div className="pt-1.5 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsBankDropdownOpen(false);
+                                setIsAddBankModalOpen(true);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-[#4309A2] hover:bg-orange-50/70 border border-dashed border-orange-200 transition-all cursor-pointer flex items-center gap-2"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Add New Bank Account</span>
                             </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Quick Add Bank Footer Button */}
-                      <div className="pt-1.5 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsBankDropdownOpen(false);
-                            setIsAddBankModalOpen(true);
-                          }}
-                          className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-[#4309A2] hover:bg-orange-50/70 border border-dashed border-orange-200 transition-all cursor-pointer flex items-center gap-2"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Add New Bank Account</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Active Bank Details (Matching Reference Image 2 Style) */}
-                {selectedBank && (
-                  <div className="pt-2">
-                    <div className="space-y-3.5 text-[13px]">
-                      <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                        <span className="font-bold text-slate-800">Bank Name</span>
-                        <span className="text-slate-700">: {selectedBank.bankName}</span>
-                      </div>
-                      <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                        <span className="font-bold text-slate-800">Account Number</span>
-                        <span className="text-slate-700">: {selectedBank.accountNumber}</span>
-                      </div>
-                      <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                        <span className="font-bold text-slate-800">IFSC Code</span>
-                        <span className="text-slate-700">: {selectedBank.ifscCode}</span>
-                      </div>
-                      {selectedBank.branchName && (
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">Branch Name</span>
-                          <span className="text-slate-700">: {selectedBank.branchName}</span>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                        <span className="font-bold text-slate-800">Beneficiary Name</span>
-                        <span className="text-slate-700">: {selectedBank.accountName}</span>
-                      </div>
-                      {selectedBank.upiId && (
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">UPI ID</span>
-                          <span className="text-slate-700">: {selectedBank.upiId}</span>
+                          </div>
                         </div>
                       )}
                     </div>
-                  </div>
+
+                    {/* Active Bank Details */}
+                    {selectedBank && (
+                      <div className="pt-2">
+                        <div className="space-y-3.5 text-[13px]">
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Bank Name</span>
+                            <span className="text-slate-700">: {selectedBank.bankName}</span>
+                          </div>
+                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                            <span className="font-bold text-slate-800">Account Number</span>
+                            <span className="text-slate-700">: {selectedBank.accountNumber}</span>
+                          </div>
+                          {selectedBank.ifscCode && (
+                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                              <span className="font-bold text-slate-800">IFSC Code</span>
+                              <span className="text-slate-700">: {selectedBank.ifscCode}</span>
+                            </div>
+                          )}
+                          {selectedBank.branchName && (
+                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                              <span className="font-bold text-slate-800">Branch Name</span>
+                              <span className="text-slate-700">: {selectedBank.branchName}</span>
+                            </div>
+                          )}
+                          {selectedBank.accountName && (
+                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                              <span className="font-bold text-slate-800">Beneficiary Name</span>
+                              <span className="text-slate-700">: {selectedBank.accountName}</span>
+                            </div>
+                          )}
+                          {selectedBank.upiId && (
+                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                              <span className="font-bold text-slate-800">UPI ID</span>
+                              <span className="text-slate-700">: {selectedBank.upiId}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -1920,7 +1783,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 {/* Action Button */}
                 <button
                   type="button"
-                  onClick={() => {
+                  disabled={isSubmitting}
+                  onClick={async () => {
                     if (!selectedCustomer) {
                       showToast('error', 'Select Client', 'Please select or add a client in the Client card first.');
                       return;
@@ -1930,95 +1794,139 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       return;
                     }
 
-                    const finalInvoiceNumber = invoiceNumber.trim() || generateInvoiceNo();
+                    if (isProforma) {
+                      try {
+                        setIsSubmitting(true);
+                        if (invoiceToEdit) {
+                          const updatePayload: UpdateProformaRequest = {
+                            invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
+                            dueDate: invoiceToEdit.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                            discountTotal: totalDiscount,
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                            gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                            pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                            notes: invoiceDescription || undefined,
+                            items: items.map((it, idx) => ({
+                              itemId: it.id || `SKU-${idx + 1}`,
+                              itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                              hsnCode: it.hsnCode || '998314',
+                              quantity: Number(it.qty) || 1,
+                              unitPrice: Number(it.unitPrice) || 0,
+                              gstPercent: Number(it.taxPercent) || 18,
+                            })),
+                          };
+                          const res = await proformaInvoiceApi.updateProformaInvoice(invoiceToEdit.id, updatePayload);
+                          showToast('success', 'Proforma Invoice Updated', `Proforma invoice #${res.data?.proformaNumber || ''} updated successfully!`);
+                          navigate('/proforma/invoices');
+                        } else {
+                          const createPayload: CreateProformaRequest = {
+                            invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
+                            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                            customerId: selectedCustomer.id,
+                            organizationId: selectedCustomer.id,
+                            discountTotal: totalDiscount,
+                            billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                            gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                            pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                            notes: invoiceDescription || undefined,
+                            items: items.map((it, idx) => ({
+                              itemId: it.id || `SKU-${idx + 1}`,
+                              itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                              hsnCode: it.hsnCode || '998314',
+                              quantity: Number(it.qty) || 1,
+                              unitPrice: Number(it.unitPrice) || 0,
+                              gstPercent: Number(it.taxPercent) || 18,
+                            })),
+                          };
+                          const res = await proformaInvoiceApi.createProformaInvoice(createPayload);
+                          showToast('success', 'Proforma Invoice Created', `Proforma invoice #${res.data?.proformaNumber || ''} created successfully on server!`);
+                          navigate('/proforma/invoices');
+                        }
+                      } catch (err: any) {
+                        console.error('Failed to save proforma invoice:', err);
+                        const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to save proforma invoice';
+                        showToast('error', 'Operation Failed', errMsg);
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                      return;
+                    }
 
-                    const formattedItems = items.map((it) => {
-                      const itQty = Number(it.qty) || 0;
-                      const itPrice = Number(it.unitPrice) || 0;
-                      const itDisc = Number(it.discount) || 0;
-                      const itTaxRate = Number(it.taxPercent) || 0;
-                      const itSubtotal = itQty * itPrice;
-                      const itTaxable = Math.max(0, itSubtotal - itDisc);
-                      const itTax = (itTaxable * itTaxRate) / 100;
-                      const itTotal = itTaxable + itTax;
+                    // Standard sale invoice flow
+                    try {
+                      setIsSubmitting(true);
+                      let validOrgId = selectedCustomer.id;
+                      const matchedOrg = platformOrgs.find(
+                        (o) => o.id === selectedCustomer.id || o.name.toLowerCase() === selectedCustomer.company.toLowerCase()
+                      );
+                      if (matchedOrg) {
+                        validOrgId = matchedOrg.id;
+                      }
 
-                      return {
-                        id: it.id,
-                        name: it.name,
-                        description: it.description,
-                        hsnCode: it.hsnCode,
-                        qty: itQty,
-                        unitPrice: itPrice,
-                        taxPercent: itTaxRate,
-                        discount: itDisc,
-                        subtotal: itSubtotal,
-                        total: itTotal,
-                      };
-                    });
-
-                    const newSavedInvoice: SavedInvoice = {
-                      id: invoiceToEdit?.id || `inv_${Date.now()}`,
-                      invoiceNumber: finalInvoiceNumber,
-                      invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
-                      dueDate: invoiceToEdit?.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                      referenceNumbers: referenceNumbers.filter(Boolean),
-                      description: invoiceDescription,
-                      customFields: customInvoiceFields.filter((f) => f.label.trim() && f.value.trim()),
-                      status: invoiceToEdit?.status || 'Pending',
-                      paymentDetails: invoiceToEdit?.paymentDetails,
-                      client: {
-                        id: selectedCustomer.id,
-                        company: selectedCustomer.company,
-                        name: selectedCustomer.name,
-                        email: selectedCustomer.email,
-                        phone: selectedCustomer.phone || '',
-                        gstin: (selectedCustomer as any).gstin || (selectedCustomer as any).taxId || '27AABCT8892K1Z5',
-                        location: selectedCustomer.location || 'Mumbai, MH',
-                        industry: selectedCustomer.industry || 'Technology',
-                      },
-                      company: {
-                        name: companyDetails.name,
-                        taxId: companyDetails.taxId,
-                        address: companyDetails.address,
-                        email: companyDetails.email,
-                        phone: companyDetails.phone,
-                      },
-                      bank: {
-                        bankName: selectedBank.bankName,
-                        accountName: selectedBank.accountName,
-                        accountNumber: selectedBank.accountNumber,
-                        ifscCode: selectedBank.ifscCode,
-                        branchName: selectedBank.branchName,
-                        upiId: selectedBank.upiId,
-                      },
-                      items: formattedItems,
-                      subtotal,
-                      totalDiscount,
-                      taxableAmount,
-                      taxTotal,
-                      roundMode,
-                      roundOffAmount,
-                      grandTotal,
-                      createdAt: invoiceToEdit?.createdAt || new Date().toISOString(),
-                    };
-
-                    addInvoice(newSavedInvoice);
-                    const toastAction = invoiceToEdit
-                      ? (isProforma ? 'Proforma Invoice Updated' : 'Invoice Updated')
-                      : (isProforma ? 'Proforma Invoice Saved' : 'Sale Invoice Saved');
-                    const toastMessage = invoiceToEdit
-                      ? `${isProforma ? 'Proforma Invoice' : 'Invoice'} ${finalInvoiceNumber} updated successfully!`
-                      : `${isProforma ? 'Proforma Invoice' : 'Invoice'} ${finalInvoiceNumber} generated and saved!`;
-                    showToast('success', toastAction, toastMessage);
-                    navigate(isProforma ? '/proforma/invoices' : '/sales/invoices');
+                      if (invoiceToEdit) {
+                        const updatePayload: UpdateInvoiceRequest = {
+                          dueDate: invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined,
+                          notes: invoiceDescription || undefined,
+                          discountTotal: totalDiscount,
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                          items: items.map((it, idx) => ({
+                            itemId: it.id || `SKU-${idx + 1}`,
+                            itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                            hsnCode: it.hsnCode || '998314',
+                            quantity: Number(it.qty) || 1,
+                            unitPrice: Number(it.unitPrice) || 0,
+                            gstPercent: Number(it.taxPercent) || 18,
+                          })),
+                        };
+                        const res = await invoiceApi.updateInvoice(invoiceToEdit.id, updatePayload);
+                        showToast('success', 'Invoice Updated', `Invoice #${res.data?.invoiceNumber || ''} updated successfully!`);
+                        navigate('/sales/invoices');
+                      } else {
+                        const createPayload: CreateInvoiceRequest = {
+                          invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
+                          dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                          customerId: validOrgId,
+                          organizationId: validOrgId,
+                          status: 'Sent',
+                          discountTotal: totalDiscount,
+                          billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+                          gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                          pan: (selectedCustomer as any).pan || 'AAAAA0000A',
+                          notes: invoiceDescription || undefined,
+                          items: items.map((it, idx) => ({
+                            itemId: it.id || `SKU-${idx + 1}`,
+                            itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                            hsnCode: it.hsnCode || '998314',
+                            quantity: Number(it.qty) || 1,
+                            unitPrice: Number(it.unitPrice) || 0,
+                            gstPercent: Number(it.taxPercent) || 18,
+                          })),
+                        };
+                        const res = await invoiceApi.createInvoice(createPayload);
+                        showToast('success', 'Invoice Created', `Invoice #${res.data?.invoiceNumber || ''} created successfully on server!`);
+                        navigate('/sales/invoices');
+                      }
+                    } catch (err: any) {
+                      console.error('Failed to save invoice:', err);
+                      const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to save invoice';
+                      showToast('error', 'Operation Failed', errMsg);
+                    } finally {
+                      setIsSubmitting(false);
+                    }
                   }}
                   className="w-full h-12 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
+                  {isSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4" />
+                  )}
                   <span>
-                    {invoiceToEdit
-                      ? (isProforma ? 'Update & Save Proforma Invoice' : 'Update & Save Invoice')
-                      : (isProforma ? 'Generate & Save Proforma Invoice' : 'Generate & Save Invoice')}
+                    {isSubmitting
+                      ? isProforma ? 'Saving Proforma Invoice...' : 'Saving Invoice...'
+                      : invoiceToEdit
+                        ? (isProforma ? 'Update & Save Proforma Invoice' : 'Update & Save Invoice')
+                        : (isProforma ? 'Generate & Save Proforma Invoice' : 'Generate & Save Invoice')}
                   </span>
                 </button>
               </div>
@@ -2108,40 +2016,55 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </p>
 
               <div className="divide-y divide-slate-100 border border-slate-100 rounded-2xl overflow-hidden max-h-80 overflow-y-auto">
-                {existingInvoices.map((inv) => (
-                  <div
-                    key={inv.id}
-                    className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3.5"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2.5">
-                        <span className="font-bold text-sm text-[#33077C]">{inv.invoiceNumber}</span>
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${inv.status === 'Paid'
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : 'bg-amber-50 text-amber-700'
-                            }`}
-                        >
-                          {inv.status}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-700 font-semibold mt-1">{inv.client}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {inv.date} - {inv.itemsCount} line items
-                      </p>
-                    </div>
-
-                    <div className="text-right flex items-center gap-3.5">
-                      <span className="font-black text-base text-slate-900">₹{inv.amount}</span>
-                      <button
-                        onClick={() => handleSelectExistingInvoice(inv)}
-                        className="h-9 px-4 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
-                      >
-                        Load Sale
-                      </button>
-                    </div>
+                {isLoadingExistingInvoices ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <Loader2 className="w-7 h-7 mx-auto mb-2 animate-spin text-[#33077C]" />
+                    <p className="text-xs font-semibold text-slate-600">Loading existing invoices...</p>
                   </div>
-                ))}
+                ) : existingInvoices.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <p className="text-xs font-semibold text-slate-600">No saved invoices found</p>
+                  </div>
+                ) : (
+                  existingInvoices.map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3.5"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-bold text-sm text-[#33077C]">{inv.invoiceNumber}</span>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                              inv.status === 'Paid'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : inv.status === 'Partially Paid'
+                                  ? 'bg-sky-50 text-sky-700'
+                                  : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {inv.status}
+                          </span>
+                        </div>
+                        <p className="text-sm text-slate-700 font-semibold mt-1">{inv.customerName}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {inv.invoiceDate ? inv.invoiceDate.split('T')[0] : ''} - {inv.items?.length || 0} line items
+                        </p>
+                      </div>
+
+                      <div className="text-right flex items-center gap-3.5">
+                        <span className="font-black text-base text-slate-900">₹{inv.grandTotal?.toLocaleString()}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectExistingInvoice(inv)}
+                          className="h-9 px-4 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
+                        >
+                          Load Sale
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
@@ -2184,7 +2107,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             </div>
 
-            <form onSubmit={handleSaveNewBank} className="p-6 sm:p-8 space-y-6">
+            <form noValidate onSubmit={handleSaveNewBank} className="p-6 sm:p-8 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
@@ -2326,7 +2249,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </button>
             </div>
 
-            <form onSubmit={handleSaveClientProject} className="space-y-4 text-xs">
+            <form noValidate onSubmit={handleSaveClientProject} className="space-y-4 text-xs">
               <div>
                 <label className="font-bold text-slate-600 block mb-1.5">Project / Service Name *</label>
                 <input

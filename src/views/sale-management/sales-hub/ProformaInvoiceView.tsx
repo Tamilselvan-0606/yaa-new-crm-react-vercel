@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   FileText,
   Plus,
@@ -29,7 +29,6 @@ import {
   ChevronDown,
   ShoppingBag,
   ShoppingCart,
-  FileCheck,
   RefreshCw,
   Ban,
   Calculator,
@@ -42,12 +41,17 @@ import {
   PlusCircle,
   ArrowLeft,
   Receipt,
+  FileSpreadsheet,
+  Wifi,
+  WifiOff,
+  Loader2,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
   SaleProductItem,
   SalesCustomer,
   SaleTransaction,
+  InventoryStockItem,
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -57,7 +61,24 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { FileSpreadsheet } from 'lucide-react';
+import {
+  commerceProformaApi,
+  mapApiProformaToSaleProforma,
+  mapSaleProformaToPayload,
+  ProformaFilterParams,
+  customerApi,
+  mapApiCustomerToSalesCustomer,
+  stockApi,
+  mapApiStockToInventoryStockItem,
+  productApi,
+  mapApiProductToProductItem,
+  ProductItemModel,
+  ExtendedProformaItem,
+  SaleProformaInvoice,
+  UUID_REGEX,
+} from '../../../api';
+import { useAppDispatch } from '../../../hooks/redux';
+import { baseApi } from '../../../api/baseApi';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -138,58 +159,12 @@ const STATUS_FILTER_OPTIONS = [
   { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
 ];
 
-export interface ExtendedProformaItem extends SaleProductItem {
-  unit?: string;
-  discountAmount?: number;
-  taxAmount?: number;
-  category?: string;
-  itemCode?: string;
-  hsnCode?: string;
-  description?: string;
-}
-
 export interface TableColumnSettings {
   showItemCategory: boolean;
   showItemCode: boolean;
   showHsnSac: boolean;
   showDescription: boolean;
   showDiscount: boolean;
-}
-
-export interface SaleProformaInvoice {
-  id: string;
-  proformaNo: string;
-  referenceNo?: string;
-  date: string;
-  validUntil: string;
-  customerId: string;
-  partyName: string;
-  customerCompany?: string;
-  customerPhone?: string;
-  customerEmail?: string;
-  billingAddress: string;
-  shippingAddress?: string;
-  stateOfSupply?: string;
-  items: ExtendedProformaItem[];
-  subtotal: number;
-  withGst?: boolean;
-  gstType?: 'intra_state' | 'inter_state';
-  cgst?: number;
-  sgst?: number;
-  igst?: number;
-  discount?: number;
-  taxAmount?: number;
-  roundOff?: number;
-  amount: number;
-  balance: number;
-  status: 'Open' | 'Converted' | 'Expired' | 'Cancelled';
-  convertedToInvoiceNo?: string;
-  notes?: string;
-  terms?: string;
-  attachedImageName?: string;
-  attachedDocName?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface ProformaTabItem {
@@ -218,92 +193,6 @@ export interface ProformaTabItem {
   columnSettings?: TableColumnSettings;
 }
 
-const INITIAL_PROFORMA_LIST: SaleProformaInvoice[] = [
-  {
-    id: 'pro_1',
-    proformaNo: 'PRO-2026-0001',
-    referenceNo: '1',
-    date: '2026-10-05',
-    validUntil: '2026-10-31',
-    customerId: 'cust_keerthi',
-    partyName: 'Keerthivasan',
-    customerCompany: 'Keerthi Tech Enterprises',
-    customerPhone: '9840123456',
-    customerEmail: 'keerthivasan@gmail.com',
-    billingAddress: 'No. 15 Anna Salai, Chennai, Tamil Nadu 600002',
-    stateOfSupply: '33-Tamil Nadu',
-    items: [
-      {
-        id: 'pi_1',
-        productId: 'PROD_1001',
-        productName: 'Commercial Supplies & Service Consultation',
-        quantity: 1,
-        unit: 'PCS',
-        unitPrice: 80,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 80,
-      },
-    ],
-    subtotal: 80,
-    withGst: false,
-    discount: 0,
-    taxAmount: 0,
-    roundOff: 0,
-    amount: 80,
-    balance: 80,
-    status: 'Open',
-    terms: '1. Advance payment required.\n2. Goods once confirmed will be processed within 3 days.\n3. Valid for 30 days from issue date.',
-    notes: 'Commercial proforma invoice quotation.',
-    createdAt: '2026-10-05T10:00:00Z',
-    updatedAt: '2026-10-05T10:00:00Z',
-  },
-  {
-    id: 'pro_2',
-    proformaNo: 'PRO-2026-0002',
-    referenceNo: '2',
-    date: '2026-10-03',
-    validUntil: '2026-10-25',
-    customerId: 'cust_2',
-    partyName: 'Royal Spice Caterers',
-    customerCompany: 'Royal Spice Caterers',
-    customerPhone: '+91 97890 45678',
-    customerEmail: 'orders@royalspice.in',
-    billingAddress: '45 Mount Road, Teynampet, Chennai, Tamil Nadu 600018',
-    stateOfSupply: '33-Tamil Nadu',
-    items: [
-      {
-        id: 'pi_3',
-        productId: 'PROD_1002',
-        productName: 'Aashirvaad Shudh Chakki Atta (10 Kg Bag)',
-        quantity: 25,
-        unit: 'BAG',
-        unitPrice: 420,
-        discountPercent: 2,
-        taxPercent: 5,
-        total: 10804.5,
-      },
-    ],
-    subtotal: 10500,
-    withGst: true,
-    gstType: 'intra_state',
-    cgst: 257.25,
-    sgst: 257.25,
-    igst: 0,
-    discount: 210,
-    taxAmount: 514.5,
-    roundOff: 0.5,
-    amount: 10805,
-    balance: 0,
-    status: 'Converted',
-    convertedToInvoiceNo: 'INV-2026-0104',
-    terms: 'Standard supply terms apply.',
-    notes: 'Converted to Tax Invoice on confirmation of purchase.',
-    createdAt: '2026-10-03T11:30:00Z',
-    updatedAt: '2026-10-03T14:20:00Z',
-  },
-];
-
 interface ProformaInvoiceViewProps {
   initialMode?: 'list' | 'form';
 }
@@ -314,13 +203,38 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const navigate = useNavigate();
   const { customers, stocks, saveCustomer, saveSale } = useSalesManagementStore();
 
-  // Proforma state with localStorage persistence
+  const dispatch = useAppDispatch();
+  const [liveProformas, setLiveProformas] = useState<SaleProformaInvoice[]>([]);
+  const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+  const [liveCustomers, setLiveCustomers] = useState<SalesCustomer[]>([]);
+  const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
+  const [liveProducts, setLiveProducts] = useState<ProductItemModel[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Proforma state with localStorage persistence as offline fallback
   const [proformaList, setProformaList] = useState<SaleProformaInvoice[]>(() => {
     try {
       const saved = localStorage.getItem('yaa_crm_proforma_invoices');
-      return saved ? JSON.parse(saved) : INITIAL_PROFORMA_LIST;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (p) =>
+              p.id !== 'pro_1' &&
+              p.id !== 'pro_2' &&
+              !String(p.id).startsWith('pro_') &&
+              !String(p.partyName || '').includes('Keerthivasan') &&
+              !String(p.partyName || '').includes('Royal Spice')
+          );
+        }
+      }
+      return [];
     } catch {
-      return INITIAL_PROFORMA_LIST;
+      return [];
     }
   });
 
@@ -349,6 +263,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Helper to map UI period names to OpenAPI period values
+  const mapPeriodToApiPeriod = (periodStr: string): string => {
+    const norm = periodStr.toLowerCase().replace(/\s+/g, '_');
+    if (norm.includes('month') && norm.includes('last')) return 'last_month';
+    if (norm.includes('month')) return 'this_month';
+    if (norm.includes('week')) return 'this_week';
+    if (norm.includes('today')) return 'today';
+    if (norm.includes('quarter')) return 'this_quarter';
+    if (norm.includes('year')) return 'this_year';
+    if (norm.includes('all')) return 'all';
+    return 'this_month';
+  };
 
   // Dropdowns & Action Menu
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -397,74 +324,215 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const partySelectRef = useRef<HTMLDivElement>(null);
   const [showShareFooterMenu, setShowShareFooterMenu] = useState(false);
 
-  // Helper to build fresh proforma formData
+  // Fetch Proforma Invoices from Live Commerce API
+  const isFetchingRef = useRef(false);
+  const fetchProformas = useCallback(
+    async (
+      pageNo: number = page,
+      size: number = pageSize,
+      searchQuery: string = appliedSearch,
+      statusVal: string = appliedStatus,
+      periodVal: string = appliedPeriod
+    ) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+      setIsApiLoading(true);
+      setApiErrorMessage(null);
+
+      const params: ProformaFilterParams = {
+        page_no: pageNo,
+        page_size: size,
+        pagination_required: true,
+        sortOrder: 'desc',
+      };
+
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
+      if (statusVal && statusVal !== 'ALL') {
+        params.status = statusVal;
+      }
+      if (periodVal) {
+        params.period = mapPeriodToApiPeriod(periodVal);
+      }
+
+      try {
+        const response = await commerceProformaApi.getProformas(params);
+        if (response && (response.success || response.data)) {
+          const list = Array.isArray(response.data) ? response.data : [];
+          const mapped = list.map(mapApiProformaToSaleProforma);
+          setLiveProformas(mapped);
+          setTotalApiRecords(response.pagination?.totalRecords ?? mapped.length);
+          setTotalApiPages(response.pagination?.totalPages ?? 1);
+          setIsApiConnected(true);
+        } else {
+          throw new Error(response?.message || 'Failed to fetch proforma invoices');
+        }
+      } catch (err: any) {
+        console.warn('Commerce Proformas API notice:', err);
+        setIsApiConnected(false);
+        setApiErrorMessage(err.message || 'Commerce API not reachable');
+        setLiveProformas(proformaList);
+        setTotalApiRecords(proformaList.length);
+        setTotalApiPages(Math.max(1, Math.ceil(proformaList.length / size)));
+      } finally {
+        setIsApiLoading(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize, proformaList]
+  );
+
+  // Trigger API fetch on filter/page change
+  useEffect(() => {
+    fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+  }, [fetchProformas, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  // Purge legacy mock data from storage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('yaa_crm_proforma_invoices');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(
+            (p) =>
+              p.id !== 'pro_1' &&
+              p.id !== 'pro_2' &&
+              !String(p.id).startsWith('pro_') &&
+              !String(p.partyName || '').includes('Keerthivasan') &&
+              !String(p.partyName || '').includes('Royal Spice')
+          );
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('yaa_crm_proforma_invoices', JSON.stringify(cleaned));
+            setProformaList(cleaned);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Storage purge error:', e);
+    }
+  }, []);
+
+  // Prefetch live customers and stocks for party selector & item selector (Runs ONCE)
+  useEffect(() => {
+    let isMounted = true;
+
+    customerApi
+      .getCustomers({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiCustomerToSalesCustomer);
+          setLiveCustomers(mapped);
+        }
+      })
+      .catch((err) => console.warn('Customer prefetch:', err));
+
+    productApi
+      .getProducts({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiProductToProductItem);
+          setLiveProducts(mapped);
+        }
+      })
+      .catch((err) => console.warn('Product prefetch:', err));
+
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiStockToInventoryStockItem);
+          setLiveStocks(mapped);
+        }
+      })
+      .catch((err) => console.warn('Stock prefetch:', err));
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Live products and live customers for selectors (strictly excluding mock customers)
+  const availableCustomers = useMemo(() => {
+    if (liveCustomers.length > 0) return liveCustomers;
+    return customers.filter(
+      (c) =>
+        !c.id.startsWith('cust_') &&
+        !c.name.includes('Keerthi') &&
+        !c.name.includes('Royal Spice') &&
+        !c.name.includes('Green Valley')
+    );
+  }, [liveCustomers, customers]);
+
+  const availableProducts = useMemo(() => {
+    const list: Array<{
+      productId: string;
+      id: string;
+      productName: string;
+      sku: string;
+      unitPrice: number;
+      category?: string;
+      unit?: string;
+    }> = [];
+
+    const seenIds = new Set<string>();
+
+    // 1. Live Products from /commerce/products
+    liveProducts.forEach((p) => {
+      const pid = String(p.id || '');
+      if (pid && UUID_REGEX.test(pid) && !seenIds.has(pid)) {
+        seenIds.add(pid);
+        list.push({
+          productId: pid,
+          id: pid,
+          productName: p.productName || 'Unnamed Product',
+          sku: p.productCode || '',
+          unitPrice: Number(p.salePrice) || 0,
+          category: p.category || '',
+          unit: p.unit || 'PCS',
+        });
+      }
+    });
+
+    // 2. Live Stocks from /commerce/stocks
+    liveStocks.forEach((s) => {
+      const pid = String(s.productId || s.id || '');
+      if (pid && UUID_REGEX.test(pid) && !seenIds.has(pid)) {
+        seenIds.add(pid);
+        list.push({
+          productId: pid,
+          id: pid,
+          productName: s.productName || 'Unnamed Product',
+          sku: s.sku || '',
+          unitPrice: Number(s.unitPrice) || 0,
+          category: s.category || '',
+          unit: s.unit || 'PCS',
+        });
+      }
+    });
+
+    return list;
+  }, [liveProducts, liveStocks]);
+
+  // Helper to build fresh clean proforma formData (no mock items)
   const createDefaultFormData = (num: number = 1) => {
     const year = new Date().getFullYear();
-    const nextCode = `PRO-${year}-${String(proformaList.length + num).padStart(4, '0')}`;
-    const defaultProd1 = stocks && stocks.length > 0 ? stocks[0] : null;
-    const defaultProd2 = stocks && stocks.length > 1 ? stocks[1] : null;
-
+    const nextCode = `PRO-${year}-${String(num).padStart(4, '0')}`;
     const initialRows: ExtendedProformaItem[] = [
-      defaultProd1
-        ? {
-            id: `row_${Date.now()}_1`,
-            productId: defaultProd1.productId,
-            productName: defaultProd1.productName,
-            sku: defaultProd1.sku,
-            itemCode: defaultProd1.sku,
-            category: (defaultProd1 as any).category || (defaultProd1 as any).categoryName || '',
-            quantity: 1,
-            unit: 'PCS',
-            unitPrice: defaultProd1.unitPrice || 495,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: Math.round(((defaultProd1.unitPrice || 495) * 0.05) * 100) / 100,
-            total: Math.round(((defaultProd1.unitPrice || 495) * 1.05) * 100) / 100,
-          }
-        : {
-            id: `row_${Date.now()}_1`,
-            productId: '',
-            productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-            quantity: 1,
-            unit: 'PCS',
-            unitPrice: 495,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: 24.75,
-            total: 519.75,
-          },
-      defaultProd2
-        ? {
-            id: `row_${Date.now()}_2`,
-            productId: defaultProd2.productId,
-            productName: defaultProd2.productName,
-            sku: defaultProd2.sku,
-            itemCode: defaultProd2.sku,
-            category: (defaultProd2 as any).category || (defaultProd2 as any).categoryName || '',
-            quantity: 1,
-            unit: 'KG',
-            unitPrice: defaultProd2.unitPrice || 699,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: Math.round(((defaultProd2.unitPrice || 699) * 0.05) * 100) / 100,
-            total: Math.round(((defaultProd2.unitPrice || 699) * 1.05) * 100) / 100,
-          }
-        : {
-            id: `row_${Date.now()}_2`,
-            productId: '',
-            productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-            quantity: 1,
-            unit: 'KG',
-            unitPrice: 699,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: 34.95,
-            total: 733.95,
-          },
+      {
+        id: `row_${Date.now()}_1`,
+        productId: '',
+        productName: '',
+        quantity: 1,
+        unit: 'NONE',
+        unitPrice: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        taxPercent: 0,
+        taxAmount: 0,
+        total: 0,
+      },
     ];
 
     return {
@@ -512,15 +580,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // Filtered party list for Party Search Dropdown
   const filteredCustomers = useMemo(() => {
     const q = partySearchQuery.toLowerCase().trim();
-    if (!q) return customers;
-    return customers.filter(
+    if (!q) return availableCustomers;
+    return availableCustomers.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.company && c.company.toLowerCase().includes(q)) ||
         (c.phone && c.phone.includes(q)) ||
         (c.customerCode && c.customerCode.toLowerCase().includes(q))
     );
-  }, [customers, partySearchQuery]);
+  }, [availableCustomers, partySearchQuery]);
 
   // Form Initializer (Opens Proforma Invoice #1)
   const handleOpenCreateForm = () => {
@@ -618,7 +686,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // Switch to Form Mode for Editing Proforma
   const handleOpenEditForm = (proforma: SaleProformaInvoice) => {
     const mappedItems: ExtendedProformaItem[] = proforma.items.map((it) => {
-      const stockItem = stocks.find((s) => s.productId === it.productId || s.productName === it.productName);
+      const stockItem = availableProducts.find((s) => s.productId === it.productId || s.productName === it.productName);
       return {
         ...it,
         id: it.id || `row_${Date.now()}_${Math.random()}`,
@@ -709,7 +777,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const item = { ...newItems[index], [field]: value };
 
       if (field === 'productId') {
-        const prod = stocks.find((s) => s.productId === value || s.id === value);
+        const prod = availableProducts.find((s) => s.productId === value || s.id === value);
         if (prod) {
           item.productName = prod.productName;
           item.sku = prod.sku;
@@ -720,8 +788,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           item.taxPercent = 5;
         }
       } else if (field === 'productName') {
-        const matched = stocks.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
+        const matched = availableProducts.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
         if (matched) {
+          item.productId = matched.productId || matched.id || '';
           item.sku = matched.sku;
           item.itemCode = matched.sku;
           item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
@@ -847,7 +916,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   };
 
   // Save Proforma Invoice Handler
-  const handleSaveProforma = (andConvert = false) => {
+  const handleSaveProforma = async (andConvert = false) => {
     if (!formData.partyName.trim()) {
       toast.error('Please select or enter Party / Customer name');
       return;
@@ -858,23 +927,70 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       return;
     }
 
+    // Resolve valid UUID productId for every item row
+    const resolvedItems: ExtendedProformaItem[] = [];
+    for (const it of validItems) {
+      let pid = it.productId;
+      // 1. If pid is not a valid UUID, look for matching product in availableProducts
+      if (!pid || !UUID_REGEX.test(pid)) {
+        const match = availableProducts.find(
+          (p) =>
+            (p.productId && UUID_REGEX.test(p.productId) && p.productName.toLowerCase() === it.productName.trim().toLowerCase()) ||
+            (p.id && UUID_REGEX.test(p.id) && p.productName.toLowerCase() === it.productName.trim().toLowerCase())
+        );
+        if (match) {
+          pid = match.productId && UUID_REGEX.test(match.productId) ? match.productId : match.id;
+        }
+      }
+
+      // 2. If still not a valid UUID, try auto-creating the product via productApi to get a real Commerce UUID
+      if (!pid || !UUID_REGEX.test(pid)) {
+        try {
+          const createProdRes = await productApi.createProduct({
+            itemType: 'Product',
+            productName: it.productName.trim() || 'Custom Item',
+            salePrice: Number(it.unitPrice) || 0,
+            salePriceTaxType: 'Excluded',
+            unit: it.unit && it.unit !== 'NONE' ? it.unit : 'PCS',
+            category: it.category || 'General',
+          });
+          if (createProdRes.data?.id && UUID_REGEX.test(createProdRes.data.id)) {
+            pid = createProdRes.data.id;
+          }
+        } catch (createErr) {
+          console.warn('Auto-create product fallback notice:', createErr);
+        }
+      }
+
+      if (!pid || !UUID_REGEX.test(pid)) {
+        toast.error(`Please select a registered product for "${it.productName || 'line item'}".`);
+        return;
+      }
+
+      resolvedItems.push({
+        ...it,
+        productId: pid,
+      });
+    }
+
     const { rawSubtotal, totalTax, totalDiscount, roundOffDiff, grandTotal } = formCalculations;
 
     const proformaId = editingProforma ? editingProforma.id : `pro_${Date.now()}`;
     const newProforma: SaleProformaInvoice = {
       id: proformaId,
-      proformaNo: formData.proformaNo || `PRO-${new Date().getFullYear()}-${String(proformaList.length + 1).padStart(4, '0')}`,
+      proformaNo: formData.proformaNo || `PRO-${new Date().getFullYear()}-${String((totalApiRecords ?? proformaList.length) + 1).padStart(4, '0')}`,
       referenceNo: formData.referenceNo || '1',
       date: formData.date,
       validUntil: formData.validUntil,
-      customerId: formData.customerId || `cust_${Date.now()}`,
+      customerId: formData.customerId || '',
       partyName: formData.partyName,
       customerPhone: formData.customerPhone,
       customerEmail: formData.customerEmail,
       customerCompany: formData.customerCompany,
       billingAddress: formData.billingAddress,
+      shippingAddress: formData.billingAddress,
       stateOfSupply: formData.stateOfSupply,
-      items: validItems,
+      items: resolvedItems,
       subtotal: rawSubtotal,
       withGst: totalTax > 0,
       gstType: formData.stateOfSupply?.includes('Tamil Nadu') ? 'intra_state' : 'inter_state',
@@ -896,147 +1012,134 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       updatedAt: new Date().toISOString(),
     };
 
-    let updatedList: SaleProformaInvoice[];
-    if (editingProforma) {
-      updatedList = proformaList.map((p) => (p.id === proformaId ? newProforma : p));
-      toast.success(`Proforma Invoice ${newProforma.proformaNo} updated successfully!`);
-    } else {
-      updatedList = [newProforma, ...proformaList];
-      toast.success(`Proforma Invoice ${newProforma.proformaNo} created successfully!`);
+    setIsSubmitting(true);
+    try {
+      const payload = mapSaleProformaToPayload(newProforma);
+      let targetProformaId = proformaId;
+
+      if (editingProforma) {
+        const res = await commerceProformaApi.updateProforma(editingProforma.id, payload);
+        if (res.data?.id) targetProformaId = res.data.id;
+        toast.success(`Proforma Invoice ${newProforma.proformaNo} updated successfully!`);
+      } else {
+        const res = await commerceProformaApi.createProforma(payload);
+        if (res.data?.id) {
+          targetProformaId = res.data.id;
+          newProforma.id = res.data.id;
+          if (res.data.proformaNo) newProforma.proformaNo = res.data.proformaNo;
+        }
+        toast.success(`Proforma Invoice ${newProforma.proformaNo} created successfully!`);
+      }
+
+      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id: 'LIST' }]));
+
+      if (andConvert) {
+        try {
+          const convRes = await commerceProformaApi.convertProforma(targetProformaId, {
+            targetType: 'Invoice',
+            dueDate: newProforma.validUntil,
+          });
+          const convertedNo = convRes.data?.convertedTo?.documentNo;
+          newProforma.status = 'Converted';
+          if (convertedNo) newProforma.convertedToInvoiceNo = convertedNo;
+          toast.success(`Proforma converted to Sale Invoice ${convertedNo || ''}!`);
+        } catch (convErr: any) {
+          console.warn('API convert notice:', convErr);
+          toast.info('Proforma saved. Conversion can be finalized from actions menu.');
+        }
+      }
+
+      // Also persist to local cache for offline resiliency
+      let updatedList: SaleProformaInvoice[];
+      if (editingProforma) {
+        updatedList = proformaList.map((p) => (p.id === proformaId ? newProforma : p));
+      } else {
+        updatedList = [newProforma, ...proformaList];
+      }
+      persistProformas(updatedList);
+
+      // Re-fetch live list from Commerce API
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+
+      if (tabs.length > 1) {
+        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
+        setTabs(remainingTabs);
+        const nextActive = remainingTabs[remainingTabs.length - 1];
+        setActiveTabId(nextActive.id);
+        setFormData(nextActive.formData);
+        setEditingProforma(nextActive.editingProforma || null);
+        if (nextActive.enableRoundOff !== undefined) setEnableRoundOff(nextActive.enableRoundOff);
+        if (nextActive.manualRoundOff !== undefined) setManualRoundOff(nextActive.manualRoundOff);
+        if (nextActive.columnSettings !== undefined) setColumnSettings(nextActive.columnSettings);
+      } else {
+        setViewMode('list');
+      }
+    } catch (err: any) {
+      console.error('Failed to save proforma invoice:', err);
+      const apiErr = err.response?.data?.error || err.data?.error || err;
+      const fieldMsg = Array.isArray(apiErr.fields) && apiErr.fields.length > 0
+        ? `${apiErr.message || 'Validation error'}: ${apiErr.fields.map((f: any) => `${f.path?.join('.') || 'field'} - ${f.message}`).join(', ')}`
+        : (apiErr.message || err.message || 'Failed to save proforma invoice to server. Saved in offline storage.');
+      toast.error(fieldMsg);
+      let updatedList: SaleProformaInvoice[];
+      if (editingProforma) {
+        updatedList = proformaList.map((p) => (p.id === proformaId ? newProforma : p));
+      } else {
+        updatedList = [newProforma, ...proformaList];
+      }
+      persistProformas(updatedList);
+      if (tabs.length > 1) {
+        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
+        setTabs(remainingTabs);
+      } else {
+        setViewMode('list');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
+  };
 
-    persistProformas(updatedList);
+  // Convert Existing Proforma from list (POST /commerce/proformas/{id}/convert)
+  const handleConvertExistingToSale = async (proforma: SaleProformaInvoice) => {
+    if (proforma.status === 'Converted') {
+      toast.info(`Proforma ${proforma.proformaNo} has already been converted.`);
+      return;
+    }
+    try {
+      const res = await commerceProformaApi.convertProforma(proforma.id, {
+        targetType: 'Invoice',
+        dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+      });
+      const convertedNo = res.data?.convertedTo?.documentNo || `INV-${new Date().getFullYear()}-0101`;
+      toast.success(`Proforma ${proforma.proformaNo} converted to Invoice ${convertedNo}!`);
 
-    if (andConvert) {
+      dispatch(baseApi.util.invalidateTags([
+        { type: 'Proforma', id: proforma.id },
+        { type: 'Proforma', id: 'LIST' },
+        { type: 'SalesInvoice', id: 'LIST' },
+      ]));
+
+      const updated = proformaList.map((p) =>
+        p.id === proforma.id ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo } : p
+      );
+      persistProformas(updated);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } catch (err: any) {
+      console.warn('API convert fallback:', err);
       const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(100 + proformaList.length + 1).padStart(4, '0')}`;
       const newSale: SaleTransaction = {
         id: `sale_${Date.now()}`,
         invoiceNo: saleInvoiceNo,
-        referenceNo: newProforma.proformaNo,
+        referenceNo: proforma.proformaNo,
         saleDate: new Date().toISOString().split('T')[0],
         dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-        customerId: newProforma.customerId,
-        customerName: newProforma.partyName,
-        customerCompany: newProforma.customerCompany,
-        customerPhone: newProforma.customerPhone,
-        customerEmail: newProforma.customerEmail,
-        billingAddress: newProforma.billingAddress,
-        shippingAddress: newProforma.billingAddress,
-        items: newProforma.items,
-        subtotal: newProforma.subtotal,
-        withGst: newProforma.withGst,
-        gstType: newProforma.gstType,
-        cgst: newProforma.cgst,
-        sgst: newProforma.sgst,
-        igst: newProforma.igst,
-        totalDiscount: newProforma.discount || 0,
-        totalTax: newProforma.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: newProforma.amount,
-        paidAmount: 0,
-        balance: newProforma.amount,
-        paymentMethod: 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Current User',
-        salesperson: 'Sales Rep',
-        notes: `Converted from Proforma Invoice ${newProforma.proformaNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      saveSale(newSale);
-      toast.success(`Proforma converted to Sale Invoice ${saleInvoiceNo}!`);
-    }
-
-    if (tabs.length > 1) {
-      const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
-      setTabs(remainingTabs);
-      const nextActive = remainingTabs[remainingTabs.length - 1];
-      setActiveTabId(nextActive.id);
-      setFormData(nextActive.formData);
-      setEditingProforma(nextActive.editingProforma || null);
-      if (nextActive.enableRoundOff !== undefined) setEnableRoundOff(nextActive.enableRoundOff);
-      if (nextActive.manualRoundOff !== undefined) setManualRoundOff(nextActive.manualRoundOff);
-      if (nextActive.columnSettings !== undefined) setColumnSettings(nextActive.columnSettings);
-    } else {
-      setViewMode('list');
-    }
-  };
-
-  // Convert Existing Proforma from list
-  const handleConvertExistingToSale = (proforma: SaleProformaInvoice) => {
-    const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(100 + proformaList.length + 1).padStart(4, '0')}`;
-    const newSale: SaleTransaction = {
-      id: `sale_${Date.now()}`,
-      invoiceNo: saleInvoiceNo,
-      referenceNo: proforma.proformaNo,
-      saleDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-      customerId: proforma.customerId,
-      customerName: proforma.partyName,
-      customerCompany: proforma.customerCompany,
-      customerPhone: proforma.customerPhone,
-      customerEmail: proforma.customerEmail,
-      billingAddress: proforma.billingAddress,
-      shippingAddress: proforma.billingAddress,
-      items: proforma.items,
-      subtotal: proforma.subtotal,
-      withGst: proforma.withGst,
-      gstType: proforma.gstType,
-      cgst: proforma.cgst,
-      sgst: proforma.sgst,
-      igst: proforma.igst,
-      totalDiscount: proforma.discount || 0,
-      totalTax: proforma.taxAmount || 0,
-      shippingCharges: 0,
-      otherCharges: 0,
-      grandTotal: proforma.amount,
-      paidAmount: 0,
-      balance: proforma.amount,
-      paymentMethod: 'Cash',
-      paymentTerms: '15 Days',
-      paymentStatus: 'Unpaid',
-      saleStatus: 'Confirmed',
-      createdBy: 'Current User',
-      salesperson: 'Sales Rep',
-      notes: `Converted from Proforma Invoice ${proforma.proformaNo}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    saveSale(newSale);
-    const updated = proformaList.map((p) =>
-      p.id === proforma.id ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: saleInvoiceNo } : p
-    );
-    persistProformas(updated);
-    toast.success(`Proforma ${proforma.proformaNo} converted to Sale Invoice ${saleInvoiceNo}!`);
-  };
-
-  // Convert Existing Proforma to Sale Order
-  const handleConvertExistingToOrder = (proforma: SaleProformaInvoice) => {
-    try {
-      const savedOrdersStr = localStorage.getItem('yaa_crm_sale_orders');
-      const savedOrders = savedOrdersStr ? JSON.parse(savedOrdersStr) : [];
-      const nextNum = savedOrders.length + 1;
-      const orderNo = `SO-${new Date().getFullYear()}-${String(nextNum).padStart(4, '0')}`;
-
-      const newOrder = {
-        id: `so_${Date.now()}`,
-        orderNo,
-        referenceNo: proforma.proformaNo,
-        orderDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
         customerId: proforma.customerId,
-        partyName: proforma.partyName,
+        customerName: proforma.partyName,
         customerCompany: proforma.customerCompany,
         customerPhone: proforma.customerPhone,
         customerEmail: proforma.customerEmail,
         billingAddress: proforma.billingAddress,
-        shippingAddress: proforma.shippingAddress || proforma.billingAddress,
-        stateOfSupply: proforma.stateOfSupply || '33-Tamil Nadu',
-        paymentType: 'Cash',
+        shippingAddress: proforma.billingAddress,
         items: proforma.items,
         subtotal: proforma.subtotal,
         withGst: proforma.withGst,
@@ -1044,37 +1147,39 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         cgst: proforma.cgst,
         sgst: proforma.sgst,
         igst: proforma.igst,
-        discount: proforma.discount || 0,
-        taxAmount: proforma.taxAmount || 0,
-        roundOff: proforma.roundOff || 0,
-        amount: proforma.amount,
-        advanceAmount: 0,
+        totalDiscount: proforma.discount || 0,
+        totalTax: proforma.taxAmount || 0,
+        shippingCharges: 0,
+        otherCharges: 0,
+        grandTotal: proforma.amount,
+        paidAmount: 0,
         balance: proforma.amount,
-        status: 'Open',
+        paymentMethod: 'Cash',
+        paymentTerms: '15 Days',
+        paymentStatus: 'Unpaid',
+        saleStatus: 'Confirmed',
+        createdBy: 'Current User',
+        salesperson: 'Sales Rep',
         notes: `Converted from Proforma Invoice ${proforma.proformaNo}`,
-        terms: proforma.terms,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-
-      localStorage.setItem('yaa_crm_sale_orders', JSON.stringify([newOrder, ...savedOrders]));
-
+      saveSale(newSale);
       const updated = proformaList.map((p) =>
-        p.id === proforma.id ? { ...p, status: 'Converted' as const } : p
+        p.id === proforma.id ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: saleInvoiceNo } : p
       );
       persistProformas(updated);
-      toast.success(`Proforma ${proforma.proformaNo} converted to Sale Order ${orderNo}!`);
+      toast.success(`Proforma ${proforma.proformaNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } finally {
       setActiveConvertDropdownId(null);
       setConvertDropdownPos(null);
-    } catch (e) {
-      console.error('Failed to convert proforma to order', e);
-      toast.error('Failed to convert proforma to order');
     }
   };
 
-  // Duplicate Proforma
-  const handleDuplicateProforma = (proforma: SaleProformaInvoice) => {
-    const nextNum = proformaList.length + 1;
+  // Duplicate Proforma (POST /commerce/proformas)
+  const handleDuplicateProforma = async (proforma: SaleProformaInvoice) => {
+    const nextNum = (totalApiRecords ?? proformaList.length) + 1;
     const newProformaNo = `PRO-${new Date().getFullYear()}-${String(nextNum).padStart(4, '0')}`;
     const duplicated: SaleProformaInvoice = {
       ...proforma,
@@ -1087,47 +1192,82 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    const updated = [duplicated, ...proformaList];
-    persistProformas(updated);
-    toast.success(`Duplicated ${proforma.proformaNo} as new Proforma ${newProformaNo}!`);
-    setActiveDropdownId(null);
-    setDropdownPos(null);
-  };
 
-  // Delete Proforma
-  const handleDeleteProforma = (id: string) => {
-    const updated = proformaList.filter((p) => p.id !== id);
-    persistProformas(updated);
-    toast.success('Proforma invoice removed.');
-    setActiveDropdownId(null);
-    setDropdownPos(null);
-  };
-
-  // Metrics Calculation
-  const metrics = useMemo(() => {
-    let totalVal = 0;
-    let convertedVal = 0;
-    let openVal = 0;
-
-    proformaList.forEach((p) => {
-      totalVal += p.amount;
-      if (p.status === 'Converted') {
-        convertedVal += p.amount;
-      } else if (p.status === 'Open') {
-        openVal += p.amount;
+    const resolvedItems = duplicated.items.map((it) => {
+      let pid = it.productId;
+      if (!pid || !UUID_REGEX.test(pid)) {
+        const match = availableProducts.find(
+          (p) =>
+            (p.productId && UUID_REGEX.test(p.productId) && p.productName.toLowerCase() === it.productName.trim().toLowerCase()) ||
+            (p.id && UUID_REGEX.test(p.id) && p.productName.toLowerCase() === it.productName.trim().toLowerCase())
+        );
+        if (match) {
+          pid = match.productId && UUID_REGEX.test(match.productId) ? match.productId : match.id;
+        }
       }
+      return { ...it, productId: pid || it.productId };
     });
+    duplicated.items = resolvedItems;
 
-    return {
-      totalVal,
-      convertedVal,
-      openVal,
-      totalCount: proformaList.length,
-    };
-  }, [proformaList]);
+    try {
+      const payload = mapSaleProformaToPayload(duplicated);
+      const res = await commerceProformaApi.createProforma(payload);
+      if (res.data?.id) duplicated.id = res.data.id;
+      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id: 'LIST' }]));
+      toast.success(`Duplicated ${proforma.proformaNo} as new Proforma ${newProformaNo}!`);
+    } catch (err: any) {
+      console.warn('Duplicate API notice:', err);
+      toast.info(`Duplicated ${proforma.proformaNo} locally.`);
+    } finally {
+      const updated = [duplicated, ...proformaList];
+      persistProformas(updated);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+    }
+  };
 
-  // Filtered Proforma Invoices for List View
-  const filteredProformas = useMemo(() => {
+  // Delete Proforma (DELETE /commerce/proformas/{id})
+  const handleDeleteProforma = async (id: string) => {
+    try {
+      await commerceProformaApi.deleteProforma(id);
+      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id }, { type: 'Proforma', id: 'LIST' }]));
+      toast.success('Proforma invoice removed.');
+    } catch (err: any) {
+      console.warn('Delete API warning:', err);
+      toast.info('Proforma invoice removed locally.');
+    } finally {
+      const updated = proformaList.filter((p) => p.id !== id);
+      persistProformas(updated);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+    }
+  };
+
+  // Update Status Handler (PATCH /commerce/proformas/{id}/status)
+  const handleUpdateStatus = async (id: string, newStatus: 'Open' | 'Cancelled') => {
+    try {
+      await commerceProformaApi.updateStatus(id, { status: newStatus });
+      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id }, { type: 'Proforma', id: 'LIST' }]));
+      toast.success(`Proforma invoice marked as ${newStatus}!`);
+    } catch (err: any) {
+      console.warn('Status update API error:', err);
+      toast.info(`Proforma status updated to ${newStatus}.`);
+    } finally {
+      const updated = proformaList.map((p) => (p.id === id ? { ...p, status: newStatus } : p));
+      persistProformas(updated);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+    }
+  };
+
+  // Displayed Proforma Invoices: Live API data when connected, store fallback otherwise
+  const displayProformas = useMemo(() => {
+    if (isApiConnected) {
+      return liveProformas;
+    }
     return proformaList.filter((p) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
@@ -1135,21 +1275,46 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         p.proformaNo.toLowerCase().includes(q) ||
         p.partyName.toLowerCase().includes(q) ||
         (p.referenceNo && p.referenceNo.toLowerCase().includes(q)) ||
-        (p.customerPhone && p.customerPhone.toLowerCase().includes(q));
+        (p.customerPhone && p.customerPhone.toLowerCase().includes(q)) ||
+        p.items.some((it) => it.productName.toLowerCase().includes(q));
 
       const matchesStatus = appliedStatus === 'ALL' || p.status === appliedStatus;
-
       return matchesSearch && matchesStatus;
     });
-  }, [proformaList, appliedSearch, appliedStatus]);
+  }, [isApiConnected, liveProformas, proformaList, appliedSearch, appliedStatus]);
+
+  // Metrics Calculation
+  const metrics = useMemo(() => {
+    const list = displayProformas;
+    let totalVal = 0;
+    let convertedVal = 0;
+    let openVal = 0;
+
+    list.forEach((p) => {
+      totalVal += Number(p.amount) || 0;
+      if (p.status === 'Converted') {
+        convertedVal += Number(p.amount) || 0;
+      } else if (p.status === 'Open') {
+        openVal += Number(p.amount) || 0;
+      }
+    });
+
+    return {
+      totalVal,
+      convertedVal,
+      openVal,
+      totalCount: isApiConnected && totalApiRecords !== null ? totalApiRecords : list.length,
+    };
+  }, [displayProformas, isApiConnected, totalApiRecords]);
 
   // Paginated list
-  const totalPages = Math.max(1, Math.ceil(filteredProformas.length / pageSize));
+  const totalPages = isApiConnected && totalApiPages !== null
+    ? Math.max(1, totalApiPages)
+    : Math.max(1, Math.ceil(displayProformas.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const paginatedProformas = useMemo(() => {
-    const start = (safePage - 1) * pageSize;
-    return filteredProformas.slice(start, start + pageSize);
-  }, [filteredProformas, safePage, pageSize]);
+  const paginatedProformas = isApiConnected
+    ? displayProformas
+    : displayProformas.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   // Close dropdowns on outside click and scroll/resize
   useEffect(() => {
@@ -1252,7 +1417,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         </div>
 
         {/* 3. MAIN FORM CONTAINER */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6">
+        <form
+          id="proforma-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveProforma(false);
+          }}
+          className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6"
+        >
           <div>
             {/* Top Meta Details (Party + Ref/Date/State) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
@@ -1606,8 +1779,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                           />
                           <datalist id={`product-list-${idx}`}>
-                            {stocks.map((s) => (
-                              <option key={s.productId} value={s.productName}>
+                            {availableProducts.map((s) => (
+                              <option key={s.productId || s.id} value={s.productName}>
                                 SKU: {s.sku} • ₹{s.unitPrice}
                               </option>
                             ))}
@@ -2078,6 +2251,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 variant="secondary"
                 size="md"
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => handleSaveProforma(true)}
                 icon={<ShoppingCart className="w-4 h-4 text-[#33077C]" />}
               >
@@ -2088,15 +2262,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               <Button
                 variant="primary"
                 size="md"
-                type="button"
-                onClick={() => handleSaveProforma(false)}
-                icon={<Check className="w-4 h-4 text-white stroke-[3]" />}
+                type="submit"
+                form="proforma-form"
+                disabled={isSubmitting}
+                icon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Check className="w-4 h-4 text-white stroke-[3]" />}
               >
-                Save
+                {isSubmitting ? 'Saving...' : 'Save'}
               </Button>
             </div>
           </div>
-        </div>
+        </form>
 
         {/* Quick Add Customer Modal */}
         {isQuickCustomerModalOpen && (
@@ -2106,7 +2281,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             title="Add New Party / Customer"
             maxWidth="md"
           >
-            <div className="p-5 space-y-4 text-xs">
+            <form
+              noValidate
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCreateQuickCustomer();
+              }}
+              className="p-5 space-y-4 text-xs"
+            >
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   Customer / Party Name <span className="text-rose-500">*</span>
@@ -2154,13 +2336,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 <Button
                   variant="primary"
                   size="sm"
-                  type="button"
-                  onClick={handleCreateQuickCustomer}
+                  type="submit"
                 >
                   Save Party
                 </Button>
               </div>
-            </div>
+            </form>
           </Modal>
         )}
       </div>
@@ -2171,12 +2352,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // VIEW MODE: LIST (Master Proforma Invoices Table View as in screenshot 1)
   // Export to Excel
   const handleExportExcel = () => {
-    if (filteredProformas.length === 0) {
+    if (displayProformas.length === 0) {
       toast.error('No proforma invoices to export');
       return;
     }
 
-    const excelRows = filteredProformas.map((p) => ({
+    const excelRows = displayProformas.map((p) => ({
       date: isoToDdmmyyyy(p.date),
       validUntil: isoToDdmmyyyy(p.validUntil),
       proformaNo: p.proformaNo,
@@ -2191,7 +2372,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       filename: `Proforma_Invoices_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Proforma Invoices',
       title: 'YAA CREATIONS CRM - PROFORMA INVOICE REPORT',
-      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${filteredProformas.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${displayProformas.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
         { header: 'Proforma Date', key: 'date', align: 'center', width: 15 },
         { header: 'Valid Until', key: 'validUntil', align: 'center', width: 15 },
@@ -2205,13 +2386,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       data: excelRows,
       summaryRow: {
         date: 'TOTAL',
-        partyName: `${filteredProformas.length} Proformas`,
+        partyName: `${displayProformas.length} Proformas`,
         amount: metrics.totalVal,
         balance: metrics.openVal,
       },
     });
 
-    toast.success(`Proforma Invoices Excel report downloaded (${filteredProformas.length} records)!`);
+    toast.success(`Proforma Invoices Excel report downloaded (${displayProformas.length} records)!`);
   };
 
   // =========================================================================
@@ -2231,12 +2412,36 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 Proforma Invoice
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {proformaList.length} total
+                {metrics.totalCount} total
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Create, track, and convert commercial proforma invoices into confirmed sales.
             </p>
+            <div className="flex items-center gap-2.5 mt-2 flex-wrap">
+              {isApiConnected === true ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live Commerce API
+                </span>
+              ) : isApiConnected === false ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <WifiOff className="w-3 h-3 text-amber-600" />
+                  Offline Cache Mode
+                </span>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod)}
+                disabled={isApiLoading}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-[#33077C] transition-colors px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
+                title="Sync from API"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isApiLoading ? 'animate-spin text-[#33077C]' : ''}`} />
+                <span>Sync</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2380,7 +2585,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
       {/* 4. PROFORMA INVOICES TABLE (Standardized Royal Purple Themed Header) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        {filteredProformas.length === 0 ? (
+        {displayProformas.length === 0 ? (
           /* Empty State */
           <div className="py-20 px-4 flex flex-col items-center justify-center text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shadow-xs">
@@ -2515,8 +2720,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           <div className="relative inline-block text-left">
                             <button
                               type="button"
+                              disabled={item.status === 'Converted'}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (item.status === 'Converted') return;
                                 if (isConvertOpen) {
                                   setActiveConvertDropdownId(null);
                                   setConvertDropdownPos(null);
@@ -2531,7 +2738,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                   setDropdownPos(null);
                                 }
                               }}
-                              className="proforma-convert-btn text-xs font-bold text-[#33077C] hover:text-[#4309A2] bg-purple-50 hover:bg-purple-100/80 border border-purple-200/70 flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors cursor-pointer select-none"
+                              className={`proforma-convert-btn text-xs font-bold border rounded-lg transition-colors select-none flex items-center gap-1 px-2.5 py-1 ${
+                                item.status === 'Converted'
+                                  ? 'text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed opacity-60'
+                                  : 'text-[#33077C] hover:text-[#4309A2] bg-purple-50 hover:bg-purple-100/80 border-purple-200/70 cursor-pointer'
+                              }`}
+                              title={item.status === 'Converted' ? 'Already converted' : 'Convert to Invoice'}
                             >
                               <span>Convert</span>
                               <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
@@ -2561,18 +2773,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                   <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
                                   <span>Convert to Sale Invoice</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveConvertDropdownId(null);
-                                    setConvertDropdownPos(null);
-                                    handleConvertExistingToOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
-                                >
-                                  <FileCheck className="w-3.5 h-3.5 text-slate-500" />
-                                  <span>Convert to Sale Order</span>
-                                </button>
                               </div>
                             )}
                           </div>
@@ -2589,7 +2789,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                 } else {
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 240;
+                                  const dropdownHeight = 290;
                                   if (spaceBelow < dropdownHeight) {
                                     setDropdownPos({
                                       bottom: window.innerHeight - rect.top + 4,
@@ -2612,7 +2812,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                               <MoreVertical className="w-4 h-4 text-slate-600" />
                             </button>
 
-                            {/* 3-Dots Floating Dropdown Menu (Exact 6 Items in order from screenshot) */}
+                            {/* 3-Dots Floating Dropdown Menu */}
                             {isActionOpen && dropdownPos && (
                               <div
                                 style={{
@@ -2637,6 +2837,26 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                 >
                                   View/Edit
                                 </button>
+
+                                {/* Status actions: PATCH /commerce/proformas/{id}/status */}
+                                {item.status !== 'Converted' && item.status !== 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.id, 'Cancelled')}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-amber-700 hover:bg-amber-50 transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Cancelled
+                                  </button>
+                                )}
+                                {item.status === 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateStatus(item.id, 'Open')}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Open
+                                  </button>
+                                )}
 
                                 {/* 2. Delete */}
                                 <button
@@ -2719,9 +2939,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       </div>
 
       {/* 5. PAGINATION */}
-      {filteredProformas.length > 0 && (
+      {displayProformas.length > 0 && (
         <Pagination
-          total={filteredProformas.length}
+          total={isApiConnected && totalApiRecords !== null ? totalApiRecords : displayProformas.length}
           currentPage={safePage}
           pageSize={pageSize}
           pageSizeOptions={[10, 20, 50]}

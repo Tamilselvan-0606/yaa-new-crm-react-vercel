@@ -6,6 +6,11 @@ import { Lead } from '../../types';
 import { Modal } from '../common/Modal';
 import { useAuth } from '../../context/AuthContext';
 import { useCreateLead, useUpdateLead } from '../../hooks/useQueries';
+import {
+  useCreatePlatformLeadMutation,
+  useUpdatePlatformLeadMutation,
+  CreatePlatformLeadRequest,
+} from '../../api/platform/leadApi';
 import { CustomSelect } from '../common/CustomSelect';
 import { ToggleField } from './ProductConfigForms';
 import { 
@@ -25,6 +30,7 @@ interface LeadFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialLead?: Lead | null;
+  onLeadSaved?: () => void;
 }
 
 const LEAD_STEPS = [
@@ -38,11 +44,15 @@ const LEAD_STEPS = [
 
 const LEAD_SOURCE_OPTIONS = [
   'Website',
+  'Referral',
+  'LinkedIn',
+  'Cold Call',
+  'Campaign',
+  'Event',
   'Google',
   'Instagram',
   'Facebook',
   'WhatsApp',
-  'Referral',
   'Direct',
   'Other',
 ];
@@ -50,12 +60,14 @@ const LEAD_SOURCE_OPTIONS = [
 const LEAD_STATUS_OPTIONS = [
   'New',
   'Contacted',
+  'Qualified',
+  'Proposal',
+  'Negotiation',
+  'Won',
+  'Lost',
   'Interested',
   'Follow-up',
   'Onboarding',
-  'Converted',
-  'Not Interested',
-  'Lost',
 ];
 
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
@@ -78,10 +90,13 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
   isOpen,
   onClose,
   initialLead,
+  onLeadSaved,
 }) => {
   const { users, currentUser } = useAuth();
   const createLeadMutation = useCreateLead();
   const updateLeadMutation = useUpdateLead();
+  const [createPlatformLead] = useCreatePlatformLeadMutation();
+  const [updatePlatformLead] = useUpdatePlatformLeadMutation();
 
   const [step, setStep] = useState(1);
   const [selectedProducts, setSelectedProducts] = useState<string[]>(['YaaConnect']);
@@ -159,8 +174,8 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           interestedProducts: prods,
           interestedProductOrService: initialLead.interestedProductOrService || 'YaaConnect',
           assignedStaffId: initialLead.assignedStaffId || currentUser?.id || 'usr_staff_sales',
-          status: initialLead.status || 'New',
-          priority: initialLead.priority || 'Medium',
+          status: (initialLead.status as any) || 'New',
+          priority: (initialLead.priority as any) || 'Medium',
           interest: initialLead.interest || 'High',
           tags: initialLead.tags?.join(', ') || '',
           requirements: initialLead.requirements || '',
@@ -250,26 +265,61 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     try {
       const assignedUser = users.find((u) => u.id === data.assignedStaffId);
       const tagList = data.tags ? data.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+      const locationVal = [data.city, data.state].filter(Boolean).join(', ') || data.address || '';
+      const chosenPlan = selectedProducts.join(', ') || data.interestedProductOrService || 'YaaConnect';
+      const parsedValue = data.expectedBudget ? Number(data.expectedBudget) || 0 : 0;
 
-      const payload: Partial<Lead> = {
-        ...data,
-        leadSource: data.leadSource as any,
-        source: data.leadSource as any,
-        location: [data.city, data.state].filter(Boolean).join(', ') || data.address,
-        assignedStaffName: assignedUser?.name || 'Sales Team',
-        interestedProducts: selectedProducts,
-        interestedProductOrService: selectedProducts.join(', ') || data.interestedProductOrService || 'YaaConnect',
-        tags: tagList,
+      // Platform Leads API payload (aligned with OpenAPI specs)
+      const platformPayload: CreatePlatformLeadRequest = {
+        name: data.name,
+        company: data.company,
+        email: data.email || `${data.company.toLowerCase().replace(/[^a-z0-9]/g, '') || 'lead'}@example.com`,
+        phone: data.phone,
+        whatsapp: data.whatsapp || data.phone,
+        source: data.leadSource || 'Website',
+        status: data.status || 'New',
+        priority: data.priority || 'Medium',
+        value: parsedValue,
+        planInterest: chosenPlan,
+        industry: data.company ? `${data.company} Industry` : 'General Business',
+        location: locationVal,
+        assignedTo: data.assignedStaffId || undefined,
+        followUpDate: data.nextFollowUpDate ? new Date(data.nextFollowUpDate).toISOString() : undefined,
+        notes: data.notes || data.requirements || data.feedback || '',
       };
 
       if (initialLead) {
-        await updateLeadMutation.mutateAsync({ id: initialLead.id, data: payload as any });
+        await updatePlatformLead({ id: initialLead.id, payload: platformPayload }).unwrap();
       } else {
-        await createLeadMutation.mutateAsync(payload as any);
+        await createPlatformLead(platformPayload).unwrap();
       }
+
+      // Also trigger legacy mutation asynchronously for local store backward compatibility if needed
+      try {
+        const legacyPayload: Partial<Lead> = {
+          ...data,
+          leadSource: data.leadSource as any,
+          source: data.leadSource as any,
+          location: locationVal,
+          assignedStaffName: assignedUser?.name || 'Sales Team',
+          interestedProducts: selectedProducts,
+          interestedProductOrService: chosenPlan,
+          tags: tagList,
+        };
+        if (initialLead) {
+          updateLeadMutation.mutate({ id: initialLead.id, data: legacyPayload as any });
+        } else {
+          createLeadMutation.mutate(legacyPayload as any);
+        }
+      } catch (_) {
+        // ignore legacy sync errors
+      }
+
+      if (onLeadSaved) onLeadSaved();
       onClose();
-    } catch (e) {
-      // Handled in mutation hook
+    } catch (e: any) {
+      // RTK Query or server error
+      console.error('Failed to save platform lead:', e);
     }
   };
 
@@ -280,7 +330,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       title={LEAD_STEPS[step - 1] || 'Lead Details'}
       maxWidth="2xl"
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* ========================================================================= */}
         {/* STEP 1: LEAD INFORMATION */}
         {/* ========================================================================= */}

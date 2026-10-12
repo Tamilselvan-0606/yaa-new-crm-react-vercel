@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { clientProductApi } from '../../api';
 import { Product, DocumentItem, Branch } from '../../types';
 import {
   UsersRound,
@@ -64,6 +65,8 @@ import { Modal } from '../../components/common/Modal';
 
 import { useDashboardStats } from '../../hooks/useQueries';
 import { useNavigate } from 'react-router-dom';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { SaleManagementDashboardView } from '../sale-management/dashboard/SaleManagementDashboardView';
 
 const AdminDashboardView: React.FC = () => {
   const { isAdmin, showToast } = useAuth();
@@ -169,7 +172,8 @@ const AdminDashboardView: React.FC = () => {
   const loadProducts = async () => {
     setLoading(true);
     try {
-      const data = await api.getProducts();
+      const res = await clientProductApi.getProducts({ limit: 100 });
+      const data = res?.success && Array.isArray(res.data) ? res.data : [];
       setProducts(data);
       if (data && data.length > 0 && !selectedDropdownValue) {
         setSelectedDropdownValue(data[0].id);
@@ -576,7 +580,7 @@ const AdminDashboardView: React.FC = () => {
     <div className="space-y-6">
       {/* Product Selection Bar */}
       <div className="bg-white px-5 py-4 rounded-xl border border-slate-200/90 shadow-xs">
-        <form onSubmit={handleProductSubmit} className="flex flex-wrap items-center gap-3 sm:gap-4">
+        <form noValidate onSubmit={handleProductSubmit} className="flex flex-wrap items-center gap-3 sm:gap-4">
           {/* Label before the field */}
           <span className="text-[14px] font-bold text-[#33077C] shrink-0">
             {selectedProductId ? 'Switch Product' : 'Choose Product'}
@@ -1857,7 +1861,7 @@ const AdminDashboardView: React.FC = () => {
         onClose={() => setIsDocModalOpen(false)}
         title={`Attach Document to ${currentProduct?.name}`}
       >
-        <form onSubmit={handleUploadDocument} className="space-y-4">
+        <form noValidate onSubmit={handleUploadDocument} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
               Document Title / Spec Name *
@@ -1928,7 +1932,7 @@ const AdminDashboardView: React.FC = () => {
         onClose={() => setIsAddClientModalOpen(false)}
         title={`Onboard Client to ${currentProduct?.name}`}
       >
-        <form onSubmit={handleAddClient} className="space-y-4">
+        <form noValidate onSubmit={handleAddClient} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
               Company Name *
@@ -2010,7 +2014,7 @@ const AdminDashboardView: React.FC = () => {
         onClose={() => setIsEditModalOpen(false)}
         title={`Edit ${currentProduct?.name} Configuration`}
       >
-        <form onSubmit={handleUpdateProduct} className="space-y-4">
+        <form noValidate onSubmit={handleUpdateProduct} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
               Tagline
@@ -2077,7 +2081,7 @@ const AdminDashboardView: React.FC = () => {
         hideCloseButton={true}
         onBack={() => setIsAddBranchModalOpen(false)}
       >
-        <form onSubmit={handleCreateBranch} className="space-y-4 p-2 sm:p-3">
+        <form noValidate onSubmit={handleCreateBranch} className="space-y-4 p-2 sm:p-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-semibold text-slate-600 block mb-1">
@@ -2207,7 +2211,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const navigate = useNavigate();
   const { currentUser, role, isAdmin, isSuperAdmin, markReminderCompleted } = useAuth();
+  const { isSaleManagement, isClientOnly } = useActiveOrgType();
   const { data: stats, isLoading: loading, refetch: loadStats } = useDashboardStats();
+
+  // ==========================================
+  // SALE MANAGEMENT SUITE DASHBOARD (INVENTORY, SALES HUB, PURCHASE, SALE REPORT)
+  // ==========================================
+  if (isSaleManagement && !isClientOnly) {
+    return <SaleManagementDashboardView />;
+  }
 
   const handleNavigate = (tab: string) => {
     if (onNavigateTab) {

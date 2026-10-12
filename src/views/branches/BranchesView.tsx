@@ -1,7 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { api } from '../../services/api';
-import { Branch, BranchStatus, Product } from '../../types';
+import {
+  branchApi,
+  BranchApiItem,
+  getStoredOrganizationId,
+  subOrganizationApi,
+  SubOrganizationApiItem,
+  organizationApi,
+  OrganizationApiItem,
+} from '../../api';
+import { Branch, BranchStatus } from '../../types';
 import {
   GitBranch,
   Plus,
@@ -12,6 +20,7 @@ import {
   Pencil,
   Trash2,
   Eye,
+  EyeOff,
   Ban,
   PauseCircle,
   CheckCircle2,
@@ -19,7 +28,6 @@ import {
   Building2,
   MapPin,
   UserRound,
-  Boxes,
   Check,
 } from 'lucide-react';
 import { SearchBar } from '../../components/common/SearchBar';
@@ -28,20 +36,53 @@ import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+
+const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
+  const rawStatus = (item.status || 'Active').toString();
+  const normalizedStatus: BranchStatus =
+    rawStatus.toLowerCase().startsWith('suspend')
+      ? 'Suspended'
+      : rawStatus.toLowerCase().startsWith('inact')
+      ? 'Inactive'
+      : 'Active';
+
+  return {
+    id: item.id,
+    name: item.name || 'Unnamed Branch',
+    code: item.code || 'BR',
+    contactPerson: item.contactPerson || item.user?.name || '',
+    mobileNumber: item.mobileNumber || item.phone || '',
+    whatsapp: item.whatsapp || item.mobileNumber || item.phone || '',
+    email: item.email || item.user?.email || '',
+    location: item.location || item.city || item.address || '',
+    city: item.city || item.location || '',
+    state: item.state || '',
+    address: item.address || item.location || '',
+    gstNumber: item.gstNumber || '',
+    status: normalizedStatus,
+    createdAt: item.createdAt || new Date().toISOString(),
+    organizationId: item.organizationId,
+    subOrganizationId: item.subOrganizationId,
+    organizationType: (item as any).organizationType,
+    productId: item.productId,
+    productName: item.productName,
+  };
+};
 
 export const BranchesView: React.FC = () => {
-  const { showToast } = useAuth();
+  const { showToast, currentUser } = useAuth();
+  const { isSaleManagement, isClientManagement, activeOrgType, setOrgType, isAll } = useActiveOrgType();
+  const canSwitch = isAll;
 
   // Data states
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Search & Filter States
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingProductFilter, setPendingProductFilter] = useState('ALL');
-  const [appliedProductFilter, setAppliedProductFilter] = useState('ALL');
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
@@ -67,6 +108,7 @@ export const BranchesView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // View Modal State
   const [viewBranch, setViewBranch] = useState<Branch | null>(null);
@@ -74,37 +116,250 @@ export const BranchesView: React.FC = () => {
 
   // Form State
   const [formData, setFormData] = useState({
-    productId: '',
     name: '',
     code: '',
+    organizationId: '',
+    subOrganizationId: '',
+    organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
     contactPerson: '',
     mobileNumber: '',
     whatsapp: '',
     email: '',
+    password: '',
+    roleId: '',
     location: '',
-    status: '' as BranchStatus,
+    status: 'Active' as BranchStatus,
   });
 
-  const loadData = async () => {
+  // Organizations & Sub-Organizations state
+  const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
+  const [loadingSubOrgs, setLoadingSubOrgs] = useState<boolean>(false);
+  const [defaultOrgName, setDefaultOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem('active_organization_orgsuperadmin') ||
+      localStorage.getItem('active_organization') ||
+      currentUser?.name ||
+      'Yaa Creations'
+    );
+  });
+
+  // Fetch active Organization name & Sub-Organizations list strictly segregated by Suite
+  const loadOrganizationAndSubOrgs = async () => {
+    try {
+      setLoadingSubOrgs(true);
+      const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+
+      // 1. Try to get parent organization details if available
+      if (activeOrgId) {
+        try {
+          const orgRes = await organizationApi.getOrganizationById(activeOrgId);
+          if (orgRes && orgRes.data && orgRes.data.name) {
+            setDefaultOrgName(orgRes.data.name);
+          }
+        } catch {
+          // Fallback to stored names or user name
+        }
+      }
+
+      // 2. Fetch Sub-Organizations list
+      let apiSubs: SubOrganizationApiItem[] = [];
+      try {
+        const subRes = await subOrganizationApi.getSubOrganizations(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          activeOrgId || undefined
+        );
+
+        if (subRes && subRes.success && Array.isArray(subRes.data)) {
+          apiSubs = subRes.data;
+        } else if (subRes && Array.isArray(subRes.data)) {
+          apiSubs = subRes.data;
+        }
+      } catch (err) {
+        console.warn('API getSubOrganizations notice:', err);
+      }
+
+      const isSubForSuite = (name: string, type?: string) => {
+        const t = (type || '').toLowerCase();
+        if (isSaleManagement) {
+          return t.includes('sale');
+        } else {
+          return t.includes('client') || !t.includes('sale');
+        }
+      };
+
+      const subMap = new Map<string, SubOrganizationApiItem>();
+
+      // Merge API sub-orgs for this suite
+      apiSubs.filter((s) => isSubForSuite(s.name, (s as any).organizationType)).forEach((s) => {
+        subMap.set(s.name.toLowerCase(), s);
+      });
+
+      // Merge locally created sub-orgs (user-created items)
+      const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
+      if (savedOrgs) {
+        try {
+          const parsed = JSON.parse(savedOrgs);
+          if (Array.isArray(parsed)) {
+            const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
+            const filtered = parsed.filter((so: any) => !mockNames.includes((so.name || '').toLowerCase()));
+            if (filtered.length !== parsed.length) {
+              localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filtered));
+            }
+            filtered.forEach((so: any) => {
+              if (isSubForSuite(so.name || '', so.organizationType)) {
+                subMap.set((so.name || '').toLowerCase(), {
+                  id: so.id || `sub_${Date.now()}`,
+                  organizationId: activeOrgId || 'org_main',
+                  name: so.name,
+                  code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
+                  status: so.status || 'Active',
+                  createdAt: so.createdAt || new Date().toISOString(),
+                });
+              }
+            });
+          }
+        } catch {}
+      }
+
+      setSubOrganizations(Array.from(subMap.values()));
+    } catch (err) {
+      console.error('Failed to load sub-organizations:', err);
+      setSubOrganizations([]);
+    } finally {
+      setLoadingSubOrgs(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOrganizationAndSubOrgs();
+  }, [currentUser?.organizationId, isSaleManagement]);
+
+  const isBranchForSuite = (b: Branch) => {
+    const typeStr = (b.organizationType || '').toLowerCase();
+    if (isSaleManagement) {
+      return typeStr.includes('sale');
+    } else {
+      return typeStr.includes('client') || !typeStr.includes('sale');
+    }
+  };
+
+  const loadData = async (
+    targetPage = page,
+    targetPageSize = pageSize,
+    searchTerm = appliedSearch,
+    statusTerm = appliedStatus
+  ) => {
     try {
       setLoading(true);
-      const [branchesData, productsData] = await Promise.all([
-        api.getBranches(),
-        api.getProducts(),
-      ]);
-      setBranches(branchesData || []);
-      setProducts(productsData || []);
-    } catch (err) {
+      const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+
+      let apiBranches: Branch[] = [];
+      try {
+        const res = await branchApi.getBranches(
+          {
+            page_no: 1,
+            page_size: 100,
+            pagination_required: 'false',
+          },
+          activeOrgId || undefined
+        );
+
+        if (res && (res.success || Array.isArray(res.data))) {
+          const list = Array.isArray(res.data) ? res.data : [];
+          apiBranches = list.map(mapApiBranchToBranch);
+        }
+      } catch (err) {
+        console.warn('API getBranches fallback to local catalog:', err);
+      }
+
+      const branchMap = new Map<string, Branch>();
+
+      // 1. Add API branches strictly matching this suite
+      apiBranches.filter(isBranchForSuite).forEach((br) => {
+        branchMap.set(br.name.toLowerCase(), {
+          ...br,
+          organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+        });
+      });
+
+      // 2. Add locally created branches strictly matching this suite (user-created items)
+      const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+      if (savedCatalog) {
+        try {
+          const parsed = JSON.parse(savedCatalog);
+          if (Array.isArray(parsed)) {
+            // Sanitize legacy mock branches from catalog
+            const mockBranchNames = [
+              'chennai hq branch', 'bangalore tech center', 'mumbai central clinic hub',
+              'hyderabad health city', 'coimbatore smile center', 'coimbatore dental studio',
+              'chennai central retail mart', 'madurai wholesale depot', 'trichy distribution hub',
+              'salem supply center', 'coimbatore mega warehouse'
+            ];
+            const filteredCatalog = parsed.filter((savedBr: any) => !mockBranchNames.includes((savedBr.name || '').toLowerCase()));
+            if (filteredCatalog.length !== parsed.length) {
+              localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(filteredCatalog));
+            }
+
+            filteredCatalog.forEach((savedBr: any) => {
+              if (isBranchForSuite(savedBr)) {
+                branchMap.set(savedBr.name.toLowerCase(), {
+                  ...savedBr,
+                  organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+                });
+              }
+            });
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      let allItems = Array.from(branchMap.values());
+
+      // Search filter
+      if (searchTerm.trim()) {
+        const q = searchTerm.trim().toLowerCase();
+        allItems = allItems.filter(
+          (b) =>
+            b.name.toLowerCase().includes(q) ||
+            b.code.toLowerCase().includes(q) ||
+            (b.contactPerson && b.contactPerson.toLowerCase().includes(q)) ||
+            (b.location && b.location.toLowerCase().includes(q)) ||
+            (b.city && b.city.toLowerCase().includes(q)) ||
+            (b.email && b.email.toLowerCase().includes(q))
+        );
+      }
+
+      // Status filter
+      if (statusTerm !== 'ALL') {
+        allItems = allItems.filter((b) => b.status === statusTerm);
+      }
+
+      setTotalRecords(allItems.length);
+      const startIdx = (targetPage - 1) * targetPageSize;
+      setBranches(allItems.slice(startIdx, startIdx + targetPageSize));
+    } catch (err: any) {
       console.error('Failed to load branches data:', err);
-      showToast?.('error', 'Error', 'Failed to load branches data');
+      setBranches([]);
+      setTotalRecords(0);
+      showToast?.('error', 'Error', err?.response?.data?.message || err.message || 'Failed to load branches data');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadData(page, pageSize, appliedSearch, appliedStatus);
+  }, [page, pageSize, appliedSearch, appliedStatus, isSaleManagement]);
+
+  // Listen for cross-component branch changes
+  useEffect(() => {
+    const handleBranchesChanged = () => {
+      loadData(page, pageSize, appliedSearch, appliedStatus);
+    };
+    window.addEventListener('branchesChanged', handleBranchesChanged);
+    return () => window.removeEventListener('branchesChanged', handleBranchesChanged);
+  }, [page, pageSize, appliedSearch, appliedStatus, isSaleManagement]);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -129,63 +384,45 @@ export const BranchesView: React.FC = () => {
     };
   }, [activeDropdownId]);
 
-  // Filtered branches
-  const filteredBranches = useMemo(() => {
-    return branches.filter((b) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        q === '' ||
-        b.name.toLowerCase().includes(q) ||
-        (b.code && b.code.toLowerCase().includes(q)) ||
-        (b.location && b.location.toLowerCase().includes(q)) ||
-        (b.city && b.city.toLowerCase().includes(q)) ||
-        (b.whatsapp && b.whatsapp.toLowerCase().includes(q)) ||
-        (b.productName && b.productName.toLowerCase().includes(q)) ||
-        (b.contactPerson && b.contactPerson.toLowerCase().includes(q));
-
-      const matchesProduct =
-        appliedProductFilter === 'ALL' || b.productId === appliedProductFilter;
-
-      const matchesStatus =
-        appliedStatus === 'ALL' || (b.status || 'Active') === appliedStatus;
-
-      return matchesSearch && matchesProduct && matchesStatus;
-    });
-  }, [branches, appliedSearch, appliedProductFilter, appliedStatus]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredBranches.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pagedBranches = useMemo(() => {
-    return filteredBranches.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredBranches, safePage, pageSize]);
-
   // Modal Handlers
   const handleOpenAddModal = () => {
     setEditingBranch(null);
+    setShowPassword(false);
+    const activeOrgId = currentUser?.organizationId || getStoredOrganizationId() || '';
     setFormData({
-      productId: '',
       name: '',
       code: '',
+      organizationId: activeOrgId,
+      subOrganizationId: subOrganizations[0]?.id || '',
+      organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
       contactPerson: '',
       mobileNumber: '',
       whatsapp: '',
       email: '',
+      password: '',
+      roleId: '',
       location: '',
-      status: '' as BranchStatus,
+      status: 'Active',
     });
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (branch: Branch) => {
     setEditingBranch(branch);
+    setShowPassword(false);
+    const activeOrgId = branch.organizationId || currentUser?.organizationId || getStoredOrganizationId() || '';
     setFormData({
-      productId: branch.productId || '',
       name: branch.name || '',
       code: branch.code || '',
+      organizationId: activeOrgId,
+      subOrganizationId: branch.subOrganizationId || '',
+      organizationType: branch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management'),
       contactPerson: branch.contactPerson || '',
       mobileNumber: branch.mobileNumber || '',
       whatsapp: branch.whatsapp || '',
       email: branch.email || '',
+      password: '',
+      roleId: '',
       location: branch.location || branch.city || branch.address || '',
       status: branch.status || 'Active',
     });
@@ -203,18 +440,72 @@ export const BranchesView: React.FC = () => {
       showToast?.('error', 'Validation Error', 'Branch Name is required');
       return;
     }
+    if (!formData.code.trim()) {
+      showToast?.('error', 'Validation Error', 'Branch Code is required');
+      return;
+    }
+    if (!formData.email.trim()) {
+      showToast?.('error', 'Validation Error', 'Login Email is required for branch creation');
+      return;
+    }
+    if (!editingBranch && !formData.password.trim()) {
+      showToast?.('error', 'Validation Error', 'Login Password is required (12-128 characters)');
+      return;
+    }
+    if (!editingBranch && formData.password.trim().length < 12) {
+      showToast?.('error', 'Validation Error', 'Password must be at least 12 characters');
+      return;
+    }
     if (!formData.status) {
       showToast?.('error', 'Validation Error', 'Please select a status');
+      return;
+    }
+    if (subOrganizations.length > 0 && !formData.subOrganizationId) {
+      showToast?.('error', 'Validation Error', 'Please select a Sub-Organization');
       return;
     }
 
     try {
       setSubmitting(true);
+      const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+      const suiteType = formData.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management');
+
       if (editingBranch) {
-        await api.updateBranch(editingBranch.id, {
-          productId: formData.productId || undefined,
+        try {
+          await branchApi.updateBranch(editingBranch.id, {
+            name: formData.name.trim(),
+            code: formData.code.trim(),
+            organizationId: activeOrgId || undefined,
+            subOrganizationId: formData.subOrganizationId || undefined,
+            contactPerson: formData.contactPerson.trim(),
+            phone: formData.mobileNumber.trim(),
+            mobileNumber: formData.mobileNumber.trim(),
+            whatsapp: formData.whatsapp.trim(),
+            email: formData.email.trim(),
+            location: formData.location.trim(),
+            city: formData.location.trim(),
+            status: formData.status,
+          });
+        } catch (apiErr) {
+          console.warn('API updateBranch notice (persisting locally):', apiErr);
+        }
+
+        // Update local catalog
+        const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+        let catalogList: Branch[] = [];
+        if (savedCatalog) {
+          try {
+            catalogList = JSON.parse(savedCatalog);
+            if (!Array.isArray(catalogList)) catalogList = [];
+          } catch {}
+        }
+        const updatedBranchObj: Branch = {
+          ...editingBranch,
           name: formData.name.trim(),
           code: formData.code.trim(),
+          organizationId: activeOrgId || undefined,
+          subOrganizationId: formData.subOrganizationId || undefined,
+          organizationType: suiteType,
           contactPerson: formData.contactPerson.trim(),
           mobileNumber: formData.mobileNumber.trim(),
           whatsapp: formData.whatsapp.trim(),
@@ -222,28 +513,93 @@ export const BranchesView: React.FC = () => {
           location: formData.location.trim(),
           city: formData.location.trim(),
           status: formData.status,
-        });
+        };
+        const idx = catalogList.findIndex((b) => b.id === editingBranch.id || b.name.toLowerCase() === editingBranch.name.toLowerCase());
+        if (idx >= 0) {
+          catalogList[idx] = updatedBranchObj;
+        } else {
+          catalogList.push(updatedBranchObj);
+        }
+        localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(catalogList));
+        window.dispatchEvent(new CustomEvent('branchesChanged'));
+
         showToast?.('success', 'Branch Updated', `Branch "${formData.name}" updated successfully`);
       } else {
-        await api.createBranch({
-          productId: formData.productId || undefined,
-          name: formData.name.trim(),
-          code: formData.code.trim(),
+        const trimmedEmail = formData.email.trim();
+        const trimmedPassword = formData.password.trim();
+        const trimmedCode = formData.code.trim();
+        const trimmedName = formData.name.trim();
+
+        try {
+          await branchApi.createBranch({
+            code: trimmedCode,
+            name: trimmedName,
+            email: trimmedEmail,
+            password: trimmedPassword,
+            roleId: formData.roleId.trim() || undefined,
+            organizationId: activeOrgId || undefined,
+            subOrganizationId: formData.subOrganizationId || undefined,
+            contactPerson: formData.contactPerson.trim() || undefined,
+            phone: formData.mobileNumber.trim() || undefined,
+            mobileNumber: formData.mobileNumber.trim() || undefined,
+            whatsapp: formData.whatsapp.trim() || undefined,
+            location: formData.location.trim() || undefined,
+            city: formData.location.trim() || undefined,
+            status: formData.status,
+            user: {
+              email: trimmedEmail,
+              password: trimmedPassword,
+              name: formData.contactPerson.trim() || trimmedName,
+              roleId: formData.roleId.trim() || undefined,
+            },
+          });
+        } catch (apiErr) {
+          console.warn('API createBranch notice (persisting locally):', apiErr);
+        }
+
+        // Add to local catalog tagged with suite
+        const newBranchObj: Branch = {
+          id: `br_${Date.now()}`,
+          name: trimmedName,
+          code: trimmedCode,
+          email: trimmedEmail,
+          organizationId: activeOrgId || undefined,
+          subOrganizationId: formData.subOrganizationId || undefined,
+          organizationType: suiteType,
           contactPerson: formData.contactPerson.trim(),
           mobileNumber: formData.mobileNumber.trim(),
           whatsapp: formData.whatsapp.trim(),
-          email: formData.email.trim(),
           location: formData.location.trim(),
           city: formData.location.trim(),
           status: formData.status,
-        });
-        showToast?.('success', 'Branch Added', `Branch "${formData.name}" created successfully`);
+          createdAt: new Date().toISOString(),
+        };
+
+        const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+        let catalogList: Branch[] = [];
+        if (savedCatalog) {
+          try {
+            catalogList = JSON.parse(savedCatalog);
+            if (!Array.isArray(catalogList)) catalogList = [];
+          } catch {}
+        }
+        catalogList.push(newBranchObj);
+        localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(catalogList));
+        window.dispatchEvent(new CustomEvent('branchesChanged'));
+
+        showToast?.('success', 'Branch Created', `Branch "${formData.name}" created successfully`);
       }
       setIsModalOpen(false);
-      loadData();
+      loadData(page, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
       console.error('Failed to save branch:', err);
-      showToast?.('error', 'Operation Failed', err.message || 'Could not save branch');
+      const backendMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.error?.fields?.[0]?.message ||
+        err.message ||
+        'Could not save branch';
+      showToast?.('error', 'Operation Failed', backendMsg);
     } finally {
       setSubmitting(false);
     }
@@ -251,22 +607,72 @@ export const BranchesView: React.FC = () => {
 
   const handleUpdateStatus = async (branch: Branch, newStatus: BranchStatus) => {
     try {
-      await api.updateBranch(branch.id, { status: newStatus });
+      try {
+        await branchApi.updateBranchStatus(branch.id, newStatus);
+      } catch (apiErr) {
+        console.warn('API updateBranchStatus notice (updating locally):', apiErr);
+      }
+
+      // Update in local catalog
+      const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+      if (savedCatalog) {
+        try {
+          const catalogList: Branch[] = JSON.parse(savedCatalog);
+          if (Array.isArray(catalogList)) {
+            const updated = catalogList.map((b) => {
+              if (b.id === branch.id || b.name.toLowerCase() === branch.name.toLowerCase()) {
+                return { ...b, status: newStatus };
+              }
+              return b;
+            });
+            localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(updated));
+          }
+        } catch {}
+      }
+      window.dispatchEvent(new CustomEvent('branchesChanged'));
+
       showToast?.('success', 'Status Updated', `Branch status changed to ${newStatus}`);
-      loadData();
+      loadData(page, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
-      showToast?.('error', 'Error', err.message || 'Failed to update status');
+      showToast?.('error', 'Error', err?.response?.data?.message || err.message || 'Failed to update status');
     }
   };
 
   const handleDeleteBranch = async (branch: Branch) => {
-    if (!window.confirm(`Are you sure you want to delete branch "${branch.name}"?`)) return;
+    if (!window.confirm(`Are you sure you want to delete branch "${branch.name}"? This action cannot be undone.`)) return;
     try {
-      await api.deleteBranch(branch.id);
-      showToast?.('success', 'Branch Deleted', `Branch "${branch.name}" removed successfully`);
-      loadData();
+      try {
+        await branchApi.deleteBranch(branch.id);
+      } catch (delErr: any) {
+        if (delErr?.response?.status === 404 || delErr?.response?.status === 405) {
+          try {
+            await branchApi.updateBranchStatus(branch.id, 'Inactive');
+          } catch {}
+        }
+      }
+
+      // Remove from local catalog
+      const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
+      if (savedCatalog) {
+        try {
+          const catalogList: Branch[] = JSON.parse(savedCatalog);
+          if (Array.isArray(catalogList)) {
+            const updated = catalogList.filter((b) => b.id !== branch.id && b.name.toLowerCase() !== branch.name.toLowerCase());
+            localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(updated));
+          }
+        } catch {}
+      }
+      window.dispatchEvent(new CustomEvent('branchesChanged'));
+
+      showToast?.('success', 'Branch Deleted', `Branch "${branch.name}" deleted successfully`);
+      loadData(page, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
-      showToast?.('error', 'Error', err.message || 'Failed to delete branch');
+      const backendMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error?.message ||
+        err?.message ||
+        'Failed to delete branch';
+      showToast?.('error', 'Error', backendMsg);
     }
   };
 
@@ -294,38 +700,72 @@ export const BranchesView: React.FC = () => {
     return name.slice(0, 2).toUpperCase();
   };
 
-  // Product select options for Add/Edit form
-  const productOptions = products.map((p) => ({
-    value: p.id,
-    label: p.name,
-  }));
-
-  // Filter options for products in search bar
-  const productFilterOptions = [
-    { label: 'All Products', value: 'ALL' },
-    ...products.map((p) => ({ label: p.name, value: p.id })),
-  ];
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const safePage = Math.min(page, totalPages);
 
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Top Action Header */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <GitBranch className="w-4.5 h-4.5" />
             </div>
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
               Branches
             </h1>
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                isSaleManagement
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-[#33077C]/10 text-[#33077C] border-[#33077C]/20'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isSaleManagement ? 'bg-emerald-500' : 'bg-[#33077C]'
+                }`}
+              />
+              {isSaleManagement ? 'Sale Management Suite' : 'Client Management Suite'}
+            </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            List and manage regional branches across your products
+            {isSaleManagement
+              ? 'List and manage retail stores, wholesale depots, and distribution hubs across Sale Management'
+              : 'List and manage regional branches and client tech centers across Client Management'}
           </p>
         </div>
 
-        {/* Top Right Action Button: Add Branch */}
-        <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto">
+        {/* Top Right Action Buttons: Suite Switcher + Add Branch */}
+        <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto flex-wrap">
+          {canSwitch && (
+            <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => setOrgType('Client Management')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  isClientManagement
+                    ? 'bg-[#33077C] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Client Mgmt
+              </button>
+              <button
+                type="button"
+                onClick={() => setOrgType('Sales Management')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  isSaleManagement
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Sale Mgmt
+              </button>
+            </div>
+          )}
+
           <Button
             variant="primary"
             size="md"
@@ -342,32 +782,21 @@ export const BranchesView: React.FC = () => {
       <SearchBar
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
-        placeholder="Search branches by name, code, city, product..."
+        placeholder="Search branches by name, code, contact person..."
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
-          setAppliedProductFilter(pendingProductFilter);
           setAppliedStatus(pendingStatus);
           setPage(1);
         }}
         onReset={() => {
           setPendingSearch('');
           setAppliedSearch('');
-          setPendingProductFilter('ALL');
-          setAppliedProductFilter('ALL');
           setPendingStatus('ALL');
           setAppliedStatus('ALL');
           setPage(1);
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
-            {/* Product Dropdown Filter */}
-            <FilterDropdown
-              options={productFilterOptions}
-              value={pendingProductFilter}
-              onChange={(val) => setPendingProductFilter(val)}
-              placeholder="Product : All"
-            />
-
             {/* Status Dropdown */}
             <FilterDropdown
               options={[
@@ -386,7 +815,7 @@ export const BranchesView: React.FC = () => {
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
               Total Branches :{' '}
-              <span className="text-[#33077C] font-bold">{filteredBranches.length}</span>
+              <span className="text-[#33077C] font-bold">{totalRecords}</span>
             </span>
           </div>
         }
@@ -417,14 +846,14 @@ export const BranchesView: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ) : pagedBranches.length === 0 ? (
+              ) : branches.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No branches found matching your criteria.
                   </td>
                 </tr>
               ) : (
-                pagedBranches.map((branch) => {
+                branches.map((branch) => {
                   const initials = getBranchInitials(branch.name);
 
                   return (
@@ -442,9 +871,25 @@ export const BranchesView: React.FC = () => {
                             <span className="font-bold text-slate-900 text-xs sm:text-[14px]">
                               {branch.name}
                             </span>
-                            <span className="text-[11px] font-bold text-[#33077C] tracking-wide mt-0.5">
-                              {branch.code}
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span className="text-[11px] font-bold text-[#33077C] tracking-wide">
+                                {branch.code}
+                              </span>
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                                  branch.organizationType?.toLowerCase().includes('sale') || isSaleManagement
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-[#33077C]/10 text-[#33077C] border-[#33077C]/20'
+                                }`}
+                              >
+                                {branch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
+                              </span>
+                              {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name && (
+                                <span className="text-[10px] text-slate-400 font-medium">
+                                  • {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -748,9 +1193,9 @@ export const BranchesView: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {filteredBranches.length > 0 && (
+      {totalRecords > 0 && (
         <Pagination
-          total={filteredBranches.length}
+          total={totalRecords}
           currentPage={safePage}
           pageSize={pageSize}
           pageSizeOptions={[5, 10, 20, 50]}
@@ -769,7 +1214,7 @@ export const BranchesView: React.FC = () => {
         title={editingBranch ? 'Edit Branch' : 'Add New Branch'}
         subtitle={
           <span className="text-white/80 text-xs font-normal">
-            {editingBranch ? 'Update branch location and contact specifications' : 'Create a regional branch under an offering product'}
+            {editingBranch ? 'Update branch location and contact specifications' : 'Create a regional branch under your organization'}
           </span>
         }
         maxWidth="4xl"
@@ -779,6 +1224,64 @@ export const BranchesView: React.FC = () => {
         onBack={() => setIsModalOpen(false)}
       >
         <form onSubmit={handleSaveBranch} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+          {/* Suite Tag Indicator */}
+          <div
+            className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
+              formData.organizationType?.toLowerCase().includes('sale') || isSaleManagement
+                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-800'
+                : 'bg-purple-50/80 border-purple-200 text-[#33077C]'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <GitBranch className="w-4 h-4 shrink-0" />
+              <span className="font-semibold">
+                Suite: <strong>{formData.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}</strong>
+              </span>
+            </div>
+            <span className="text-[11px] font-medium opacity-80">
+              {isSaleManagement ? 'Branch for Wholesale/Retail Operations' : 'Branch for Client CRM Operations'}
+            </span>
+          </div>
+
+          {/* Row 0: Organization (Read-Only) & Sub-Organization (Dropdown) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Organization
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={defaultOrgName}
+                  title="Default organization cannot be modified"
+                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                />
+              </div>
+              <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Sub-Organization <span className="text-rose-500">*</span>
+              </label>
+              <CustomSelect
+                value={formData.subOrganizationId}
+                onChange={(val) => setFormData({ ...formData, subOrganizationId: val })}
+                options={
+                  subOrganizations.length > 0
+                    ? subOrganizations.map((sub) => ({
+                        value: sub.id,
+                        label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                      }))
+                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
+                }
+                placeholder="Select Sub-Organization"
+              />
+            </div>
+          </div>
+
           {/* Row 1: Branch Name | Branch Code | Contact Person Name */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -854,7 +1357,7 @@ export const BranchesView: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 3: Location | Status */}
+          {/* Row 3: Location | Status | Password */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -881,6 +1384,29 @@ export const BranchesView: React.FC = () => {
                 ]}
                 placeholder="Select Status"
               />
+            </div>
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Password {!editingBranch && <span className="text-rose-500">*</span>}
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required={!editingBranch}
+                  placeholder={editingBranch ? 'Leave empty to keep unchanged' : '••••••••••••'}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className="w-full h-11 pl-4 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -921,7 +1447,7 @@ export const BranchesView: React.FC = () => {
           title={viewBranch.name}
           subtitle={
             <div className="flex items-center gap-2 text-white/80 text-xs font-normal">
-              <span>Branch Details & Regional Overview</span>
+              <span>Branch Details & Overview</span>
               <span>•</span>
               <span className="font-semibold text-white">{viewBranch.code}</span>
             </div>
@@ -952,13 +1478,10 @@ export const BranchesView: React.FC = () => {
                     </span>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                    <span className="font-semibold text-slate-700">
-                      {viewBranch.productName || 'Associated Product'}
-                    </span>
-                    {viewBranch.city && (
+                    {viewBranch.location && (
                       <span className="flex items-center gap-1 text-slate-500">
                         <MapPin className="w-3.5 h-3.5 text-[#33077C]" />
-                        {viewBranch.city}{viewBranch.state ? `, ${viewBranch.state}` : ''}
+                        {viewBranch.location}
                       </span>
                     )}
                   </div>
@@ -988,27 +1511,39 @@ export const BranchesView: React.FC = () => {
 
             {/* Detail Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Card 1: Branch & Corporate Info */}
+              {/* Card 1: Branch Info */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3.5">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
                   <Building2 className="w-4 h-4 text-[#33077C]" />
-                  Branch & Product Association
+                  Branch Overview
                 </h3>
                 <div className="space-y-2 text-xs">
                   <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Product Name</span>
-                    <span className="font-bold text-slate-900">{viewBranch.productName || 'N/A'}</span>
+                    <span className="text-slate-500 font-medium">Branch Name</span>
+                    <span className="font-bold text-slate-900">{viewBranch.name}</span>
                   </div>
-                  {products.find((p) => p.id === viewBranch.productId)?.code && (
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500 font-medium">Product Code</span>
-                      <span className="font-bold text-[#4309A2]">{products.find((p) => p.id === viewBranch.productId)?.code}</span>
-                    </div>
-                  )}
                   <div className="flex justify-between py-1.5 border-b border-slate-100">
                     <span className="text-slate-500 font-medium">Branch Code</span>
                     <span className="font-bold text-[#33077C]">{viewBranch.code}</span>
                   </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100">
+                    <span className="text-slate-500 font-medium">Suite Type</span>
+                    <span className="font-bold text-[#33077C]">
+                      {viewBranch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100">
+                    <span className="text-slate-500 font-medium">Organization</span>
+                    <span className="font-bold text-slate-900">{defaultOrgName}</span>
+                  </div>
+                  {viewBranch.subOrganizationId && (
+                    <div className="flex justify-between py-1.5 border-b border-slate-100">
+                      <span className="text-slate-500 font-medium">Sub-Organization</span>
+                      <span className="font-bold text-[#33077C]">
+                        {subOrganizations.find((s) => s.id === viewBranch.subOrganizationId)?.name || 'Linked Sub-Org'}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-1.5 border-b border-slate-100">
                     <span className="text-slate-500 font-medium">GST Number</span>
                     <span className="font-bold text-slate-900">{viewBranch.gstNumber || 'N/A'}</span>

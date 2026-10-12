@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Package,
   Plus,
@@ -31,13 +31,112 @@ import {
   Printer,
   Forward,
   FileSpreadsheet,
+  Loader2,
+  Eye,
+  Database,
+  AlertCircle,
 } from 'lucide-react';
+import { useForm } from 'react-hook-form';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { Button } from '../../../components/common/Button';
 import { Pagination } from '../../../components/common/Pagination';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatProductShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
+import {
+  productApi,
+  mapApiProductToProductItem,
+  ApiProduct,
+  categoryApi,
+  unitApi,
+  ApiUnit,
+  mapApiUnitToUnitItem,
+} from '../../../api';
+
+// Standard Industry Master Units available by default
+export const DEFAULT_COMMERCE_UNITS: Array<{ id: string; name: string; shortCode: string; status: number }> = [
+  { id: 'unit-pcs', name: 'Pieces', shortCode: 'Pcs', status: 1 },
+  { id: 'unit-box', name: 'Box', shortCode: 'Box', status: 1 },
+  { id: 'unit-nos', name: 'Numbers', shortCode: 'Nos', status: 1 },
+  { id: 'unit-kg', name: 'Kilogram', shortCode: 'Kg', status: 1 },
+  { id: 'unit-gm', name: 'Gram', shortCode: 'Gm', status: 1 },
+  { id: 'unit-ltr', name: 'Litre', shortCode: 'Ltr', status: 1 },
+  { id: 'unit-ml', name: 'Millilitre', shortCode: 'Ml', status: 1 },
+  { id: 'unit-mtr', name: 'Meter', shortCode: 'Mtr', status: 1 },
+  { id: 'unit-cm', name: 'Centimeter', shortCode: 'Cm', status: 1 },
+  { id: 'unit-ft', name: 'Feet', shortCode: 'Ft', status: 1 },
+  { id: 'unit-dzn', name: 'Dozen', shortCode: 'Dzn', status: 1 },
+  { id: 'unit-pac', name: 'Pack', shortCode: 'Pac', status: 1 },
+  { id: 'unit-pr', name: 'Pair', shortCode: 'Pr', status: 1 },
+  { id: 'unit-set', name: 'Set', shortCode: 'Set', status: 1 },
+  { id: 'unit-rol', name: 'Rolls', shortCode: 'Rol', status: 1 },
+  { id: 'unit-bag', name: 'Bags', shortCode: 'Bag', status: 1 },
+  { id: 'unit-bdl', name: 'Bundle', shortCode: 'Bdl', status: 1 },
+  { id: 'unit-ctn', name: 'Carton', shortCode: 'Ctn', status: 1 },
+  { id: 'unit-drm', name: 'Drum', shortCode: 'Drm', status: 1 },
+  { id: 'unit-sqft', name: 'Square Feet', shortCode: 'Sq.Ft', status: 1 },
+  { id: 'unit-sqm', name: 'Square Meter', shortCode: 'Sq.M', status: 1 },
+];
+
+export interface ProductFormValues {
+  itemType: 'Product' | 'Service';
+  productCode: string;
+  productName: string;
+  hsnCode: string;
+  unit: string;
+  baseUnitId?: string;
+  secondaryUnitId?: string | null;
+  secondaryUnit?: string;
+  category: string;
+  itemImage: string;
+  salePrice: string | number;
+  salePriceTaxType: 'Excluded' | 'Included';
+  discountValue: string | number;
+  discountType: 'Percentage' | 'Amount';
+  hasWholesale: boolean;
+  wholesalePrice: string | number;
+  wholesaleTaxType: 'Excluded' | 'Included';
+  minWholesaleQty: string | number;
+  purchasePrice: string | number;
+  purchasePriceTaxType: 'Excluded' | 'Included';
+  taxRate: string;
+  openingStock: string | number;
+  atPrice: string | number;
+  asOfDate: string;
+  minStockAlert: string | number;
+  location: string;
+}
+
+export const defaultProductFormValues: ProductFormValues = {
+  itemType: 'Product',
+  productCode: '',
+  productName: '',
+  hsnCode: '',
+  unit: 'PCS',
+  baseUnitId: undefined,
+  secondaryUnitId: null,
+  secondaryUnit: undefined,
+  category: 'General',
+  itemImage: '',
+  salePrice: '',
+  salePriceTaxType: 'Excluded',
+  discountValue: '',
+  discountType: 'Percentage',
+  hasWholesale: false,
+  wholesalePrice: '',
+  wholesaleTaxType: 'Excluded',
+  minWholesaleQty: '',
+  purchasePrice: '',
+  purchasePriceTaxType: 'Excluded',
+  taxRate: 'None',
+  openingStock: '',
+  atPrice: '',
+  asOfDate: new Date().toISOString().split('T')[0],
+  minStockAlert: '',
+  location: '',
+};
+
 
 export interface ProductItem {
   id: string;
@@ -47,6 +146,9 @@ export interface ProductItem {
   productName: string;
   hsnCode: string;
   unit: string;
+  baseUnitId?: string;
+  secondaryUnitId?: string | null;
+  secondaryUnit?: string;
   category: string;
   subcategory?: string;
   itemImage?: string;
@@ -78,17 +180,7 @@ export interface ProductItem {
   status: 'Active' | 'Inactive';
 }
 
-const INITIAL_CATEGORIES = [
-  'Grains & Flours',
-  'Pulses & Dals',
-  'Edible Oils & Ghee',
-  'Spices, Salt & Sugar',
-  'Beverages & Tea',
-  'Packaged Food & Snacks',
-  'Dairy & Bakery',
-  'Cleaning & Household',
-  'Personal Care',
-];
+
 
 const TAX_RATE_OPTIONS = [
   { label: 'None', value: 'None' },
@@ -100,57 +192,6 @@ const TAX_RATE_OPTIONS = [
   { label: 'GST @ 18%', value: 'GST @ 18%' },
   { label: 'GST @ 28%', value: 'GST @ 28%' },
   { label: 'Exempted', value: 'Exempted' },
-];
-
-const POPULAR_UNITS = [
-  { code: 'KGS', name: 'Kilograms' },
-  { code: 'GMS', name: 'Grams' },
-  { code: 'LTR', name: 'Litres' },
-  { code: 'MLT', name: 'Millilitres' },
-  { code: 'PAC', name: 'Packs' },
-  { code: 'BAG', name: 'Bags' },
-  { code: 'BTL', name: 'Bottles' },
-  { code: 'CAN', name: 'Cans' },
-  { code: 'PCS', name: 'Pieces' },
-  { code: 'BOX', name: 'Box' },
-  { code: 'NOS', name: 'Numbers' },
-  { code: 'DOZ', name: 'Dozens' },
-  { code: 'UNT', name: 'Units' },
-  { code: 'SET', name: 'Sets' },
-  { code: 'TON', name: 'Tonnes' },
-];
-
-export const STANDARD_UNITS_LIST = [
-  'None',
-  'BAGS (Bag)',
-  'BOTTLES (Btl)',
-  'BOX (Box)',
-  'BUNDLES (Bdl)',
-  'CANS (Can)',
-  'CARTONS (Ctn)',
-  'CUBIC METER (Mtq)',
-  'DAY (Day)',
-  'DOZENS (Dzn)',
-  'GRAMMES (Gm)',
-  'HOUR (Hur)',
-  'KILOGRAMS (Kg)',
-  'KILOMETER (Kmt)',
-  'LITRE (Ltr)',
-  'METERS (Mtr)',
-  'MILILITRE (Ml)',
-  'NUMBERS (Nos)',
-  'PACKS (Pac)',
-  'PAIRS (Prs)',
-  'PIECES (Pcs)',
-  'QUINTAL (Qtl)',
-  'ROLLS (Rol)',
-  'SETS (Set)',
-  'SQ. FEET (Sqf)',
-  'SQ. METERS (Sqm)',
-  'TABLETS (Tbs)',
-  'TONNES (Ton)',
-  'TUBES (Tub)',
-  'UNITS (Unt)',
 ];
 
 const COMMON_HSN_CODES = [
@@ -376,180 +417,31 @@ const CategorySelectField: React.FC<CategorySelectProps> = ({
 };
 
 export const InventoryProductsView: React.FC = () => {
-  // Categories List State
-  const [categories, setCategories] = useState<string[]>(INITIAL_CATEGORIES);
+  // Categories List State (dynamically populated via commerce category API)
+  const [categories, setCategories] = useState<string[]>([]);
 
-  // Initial Sample Records
-  const [products, setProducts] = useState<ProductItem[]>([
-    {
-      id: 'prod-1',
-      sNo: 1,
-      itemType: 'Product',
-      productCode: 'PRD-1001',
-      productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-      hsnCode: '1101',
-      unit: 'BAG',
-      category: 'Grains & Flours',
-      subcategory: 'Flours',
-      salePrice: 495,
-      salePriceTaxType: 'Included',
-      discountValue: 15,
-      discountType: 'Amount',
-      hasWholesale: true,
-      wholesalePrice: 450,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 10,
-      purchasePrice: 420,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 5%',
-      openingStock: 85,
-      atPrice: 420,
-      asOfDate: '2026-09-25',
-      minStockAlert: 15,
-      location: 'Aisle 1 - Grains',
-      status: 'Active',
-    },
-    {
-      id: 'prod-2',
-      sNo: 2,
-      itemType: 'Product',
-      productCode: 'PRD-1002',
-      productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-      hsnCode: '1006',
-      unit: 'BAG',
-      category: 'Grains & Flours',
-      subcategory: 'Rice',
-      salePrice: 699,
-      salePriceTaxType: 'Included',
-      discountValue: 5,
-      discountType: 'Percentage',
-      hasWholesale: true,
-      wholesalePrice: 620,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 5,
-      purchasePrice: 580,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 5%',
-      openingStock: 120,
-      atPrice: 580,
-      asOfDate: '2026-09-26',
-      minStockAlert: 20,
-      location: 'Aisle 1 - Grains',
-      status: 'Active',
-    },
-    {
-      id: 'prod-3',
-      sNo: 3,
-      itemType: 'Product',
-      productCode: 'PRD-1003',
-      productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-      hsnCode: '1512',
-      unit: 'PAC',
-      category: 'Edible Oils & Ghee',
-      subcategory: 'Cooking Oils',
-      salePrice: 165,
-      salePriceTaxType: 'Included',
-      discountValue: 0,
-      discountType: 'Percentage',
-      hasWholesale: true,
-      wholesalePrice: 145,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 15,
-      purchasePrice: 138,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 5%',
-      openingStock: 240,
-      atPrice: 138,
-      asOfDate: '2026-09-27',
-      minStockAlert: 40,
-      location: 'Aisle 2 - Oils',
-      status: 'Active',
-    },
-    {
-      id: 'prod-4',
-      sNo: 4,
-      itemType: 'Product',
-      productCode: 'PRD-1004',
-      productName: 'Tata Salt Vacuum Evaporated Iodized (1 Kg)',
-      hsnCode: '2501',
-      unit: 'PAC',
-      category: 'Spices, Salt & Sugar',
-      subcategory: 'Salt',
-      salePrice: 28,
-      salePriceTaxType: 'Included',
-      discountValue: 0,
-      discountType: 'Percentage',
-      hasWholesale: true,
-      wholesalePrice: 24,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 25,
-      purchasePrice: 22,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 0%',
-      openingStock: 350,
-      atPrice: 22,
-      asOfDate: '2026-09-28',
-      minStockAlert: 50,
-      location: 'Aisle 3 - Spices',
-      status: 'Active',
-    },
-    {
-      id: 'prod-5',
-      sNo: 5,
-      itemType: 'Product',
-      productCode: 'PRD-1005',
-      productName: 'Brooke Bond Red Label Strong Tea (500g)',
-      hsnCode: '0902',
-      unit: 'PAC',
-      category: 'Beverages & Tea',
-      subcategory: 'Tea',
-      salePrice: 275,
-      salePriceTaxType: 'Included',
-      discountValue: 10,
-      discountType: 'Amount',
-      hasWholesale: true,
-      wholesalePrice: 245,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 10,
-      purchasePrice: 230,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 5%',
-      openingStock: 75,
-      atPrice: 230,
-      asOfDate: '2026-09-28',
-      minStockAlert: 15,
-      location: 'Aisle 4 - Beverages',
-      status: 'Active',
-    },
-    {
-      id: 'prod-6',
-      sNo: 6,
-      itemType: 'Product',
-      productCode: 'PRD-1006',
-      productName: 'Surf Excel Easy Wash Detergent Powder (1 Kg)',
-      hsnCode: '3402',
-      unit: 'PAC',
-      category: 'Cleaning & Household',
-      subcategory: 'Detergents',
-      salePrice: 148,
-      salePriceTaxType: 'Included',
-      discountValue: 0,
-      discountType: 'Percentage',
-      hasWholesale: true,
-      wholesalePrice: 135,
-      wholesaleTaxType: 'Included',
-      minWholesaleQty: 12,
-      purchasePrice: 125,
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'GST @ 18%',
-      openingStock: 65,
-      atPrice: 125,
-      asOfDate: '2026-09-28',
-      minStockAlert: 10,
-      location: 'Aisle 5 - Cleaning',
-      status: 'Active',
-    },
-  ]);
+  // Products collection - initialized empty (zero mock data)
+  const [products, setProducts] = useState<ProductItem[]>([]);
+
+  // Loading & API State
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+
+  // Request Deduplication Refs
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef<string | null>(null);
+
+  // Detail Modal State (GET /commerce/products/:id)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedProductDetail, setSelectedProductDetail] = useState<ApiProduct | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  // Delete Confirmation State
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState<ProductItem | null>(null);
 
   // Selected row IDs for bulk actions
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -585,11 +477,201 @@ export const InventoryProductsView: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  /**
+   * Master API Loader with strict deduplication guards to ensure zero redundant calls
+   * Query parameters are only requested when applied
+   */
+  const loadProducts = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedType}_${appliedStatus}`;
+
+      // Prevent concurrent calls or redundant re-fetching of identical parameters
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsLoading(true);
+
+      try {
+        const res = await productApi.getProducts({
+          page_no: page,
+          page_size: pageSize,
+          pagination_required: true,
+          search: appliedSearch.trim() || undefined,
+          sortOrder: 'desc',
+          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+          category: appliedCategory !== 'ALL' ? appliedCategory : undefined,
+          itemType: appliedType !== 'ALL' ? (appliedType as 'Product' | 'Service') : undefined,
+        });
+
+        if (res && res.success && Array.isArray(res.data)) {
+          const mapped = res.data.map((item, idx) =>
+            mapApiProductToProductItem(item, (page - 1) * pageSize + idx)
+          );
+          setProducts(mapped);
+          setIsApiConnected(true);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords);
+            setTotalApiPages(res.pagination.totalPages);
+          }
+        } else {
+          setIsApiConnected(false);
+        }
+      } catch (err: any) {
+        console.warn('Commerce Product API call failed, falling back to local state:', err?.message || err);
+        setIsApiConnected(false);
+      } finally {
+        setIsLoading(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [page, pageSize, appliedSearch, appliedCategory, appliedType, appliedStatus]
+  );
+
+  useEffect(() => {
+    loadProducts();
+  }, [loadProducts]);
+
+  /**
+   * Fetch live categories to populate dropdowns in Add/Edit modal and filter
+   */
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveCategories = async () => {
+      try {
+        const res = await categoryApi.getCategories({
+          pagination_required: false,
+          sortOrder: 'asc',
+        });
+        if (isMounted && res?.success && Array.isArray(res.data) && res.data.length > 0) {
+          const catNames = res.data
+            .map((c) => c.categoryName || c.name || '')
+            .filter((n) => n.trim() !== '');
+          if (catNames.length > 0) {
+            setCategories(Array.from(new Set(catNames)));
+          }
+        }
+      } catch (err) {
+        // Fallback to default categories
+      }
+    };
+    fetchLiveCategories();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Open Details Modal (GET /commerce/products/:id)
+  const handleOpenDetailModal = async (prod: ProductItem) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setIsDetailModalOpen(true);
+    setIsLoadingDetail(true);
+    setSelectedProductDetail(null);
+
+    try {
+      const res = await productApi.getProductById(prod.id);
+      if (res?.success && res.data) {
+        setSelectedProductDetail(res.data);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Product detail API failed, falling back to basic view:', apiErr);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+
+    // Local fallback for details
+    setSelectedProductDetail({
+      id: prod.id,
+      organizationId: '',
+      sNo: prod.sNo,
+      itemType: prod.itemType,
+      productCode: prod.productCode,
+      productName: prod.productName,
+      hsnCode: prod.hsnCode,
+      unit: prod.unit,
+      category: prod.category,
+      subcategory: prod.subcategory,
+      itemImage: prod.itemImage,
+      salePrice: prod.salePrice,
+      salePriceTaxType: prod.salePriceTaxType,
+      discountValue: prod.discountValue,
+      discountType: prod.discountType,
+      hasWholesale: prod.hasWholesale,
+      wholesalePrice: prod.wholesalePrice,
+      wholesaleTaxType: prod.wholesaleTaxType,
+      minWholesaleQty: prod.minWholesaleQty,
+      purchasePrice: prod.purchasePrice,
+      purchasePriceTaxType: prod.purchasePriceTaxType,
+      taxRate: prod.taxRate,
+      openingStock: prod.openingStock,
+      atPrice: prod.atPrice,
+      asOfDate: prod.asOfDate,
+      minStockAlert: prod.minStockAlert,
+      location: prod.location,
+      status: prod.status,
+      stockBatches: [],
+    });
+  };
+
+  // Toggle Product Status (PATCH /commerce/products/:id)
+  const handleToggleStatus = async (item: ProductItem) => {
+    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+
+    try {
+      const res = await productApi.patchProduct(item.id, { status: nextStatus });
+      if (res?.success) {
+        setProducts((prev) =>
+          prev.map((p) => (p.id === item.id ? { ...p, status: nextStatus } : p))
+        );
+        toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote product status patch failed, updating locally:', apiErr);
+    }
+
+    setProducts((prev) =>
+      prev.map((p) => (p.id === item.id ? { ...p, status: nextStatus } : p))
+    );
+    toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
+  };
+
+  // Confirm and Execute Delete (DELETE /commerce/products/:id)
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmItem) return;
+    const { id, productName } = deleteConfirmItem;
+    setIsDeleting(true);
+
+    try {
+      const res = await productApi.deleteProduct(id);
+      if (res?.success) {
+        setProducts((prev) => prev.filter((p) => p.id !== id));
+        setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
+        toast.success(`Product "${productName}" deleted successfully.`);
+        setDeleteConfirmItem(null);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote product delete failed, removing locally:', apiErr);
+    } finally {
+      setIsDeleting(false);
+    }
+
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+    toast.success(`Product "${productName}" deleted.`);
+    setDeleteConfirmItem(null);
+  };
+
   // 3-Dots Action Dropdown State & Share Popover
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -605,137 +687,282 @@ export const InventoryProductsView: React.FC = () => {
   const [isHsnModalOpen, setIsHsnModalOpen] = useState(false);
   const [hsnSearchQuery, setHsnSearchQuery] = useState('');
 
-  // Custom units list with localStorage persistence
-  const [customUnits, setCustomUnits] = useState<Array<{ name: string; shortName: string }>>(() => {
+  // Live Units from Commerce API
+  const [apiUnits, setApiUnits] = useState<ApiUnit[]>([]);
+  const [isLoadingUnits, setIsLoadingUnits] = useState(false);
+  const [isCreatingUnit, setIsCreatingUnit] = useState(false);
+  const [deletingUnitId, setDeletingUnitId] = useState<string | null>(null);
+
+  // Helper to format unit object to dropdown string format e.g. "PIECES (Pcs)"
+  const formatUnitOption = useCallback((u: ApiUnit | { name: string; shortCode?: string; code?: string }) => {
+    const short = u.shortCode || (u as any).code || '';
+    const name = u.name || (u as any).unitName || '';
+    if (!name) return short ? short.toUpperCase() : 'PCS';
+    return short ? `${name.toUpperCase()} (${short})` : name.toUpperCase();
+  }, []);
+
+  // Combined master units: Live Commerce API units merged with standard defaults
+  const allAvailableUnits = useMemo<ApiUnit[]>(() => {
+    const list: ApiUnit[] = [...apiUnits];
+    DEFAULT_COMMERCE_UNITS.forEach((def) => {
+      const exists = list.some(
+        (u) =>
+          u.name?.toLowerCase().trim() === def.name.toLowerCase().trim() ||
+          u.shortCode?.toLowerCase().trim() === def.shortCode.toLowerCase().trim()
+      );
+      if (!exists) {
+        list.push({
+          id: def.id,
+          organizationId: '',
+          name: def.name,
+          shortCode: def.shortCode,
+          status: def.status,
+        });
+      }
+    });
+    return list;
+  }, [apiUnits]);
+
+  // Combined Units list string options
+  const allUnitsList = useMemo(() => {
+    const list: string[] = ['None'];
+    allAvailableUnits.forEach((u) => {
+      const formatted = formatUnitOption(u);
+      if (!list.includes(formatted)) {
+        list.push(formatted);
+      }
+    });
+    return list;
+  }, [allAvailableUnits, formatUnitOption]);
+
+  // Master Loader for Commerce Units
+  const loadUnits = useCallback(async () => {
     try {
-      const saved = localStorage.getItem('yaa_crm_units');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+      setIsLoadingUnits(true);
+      const res = await unitApi.getUnits({
+        sortOrder: 'asc',
+      });
+      const list = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res)
+        ? res
+        : Array.isArray((res as any)?.data?.data)
+        ? (res as any).data.data
+        : [];
+      if (list.length > 0) {
+        setApiUnits(list);
+      }
+    } catch (err: any) {
+      console.warn('Failed to load units from Commerce API:', err);
+    } finally {
+      setIsLoadingUnits(false);
     }
-  });
+  }, []);
+
+  useEffect(() => {
+    loadUnits();
+  }, [loadUnits]);
 
   // State for creating a new custom unit inside the Unit dialog
   const [newUnitFullName, setNewUnitFullName] = useState('');
   const [newUnitShortName, setNewUnitShortName] = useState('');
   const [showAddUnitForm, setShowAddUnitForm] = useState(true);
 
-  // Combined Units list (Standard + Custom)
-  const allUnitsList = useMemo(() => {
-    const list = [...STANDARD_UNITS_LIST];
-    customUnits.forEach((u) => {
-      const formatted = `${u.name.toUpperCase()} (${u.shortName})`;
-      if (!list.includes(formatted)) {
-        list.push(formatted);
-      }
-    });
-    return list;
-  }, [customUnits]);
-
-  // Handler to add a new custom unit
-  const handleAddNewCustomUnit = () => {
-    const fullName = newUnitFullName.trim();
-    const shortName = newUnitShortName.trim();
+  // Handler to add a new unit via Commerce unitApi
+  const handleAddNewCustomUnit = async (
+    overrideFullName?: string,
+    overrideShortName?: string
+  ): Promise<ApiUnit | null> => {
+    const fullName = (overrideFullName !== undefined ? overrideFullName : newUnitFullName).trim();
+    const shortName = (overrideShortName !== undefined ? overrideShortName : newUnitShortName).trim();
     if (!fullName) {
       toast.error('Please enter a unit name (e.g. Dozen, Pack, Drum)');
-      return;
+      return null;
     }
-    const short = shortName ? shortName : fullName.slice(0, 3).toUpperCase();
+    const short = shortName
+      ? shortName
+      : fullName.length <= 4
+      ? fullName.toUpperCase()
+      : fullName.slice(0, 3).toUpperCase();
     const formatted = `${fullName.toUpperCase()} (${short})`;
 
-    const exists = allUnitsList.some(
+    // Check if a unit with the same name or short code already exists in local list
+    const existing = allAvailableUnits.find(
       (u) =>
-        u.toLowerCase() === formatted.toLowerCase() ||
-        u.toLowerCase() === fullName.toLowerCase() ||
-        (u.includes('(') && u.match(/\((.*?)\)/)?.[1]?.toLowerCase() === short.toLowerCase())
+        u.name?.toLowerCase().trim() === fullName.toLowerCase() ||
+        (short && u.shortCode?.toLowerCase().trim() === short.toLowerCase())
     );
 
-    if (exists) {
-      const matched = allUnitsList.find(
-        (u) =>
-          u.toLowerCase() === formatted.toLowerCase() ||
-          u.toLowerCase() === fullName.toLowerCase() ||
-          (u.includes('(') && u.match(/\((.*?)\)/)?.[1]?.toLowerCase() === short.toLowerCase())
-      );
-      if (matched) setSelectedBaseUnit(matched);
-      toast.info(`Unit "${formatted}" already exists and has been selected!`);
+    if (existing) {
+      setSelectedBaseUnit(formatUnitOption(existing));
       setNewUnitFullName('');
       setNewUnitShortName('');
-      return;
+      toast.info(`Unit "${formatUnitOption(existing)}" is already in your unit list and selected.`);
+      return existing;
     }
 
-    const updated = [...customUnits, { name: fullName, shortName: short }];
-    setCustomUnits(updated);
+    setIsCreatingUnit(true);
     try {
-      localStorage.setItem('yaa_crm_units', JSON.stringify(updated));
-    } catch (e) {
-      console.error('Failed to save custom unit', e);
-    }
+      const res = await unitApi.createUnit({
+        name: fullName,
+        shortCode: short,
+        status: 1,
+      });
 
-    setSelectedBaseUnit(formatted);
-    setNewUnitFullName('');
-    setNewUnitShortName('');
-    toast.success(`Unit "${formatted}" added and selected!`);
+      const createdUnit: ApiUnit | null =
+        res && (res.data ? res.data : (res as any)?.id ? (res as any) : null);
+
+      if (createdUnit && createdUnit.id) {
+        setApiUnits((prev) => {
+          const exists = prev.some((u) => u.id === createdUnit.id);
+          return exists ? prev : [...prev, createdUnit];
+        });
+        const formattedOption = formatUnitOption(createdUnit);
+        setSelectedBaseUnit(formattedOption);
+        setNewUnitFullName('');
+        setNewUnitShortName('');
+        toast.success(`Unit "${formattedOption}" created successfully!`);
+        loadUnits();
+        return createdUnit;
+      } else {
+        throw new Error('Unexpected response format from Unit API');
+      }
+    } catch (err: any) {
+      console.error('Failed to create unit via API:', err);
+      const errCode = err?.response?.data?.error?.code || (err as any)?.code;
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to create unit';
+
+      // If unit already exists on backend (DUPLICATE_UNIT_NAME, DUPLICATE_UNIT_SHORT_CODE, etc.)
+      const isDuplicate =
+        errCode === 'DUPLICATE_UNIT_NAME' ||
+        errCode === 'DUPLICATE_UNIT_SHORT_CODE' ||
+        errMsg.toLowerCase().includes('already exists') ||
+        errMsg.toLowerCase().includes('duplicate');
+
+      if (isDuplicate) {
+        try {
+          const freshRes = await unitApi.getUnits({ sortOrder: 'asc' });
+          const list = Array.isArray(freshRes?.data)
+            ? freshRes.data
+            : Array.isArray(freshRes)
+            ? freshRes
+            : [];
+          if (list.length > 0) {
+            setApiUnits(list);
+            const matched = list.find(
+              (u) =>
+                u.name?.toLowerCase().trim() === fullName.toLowerCase() ||
+                (short && u.shortCode?.toLowerCase().trim() === short.toLowerCase())
+            );
+            if (matched) {
+              const formattedOption = formatUnitOption(matched);
+              setSelectedBaseUnit(formattedOption);
+              setNewUnitFullName('');
+              setNewUnitShortName('');
+              toast.info(`Unit "${formattedOption}" already exists and has been selected for you.`);
+              return matched;
+            }
+          }
+        } catch {
+          // ignore fallback load error
+        }
+      }
+
+      toast.error(errMsg);
+      return null;
+    } finally {
+      setIsCreatingUnit(false);
+    }
   };
 
-  // Handler to delete custom unit
-  const handleDeleteCustomUnit = (unitToRemove: { name: string; shortName: string }) => {
-    const formatted = `${unitToRemove.name.toUpperCase()} (${unitToRemove.shortName})`;
-    const updated = customUnits.filter(
-      (u) => !(u.name.toLowerCase() === unitToRemove.name.toLowerCase() && u.shortName.toLowerCase() === unitToRemove.shortName.toLowerCase())
-    );
-    setCustomUnits(updated);
+  // Handler to delete unit via Commerce unitApi
+  const handleDeleteCustomUnit = async (unitToRemove: ApiUnit) => {
+    const formatted = formatUnitOption(unitToRemove);
+    setDeletingUnitId(unitToRemove.id);
     try {
-      localStorage.setItem('yaa_crm_units', JSON.stringify(updated));
-    } catch (e) {
-      console.error(e);
+      const res = await unitApi.deleteUnit(unitToRemove.id);
+      if (res?.success) {
+        setApiUnits((prev) => prev.filter((u) => u.id !== unitToRemove.id));
+        if (selectedBaseUnit === formatted) {
+          const fallback = apiUnits.find((u) => u.id !== unitToRemove.id);
+          setSelectedBaseUnit(fallback ? formatUnitOption(fallback) : 'None');
+        }
+        if (selectedSecondaryUnit === formatted) {
+          setSelectedSecondaryUnit('None');
+        }
+        toast.success(`Unit "${unitToRemove.name}" deleted successfully`);
+        await loadUnits();
+      }
+    } catch (err: any) {
+      console.error('Failed to delete unit via API:', err);
+      const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to delete unit';
+      toast.error(errMsg);
+    } finally {
+      setDeletingUnitId(null);
     }
-    if (selectedBaseUnit === formatted) {
-      setSelectedBaseUnit('PIECES (Pcs)');
-    }
-    if (selectedSecondaryUnit === formatted) {
-      setSelectedSecondaryUnit('None');
-    }
-    toast.success(`Custom unit "${unitToRemove.name}" removed`);
   };
 
   // Image Upload reference
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Form Data State
-  const [formData, setFormData] = useState({
-    itemType: 'Product' as 'Product' | 'Service',
-    productCode: '',
-    productName: '',
-    hsnCode: '',
-    unit: 'PCS',
-    category: 'food',
-    itemImage: '',
-    
-    // Pricing
-    salePrice: '' as string | number,
-    salePriceTaxType: 'Excluded' as 'Excluded' | 'Included',
-    discountValue: '' as string | number,
-    discountType: 'Percentage' as 'Percentage' | 'Amount',
-    
-    // Wholesale
-    hasWholesale: false,
-    wholesalePrice: '' as string | number,
-    wholesaleTaxType: 'Excluded' as 'Excluded' | 'Included',
-    minWholesaleQty: '' as string | number,
-    
-    // Purchase & Taxes
-    purchasePrice: '' as string | number,
-    purchasePriceTaxType: 'Excluded' as 'Excluded' | 'Included',
-    taxRate: 'None',
-    
-    // Stock
-    openingStock: '' as string | number,
-    atPrice: '' as string | number,
-    asOfDate: new Date().toISOString().split('T')[0],
-    minStockAlert: '' as string | number,
-    location: '',
+  // React Hook Form instance for Add / Edit Item Modal
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    getValues,
+    formState: { errors },
+  } = useForm<ProductFormValues>({
+    mode: 'onChange',
+    defaultValues: defaultProductFormValues,
   });
+
+  const formData = watch();
+
+  // Backward-compatible state updater bridging to React Hook Form
+  const setFormData = (updater: Partial<ProductFormValues> | ((prev: ProductFormValues) => Partial<ProductFormValues>)) => {
+    const current = getValues();
+    const updated = typeof updater === 'function' ? updater(current) : updater;
+    Object.entries(updated).forEach(([k, v]) => {
+      setValue(k as keyof ProductFormValues, v as any, { shouldValidate: true });
+    });
+  };
+
+  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
+  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key >= '0' && e.key <= '9') {
+      e.preventDefault();
+    }
+  };
+
+  // Keystroke sanitizer: disallow typing non-numeric characters in number-only fields
+  const handleNumberOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, allowDecimal = false) => {
+    if (
+      e.key === 'Backspace' ||
+      e.key === 'Delete' ||
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight' ||
+      e.key === 'Tab' ||
+      e.key === 'Enter' ||
+      (allowDecimal && e.key === '.') ||
+      e.ctrlKey ||
+      e.metaKey
+    ) {
+      if (allowDecimal && e.key === '.' && e.currentTarget.value.includes('.')) {
+        e.preventDefault();
+      }
+      return;
+    }
+    if (!/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+    }
+  };
 
   // Close dropdowns on outside click or scroll
   useEffect(() => {
@@ -781,33 +1008,23 @@ export const InventoryProductsView: React.FC = () => {
     return `${prefix}-${randNum}`;
   };
 
-  const handleOpenAddModal = () => {
+  const handleOpenAddModal = (defaultType?: 'Product' | 'Service' | React.MouseEvent) => {
+    const type = typeof defaultType === 'string' ? defaultType : 'Product';
     setEditingProduct(null);
     setActiveTab('Pricing');
-    setFormData({
-      itemType: 'Product',
-      productCode: generateNewCode('Product'),
-      productName: '',
-      hsnCode: '',
-      unit: 'PCS',
-      category: '',
-      itemImage: '',
-      salePrice: '',
-      salePriceTaxType: 'Excluded',
-      discountValue: '',
-      discountType: 'Percentage',
-      hasWholesale: false,
-      wholesalePrice: '',
-      wholesaleTaxType: 'Excluded',
-      minWholesaleQty: '',
-      purchasePrice: '',
-      purchasePriceTaxType: 'Excluded',
-      taxRate: 'None',
-      openingStock: '',
-      atPrice: '',
-      asOfDate: new Date().toISOString().split('T')[0],
-      minStockAlert: '',
-      location: '',
+    const defaultUnit = allAvailableUnits.length > 0 ? allAvailableUnits[0] : null;
+    const defaultUnitFormatted = defaultUnit ? formatUnitOption(defaultUnit) : 'PIECES (Pcs)';
+    setSelectedBaseUnit(defaultUnitFormatted);
+    setSelectedSecondaryUnit('None');
+    reset({
+      ...defaultProductFormValues,
+      itemType: type,
+      productCode: generateNewCode(type),
+      unit: defaultUnit ? (defaultUnit.shortCode || defaultUnit.name) : 'PCS',
+      baseUnitId: defaultUnit && !defaultUnit.id.startsWith('unit-') ? defaultUnit.id : undefined,
+      secondaryUnitId: null,
+      secondaryUnit: undefined,
+      category: categories[0] || 'General',
     });
     setIsModalOpen(true);
   };
@@ -815,12 +1032,44 @@ export const InventoryProductsView: React.FC = () => {
   const handleOpenEditModal = (prod: ProductItem) => {
     setEditingProduct(prod);
     setActiveTab('Pricing');
-    setFormData({
+    const matchedBase = allAvailableUnits.find(
+      (u) =>
+        u.id === prod.baseUnitId ||
+        u.shortCode?.toUpperCase() === prod.unit?.toUpperCase() ||
+        u.name?.toUpperCase() === prod.unit?.toUpperCase() ||
+        formatUnitOption(u).toUpperCase().includes(`(${prod.unit?.toUpperCase()})`)
+    );
+    if (matchedBase) {
+      setSelectedBaseUnit(formatUnitOption(matchedBase));
+    } else if (prod.unit) {
+      setSelectedBaseUnit(prod.unit);
+    } else {
+      setSelectedBaseUnit('PIECES (Pcs)');
+    }
+
+    const matchedSec = allAvailableUnits.find(
+      (u) =>
+        u.id === prod.secondaryUnitId ||
+        (prod.secondaryUnit && (
+          u.shortCode?.toUpperCase() === prod.secondaryUnit?.toUpperCase() ||
+          u.name?.toUpperCase() === prod.secondaryUnit?.toUpperCase()
+        ))
+    );
+    if (matchedSec) {
+      setSelectedSecondaryUnit(formatUnitOption(matchedSec));
+    } else {
+      setSelectedSecondaryUnit('None');
+    }
+
+    reset({
       itemType: prod.itemType,
       productCode: prod.productCode,
       productName: prod.productName,
       hsnCode: prod.hsnCode || '',
-      unit: prod.unit || 'PCS',
+      unit: prod.unit || (matchedBase ? (matchedBase.shortCode || matchedBase.name) : 'PCS'),
+      baseUnitId: prod.baseUnitId || (matchedBase && !matchedBase.id.startsWith('unit-') ? matchedBase.id : undefined),
+      secondaryUnitId: prod.secondaryUnitId || (matchedSec && !matchedSec.id.startsWith('unit-') ? matchedSec.id : null),
+      secondaryUnit: prod.secondaryUnit || (matchedSec ? (matchedSec.shortCode || matchedSec.name) : undefined),
       category: prod.category || '',
       itemImage: prod.itemImage || '',
       salePrice: prod.salePrice || '',
@@ -865,126 +1114,151 @@ export const InventoryProductsView: React.FC = () => {
     }
   };
 
-  const handleSaveItem = (keepOpenAfterSave = false) => {
-    if (!formData.productName.trim()) {
+  const handleSaveItem = async (keepOpenAfterSave = false, formValuesParam?: ProductFormValues) => {
+    const data = formValuesParam || getValues();
+    if (!data.productName.trim()) {
       toast.error('Item Name is required');
       return;
     }
 
-    const finalCode = formData.productCode.trim() || generateNewCode(formData.itemType);
-    const salePriceNum = Number(formData.salePrice) || 0;
-    const purchasePriceNum = Number(formData.purchasePrice) || 0;
-    const discountValNum = Number(formData.discountValue) || 0;
-    const wholesalePriceNum = Number(formData.wholesalePrice) || 0;
-    const minWholesaleQtyNum = Number(formData.minWholesaleQty) || 0;
-    const openingStockNum = Number(formData.openingStock) || 0;
-    const atPriceNum = Number(formData.atPrice) || purchasePriceNum;
-    const minStockAlertNum = Number(formData.minStockAlert) || 0;
+    const finalCode = data.productCode.trim() || generateNewCode(data.itemType);
+    const salePriceNum = Number(data.salePrice) || 0;
+    const purchasePriceNum = Number(data.purchasePrice) || 0;
+    const discountValNum = Number(data.discountValue) || 0;
+    const wholesalePriceNum = Number(data.wholesalePrice) || 0;
+    const minWholesaleQtyNum = Number(data.minWholesaleQty) || 0;
+    const openingStockNum = Number(data.openingStock) || 0;
+    const atPriceNum = Number(data.atPrice) || purchasePriceNum;
+    const minStockAlertNum = Number(data.minStockAlert) || 0;
+    const finalStatus = (editingProduct ? editingProduct.status : 'Active') as 'Active' | 'Inactive';
 
-    if (editingProduct) {
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === editingProduct.id
-            ? {
-                ...p,
-                itemType: formData.itemType,
-                productCode: finalCode,
-                productName: formData.productName.trim(),
-                hsnCode: formData.hsnCode.trim(),
-                unit: formData.unit,
-                category: formData.category || 'General',
-                itemImage: formData.itemImage,
-                salePrice: salePriceNum,
-                salePriceTaxType: formData.salePriceTaxType,
-                discountValue: discountValNum,
-                discountType: formData.discountType,
-                hasWholesale: formData.hasWholesale,
-                wholesalePrice: wholesalePriceNum,
-                wholesaleTaxType: formData.wholesaleTaxType,
-                minWholesaleQty: minWholesaleQtyNum,
-                purchasePrice: purchasePriceNum,
-                purchasePriceTaxType: formData.purchasePriceTaxType,
-                taxRate: formData.taxRate,
-                openingStock: openingStockNum,
-                atPrice: atPriceNum,
-                asOfDate: formData.asOfDate,
-                minStockAlert: minStockAlertNum,
-                location: formData.location,
-              }
-            : p
-        )
-      );
-      toast.success(`Item "${formData.productName}" updated successfully!`);
-    } else {
-      const newItem: ProductItem = {
-        id: `prod-${Date.now()}`,
-        sNo: products.length + 1,
-        itemType: formData.itemType,
-        productCode: finalCode,
-        productName: formData.productName.trim(),
-        hsnCode: formData.hsnCode.trim(),
-        unit: formData.unit,
-        category: formData.category || 'General',
-        itemImage: formData.itemImage,
-        salePrice: salePriceNum,
-        salePriceTaxType: formData.salePriceTaxType,
-        discountValue: discountValNum,
-        discountType: formData.discountType,
-        hasWholesale: formData.hasWholesale,
-        wholesalePrice: wholesalePriceNum,
-        wholesaleTaxType: formData.wholesaleTaxType,
-        minWholesaleQty: minWholesaleQtyNum,
-        purchasePrice: purchasePriceNum,
-        purchasePriceTaxType: formData.purchasePriceTaxType,
-        taxRate: formData.taxRate,
-        openingStock: openingStockNum,
-        atPrice: atPriceNum,
-        asOfDate: formData.asOfDate,
-        minStockAlert: minStockAlertNum,
-        location: formData.location,
-        status: 'Active',
-      };
-      setProducts((prev) => [newItem, ...prev]);
-      toast.success(`Item "${formData.productName}" added successfully!`);
-    }
+    const payload = {
+      itemType: data.itemType,
+      productCode: finalCode,
+      productName: data.productName.trim(),
+      hsnCode: data.hsnCode.trim() || undefined,
+      unit: data.unit || 'PCS',
+      baseUnitId: data.baseUnitId || undefined,
+      secondaryUnitId: data.secondaryUnitId || undefined,
+      category: data.category || 'General',
+      itemImage: data.itemImage || undefined,
+      salePrice: salePriceNum,
+      salePriceTaxType: data.salePriceTaxType,
+      discountValue: discountValNum,
+      discountType: data.discountType,
+      hasWholesale: data.hasWholesale,
+      wholesalePrice: wholesalePriceNum,
+      wholesaleTaxType: data.wholesaleTaxType,
+      minWholesaleQty: minWholesaleQtyNum,
+      purchasePrice: purchasePriceNum,
+      purchasePriceTaxType: data.purchasePriceTaxType,
+      taxRate: data.taxRate,
+      openingStock: openingStockNum,
+      atPrice: atPriceNum,
+      asOfDate: data.asOfDate,
+      minStockAlert: minStockAlertNum,
+      location: data.location || undefined,
+      status: finalStatus,
+    };
 
-    if (keepOpenAfterSave) {
-      setEditingProduct(null);
-      setFormData({
-        itemType: formData.itemType,
-        productCode: generateNewCode(formData.itemType),
-        productName: '',
-        hsnCode: '',
-        unit: formData.unit || 'PCS',
-        category: formData.category || '',
-        itemImage: '',
-        salePrice: '',
-        salePriceTaxType: 'Excluded',
-        discountValue: '',
-        discountType: 'Percentage',
-        hasWholesale: false,
-        wholesalePrice: '',
-        wholesaleTaxType: 'Excluded',
-        minWholesaleQty: '',
-        purchasePrice: '',
-        purchasePriceTaxType: 'Excluded',
-        taxRate: formData.taxRate || 'None',
-        openingStock: '',
-        atPrice: '',
-        asOfDate: new Date().toISOString().split('T')[0],
-        minStockAlert: '',
-        location: '',
-      });
-      setActiveTab('Pricing');
-    } else {
-      setIsModalOpen(false);
+    setIsSubmitting(true);
+
+    try {
+      if (editingProduct) {
+        // PUT /commerce/products/:id
+        try {
+          const res = await productApi.updateProduct(editingProduct.id, payload);
+          if (res?.success && res.data) {
+            const updated = mapApiProductToProductItem(res.data);
+            setProducts((prev) =>
+              prev.map((p) => (p.id === editingProduct.id ? { ...p, ...updated } : p))
+            );
+            toast.success(`Item "${updated.productName}" updated successfully!`);
+            if (!keepOpenAfterSave) setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote product update failed, updating locally:', apiErr);
+        }
+
+        // Local fallback
+        setProducts((prev) =>
+          prev.map((p) =>
+            p.id === editingProduct.id
+              ? {
+                  ...p,
+                  ...payload,
+                  baseUnitId: data.baseUnitId,
+                  secondaryUnitId: data.secondaryUnitId,
+                  secondaryUnit: data.secondaryUnit,
+                  location: data.location,
+                  status: finalStatus,
+                }
+              : p
+          )
+        );
+        toast.success(`Item "${data.productName}" updated!`);
+      } else {
+        // POST /commerce/products
+        try {
+          const res = await productApi.createProduct(payload);
+          if (res?.success && res.data) {
+            const created = mapApiProductToProductItem(res.data);
+            setProducts((prev) => [created, ...prev]);
+            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
+            toast.success(`Item "${created.productName}" added successfully!`);
+            if (!keepOpenAfterSave) setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote product create failed, adding locally:', apiErr);
+        }
+
+        // Local fallback
+        const newItem: ProductItem = {
+          id: `prod-${Date.now()}`,
+          sNo: (totalApiRecords || products.length) + 1,
+          ...payload,
+          baseUnitId: data.baseUnitId,
+          secondaryUnitId: data.secondaryUnitId,
+          secondaryUnit: data.secondaryUnit,
+          location: data.location,
+          status: 'Active',
+        };
+        setProducts((prev) => [newItem, ...prev]);
+        toast.success(`Item "${data.productName}" added!`);
+      }
+    } finally {
+      setIsSubmitting(false);
+      if (keepOpenAfterSave) {
+        setEditingProduct(null);
+        reset({
+          ...defaultProductFormValues,
+          itemType: data.itemType,
+          productCode: generateNewCode(data.itemType),
+          category: data.category || '',
+          unit: data.unit || 'PCS',
+          baseUnitId: data.baseUnitId,
+          secondaryUnitId: null,
+          secondaryUnit: undefined,
+        });
+        setActiveTab('Pricing');
+      } else {
+        setIsModalOpen(false);
+      }
     }
   };
 
   const handleDeleteProduct = (id: string) => {
-    setProducts((prev) => prev.filter((p) => p.id !== id));
     setActiveDropdownId(null);
-    toast.success('Item deleted successfully.');
+    setDropdownPos(null);
+    const prod = products.find((p) => p.id === id);
+    if (prod) {
+      setDeleteConfirmItem(prod);
+    } else {
+      setProducts((prev) => prev.filter((p) => p.id !== id));
+      toast.success('Item deleted.');
+    }
   };
 
   // =========================================================================
@@ -1181,12 +1455,26 @@ export const InventoryProductsView: React.FC = () => {
     return { totalItems, totalProducts, totalServices, lowStockCount, totalStockVal };
   }, [products]);
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
+  // Total count calculation
+  const totalCount =
+    isApiConnected && totalApiRecords !== null
+      ? totalApiRecords
+      : filteredProducts.length;
+
+  const totalPages =
+    isApiConnected && totalApiPages !== null
+      ? totalApiPages
+      : Math.max(1, Math.ceil(totalCount / pageSize));
+
   const safePage = Math.min(page, totalPages);
+
+  // When API is connected, server handles pagination; otherwise slice in memory
   const pagedProducts = useMemo(() => {
+    if (isApiConnected) {
+      return products;
+    }
     return filteredProducts.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredProducts, safePage, pageSize]);
+  }, [isApiConnected, products, filteredProducts, safePage, pageSize]);
 
   // Handle select all toggle
   const isAllPageSelected =
@@ -1263,10 +1551,10 @@ export const InventoryProductsView: React.FC = () => {
     toast.success(`Inventory items Excel report downloaded (${filteredProducts.length} records)!`);
   };
 
-  const filteredUnits = POPULAR_UNITS.filter(
+  const filteredUnits = allAvailableUnits.filter(
     (u) =>
       u.name.toLowerCase().includes(unitSearchQuery.toLowerCase()) ||
-      u.code.toLowerCase().includes(unitSearchQuery.toLowerCase())
+      u.shortCode.toLowerCase().includes(unitSearchQuery.toLowerCase())
   );
 
   const filteredHsn = COMMON_HSN_CODES.filter(
@@ -1333,13 +1621,33 @@ export const InventoryProductsView: React.FC = () => {
       {/* 2. Top Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Package className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Products & Services
-            </h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                Products & Services
+              </h1>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
+                {totalCount} total
+              </span>
+              {isApiConnected === true && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live API
+                </span>
+              )}
+              {isApiConnected === false && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                  title="Local storage mode"
+                >
+                  <Database className="w-3 h-3 text-amber-500" />
+                  Local Mode
+                </span>
+              )}
+            </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
             Manage inventory products, service items, pricing, tax rates, stock alerts, and wholesale rates.
@@ -1511,7 +1819,7 @@ export const InventoryProductsView: React.FC = () => {
             )}
             <span className="text-xs font-semibold text-slate-500">
               Total Items :{' '}
-              <span className="text-[#33077C] font-bold">{filteredProducts.length}</span>
+              <span className="text-[#33077C] font-bold">{totalCount}</span>
             </span>
           </div>
         }
@@ -1562,10 +1870,27 @@ export const InventoryProductsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
-              {pagedProducts.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={10} className="py-16 text-center text-slate-400 font-medium">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
+                      <span className="text-xs text-slate-500 font-semibold">Loading products &amp; services...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : pagedProducts.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-12 text-center text-slate-400 font-medium">
-                    No items found matching your criteria.
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      <Package className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                      <span className="text-sm font-semibold text-slate-600">No products or services found</span>
+                      <p className="text-xs text-slate-400">
+                        {appliedSearch || appliedCategory !== 'ALL' || appliedType !== 'ALL' || appliedStatus !== 'ALL'
+                          ? 'Try resetting the search or filter query.'
+                          : 'Get started by clicking "+ Add Item" above.'}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -1729,125 +2054,15 @@ export const InventoryProductsView: React.FC = () => {
                           </button>
 
                           {/* Share Popover Button */}
-                          <div className="relative inline-block text-left share-popover-container">
-                            <button
-                              type="button"
-                              title="Share"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeShareId === item.id) {
-                                  setActiveShareId(null);
-                                  setSharePos(null);
-                                } else {
-                                  setActiveDropdownId(null);
-                                  const btnRect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const popoverHeight = 130;
-
-                                  if (spaceBelow < popoverHeight && btnRect.top > popoverHeight) {
-                                    setSharePos({
-                                      bottom: window.innerHeight - btnRect.top + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  } else {
-                                    setSharePos({
-                                      top: btnRect.bottom + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  }
-                                  setActiveShareId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4" />
-                            </button>
-
-                            {activeShareId === item.id && sharePos && (
-                              <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                style={{
-                                  top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                  bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
-                                }}
-                              >
-                                <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                  Share
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Email Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const subject = encodeURIComponent(`Product: ${item.productName}`);
-                                      const body = encodeURIComponent(
-                                        `Product Name: ${item.productName}\nProduct Code: ${item.productCode}\nCategory: ${item.category}\nSale Price: ₹${item.salePrice}\nOpening Stock: ${item.openingStock} ${item.unit}\nStatus: ${item.status}`
-                                      );
-                                      window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                        <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                        <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                        <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                        <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                        <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                  </button>
-
-                                  {/* WhatsApp Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `*Product:* ${item.productName}\n*Product Code:* ${item.productCode}\n*Category:* ${item.category}\n*Sale Price:* ₹${item.salePrice}\n*Opening Stock:* ${item.openingStock} ${item.unit}\n*Status:* ${item.status}`
-                                      );
-                                      window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                  </button>
-
-                                  {/* SMS Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `Product: ${item.productName}, Code: ${item.productCode}, Price: ₹${item.salePrice}, Stock: ${item.openingStock} ${item.unit}, Status: ${item.status}`
-                                      );
-                                      window.open(`sms:?body=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                        <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <UniversalShareDropdown
+                            id={item.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatProductShare(item)}
+                            title="Share Product"
+                          />
 
                           {/* 3-dots Actions Dropdown */}
                           <div className="relative inline-block text-left product-action-dropdown-container">
@@ -1895,7 +2110,17 @@ export const InventoryProductsView: React.FC = () => {
                                   right: `${dropdownPos.right}px`,
                                 }}
                               >
-                                {/* 1. Edit */}
+                                {/* 1. View Details */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDetailModal(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                >
+                                  <Eye className="w-4 h-4 text-slate-400" />
+                                  <span>View Details</span>
+                                </button>
+
+                                {/* 2. Edit */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1903,33 +2128,34 @@ export const InventoryProductsView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  Edit
+                                  <Pencil className="w-4 h-4 text-slate-400" />
+                                  <span>Edit</span>
                                 </button>
 
-                                {/* 2. Inactive / Active */}
+                                {/* 3. Inactive / Active */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
-                                    setProducts((prev) =>
-                                      prev.map((p) =>
-                                        p.id === item.id
-                                          ? { ...p, status: nextStatus }
-                                          : p
-                                      )
-                                    );
-                                    toast.success(`Product ${item.productName} set to ${nextStatus}.`);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  onClick={() => handleToggleStatus(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  {item.status === 'Active' ? 'Inactive' : 'Active'}
+                                  {item.status === 'Active' ? (
+                                    <>
+                                      <Ban className="w-4 h-4 text-slate-400" />
+                                      <span>Deactivate</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                                      <span>Activate</span>
+                                    </>
+                                  )}
                                 </button>
 
-                                {/* 3. Delete */}
+                                <div className="my-1 border-t border-slate-100" />
+
+                                {/* 4. Delete */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1937,9 +2163,10 @@ export const InventoryProductsView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  Delete
+                                  <Trash2 className="w-4 h-4 text-rose-500" />
+                                  <span>Delete</span>
                                 </button>
                               </div>
                             )}
@@ -1957,7 +2184,7 @@ export const InventoryProductsView: React.FC = () => {
 
       {/* 5. Pagination */}
       <Pagination
-        total={filteredProducts.length}
+        total={totalCount}
         currentPage={safePage}
         pageSize={pageSize}
         pageSizeOptions={[5, 10, 20, 50]}
@@ -1978,7 +2205,12 @@ export const InventoryProductsView: React.FC = () => {
             if (e.target === e.currentTarget) setIsModalOpen(false);
           }}
         >
-          <div className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[95vh] my-auto">
+            <form
+              id="product-form"
+              noValidate
+              onSubmit={handleSubmit((data) => handleSaveItem(false, data))}
+              className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[95vh] my-auto"
+            >
             {/* Modal Header - Matches CRM Standard */}
             <div
               className="flex items-center justify-between px-6 py-4.5 text-white"
@@ -2032,12 +2264,30 @@ export const InventoryProductsView: React.FC = () => {
                 <div className="md:col-span-4">
                   <input
                     type="text"
-                    required
                     placeholder="Item Name *"
-                    value={formData.productName}
-                    onChange={(e) => setFormData({ ...formData, productName: e.target.value })}
-                    className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                    disabled={isSubmitting}
+                    {...register('productName', {
+                      required: 'Item name is required',
+                      minLength: { value: 2, message: 'Item name must be at least 2 characters' },
+                      validate: (val) =>
+                        /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                    })}
+                    onKeyDown={handleTextOnlyKeyDown}
+                    onInput={(e) => {
+                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                    }}
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                      errors.productName
+                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 bg-rose-50/20'
+                        : 'border border-slate-300 hover:border-slate-400 focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15'
+                    }`}
                   />
+                  {errors.productName && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.productName.message}</span>
+                    </p>
+                  )}
                 </div>
 
                 {/* Item HSN */}
@@ -2064,17 +2314,36 @@ export const InventoryProductsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      // Pre-select matching base unit from allUnitsList
-                      if (formData.unit) {
-                        const matched = allUnitsList.find(
+                      loadUnits();
+                      if (formData.baseUnitId) {
+                        const matched = allAvailableUnits.find((u) => u.id === formData.baseUnitId);
+                        if (matched) setSelectedBaseUnit(formatUnitOption(matched));
+                      } else if (formData.unit && formData.unit !== 'None') {
+                        const matched = allAvailableUnits.find(
                           (u) =>
-                            u.toUpperCase() === formData.unit.toUpperCase() ||
-                            u.toUpperCase().includes(`(${formData.unit.toUpperCase()})`) ||
-                            (u.includes('(') && u.match(/\((.*?)\)/)?.[1]?.toUpperCase() === formData.unit.toUpperCase())
+                            u.shortCode?.toUpperCase() === formData.unit.toUpperCase() ||
+                            u.name?.toUpperCase() === formData.unit.toUpperCase() ||
+                            formatUnitOption(u).toUpperCase().includes(`(${formData.unit.toUpperCase()})`)
                         );
-                        if (matched) setSelectedBaseUnit(matched);
+                        if (matched) setSelectedBaseUnit(formatUnitOption(matched));
+                        else setSelectedBaseUnit(formData.unit);
                       } else {
-                        setSelectedBaseUnit('None');
+                        setSelectedBaseUnit(allAvailableUnits.length > 0 ? formatUnitOption(allAvailableUnits[0]) : 'PIECES (Pcs)');
+                      }
+
+                      if (formData.secondaryUnitId) {
+                        const matchedSec = allAvailableUnits.find((u) => u.id === formData.secondaryUnitId);
+                        if (matchedSec) setSelectedSecondaryUnit(formatUnitOption(matchedSec));
+                      } else if (formData.secondaryUnit && formData.secondaryUnit !== 'None') {
+                        const matchedSec = allAvailableUnits.find(
+                          (u) =>
+                            u.shortCode?.toUpperCase() === formData.secondaryUnit?.toUpperCase() ||
+                            u.name?.toUpperCase() === formData.secondaryUnit?.toUpperCase()
+                        );
+                        if (matchedSec) setSelectedSecondaryUnit(formatUnitOption(matchedSec));
+                        else setSelectedSecondaryUnit('None');
+                      } else {
+                        setSelectedSecondaryUnit('None');
                       }
                       setIsUnitModalOpen(true);
                     }}
@@ -2206,55 +2475,87 @@ export const InventoryProductsView: React.FC = () => {
                       </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {/* Sale Price + Tax Type */}
-                        <div className="flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs">
-                          <input
-                            type="number"
-                            min="0"
-                            step="any"
-                            placeholder="Sale Price"
-                            value={formData.salePrice}
-                            onChange={(e) => setFormData({ ...formData, salePrice: e.target.value })}
-                            className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                          />
-                          <select
-                            value={formData.salePriceTaxType}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                salePriceTaxType: e.target.value as any,
-                              })
-                            }
-                            className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
-                          >
-                            <option value="Excluded">Excluded</option>
-                            <option value="Included">Included</option>
-                          </select>
+                        <div className="flex flex-col">
+                          <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                            errors.salePrice
+                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                          }`}>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="Sale Price"
+                              {...register('salePrice', {
+                                validate: (val) =>
+                                  val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                              })}
+                              onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                              onInput={(e) => {
+                                e.currentTarget.value = e.currentTarget.value
+                                  .replace(/[^0-9.]/g, '')
+                                  .replace(/(\..*?)\..*/g, '$1');
+                              }}
+                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                            />
+                            <select
+                              value={formData.salePriceTaxType}
+                              onChange={(e) =>
+                                setValue('salePriceTaxType', e.target.value as any)
+                              }
+                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                            >
+                              <option value="Excluded">Excluded</option>
+                              <option value="Included">Included</option>
+                            </select>
+                          </div>
+                          {errors.salePrice && (
+                            <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{errors.salePrice.message}</span>
+                            </p>
+                          )}
                         </div>
 
                         {/* Disc. On Sale Price + Disc Type */}
-                        <div className="flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs">
-                          <input
-                            type="number"
-                            min="0"
-                            step="any"
-                            placeholder="Disc. On Sale Price"
-                            value={formData.discountValue}
-                            onChange={(e) => setFormData({ ...formData, discountValue: e.target.value })}
-                            className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                          />
-                          <select
-                            value={formData.discountType}
-                            onChange={(e) =>
-                              setFormData({
-                                ...formData,
-                                discountType: e.target.value as 'Percentage' | 'Amount',
-                              })
-                            }
-                            className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
-                          >
-                            <option value="Percentage">Percentage</option>
-                            <option value="Amount">Amount (₹)</option>
-                          </select>
+                        <div className="flex flex-col">
+                          <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                            errors.discountValue
+                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                          }`}>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="Disc. On Sale Price"
+                              {...register('discountValue', {
+                                validate: (val) =>
+                                  val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                              })}
+                              onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                              onInput={(e) => {
+                                e.currentTarget.value = e.currentTarget.value
+                                  .replace(/[^0-9.]/g, '')
+                                  .replace(/(\..*?)\..*/g, '$1');
+                              }}
+                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                            />
+                            <select
+                              value={formData.discountType}
+                              onChange={(e) =>
+                                setValue('discountType', e.target.value as 'Percentage' | 'Amount')
+                              }
+                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                            >
+                              <option value="Percentage">Percentage</option>
+                              <option value="Amount">Amount (₹)</option>
+                            </select>
+                          </div>
+                          {errors.discountValue && (
+                            <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{errors.discountValue.message}</span>
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -2267,7 +2568,11 @@ export const InventoryProductsView: React.FC = () => {
                           {formData.hasWholesale ? (
                             <button
                               type="button"
-                              onClick={() => setFormData({ ...formData, hasWholesale: false, wholesalePrice: '', minWholesaleQty: '' })}
+                              onClick={() => {
+                                setValue('hasWholesale', false);
+                                setValue('wholesalePrice', '');
+                                setValue('minWholesaleQty', '');
+                              }}
                               className="text-xs font-semibold text-slate-500 hover:text-rose-600 flex items-center gap-1 transition-colors cursor-pointer"
                             >
                               <MinusCircle className="w-3.5 h-3.5 text-slate-400" />
@@ -2276,7 +2581,7 @@ export const InventoryProductsView: React.FC = () => {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => setFormData({ ...formData, hasWholesale: true })}
+                              onClick={() => setValue('hasWholesale', true)}
                               className="text-xs font-bold text-[#33077C] hover:text-[#4309A2] flex items-center gap-1 transition-colors cursor-pointer"
                             >
                               <Plus className="w-3.5 h-3.5 text-[#33077C]" />
@@ -2288,47 +2593,81 @@ export const InventoryProductsView: React.FC = () => {
                         {formData.hasWholesale && (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 animate-in fade-in duration-100">
                             {/* Wholesale Price + Tax Type */}
-                            <div className="flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs">
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                placeholder="Wholesale Price"
-                                value={formData.wholesalePrice}
-                                onChange={(e) => setFormData({ ...formData, wholesalePrice: e.target.value })}
-                                className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                              />
-                              <select
-                                value={formData.wholesaleTaxType}
-                                onChange={(e) =>
-                                  setFormData({
-                                    ...formData,
-                                    wholesaleTaxType: e.target.value as 'Excluded' | 'Included',
-                                  })
-                                }
-                                className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
-                              >
-                                <option value="Excluded">Excluded</option>
-                                <option value="Included">Included</option>
-                              </select>
+                            <div className="flex flex-col">
+                              <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                                errors.wholesalePrice
+                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              }`}>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="Wholesale Price"
+                                  {...register('wholesalePrice', {
+                                    validate: (val) =>
+                                      val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                                  })}
+                                  onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                                  onInput={(e) => {
+                                    e.currentTarget.value = e.currentTarget.value
+                                      .replace(/[^0-9.]/g, '')
+                                      .replace(/(\..*?)\..*/g, '$1');
+                                  }}
+                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                />
+                                <select
+                                  value={formData.wholesaleTaxType}
+                                  onChange={(e) =>
+                                    setValue('wholesaleTaxType', e.target.value as 'Excluded' | 'Included')
+                                  }
+                                  className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                                >
+                                  <option value="Excluded">Excluded</option>
+                                  <option value="Included">Included</option>
+                                </select>
+                              </div>
+                              {errors.wholesalePrice && (
+                                <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{errors.wholesalePrice.message}</span>
+                                </p>
+                              )}
                             </div>
 
                             {/* Minimum Wholesale Qty with Info Tooltip */}
-                            <div className="flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs pr-3">
-                              <input
-                                type="number"
-                                min="1"
-                                placeholder="Minimum Wholesale Qty"
-                                value={formData.minWholesaleQty}
-                                onChange={(e) => setFormData({ ...formData, minWholesaleQty: e.target.value })}
-                                className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                              />
-                              <div
-                                title="Minimum order quantity for wholesale pricing to apply"
-                                className="text-slate-400 hover:text-[#33077C] cursor-help"
-                              >
-                                <Info className="w-4 h-4" />
+                            <div className="flex flex-col">
+                              <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs pr-3 transition-all ${
+                                errors.minWholesaleQty
+                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              }`}>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  placeholder="Minimum Wholesale Qty"
+                                  {...register('minWholesaleQty', {
+                                    validate: (val) =>
+                                      val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
+                                  })}
+                                  onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
+                                  onInput={(e) => {
+                                    e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                                  }}
+                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                />
+                                <div
+                                  title="Minimum order quantity for wholesale pricing to apply"
+                                  className="text-slate-400 hover:text-[#33077C] cursor-help"
+                                >
+                                  <Info className="w-4 h-4" />
+                                </div>
                               </div>
+                              {errors.minWholesaleQty && (
+                                <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{errors.minWholesaleQty.message}</span>
+                                </p>
+                              )}
                             </div>
                           </div>
                         )}
@@ -2343,29 +2682,45 @@ export const InventoryProductsView: React.FC = () => {
                       <label className="text-xs font-bold text-slate-700 block">
                         Purchase Price
                       </label>
-                      <div className="flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs">
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          placeholder="Purchase Price"
-                          value={formData.purchasePrice}
-                          onChange={(e) => setFormData({ ...formData, purchasePrice: e.target.value })}
-                          className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                        <select
-                          value={formData.purchasePriceTaxType}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              purchasePriceTaxType: e.target.value as any,
-                            })
-                          }
-                          className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
-                        >
-                          <option value="Excluded">Excluded</option>
-                          <option value="Included">Included</option>
-                        </select>
+                      <div className="flex flex-col">
+                        <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                          errors.purchasePrice
+                            ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                            : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                        }`}>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="Purchase Price"
+                            {...register('purchasePrice', {
+                              validate: (val) =>
+                                val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                            })}
+                            onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                            onInput={(e) => {
+                              e.currentTarget.value = e.currentTarget.value
+                                .replace(/[^0-9.]/g, '')
+                                .replace(/(\..*?)\..*/g, '$1');
+                            }}
+                            className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                          />
+                          <select
+                            value={formData.purchasePriceTaxType}
+                            onChange={(e) =>
+                              setValue('purchasePriceTaxType', e.target.value as any)
+                            }
+                            className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                          >
+                            <option value="Excluded">Excluded</option>
+                            <option value="Included">Included</option>
+                          </select>
+                        </div>
+                        {errors.purchasePrice && (
+                          <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{errors.purchasePrice.message}</span>
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -2400,26 +2755,61 @@ export const InventoryProductsView: React.FC = () => {
                     {/* 1. Opening Quantity */}
                     <div>
                       <input
-                        type="number"
-                        min="0"
+                        type="text"
+                        inputMode="decimal"
                         placeholder="Opening Quantity"
-                        value={formData.openingStock}
-                        onChange={(e) => setFormData({ ...formData, openingStock: e.target.value })}
-                        className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                        {...register('openingStock', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                        })}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value
+                            .replace(/[^0-9.]/g, '')
+                            .replace(/(\..*?)\..*/g, '$1');
+                        }}
+                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                          errors.openingStock
+                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
+                        }`}
                       />
+                      {errors.openingStock && (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{errors.openingStock.message}</span>
+                        </p>
+                      )}
                     </div>
 
                     {/* 2. At Price */}
                     <div>
                       <input
-                        type="number"
-                        min="0"
-                        step="any"
+                        type="text"
+                        inputMode="decimal"
                         placeholder="At Price"
-                        value={formData.atPrice}
-                        onChange={(e) => setFormData({ ...formData, atPrice: e.target.value })}
-                        className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                        {...register('atPrice', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                        })}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value
+                            .replace(/[^0-9.]/g, '')
+                            .replace(/(\..*?)\..*/g, '$1');
+                        }}
+                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                          errors.atPrice
+                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
+                        }`}
                       />
+                      {errors.atPrice && (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{errors.atPrice.message}</span>
+                        </p>
+                      )}
                     </div>
 
                     {/* 3. As Of Date with Floating Notch Label */}
@@ -2431,7 +2821,7 @@ export const InventoryProductsView: React.FC = () => {
                         <input
                           type="date"
                           value={formData.asOfDate}
-                          onChange={(e) => setFormData({ ...formData, asOfDate: e.target.value })}
+                          onChange={(e) => setValue('asOfDate', e.target.value)}
                           className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
                         />
                       </div>
@@ -2443,13 +2833,29 @@ export const InventoryProductsView: React.FC = () => {
                     {/* 1. Min Stock To Maintain */}
                     <div>
                       <input
-                        type="number"
-                        min="0"
+                        type="text"
+                        inputMode="numeric"
                         placeholder="Min Stock To Maintain"
-                        value={formData.minStockAlert}
-                        onChange={(e) => setFormData({ ...formData, minStockAlert: e.target.value })}
-                        className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                        {...register('minStockAlert', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
+                        })}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                        }}
+                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                          errors.minStockAlert
+                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
+                        }`}
                       />
+                      {errors.minStockAlert && (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{errors.minStockAlert.message}</span>
+                        </p>
+                      )}
                     </div>
 
                     {/* 2. Location */}
@@ -2457,10 +2863,26 @@ export const InventoryProductsView: React.FC = () => {
                       <input
                         type="text"
                         placeholder="Location"
-                        value={formData.location}
-                        onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                        className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                        {...register('location', {
+                          validate: (val) =>
+                            !val || /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                        })}
+                        onKeyDown={handleTextOnlyKeyDown}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                        }}
+                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
+                          errors.location
+                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
+                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
+                        }`}
                       />
+                      {errors.location && (
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{errors.location.message}</span>
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2471,30 +2893,41 @@ export const InventoryProductsView: React.FC = () => {
             <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-50"
               >
                 <X className="w-4 h-4 text-slate-500" />
                 <span>Cancel</span>
               </button>
               <button
                 type="button"
-                onClick={() => handleSaveItem(true)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                disabled={isSubmitting}
+                onClick={handleSubmit((data) => handleSaveItem(true, data))}
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-50"
               >
                 <Plus className="w-4 h-4 text-slate-500 stroke-[2.5]" />
                 <span>Save &amp; New</span>
               </button>
               <button
-                type="button"
-                onClick={() => handleSaveItem(false)}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                type="submit"
+                disabled={isSubmitting}
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
               >
-                <Check className="w-4 h-4 stroke-[2.5]" />
-                <span>{editingProduct ? 'Update' : 'Save'}</span>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    <span>{editingProduct ? 'Update' : 'Save'}</span>
+                  </>
+                )}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
@@ -2563,16 +2996,18 @@ export const InventoryProductsView: React.FC = () => {
                         onChange={(e) => setSelectedBaseUnit(e.target.value)}
                         className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none cursor-pointer focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
                       >
-                        {allUnitsList.map((u) => {
-                          const isCustom = customUnits.some(
-                            (c) => `${c.name.toUpperCase()} (${c.shortName})` === u
-                          );
-                          return (
-                            <option key={u} value={u}>
-                              {u} {isCustom ? '★ (Custom)' : ''}
-                            </option>
-                          );
-                        })}
+                        {allAvailableUnits.length === 0 ? (
+                          <option value="None">None</option>
+                        ) : (
+                          allAvailableUnits.map((u) => {
+                            const formatted = formatUnitOption(u);
+                            return (
+                              <option key={u.id} value={formatted}>
+                                {formatted}
+                              </option>
+                            );
+                          })
+                        )}
                       </select>
                     </div>
                   </div>
@@ -2588,13 +3023,12 @@ export const InventoryProductsView: React.FC = () => {
                         onChange={(e) => setSelectedSecondaryUnit(e.target.value)}
                         className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none cursor-pointer focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
                       >
-                        {allUnitsList.map((u) => {
-                          const isCustom = customUnits.some(
-                            (c) => `${c.name.toUpperCase()} (${c.shortName})` === u
-                          );
+                        <option value="None">None</option>
+                        {allAvailableUnits.map((u) => {
+                          const formatted = formatUnitOption(u);
                           return (
-                            <option key={u} value={u}>
-                              {u} {isCustom ? '★ (Custom)' : ''}
+                            <option key={u.id} value={formatted}>
+                              {formatted}
                             </option>
                           );
                         })}
@@ -2623,10 +3057,10 @@ export const InventoryProductsView: React.FC = () => {
                       placeholder="Unit Full Name (e.g. Dozen, Pack, Drum)"
                       value={newUnitFullName}
                       onChange={(e) => setNewUnitFullName(e.target.value)}
-                      onKeyDown={(e) => {
+                      onKeyDown={async (e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleAddNewCustomUnit();
+                          await handleAddNewCustomUnit();
                         }
                       }}
                       className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
@@ -2639,10 +3073,10 @@ export const InventoryProductsView: React.FC = () => {
                       placeholder="Short (e.g. Dzn)"
                       value={newUnitShortName}
                       onChange={(e) => setNewUnitShortName(e.target.value)}
-                      onKeyDown={(e) => {
+                      onKeyDown={async (e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleAddNewCustomUnit();
+                          await handleAddNewCustomUnit();
                         }
                       }}
                       className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs uppercase"
@@ -2652,32 +3086,46 @@ export const InventoryProductsView: React.FC = () => {
                   <div className="sm:col-span-2 flex items-center">
                     <button
                       type="button"
-                      onClick={handleAddNewCustomUnit}
-                      className="w-full h-11 px-3 bg-[#33077C] hover:bg-[#4309A2] text-white rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1 shrink-0 transition-all cursor-pointer shadow-xs active:scale-95"
+                      disabled={isCreatingUnit}
+                      onClick={() => handleAddNewCustomUnit()}
+                      className="w-full h-11 px-3 bg-[#33077C] hover:bg-[#4309A2] text-white rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1 shrink-0 transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
                       title="Add Unit"
                     >
-                      <Plus className="w-4 h-4 stroke-[2.5]" />
-                      <span>Add</span>
+                      {isCreatingUnit ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4 stroke-[2.5]" />
+                          <span>Add</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
 
-                {/* List of Custom Added Units */}
-                {customUnits.length > 0 && (
+                {/* List of Units Available */}
+                {allAvailableUnits.length > 0 && (
                   <div className="pt-2.5 border-t border-slate-100">
-                    <p className="text-[11px] font-semibold text-slate-500 mb-2">
-                      Custom Units Created ({customUnits.length}):
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-0.5">
-                      {customUnits.map((cu) => {
-                        const formatted = `${cu.name.toUpperCase()} (${cu.shortName})`;
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[11px] font-semibold text-slate-500">
+                        Available Units ({allAvailableUnits.length}):
+                      </p>
+                      {isLoadingUnits && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-0.5">
+                      {allAvailableUnits.map((u) => {
+                        const formatted = formatUnitOption(u);
                         const isCurrentBase = selectedBaseUnit === formatted;
+                        const isCurrentSec = selectedSecondaryUnit === formatted;
+                        const isCustomApiUnit = apiUnits.some((item) => item.id === u.id);
                         return (
                           <div
-                            key={formatted}
+                            key={u.id}
                             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
                               isCurrentBase
                                 ? 'bg-purple-100 text-[#33077C] border-purple-300 ring-2 ring-[#33077C]/20 font-bold'
+                                : isCurrentSec
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold'
                                 : 'bg-slate-100/80 text-slate-700 border-slate-200 hover:bg-slate-200 cursor-pointer'
                             }`}
                           >
@@ -2688,17 +3136,24 @@ export const InventoryProductsView: React.FC = () => {
                             >
                               {formatted}
                             </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteCustomUnit(cu);
-                              }}
-                              className="text-slate-400 hover:text-red-600 p-0.5 rounded cursor-pointer transition-colors"
-                              title="Delete this custom unit"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
+                            {isCustomApiUnit && (
+                              <button
+                                type="button"
+                                disabled={deletingUnitId === u.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteCustomUnit(u);
+                                }}
+                                className="text-slate-400 hover:text-red-600 p-0.5 rounded cursor-pointer transition-colors disabled:opacity-50"
+                                title="Delete this unit"
+                              >
+                                {deletingUnitId === u.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" />
+                                ) : (
+                                  <X className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            )}
                           </div>
                         );
                       })}
@@ -2720,20 +3175,53 @@ export const InventoryProductsView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const chosen = selectedBaseUnit !== 'None' ? selectedBaseUnit : '';
+                disabled={isCreatingUnit}
+                onClick={async () => {
+                  let effectiveBase = selectedBaseUnit;
+                  let baseUnitObj = allAvailableUnits.find((u) => formatUnitOption(u) === selectedBaseUnit);
+
+                  // If user entered text in custom unit name without clicking Add, create and apply it
+                  if (newUnitFullName.trim()) {
+                    const created = await handleAddNewCustomUnit();
+                    if (created) {
+                      baseUnitObj = created;
+                      effectiveBase = formatUnitOption(created);
+                    }
+                  }
+
+                  const chosen = effectiveBase !== 'None' ? effectiveBase : '';
                   let unitCode = chosen;
                   if (chosen.includes('(')) {
                     const match = chosen.match(/\((.*?)\)/);
                     unitCode = match ? match[1].toUpperCase() : chosen.split(' ')[0];
                   }
-                  setFormData({ ...formData, unit: unitCode });
+
+                  if (!baseUnitObj && chosen) {
+                    baseUnitObj = allAvailableUnits.find((u) => formatUnitOption(u) === chosen);
+                  }
+
+                  const secUnitObj = selectedSecondaryUnit !== 'None'
+                    ? allAvailableUnits.find((u) => formatUnitOption(u) === selectedSecondaryUnit)
+                    : null;
+
+                  const finalUnit = unitCode || baseUnitObj?.shortCode || baseUnitObj?.name || 'PCS';
+                  setFormData({
+                    ...formData,
+                    unit: finalUnit,
+                    baseUnitId: baseUnitObj && !baseUnitObj.id.startsWith('unit-') ? baseUnitObj.id : undefined,
+                    secondaryUnitId: secUnitObj && !secUnitObj.id.startsWith('unit-') ? secUnitObj.id : null,
+                    secondaryUnit: secUnitObj ? (secUnitObj.shortCode || secUnitObj.name) : undefined,
+                  });
                   setIsUnitModalOpen(false);
-                  toast.success(`Unit set to ${unitCode || 'None'}`);
+                  toast.success(`Unit set to ${finalUnit}`);
                 }}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-60"
               >
-                <Check className="w-4 h-4 stroke-[2.5]" />
+                {isCreatingUnit ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                )}
                 <span>Save</span>
               </button>
             </div>
@@ -2836,16 +3324,15 @@ export const InventoryProductsView: React.FC = () => {
                   onChange={(e) => setSelectedBulkUnit(e.target.value)}
                   className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#33077C]"
                 >
-                  {POPULAR_UNITS.map((u) => (
-                    <option key={u.code} value={u.code}>
-                      {u.code} - {u.name}
-                    </option>
-                  ))}
-                  {customUnits.map((cu) => (
-                    <option key={cu.shortName} value={cu.shortName.toUpperCase()}>
-                      {cu.shortName.toUpperCase()} - {cu.name} (Custom)
-                    </option>
-                  ))}
+                  {allAvailableUnits.length === 0 ? (
+                    <option value="PCS">PCS - Pieces</option>
+                  ) : (
+                    allAvailableUnits.map((u) => (
+                      <option key={u.id} value={u.shortCode || u.name}>
+                        {u.shortCode ? `${u.shortCode} - ${u.name}` : u.name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -2880,7 +3367,14 @@ export const InventoryProductsView: React.FC = () => {
             if (e.target === e.currentTarget) setIsBulkUpdateModalOpen(false);
           }}
         >
-          <div className="relative w-full max-w-7xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveBulkUpdate();
+            }}
+            className="relative w-full max-w-7xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden"
+          >
             {/* 10.1 Top Header Bar */}
             <div className="px-6 py-4 border-b border-slate-200 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
               <div className="flex items-center gap-3">
@@ -3420,11 +3914,15 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) => handleBulkItemChange(item.id, 'unit', e.target.value)}
                                   className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
                                 >
-                                  {POPULAR_UNITS.map((u) => (
-                                    <option key={u.code} value={u.code}>
-                                      {u.code}
-                                    </option>
-                                  ))}
+                                  {allAvailableUnits.length === 0 ? (
+                                    <option value={item.unit || 'PCS'}>{item.unit || 'PCS'}</option>
+                                  ) : (
+                                    allAvailableUnits.map((u) => (
+                                      <option key={u.id} value={u.shortCode || u.name}>
+                                        {u.shortCode || u.name}
+                                      </option>
+                                    ))
+                                  )}
                                 </select>
                               </td>
 
@@ -3487,21 +3985,276 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right: Cancel & Update Buttons */}
-              <div className="flex items-center gap-3">
+            {/* Right: Cancel & Update Buttons */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsBulkUpdateModalOpen(false)}
+                className="h-10 px-5 rounded-xl border border-slate-300 hover:border-slate-400 bg-white text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-100 transition-all cursor-pointer shadow-2xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                onClick={handleSaveBulkUpdate}
+                className="h-10 px-7 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-sm font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
+              >
+                Update
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+      )}
+
+      {/* 8. Product Details Modal (GET /commerce/products/:id) */}
+      {isDetailModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-100 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsDetailModalOpen(false);
+          }}
+        >
+          <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] my-auto">
+            {/* Header */}
+            <div
+              className="flex items-center justify-between px-6 py-4 text-white"
+              style={{ background: '#33077C' }}
+            >
+              <div className="flex items-center gap-2.5">
+                <Package className="w-5 h-5 text-white" />
+                <h3 className="text-base sm:text-lg font-bold text-white">Item Details</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 sm:p-6 space-y-4 overflow-y-auto text-xs sm:text-[13px] bg-[#fafbfc]">
+              {isLoadingDetail ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-2">
+                  <Loader2 className="w-8 h-8 text-[#33077C] animate-spin" />
+                  <span className="text-xs font-semibold text-slate-500">Fetching item details...</span>
+                </div>
+              ) : selectedProductDetail ? (
+                <>
+                  {/* Header info card */}
+                  <div className="p-4 rounded-xl bg-white border border-slate-200 flex items-start gap-4">
+                    {selectedProductDetail.itemImage ? (
+                      <img
+                        src={selectedProductDetail.itemImage}
+                        alt={selectedProductDetail.productName}
+                        className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center shrink-0">
+                        <Package className="w-8 h-8" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className="font-bold text-[#33077C] text-xs">
+                          {selectedProductDetail.productCode}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            selectedProductDetail.itemType === 'Product'
+                              ? 'bg-[#33077C]/10 text-[#33077C]'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}
+                        >
+                          {selectedProductDetail.itemType}
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            selectedProductDetail.status === 'Active'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              selectedProductDetail.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'
+                            }`}
+                          />
+                          {selectedProductDetail.status}
+                        </span>
+                      </div>
+                      <h4 className="text-base font-bold text-slate-900 leading-tight">
+                        {selectedProductDetail.productName}
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Category: <span className="font-semibold text-slate-800">{selectedProductDetail.category}</span>
+                        {selectedProductDetail.subcategory && (
+                          <span> • Subcategory: <span className="font-semibold text-slate-800">{selectedProductDetail.subcategory}</span></span>
+                        )}
+                        {selectedProductDetail.hsnCode && (
+                          <span> • HSN: <span className="font-semibold text-slate-800">{selectedProductDetail.hsnCode}</span></span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Pricing & Stock Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[11px] text-slate-400 block mb-0.5">Sale Price</span>
+                      <span className="text-sm font-black text-[#33077C]">
+                        ₹{Number(selectedProductDetail.salePrice).toLocaleString('en-IN')}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        ({selectedProductDetail.salePriceTaxType})
+                      </span>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[11px] text-slate-400 block mb-0.5">Purchase Price</span>
+                      <span className="text-sm font-black text-slate-800">
+                        ₹{Number(selectedProductDetail.purchasePrice || 0).toLocaleString('en-IN')}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        ({selectedProductDetail.purchasePriceTaxType || 'Excluded'})
+                      </span>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[11px] text-slate-400 block mb-0.5">Current Stock</span>
+                      <span className="text-sm font-black text-slate-800">
+                        {selectedProductDetail.openingStock ?? 0} {selectedProductDetail.unit}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        Min Alert: {selectedProductDetail.minStockAlert ?? 0}
+                      </span>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[11px] text-slate-400 block mb-0.5">Tax Rate</span>
+                      <span className="text-sm font-bold text-slate-800">
+                        {selectedProductDetail.taxRate || 'None'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                        Location: {selectedProductDetail.location || 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Wholesale info if configured */}
+                  {selectedProductDetail.hasWholesale && (
+                    <div className="p-3 bg-purple-50/50 rounded-xl border border-purple-100 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-[11px] font-bold text-[#33077C] block">Wholesale Pricing</span>
+                        <span className="text-slate-600">
+                          Min Quantity: <strong>{selectedProductDetail.minWholesaleQty} {selectedProductDetail.unit}</strong>
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm font-black text-[#33077C]">
+                          ₹{Number(selectedProductDetail.wholesalePrice).toLocaleString('en-IN')}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">
+                          ({selectedProductDetail.wholesaleTaxType})
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Stock Batches if present */}
+                  {selectedProductDetail.stockBatches && selectedProductDetail.stockBatches.length > 0 && (
+                    <div className="space-y-2">
+                      <h5 className="font-bold text-slate-800 text-xs">Stock Batches</h5>
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                        {selectedProductDetail.stockBatches.map((b) => (
+                          <div
+                            key={b.id}
+                            className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between text-xs"
+                          >
+                            <div>
+                              <span className="font-bold text-[#33077C]">{b.batchNo}</span>
+                              <span className="text-slate-500 text-[11px] block">
+                                Qty: {b.quantity} • Cost: ₹{b.costPrice} • Sell: ₹{b.sellingPrice}
+                              </span>
+                            </div>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              {b.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 bg-white border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Delete Confirmation Modal */}
+      {deleteConfirmItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-100"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeleting) setDeleteConfirmItem(null);
+          }}
+        >
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-100 my-auto">
+            <div className="p-5 space-y-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                </div>
+                <div className="text-xs sm:text-[13px] text-slate-600 leading-relaxed">
+                  <p className="font-semibold text-slate-800 text-sm mb-1">
+                    Delete Product / Service?
+                  </p>
+                  <p>
+                    Are you sure you want to delete <strong className="text-slate-900">{deleteConfirmItem.productName}</strong>?
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    This action will soft-delete the item from your inventory master registry.
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsBulkUpdateModalOpen(false)}
-                  className="h-10 px-5 rounded-xl border border-slate-300 hover:border-slate-400 bg-white text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-100 transition-all cursor-pointer shadow-2xs"
+                  disabled={isDeleting}
+                  onClick={() => setDeleteConfirmItem(null)}
+                  className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleSaveBulkUpdate}
-                  className="h-10 px-7 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-sm font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
+                  disabled={isDeleting}
+                  onClick={handleConfirmDelete}
+                  className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-all active:scale-[0.98] cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  Update
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5 text-white" />
+                      <span>Delete</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

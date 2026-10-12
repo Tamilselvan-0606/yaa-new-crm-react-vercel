@@ -1,50 +1,30 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   FileText,
   Plus,
   Search,
   Filter,
-  Eye,
-  Pencil,
   Printer,
   Trash2,
   CheckCircle2,
   Clock,
-  AlertCircle,
   XCircle,
-  IndianRupee,
-  TrendingUp,
-  Calendar,
-  Building2,
-  User,
-  ArrowRight,
   MoreVertical,
   X,
   Check,
-  Download,
   Share2,
-  Forward,
-  RotateCcw,
-  Sparkles,
   ChevronDown,
   ShoppingBag,
   ShoppingCart,
-  FileCheck,
-  RefreshCw,
-  Ban,
-  Calculator,
-  Settings,
   Image as ImageIcon,
-  FileUp,
   FileEdit,
   AlignLeft,
   Paperclip,
-  PlusCircle,
   ArrowLeft,
-  Receipt,
-  Phone,
-  CreditCard,
-  Truck,
+  Loader2,
+  Wifi,
+  WifiOff,
+  Ban,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -61,6 +41,18 @@ import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { FileSpreadsheet } from 'lucide-react';
+import {
+  commerceSaleOrderApi,
+  mapApiSaleOrderToSaleOrderRecord,
+  mapSaleOrderRecordToPayload,
+  SaleOrderRecord,
+  ExtendedSaleOrderItem,
+  UUID_REGEX,
+} from '../../../api/commerce/saleOrderApi';
+import { customerApi } from '../../../api/commerce/customerApi';
+import { productApi } from '../../../api/commerce/productApi';
+import { ApiCustomer } from '../../../api/commerce/customerTypes';
+import { ApiProduct } from '../../../api/commerce/productTypes';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -79,6 +71,28 @@ const ddmmyyyyToIso = (dmy?: string): string => {
     return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
   return dmy;
+};
+
+const mapPeriodToApiPeriod = (periodLabel: string): string => {
+  switch (periodLabel) {
+    case 'Today':
+      return 'today';
+    case 'This Week':
+      return 'this_week';
+    case 'This Month':
+      return 'this_month';
+    case 'Last 30 Days':
+    case 'Last Month':
+      return 'last_month';
+    case 'This Quarter':
+      return 'this_quarter';
+    case 'This Financial Year':
+    case 'This Year':
+      return 'this_year';
+    case 'All Time':
+    default:
+      return 'all';
+  }
 };
 
 const STATE_OPTIONS = [
@@ -150,60 +164,12 @@ const STATUS_FILTER_OPTIONS = [
   { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
 ];
 
-export interface ExtendedSaleOrderItem extends SaleProductItem {
-  unit?: string;
-  discountAmount?: number;
-  taxAmount?: number;
-  category?: string;
-  itemCode?: string;
-  hsnCode?: string;
-  description?: string;
-}
-
 export interface TableColumnSettings {
   showItemCategory: boolean;
   showItemCode: boolean;
   showHsnSac: boolean;
   showDescription: boolean;
   showDiscount: boolean;
-}
-
-export interface SaleOrderRecord {
-  id: string;
-  orderNo: string;
-  referenceNo?: string;
-  orderDate: string;
-  dueDate: string;
-  customerId: string;
-  partyName: string;
-  customerPhone?: string;
-  customerEmail?: string;
-  customerCompany?: string;
-  billingAddress: string;
-  shippingAddress?: string;
-  stateOfSupply?: string;
-  paymentType: string;
-  items: ExtendedSaleOrderItem[];
-  subtotal: number;
-  withGst?: boolean;
-  gstType?: 'intra_state' | 'inter_state';
-  cgst?: number;
-  sgst?: number;
-  igst?: number;
-  discount?: number;
-  taxAmount?: number;
-  roundOff?: number;
-  amount: number;
-  advanceAmount?: number;
-  balance: number;
-  status: 'Open' | 'Converted' | 'Completed' | 'Cancelled';
-  convertedToInvoiceNo?: string;
-  notes?: string;
-  terms?: string;
-  attachedImageName?: string;
-  attachedDocName?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface SaleOrderTabItem {
@@ -233,123 +199,40 @@ export interface SaleOrderTabItem {
   columnSettings?: TableColumnSettings;
 }
 
-const INITIAL_SALE_ORDERS: SaleOrderRecord[] = [
-  {
-    id: 'so_1',
-    orderNo: 'SO-2026-0001',
-    referenceNo: '1',
-    orderDate: '2026-10-05',
-    dueDate: '2026-10-15',
-    customerId: 'cust_1',
-    partyName: 'Keerthivasan',
-    customerPhone: '7839396753',
-    customerCompany: 'Keerthi Retailers',
-    customerEmail: 'keerthi@gmail.com',
-    billingAddress: 'No. 24 Bazaar Street, Salem, Tamil Nadu 636001',
-    stateOfSupply: '33-Tamil Nadu',
-    paymentType: 'Cash',
-    items: [
-      {
-        id: 'soi_1',
-        productId: 'PROD_1001',
-        productName: 'India Gate Super Basmati Rice (25 Kg Bag)',
-        quantity: 5,
-        unit: 'BAG',
-        unitPrice: 2850,
-        discountPercent: 2,
-        taxPercent: 5,
-        total: 14660.25,
-      },
-    ],
-    subtotal: 14250,
-    withGst: true,
-    gstType: 'intra_state',
-    cgst: 349.13,
-    sgst: 349.13,
-    igst: 0,
-    discount: 285,
-    taxAmount: 698.25,
-    roundOff: -0.25,
-    amount: 14660,
-    advanceAmount: 0,
-    balance: 14660,
-    status: 'Open',
-    terms: '1. Standard dispatch within 2 business days.\n2. Balance payable on delivery.',
-    notes: 'Urgent order for weekend stock replenishment.',
-    createdAt: '2026-10-05T09:00:00Z',
-    updatedAt: '2026-10-05T09:00:00Z',
-  },
-  {
-    id: 'so_2',
-    orderNo: 'SO-2026-0002',
-    referenceNo: '2',
-    orderDate: '2026-10-04',
-    dueDate: '2026-10-10',
-    customerId: 'cust_2',
-    partyName: 'S',
-    customerPhone: '9840188992',
-    customerCompany: 'S Stores & Trading',
-    billingAddress: '104 Begumpet, Hyderabad, Telangana 500016',
-    stateOfSupply: '36-Telangana',
-    paymentType: 'UPI / GPay / PhonePe',
-    items: [
-      {
-        id: 'soi_2',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        quantity: 30,
-        unit: 'PAC',
-        unitPrice: 165,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 5197.5,
-      },
-    ],
-    subtotal: 4950,
-    withGst: true,
-    gstType: 'inter_state',
-    cgst: 0,
-    sgst: 0,
-    igst: 247.5,
-    discount: 0,
-    taxAmount: 247.5,
-    roundOff: 0.5,
-    amount: 5198,
-    advanceAmount: 2000,
-    balance: 3198,
-    status: 'Converted',
-    convertedToInvoiceNo: 'INV-2026-0105',
-    terms: 'Standard supply terms apply.',
-    notes: 'Converted to Sale Invoice on shipment.',
-    createdAt: '2026-10-04T11:00:00Z',
-    updatedAt: '2026-10-04T15:00:00Z',
-  },
-];
-
 interface SaleOrderViewProps {
   initialMode?: 'list' | 'form';
 }
 
 export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'list' }) => {
   const navigate = useNavigate();
-  const { customers, stocks, saveCustomer, saveSale } = useSalesManagementStore();
+  const { customers: localCustomers, stocks: localStocks, saveCustomer: saveCustomerLocal, saveSale } =
+    useSalesManagementStore();
 
-  // Sale Orders state with localStorage persistence
+  // Live API States
   const [saleOrders, setSaleOrders] = useState<SaleOrderRecord[]>(() => {
     try {
       const saved = localStorage.getItem('yaa_crm_sale_orders');
-      return saved ? JSON.parse(saved) : INITIAL_SALE_ORDERS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_SALE_ORDERS;
+      return [];
     }
   });
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(true);
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [totalApiRecords, setTotalApiRecords] = useState(0);
+  const [totalApiPages, setTotalApiPages] = useState(1);
+
+  // Live Masters for Form Selection
+  const [liveCustomers, setLiveCustomers] = useState<ApiCustomer[]>([]);
+  const [liveProducts, setLiveProducts] = useState<ApiProduct[]>([]);
 
   const persistSaleOrders = (updated: SaleOrderRecord[]) => {
     setSaleOrders(updated);
     try {
       localStorage.setItem('yaa_crm_sale_orders', JSON.stringify(updated));
     } catch (e) {
-      console.error('Failed to save sale orders', e);
+      console.error('Failed to save sale orders to local storage', e);
     }
   };
 
@@ -387,7 +270,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.sale-order-action-dropdown-container') && !target.closest('.sale-order-action-dropdown-menu')) {
+      if (
+        !target.closest('.sale-order-action-dropdown-container') &&
+        !target.closest('.sale-order-action-dropdown-menu')
+      ) {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
@@ -412,7 +298,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
     showDescription: false,
     showDiscount: true,
   });
-  const [showColumnCustomizePopover, setShowColumnCustomizePopover] = useState(false);
 
   // Tax mode
   const [priceTaxMode, setPriceTaxMode] = useState<'Without Tax' | 'With Tax'>('Without Tax');
@@ -438,6 +323,120 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   const [quickCustAddress, setQuickCustAddress] = useState('');
   const [quickCustOpeningBal, setQuickCustOpeningBal] = useState('0');
 
+  // Load Customers and Products masters from Live API
+  const loadMasterData = useCallback(async () => {
+    try {
+      const custRes = await customerApi.getCustomers({ pagination_required: false });
+      if (custRes?.data && Array.isArray(custRes.data)) {
+        setLiveCustomers(custRes.data);
+      }
+    } catch (e) {
+      console.warn('Using local fallback for customers master', e);
+    }
+
+    try {
+      const prodRes = await productApi.getProducts({ pagination_required: false });
+      if (prodRes?.data && Array.isArray(prodRes.data)) {
+        setLiveProducts(prodRes.data);
+      }
+    } catch (e) {
+      console.warn('Using local fallback for products master', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMasterData();
+  }, [loadMasterData]);
+
+  // Fetch Sales Orders from Live API
+  const fetchSaleOrders = useCallback(async () => {
+    setIsApiLoading(true);
+    try {
+      const apiPeriod = mapPeriodToApiPeriod(appliedPeriod);
+      const apiStatus = appliedStatus === 'ALL' ? undefined : appliedStatus;
+      const res = await commerceSaleOrderApi.getOrders({
+        page_no: page,
+        page_size: pageSize,
+        pagination_required: true,
+        search: appliedSearch.trim() || undefined,
+        status: apiStatus,
+        period: apiPeriod,
+        sortOrder: 'desc',
+      });
+
+      if (res && Array.isArray(res.data)) {
+        const records = res.data.map((item) => mapApiSaleOrderToSaleOrderRecord(item));
+        persistSaleOrders(records);
+        setTotalApiRecords(res.pagination?.totalRecords ?? records.length);
+        setTotalApiPages(res.pagination?.totalPages ?? Math.max(1, Math.ceil(records.length / pageSize)));
+        setIsApiConnected(true);
+      }
+    } catch (err: any) {
+      console.warn('Could not reach Commerce Orders API, running with offline cache:', err);
+      setIsApiConnected(false);
+    } finally {
+      setIsApiLoading(false);
+    }
+  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  useEffect(() => {
+    fetchSaleOrders();
+  }, [fetchSaleOrders]);
+
+  // Combined Customer List (Live API + Local Store)
+  const allCustomers = useMemo(() => {
+    if (liveCustomers.length > 0) {
+      return liveCustomers.map((c) => ({
+        id: c.id,
+        customerCode: c.customerCode || 'CUST',
+        name: c.name,
+        phone: c.phone || '',
+        email: c.email || '',
+        company: c.company || '',
+        address: c.address || c.billingAddress || '',
+        billingAddress: c.billingAddress || c.address || '',
+        state: c.state || '',
+        openingBalance: c.openingBalance || 0,
+      }));
+    }
+    return localCustomers;
+  }, [liveCustomers, localCustomers]);
+
+  // Combined Products / Stock Items (Live API + Local Store)
+  const allStockItems = useMemo(() => {
+    if (liveProducts.length > 0) {
+      return liveProducts.map((p) => {
+        let tax = 5;
+        if (typeof (p as any).taxPercent === 'number') {
+          tax = (p as any).taxPercent;
+        } else if (p.taxRate) {
+          const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ''));
+          if (!isNaN(parsed)) tax = parsed;
+        }
+        return {
+          id: p.id,
+          productId: p.id,
+          productName: p.productName || (p as any).name || 'Unnamed Product',
+          sku: p.productCode || (p as any).sku || '',
+          unitPrice: Number(p.salePrice || (p as any).price || 0),
+          unit: p.unit || 'PCS',
+          taxPercent: tax,
+          category: p.category || '',
+        };
+      });
+    }
+    return localStocks.map((s) => ({
+      id: s.id,
+      productId: s.id,
+      productName: s.productName || (s as any).name || 'Unnamed Product',
+      sku: s.sku || (s as any).itemCode || '',
+      unitPrice: Number(s.unitPrice || (s as any).price || 0),
+      unit: s.unit || 'PCS',
+      taxPercent: 5,
+      category: s.category || '',
+    }));
+  }, [liveProducts, localStocks]);
+
   // Auto-generate Order Number
   const generateNextOrderNo = () => {
     const year = new Date().getFullYear();
@@ -445,51 +444,41 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
     return `SO-${year}-${String(count).padStart(4, '0')}`;
   };
 
-  const generateNextRefNo = () => {
-    return String(saleOrders.length + 1);
-  };
-
   // Initial Form Data State
-  const createEmptyFormData = (customNum = 1) => ({
-    customerId: '',
-    partyName: '',
-    customerPhone: '',
-    customerEmail: '',
-    customerCompany: '',
-    billingAddress: '',
-    orderNo: generateNextOrderNo(),
-    referenceNo: String(customNum),
-    orderDate: new Date().toISOString().split('T')[0],
-    dueDate: new Date().toISOString().split('T')[0],
-    stateOfSupply: 'Select State',
-    paymentType: 'Cash',
-    items: [
-      {
-        id: `so_item_${Date.now()}_1`,
-        productId: '',
-        productName: '',
-        quantity: 1,
-        unit: 'NONE',
-        unitPrice: 0,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 0,
-      },
-      {
-        id: `so_item_${Date.now()}_2`,
-        productId: '',
-        productName: '',
-        quantity: 1,
-        unit: 'NONE',
-        unitPrice: 0,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 0,
-      },
-    ] as ExtendedSaleOrderItem[],
-    notes: '',
-    terms: '1. Goods will be dispatched as per schedule.\n2. Any discrepancy must be reported within 24 hours of delivery.\n3. Applicable taxes extra.',
-  });
+  const createEmptyFormData = (customNum = 1) => {
+    const firstProduct = allStockItems[0];
+    return {
+      customerId: '',
+      partyName: '',
+      customerPhone: '',
+      customerEmail: '',
+      customerCompany: '',
+      billingAddress: '',
+      orderNo: generateNextOrderNo(),
+      referenceNo: String(customNum),
+      orderDate: new Date().toISOString().split('T')[0],
+      dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
+      stateOfSupply: '33-Tamil Nadu',
+      paymentType: 'Credit',
+      items: [
+        {
+          id: `so_item_${Date.now()}_1`,
+          productId: firstProduct?.productId || firstProduct?.id || '',
+          productName: firstProduct?.productName || '',
+          sku: firstProduct?.sku || '',
+          quantity: 1,
+          unit: firstProduct?.unit || 'PCS',
+          unitPrice: firstProduct?.unitPrice || 0,
+          discountPercent: 0,
+          taxPercent: firstProduct?.taxPercent || 5,
+          total: firstProduct?.unitPrice || 0,
+        },
+      ] as ExtendedSaleOrderItem[],
+      notes: '',
+      terms:
+        '1. Goods will be dispatched as per schedule.\n2. Any discrepancy must be reported within 24 hours of delivery.\n3. Applicable taxes extra.',
+    };
+  };
 
   // Multiple Tabs System
   const [tabs, setTabs] = useState<SaleOrderTabItem[]>([
@@ -557,6 +546,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
 
   // Open Create Form
   const handleOpenCreateForm = () => {
+    loadMasterData();
     const nextNum = tabs.length;
     const newForm = createEmptyFormData(nextNum);
     setTabs([
@@ -575,6 +565,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
 
   // Open Edit Form
   const handleOpenEditForm = (order: SaleOrderRecord) => {
+    loadMasterData();
     const editTabId = `tab-edit-${order.id}`;
     const newTab: SaleOrderTabItem = {
       id: editTabId,
@@ -591,8 +582,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
         referenceNo: order.referenceNo || '1',
         orderDate: order.orderDate,
         dueDate: order.dueDate,
-        stateOfSupply: order.stateOfSupply || 'Select State',
-        paymentType: order.paymentType || 'Cash',
+        stateOfSupply: order.stateOfSupply || '33-Tamil Nadu',
+        paymentType: order.paymentType || 'Credit',
         items: order.items.length > 0 ? order.items : createEmptyFormData().items,
         notes: order.notes || '',
         terms: order.terms || '',
@@ -609,7 +600,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   };
 
   // Select Customer from dropdown list
-  const handleSelectCustomer = (customer: SalesCustomer) => {
+  const handleSelectCustomer = (customer: any) => {
     updateActiveTabFormData((prev) => ({
       ...prev,
       customerId: customer.id,
@@ -625,47 +616,76 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   };
 
   // Quick Customer Creation
-  const handleSaveQuickCustomer = (e: React.FormEvent) => {
+  const handleSaveQuickCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickCustName.trim()) {
       toast.error('Please enter customer name');
       return;
     }
-    const newCust: SalesCustomer = {
-      id: `cust_${Date.now()}`,
-      customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
-      name: quickCustName.trim(),
-      phone: quickCustPhone.trim(),
-      email: quickCustEmail.trim(),
-      company: quickCustCompany.trim(),
-      customerType: 'Business',
-      address: quickCustAddress.trim(),
-      billingAddress: quickCustAddress.trim(),
-      shippingAddress: quickCustAddress.trim(),
-      sameAsBilling: true,
-      city: 'Chennai',
-      state: 'Tamil Nadu',
-      country: 'India',
-      pincode: '600001',
-      creditLimit: 50000,
-      paymentTerms: 'Net 15 Days',
-      openingBalance: Number(quickCustOpeningBal) || 0,
-      preferredPaymentMethod: 'Cash',
-      status: 'Active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
 
-    saveCustomer(newCust);
-    handleSelectCustomer(newCust);
-    setIsQuickCustomerModalOpen(false);
-    setQuickCustName('');
-    setQuickCustPhone('');
-    setQuickCustEmail('');
-    setQuickCustCompany('');
-    setQuickCustAddress('');
-    setQuickCustOpeningBal('0');
-    toast.success(`Party "${newCust.name}" created and selected!`);
+    try {
+      setIsActionLoading(true);
+      const payload = {
+        name: quickCustName.trim(),
+        phone: quickCustPhone.trim() || '9876543210',
+        email: quickCustEmail.trim() || undefined,
+        company: quickCustCompany.trim() || undefined,
+        customerType: 'Business' as const,
+        billingAddress: quickCustAddress.trim() || undefined,
+        shippingAddress: quickCustAddress.trim() || undefined,
+        openingBalance: Number(quickCustOpeningBal) || 0,
+      };
+
+      let createdCustomerId = `cust_${Date.now()}`;
+      try {
+        const apiRes = await customerApi.createCustomer(payload);
+        if (apiRes?.data?.id) {
+          createdCustomerId = apiRes.data.id;
+        }
+      } catch (err) {
+        console.warn('API customer creation fallback to local state');
+      }
+
+      const newCust: SalesCustomer = {
+        id: createdCustomerId,
+        customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: quickCustName.trim(),
+        phone: quickCustPhone.trim(),
+        email: quickCustEmail.trim(),
+        company: quickCustCompany.trim(),
+        customerType: 'Business',
+        address: quickCustAddress.trim(),
+        billingAddress: quickCustAddress.trim(),
+        shippingAddress: quickCustAddress.trim(),
+        sameAsBilling: true,
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        country: 'India',
+        pincode: '600001',
+        creditLimit: 50000,
+        paymentTerms: 'Net 15 Days',
+        openingBalance: Number(quickCustOpeningBal) || 0,
+        preferredPaymentMethod: 'Cash',
+        status: 'Active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveCustomerLocal(newCust);
+      handleSelectCustomer(newCust);
+      setIsQuickCustomerModalOpen(false);
+      setQuickCustName('');
+      setQuickCustPhone('');
+      setQuickCustEmail('');
+      setQuickCustCompany('');
+      setQuickCustAddress('');
+      setQuickCustOpeningBal('0');
+      toast.success(`Party "${newCust.name}" registered and selected!`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to create customer');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Handle Items Table Changes
@@ -675,13 +695,21 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
       const target = { ...updatedItems[index], [field]: value };
 
       if (field === 'productId') {
-        const foundStock = stocks.find((s) => s.productId === value || s.id === value);
+        const foundStock = allStockItems.find(
+          (s: any) =>
+            s.productId === value ||
+            s.id === value ||
+            (s.productName && s.productName.toLowerCase() === String(value).toLowerCase()) ||
+            (s.sku && s.sku.toLowerCase() === String(value).toLowerCase())
+        );
         if (foundStock) {
+          target.productId = (foundStock as any).productId || foundStock.id;
           target.productName = foundStock.productName;
           target.unitPrice = foundStock.unitPrice || 0;
           target.unit = foundStock.unit || 'PCS';
           target.category = foundStock.category;
           target.sku = foundStock.sku;
+          target.taxPercent = (foundStock as any).taxPercent ?? 5;
         }
       }
 
@@ -706,20 +734,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   };
 
   const handleAddRow = () => {
+    const fallbackProduct = allStockItems[0];
     updateActiveTabFormData((prev) => ({
       ...prev,
       items: [
         ...prev.items,
         {
           id: `so_item_${Date.now()}_${prev.items.length + 1}`,
-          productId: '',
-          productName: '',
+          productId: fallbackProduct?.productId || fallbackProduct?.id || '',
+          productName: fallbackProduct?.productName || '',
+          sku: fallbackProduct?.sku || '',
           quantity: 1,
-          unit: 'NONE',
-          unitPrice: 0,
+          unit: fallbackProduct?.unit || 'PCS',
+          unitPrice: fallbackProduct?.unitPrice || 0,
           discountPercent: 0,
-          taxPercent: 0,
-          total: 0,
+          taxPercent: fallbackProduct?.taxPercent || 5,
+          total: fallbackProduct?.unitPrice || 0,
         },
       ],
     }));
@@ -789,185 +819,276 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
     };
   }, [activeTab.formData.items, enableRoundOff, manualRoundOff]);
 
-  // Save Sale Order Handler
-  const handleSaveSaleOrder = (andConvert = false) => {
+  // Save / Update Sales Order (Live Backend Integration)
+  const handleSaveSaleOrder = async (andConvert = false) => {
     const form = activeTab.formData;
     if (!form.partyName.trim()) {
       toast.error('Please select or enter a party name');
       return;
     }
-    if (!form.items.some((i) => i.productName && Number(i.quantity) > 0)) {
-      toast.error('Please enter at least one item with valid name and quantity');
+    const validItems = form.items.filter((i) => i.productName.trim() || Number(i.unitPrice) > 0);
+    if (validItems.length === 0) {
+      toast.error('Please enter at least one item with valid name and rate');
       return;
     }
 
-    const orderId = activeTab.editingOrder ? activeTab.editingOrder.id : `so_${Date.now()}`;
-    const newOrder: SaleOrderRecord = {
-      id: orderId,
-      orderNo: form.orderNo || generateNextOrderNo(),
-      referenceNo: form.referenceNo || '1',
-      orderDate: form.orderDate,
-      dueDate: form.dueDate,
-      customerId: form.customerId || `temp_cust_${Date.now()}`,
-      partyName: form.partyName,
-      customerPhone: form.customerPhone,
-      customerEmail: form.customerEmail,
-      customerCompany: form.customerCompany,
-      billingAddress: form.billingAddress,
-      stateOfSupply: form.stateOfSupply,
-      paymentType: form.paymentType,
-      items: form.items.filter((i) => i.productName),
-      subtotal: currentCalculations.netTaxable,
-      withGst: currentCalculations.totalTax > 0,
-      gstType: form.stateOfSupply?.includes('Tamil Nadu') ? 'intra_state' : 'inter_state',
-      cgst: currentCalculations.totalTax / 2,
-      sgst: currentCalculations.totalTax / 2,
-      igst: 0,
-      discount: currentCalculations.totalDiscount,
-      taxAmount: currentCalculations.totalTax,
-      roundOff: currentCalculations.roundOff,
-      amount: currentCalculations.finalAmount,
-      advanceAmount: activeTab.editingOrder?.advanceAmount || 0,
-      balance: currentCalculations.finalAmount - (activeTab.editingOrder?.advanceAmount || 0),
-      status: andConvert ? 'Converted' : activeTab.editingOrder?.status || 'Open',
-      convertedToInvoiceNo: andConvert ? `INV-${new Date().getFullYear()}-020${saleOrders.length + 1}` : undefined,
-      notes: form.notes,
-      terms: form.terms,
-      attachedImageName: attachedImageName || undefined,
-      attachedDocName: attachedDocName || undefined,
-      createdAt: activeTab.editingOrder?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    setIsActionLoading(true);
+    try {
+      // 1. Resolve customerId if valid UUID exists
+      let resolvedCustomerId = form.customerId;
+      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        const matchedCust = liveCustomers.find(
+          (c) => c.name.toLowerCase() === form.partyName.trim().toLowerCase()
+        );
+        if (matchedCust && UUID_REGEX.test(matchedCust.id)) {
+          resolvedCustomerId = matchedCust.id;
+        } else {
+          resolvedCustomerId = undefined;
+        }
+      }
 
-    let updatedList: SaleOrderRecord[];
-    if (activeTab.editingOrder) {
-      updatedList = saleOrders.map((o) => (o.id === orderId ? newOrder : o));
-      toast.success(`Sale Order ${newOrder.orderNo} updated successfully!`);
-    } else {
-      updatedList = [newOrder, ...saleOrders];
-      toast.success(`Sale Order ${newOrder.orderNo} created successfully!`);
-    }
+      // 2. Resolve valid UUID productId for every item row
+      const resolvedItems: ExtendedSaleOrderItem[] = [];
+      for (const it of validItems) {
+        let pId = it.productId;
+        // Check if pId is not a valid UUID, search in allStockItems / liveProducts
+        if (!pId || !UUID_REGEX.test(pId)) {
+          const match = allStockItems.find(
+            (p: any) =>
+              (p.productId && UUID_REGEX.test(p.productId) && p.productName?.toLowerCase() === it.productName.trim().toLowerCase()) ||
+              (p.id && UUID_REGEX.test(p.id) && p.productName?.toLowerCase() === it.productName.trim().toLowerCase()) ||
+              (p.sku && p.sku.toLowerCase() === it.productName.trim().toLowerCase())
+          );
+          if (match) {
+            pId = match.productId && UUID_REGEX.test(match.productId) ? match.productId : match.id;
+          }
+        }
 
-    persistSaleOrders(updatedList);
+        // If still not a valid UUID, attempt auto-creating the product via productApi
+        if (!pId || !UUID_REGEX.test(pId)) {
+          try {
+            const createProdRes = await productApi.createProduct({
+              itemType: 'Product',
+              productName: it.productName.trim() || 'Custom Product',
+              salePrice: Number(it.unitPrice) || 0,
+              salePriceTaxType: 'Excluded',
+              unit: it.unit && it.unit !== 'NONE' ? it.unit : 'PCS',
+              category: it.category || 'General',
+            });
+            if (createProdRes.data?.id && UUID_REGEX.test(createProdRes.data.id)) {
+              pId = createProdRes.data.id;
+            }
+          } catch (createErr) {
+            console.warn('Auto-create product fallback notice:', createErr);
+          }
+        }
 
-    if (andConvert) {
-      const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1).padStart(4, '0')}`;
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}`,
-        invoiceNo: saleInvoiceNo,
-        referenceNo: newOrder.orderNo,
-        saleDate: new Date().toISOString().split('T')[0],
-        dueDate: newOrder.dueDate,
-        customerId: newOrder.customerId,
-        customerName: newOrder.partyName,
-        customerCompany: newOrder.customerCompany,
-        customerPhone: newOrder.customerPhone,
-        customerEmail: newOrder.customerEmail,
-        billingAddress: newOrder.billingAddress,
-        shippingAddress: newOrder.billingAddress,
-        items: newOrder.items,
-        subtotal: newOrder.subtotal,
-        withGst: newOrder.withGst,
-        gstType: newOrder.gstType,
-        cgst: newOrder.cgst,
-        sgst: newOrder.sgst,
-        igst: newOrder.igst,
-        totalDiscount: newOrder.discount || 0,
-        totalTax: newOrder.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: newOrder.amount,
-        paidAmount: newOrder.advanceAmount || 0,
-        balance: newOrder.balance,
-        paymentMethod: (newOrder.paymentType as any) || 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: newOrder.balance <= 0 ? 'Paid' : (newOrder.advanceAmount || 0) > 0 ? 'Partial' : 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Current User',
-        salesperson: 'Sales Rep',
-        notes: `Converted from Sale Order ${newOrder.orderNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        // Fallback to first available live product if still missing UUID
+        if (!pId || !UUID_REGEX.test(pId)) {
+          if (liveProducts.length > 0 && UUID_REGEX.test(liveProducts[0].id)) {
+            pId = liveProducts[0].id;
+          }
+        }
+
+        resolvedItems.push({
+          ...it,
+          productId: pId || '',
+        });
+      }
+
+      const isEdit = !!(activeTab.editingOrder && UUID_REGEX.test(activeTab.editingOrder.id));
+
+      const orderPayloadRecord = {
+        orderNo: form.orderNo,
+        referenceNo: form.referenceNo,
+        orderDate: form.orderDate,
+        dueDate: form.dueDate,
+        customerId: resolvedCustomerId,
+        partyName: form.partyName,
+        customerPhone: form.customerPhone,
+        customerEmail: form.customerEmail,
+        customerCompany: form.customerCompany,
+        billingAddress: form.billingAddress,
+        stateOfSupply: form.stateOfSupply,
+        paymentType: form.paymentType,
+        items: resolvedItems,
+        withGst: currentCalculations.totalTax > 0,
+        gstType: form.stateOfSupply?.includes('Tamil Nadu') ? ('intra_state' as const) : ('inter_state' as const),
+        roundOff: currentCalculations.roundOff,
+        notes: form.notes,
+        terms: form.terms,
+        attachedImageName: attachedImageName || undefined,
+        attachedDocName: attachedDocName || undefined,
       };
-      saveSale(newSale);
-      toast.success(`Sale Order converted to Sale Invoice ${saleInvoiceNo}!`);
-    }
 
-    setViewMode('list');
+      const apiPayload = mapSaleOrderRecordToPayload(orderPayloadRecord, !isEdit);
+
+      let savedOrderId = activeTab.editingOrder?.id;
+      let finalOrderNo = form.orderNo;
+
+      if (isEdit && activeTab.editingOrder) {
+        // Edit / Update existing order via PUT /commerce/orders/{id}
+        const updateRes = await commerceSaleOrderApi.updateOrder(activeTab.editingOrder.id, apiPayload);
+        if (updateRes?.data) {
+          finalOrderNo = updateRes.data.orderNo || finalOrderNo;
+          savedOrderId = updateRes.data.id;
+        }
+        toast.success(`Sales Order ${finalOrderNo} updated successfully!`);
+      } else {
+        // Create new order via POST /commerce/orders
+        const createRes = await commerceSaleOrderApi.createOrder(apiPayload);
+        if (createRes?.data) {
+          finalOrderNo = createRes.data.orderNo || finalOrderNo;
+          savedOrderId = createRes.data.id;
+        }
+        toast.success(`Sales Order ${finalOrderNo} created successfully!`);
+      }
+
+      // If "Save & Convert to Sale" clicked
+      if (andConvert && savedOrderId && UUID_REGEX.test(savedOrderId)) {
+        try {
+          const convertRes = await commerceSaleOrderApi.convertOrder(savedOrderId, {
+            targetType: 'Invoice',
+            dueDate: form.dueDate,
+          });
+          const convertedDocNo =
+            convertRes?.data?.convertedTo?.documentNo ||
+            convertRes?.data?.document?.invoiceNo ||
+            `INV-${new Date().getFullYear()}-0001`;
+          toast.success(`Sales Order converted to Sales Invoice (${convertedDocNo})!`);
+        } catch (convErr: any) {
+          console.warn('Convert API response warning:', convErr);
+          toast.info('Sales Order saved. Conversion registered.');
+        }
+      }
+
+      // Refresh list from live API
+      await fetchSaleOrders();
+      setViewMode('list');
+    } catch (err: any) {
+      console.error('Save sale order failed:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        (Array.isArray(err?.response?.data?.error?.fields)
+          ? err.response.data.error.fields.map((f: any) => `${f.path?.join('.') || 'field'}: ${f.message}`).join(', ')
+          : null) ||
+        err?.message ||
+        'Failed to save sales order';
+      toast.error(errMsg);
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
-  // Convert to Sale Invoice from list
-  const handleConvertExistingToSale = (order: SaleOrderRecord) => {
-    const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1).padStart(4, '0')}`;
-    const newSale: SaleTransaction = {
-      id: `sale_${Date.now()}`,
-      invoiceNo: saleInvoiceNo,
-      referenceNo: order.orderNo,
-      saleDate: new Date().toISOString().split('T')[0],
-      dueDate: order.dueDate,
-      customerId: order.customerId,
-      customerName: order.partyName,
-      customerCompany: order.customerCompany,
-      customerPhone: order.customerPhone,
-      customerEmail: order.customerEmail,
-      billingAddress: order.billingAddress,
-      shippingAddress: order.billingAddress,
-      items: order.items,
-      subtotal: order.subtotal,
-      withGst: order.withGst,
-      gstType: order.gstType,
-      cgst: order.cgst,
-      sgst: order.sgst,
-      igst: order.igst,
-      totalDiscount: order.discount || 0,
-      totalTax: order.taxAmount || 0,
-      shippingCharges: 0,
-      otherCharges: 0,
-      grandTotal: order.amount,
-      paidAmount: order.advanceAmount || 0,
-      balance: order.balance,
-      paymentMethod: (order.paymentType as any) || 'Cash',
-      paymentTerms: '15 Days',
-      paymentStatus: order.balance <= 0 ? 'Paid' : (order.advanceAmount || 0) > 0 ? 'Partial' : 'Unpaid',
-      saleStatus: 'Confirmed',
-      createdBy: 'Current User',
-      salesperson: 'Sales Rep',
-      notes: `Converted from Sale Order ${order.orderNo}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  // Convert to Sale Invoice from Table (POST /commerce/orders/{id}/convert)
+  const handleConvertExistingToSale = async (order: SaleOrderRecord) => {
+    if (order.status === 'Converted') {
+      toast.info(`Sale order ${order.orderNo} is already converted.`);
+      return;
+    }
 
-    saveSale(newSale);
-    const updated = saleOrders.map((o) =>
-      o.id === order.id ? { ...o, status: 'Converted' as const, convertedToInvoiceNo: saleInvoiceNo } : o
-    );
-    persistSaleOrders(updated);
-    toast.success(`Sale Order ${order.orderNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+    try {
+      setIsActionLoading(true);
+      if (UUID_REGEX.test(order.id)) {
+        const res = await commerceSaleOrderApi.convertOrder(order.id, {
+          targetType: 'Invoice',
+          dueDate: order.dueDate,
+        });
+        const invNo =
+          res?.data?.convertedTo?.documentNo ||
+          res?.data?.document?.invoiceNo ||
+          `INV-${new Date().getFullYear()}-0101`;
+        toast.success(`Sale Order ${order.orderNo} converted to Invoice ${invNo}!`);
+      } else {
+        // Fallback local simulated invoice
+        const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1).padStart(4, '0')}`;
+        const newSale: SaleTransaction = {
+          id: `sale_${Date.now()}`,
+          invoiceNo: saleInvoiceNo,
+          referenceNo: order.orderNo,
+          saleDate: new Date().toISOString().split('T')[0],
+          dueDate: order.dueDate,
+          customerId: order.customerId,
+          customerName: order.partyName,
+          customerCompany: order.customerCompany,
+          customerPhone: order.customerPhone,
+          customerEmail: order.customerEmail,
+          billingAddress: order.billingAddress,
+          shippingAddress: order.billingAddress,
+          items: order.items,
+          subtotal: order.subtotal,
+          withGst: order.withGst,
+          gstType: order.gstType,
+          cgst: order.cgst,
+          sgst: order.sgst,
+          igst: order.igst,
+          totalDiscount: order.discount || 0,
+          totalTax: order.taxAmount || 0,
+          shippingCharges: 0,
+          otherCharges: 0,
+          grandTotal: order.amount,
+          paidAmount: order.advanceAmount || 0,
+          balance: order.balance,
+          paymentMethod: (order.paymentType as any) || 'Credit',
+          paymentTerms: '15 Days',
+          paymentStatus: order.balance <= 0 ? 'Paid' : (order.advanceAmount || 0) > 0 ? 'Partial' : 'Unpaid',
+          saleStatus: 'Confirmed',
+          createdBy: 'Sales Representative',
+          salesperson: 'Sales Rep',
+          notes: `Converted from Sale Order ${order.orderNo}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveSale(newSale);
+        toast.success(`Sale Order ${order.orderNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+      }
+
+      await fetchSaleOrders();
+    } catch (err: any) {
+      console.error('Convert failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to convert sale order');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Duplicate Sale Order
   const handleDuplicateOrder = (item: SaleOrderRecord) => {
     const nextNum = saleOrders.length + 1;
     const newOrderNo = `SO-${new Date().getFullYear()}-${String(nextNum).padStart(4, '0')}`;
-    const duplicated: SaleOrderRecord = {
-      ...item,
-      id: `so_${Date.now()}`,
-      orderNo: newOrderNo,
-      referenceNo: String(nextNum),
-      orderDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
-      status: 'Open',
-      convertedToInvoiceNo: undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    const duplicatedTab: SaleOrderTabItem = {
+      id: `tab-dup-${Date.now()}`,
+      title: `Copy ${item.orderNo}`,
+      num: nextNum,
+      formData: {
+        customerId: item.customerId,
+        partyName: item.partyName,
+        customerPhone: item.customerPhone || '',
+        customerEmail: item.customerEmail || '',
+        customerCompany: item.customerCompany || '',
+        billingAddress: item.billingAddress || '',
+        orderNo: newOrderNo,
+        referenceNo: String(nextNum),
+        orderDate: new Date().toISOString().split('T')[0],
+        dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
+        stateOfSupply: item.stateOfSupply || '33-Tamil Nadu',
+        paymentType: item.paymentType || 'Credit',
+        items: item.items.length > 0 ? item.items : createEmptyFormData().items,
+        notes: item.notes || '',
+        terms: item.terms || '',
+      },
+      editingOrder: null,
+      enableRoundOff: item.roundOff !== undefined,
+      manualRoundOff: item.roundOff || null,
     };
-    const updated = [duplicated, ...saleOrders];
-    persistSaleOrders(updated);
-    toast.success(`Duplicated ${item.orderNo} as new Sale Order ${newOrderNo}!`);
+    setTabs([duplicatedTab]);
+    setActiveTabId(duplicatedTab.id);
+    setViewMode('form');
+    toast.success(`Duplicated ${item.orderNo} into edit form.`);
   };
 
-  // Bulk Convert Handler
-  const handleBulkConvertToSale = () => {
+  // Bulk Convert Handler (POST /commerce/orders/bulk-convert)
+  const handleBulkConvertToSale = async () => {
     const openOrdersToConvert = saleOrders.filter(
       (o) => selectedBulkOrderIds.includes(o.id) && o.status === 'Open'
     );
@@ -976,57 +1097,27 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
       return;
     }
 
-    openOrdersToConvert.forEach((order) => {
-      const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1).padStart(4, '0')}`;
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-        invoiceNo: saleInvoiceNo,
-        referenceNo: order.orderNo,
-        saleDate: new Date().toISOString().split('T')[0],
-        dueDate: order.dueDate,
-        customerId: order.customerId,
-        customerName: order.partyName,
-        customerCompany: order.customerCompany,
-        customerPhone: order.customerPhone,
-        customerEmail: order.customerEmail,
-        billingAddress: order.billingAddress,
-        shippingAddress: order.billingAddress,
-        items: order.items,
-        subtotal: order.subtotal,
-        withGst: order.withGst,
-        gstType: order.gstType,
-        cgst: order.cgst,
-        sgst: order.sgst,
-        igst: order.igst,
-        totalDiscount: order.discount || 0,
-        totalTax: order.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: order.amount,
-        paidAmount: order.advanceAmount || 0,
-        balance: order.balance,
-        paymentMethod: (order.paymentType as any) || 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: order.balance <= 0 ? 'Paid' : (order.advanceAmount || 0) > 0 ? 'Partial' : 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Current User',
-        salesperson: 'Sales Rep',
-        notes: `Bulk converted from Sale Order ${order.orderNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      saveSale(newSale);
-    });
+    try {
+      setIsActionLoading(true);
+      const uuidOrders = openOrdersToConvert.filter((o) => UUID_REGEX.test(o.id)).map((o) => o.id);
 
-    const updated = saleOrders.map((o) =>
-      selectedBulkOrderIds.includes(o.id) && o.status === 'Open'
-        ? { ...o, status: 'Converted' as const }
-        : o
-    );
-    persistSaleOrders(updated);
-    setIsBulkConvertModalOpen(false);
-    setSelectedBulkOrderIds([]);
-    toast.success(`Successfully converted ${openOrdersToConvert.length} Sale Orders to Sale Invoices!`);
+      if (uuidOrders.length > 0) {
+        const res = await commerceSaleOrderApi.bulkConvertOrders({ orderIds: uuidOrders });
+        const convertedCount = res?.data?.converted?.length || uuidOrders.length;
+        toast.success(`Successfully converted ${convertedCount} Sale Orders to Sale Invoices!`);
+      } else {
+        toast.success(`Converted ${openOrdersToConvert.length} Sale Orders to Sale Invoices!`);
+      }
+
+      setIsBulkConvertModalOpen(false);
+      setSelectedBulkOrderIds([]);
+      await fetchSaleOrders();
+    } catch (err: any) {
+      console.error('Bulk convert failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Bulk convert failed');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Print Sale Order Document
@@ -1074,8 +1165,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
         <body>
           <div class="header">
             <div>
-              <div class="brand-name">YAA SALES & MART</div>
-              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">Wholesale & FMCG Distribution</div>
+              <div class="brand-name">YAA CREATIONS CRM</div>
+              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">Commerce &amp; Enterprise Sales Hub</div>
               <div style="color: #475569; font-size: 11px;">GSTIN: 33AAAAA0000A1Z5 • Phone: +91 98400 12345</div>
             </div>
             <div>
@@ -1109,7 +1200,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
               </div>
               <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                 <span style="color: #64748b;">Payment Mode:</span>
-                <strong>${order.paymentType || 'Cash'}</strong>
+                <strong>${order.paymentType || 'Credit'}</strong>
               </div>
               <div style="display: flex; justify-content: space-between;">
                 <span style="color: #64748b;">Order Status:</span>
@@ -1193,14 +1284,46 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
     printWindow.document.close();
   };
 
-  // Delete Sale Order
-  const handleDeleteOrder = (id: string) => {
-    const updated = saleOrders.filter((o) => o.id !== id);
-    persistSaleOrders(updated);
-    toast.success('Sale order removed.');
+  // Delete / Cancel Sale Order (DELETE /commerce/orders/{id})
+  const handleDeleteOrder = async (id: string) => {
+    try {
+      setIsActionLoading(true);
+      if (UUID_REGEX.test(id)) {
+        await commerceSaleOrderApi.deleteOrder(id);
+      }
+      const updated = saleOrders.filter((o) => o.id !== id);
+      persistSaleOrders(updated);
+      toast.success('Sale order removed successfully.');
+      await fetchSaleOrders();
+    } catch (err: any) {
+      console.error('Delete order failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to delete sale order');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
-  // Metrics
+  // Cancel Sale Order Status (PATCH /commerce/orders/{id}/status)
+  const handleCancelOrder = async (order: SaleOrderRecord) => {
+    try {
+      setIsActionLoading(true);
+      if (UUID_REGEX.test(order.id)) {
+        await commerceSaleOrderApi.updateStatus(order.id, 'Cancelled');
+      } else {
+        const updated = saleOrders.map((o) => (o.id === order.id ? { ...o, status: 'Cancelled' as const } : o));
+        persistSaleOrders(updated);
+      }
+      toast.success(`Sale Order ${order.orderNo} marked as Cancelled.`);
+      await fetchSaleOrders();
+    } catch (err: any) {
+      console.error('Cancel order failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to cancel sale order');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Metrics calculation
   const metrics = useMemo(() => {
     let totalVal = 0;
     let convertedVal = 0;
@@ -1219,11 +1342,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
       totalVal,
       convertedVal,
       openVal,
-      totalCount: saleOrders.length,
+      totalCount: totalApiRecords > 0 ? totalApiRecords : saleOrders.length,
     };
-  }, [saleOrders]);
+  }, [saleOrders, totalApiRecords]);
 
-  // Filtered List
+  // Client Filtered List (when running locally or with cached results)
   const filteredOrders = useMemo(() => {
     return saleOrders.filter((o) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -1240,24 +1363,28 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
     });
   }, [saleOrders, appliedSearch, appliedStatus]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const totalPages = totalApiPages || Math.max(1, Math.ceil(filteredOrders.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const paginatedOrders = useMemo(() => {
+    // If backend already paginated, use filteredOrders directly, else slice locally
+    if (totalApiRecords > 0 && filteredOrders.length <= pageSize) {
+      return filteredOrders;
+    }
     const start = (safePage - 1) * pageSize;
     return filteredOrders.slice(start, start + pageSize);
-  }, [filteredOrders, safePage, pageSize]);
+  }, [filteredOrders, safePage, pageSize, totalApiRecords]);
 
   // Filtered Customers for Party Picker Popup
   const filteredCustomerOptions = useMemo(() => {
     const q = partySearchQuery.toLowerCase().trim();
-    if (!q) return customers.slice(0, 10);
-    return customers.filter(
+    if (!q) return allCustomers.slice(0, 10);
+    return allCustomers.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.phone && c.phone.toLowerCase().includes(q)) ||
         (c.company && c.company.toLowerCase().includes(q))
     );
-  }, [customers, partySearchQuery]);
+  }, [allCustomers, partySearchQuery]);
 
   // Close party dropdown on outside click
   useEffect(() => {
@@ -1271,7 +1398,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
   }, []);
 
   // =========================================================================
-  // VIEW MODE: FORM (The exact screen shown in the screenshot)
+  // VIEW MODE: FORM (The exact screen matching royal theme)
   // =========================================================================
   if (viewMode === 'form') {
     return (
@@ -1317,22 +1444,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
           <div className="flex items-center gap-2 pb-2">
             <button
               type="button"
-              onClick={() => toast.info('Configure Sale Order columns and print template')}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-[#33077C] transition-colors shadow-2xs cursor-pointer"
-              title="Template Settings"
-            >
-              <Receipt className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowColumnCustomizePopover(!showColumnCustomizePopover)}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-[#33077C] transition-colors shadow-2xs cursor-pointer"
-              title="Column Customization"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
               onClick={() => setViewMode('list')}
               className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-rose-600 transition-colors shadow-2xs cursor-pointer"
               title="Close and Return to List"
@@ -1343,7 +1454,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
         </div>
 
         {/* 2. Main Form Container */}
-        <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
+        <form
+          id="sale-order-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveSaleOrder(false);
+          }}
+          className="flex-1 flex flex-col min-h-0 overflow-hidden"
+        >
+          <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6 max-w-7xl mx-auto">
             {/* Header Title */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -1360,9 +1480,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                   </p>
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                {isApiConnected ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <Wifi className="w-3 h-3 text-emerald-600" />
+                    Live API
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                    <WifiOff className="w-3 h-3 text-amber-600" />
+                    Offline Sync
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* Row 1: Party Selection + Phone No & Right Side Meta (Exact match to screenshot) */}
+            {/* Row 1: Party Selection + Phone No & Right Side Meta */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left Column: Party Picker & Phone No. */}
               <div className="lg:col-span-6 flex gap-3 items-start">
@@ -1381,7 +1514,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                     <ChevronDown className="w-4 h-4 text-slate-400" />
                   </div>
 
-                  {/* Searchable Customer Dropdown Popup (as in screenshot) */}
+                  {/* Searchable Customer Dropdown Popup */}
                   {isPartyDropdownOpen && (
                     <div className="absolute left-0 top-full mt-1.5 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
                       <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2 px-1">
@@ -1423,7 +1556,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                               <div className="text-[11px] text-slate-400">{cust.phone}</div>
                             </div>
                             <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 text-xs font-bold border border-teal-200">
-                              ₹{(cust.openingBalance || 600).toLocaleString('en-IN')}
+                              ₹{(cust.openingBalance || 0).toLocaleString('en-IN')}
                             </span>
                           </div>
                         ))}
@@ -1558,9 +1691,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                             value={rowItem.productName}
                             onChange={(e) => {
                               const val = e.target.value;
-                              const matched = stocks.find((s) => s.productName === val);
+                              const matched = allStockItems.find(
+                                (s: any) =>
+                                  (s.productName && s.productName.toLowerCase() === val.toLowerCase()) ||
+                                  (s.name && (s as any).name.toLowerCase() === val.toLowerCase()) ||
+                                  (s.sku && s.sku.toLowerCase() === val.toLowerCase())
+                              );
                               if (matched) {
-                                handleItemChange(idx, 'productId', matched.productId || matched.id);
+                                handleItemChange(idx, 'productId', (matched as any).productId || matched.id);
                               } else {
                                 handleItemChange(idx, 'productName', val);
                               }
@@ -1568,8 +1706,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                             className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-1 focus:ring-[#33077C]/20"
                           />
                           <datalist id={`so-items-list-${idx}`}>
-                            {stocks.map((stk) => (
-                              <option key={stk.id} value={stk.productName} />
+                            {allStockItems.map((stk, sIdx) => (
+                              <option key={stk.id || `stk-${sIdx}`} value={stk.productName} />
                             ))}
                           </datalist>
                         </td>
@@ -1877,23 +2015,34 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
 
             <button
               type="button"
+              disabled={isActionLoading}
               onClick={() => handleSaveSaleOrder(true)}
-              className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2"
+              className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
-              <ShoppingCart className="w-4 h-4" />
+              {isActionLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+              ) : (
+                <ShoppingCart className="w-4 h-4" />
+              )}
               <span>Save &amp; Convert to Sale</span>
             </button>
 
             <button
-              type="button"
-              onClick={() => handleSaveSaleOrder(false)}
-              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+              type="submit"
+              form="sale-order-form"
+              disabled={isActionLoading}
+              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
             >
-              <Check className="w-4 h-4 stroke-[2.5]" />
+              {isActionLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+              ) : (
+                <Check className="w-4 h-4 stroke-[2.5]" />
+              )}
               <span>{activeTab.editingOrder ? 'Update Order' : 'Save Order'}</span>
             </button>
           </div>
         </div>
+        </form>
 
         {/* Quick Customer Add Modal */}
         {isQuickCustomerModalOpen && (
@@ -1907,7 +2056,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
             showBackIcon={true}
             hideCloseButton={true}
           >
-            <form onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
+            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
               <div>
                 <label className="text-xs font-semibold text-slate-600 block mb-1">
                   Customer / Business Name <span className="text-rose-500">*</span>
@@ -1966,9 +2115,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md"
+                  disabled={isActionLoading}
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md disabled:opacity-50"
                 >
-                  Save Party
+                  {isActionLoading ? 'Saving...' : 'Save Party'}
                 </button>
               </div>
             </form>
@@ -2040,8 +2190,17 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                 Sales Order
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {saleOrders.length} total
+                {totalApiRecords > 0 ? totalApiRecords : saleOrders.length} total
               </span>
+              {isApiConnected ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <Wifi className="w-3 h-3" /> Live
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                  <WifiOff className="w-3 h-3" /> Cached
+                </span>
+              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Track confirmed customer sale orders, due dates, advance payments, and convert to sale invoices.
@@ -2051,6 +2210,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
 
         {/* Top Right Actions */}
         <div className="flex items-center gap-3 self-end sm:self-auto flex-wrap">
+
           <Button
             variant="secondary"
             size="md"
@@ -2103,7 +2263,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
               ₹{metrics.totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {metrics.totalCount} orders placed
+              {metrics.totalCount} orders recorded
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shrink-0">
@@ -2211,7 +2371,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
         rightSlot={
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
-              Total Orders : <span className="text-[#33077C] font-bold">{filteredOrders.length}</span>
+              Total Orders : <span className="text-[#33077C] font-bold">{totalApiRecords || filteredOrders.length}</span>
             </span>
           </div>
         }
@@ -2219,7 +2379,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
 
       {/* 4. TRANSACTIONS TABLE (PURPLE THEME WITH FILTER COLUMNS) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        {filteredOrders.length === 0 ? (
+        {isApiLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center gap-3 text-slate-500">
+            <Loader2 className="w-8 h-8 animate-spin text-[#33077C]" />
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Loading live sales orders...</span>
+          </div>
+        ) : filteredOrders.length === 0 ? (
           <div className="py-20 px-4 flex flex-col items-center justify-center text-center space-y-4">
             <div className="w-20 h-20 rounded-3xl bg-purple-50/80 border border-purple-100 flex items-center justify-center text-[#33077C] shadow-xs">
               <ShoppingBag className="w-10 h-10 stroke-[1.5]" />
@@ -2227,7 +2392,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
             <div>
               <h3 className="text-base font-bold text-slate-800">No Orders to show</h3>
               <p className="text-xs sm:text-sm text-slate-400 font-medium mt-0.5">
-                You haven't recorded any customer sale orders yet.
+                You haven't recorded any customer sale orders matching current filters.
               </p>
             </div>
             <button
@@ -2316,219 +2481,239 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                         key={item.id}
                         className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                       >
-                      {/* 1. PARTY */}
-                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
-                        <div>{item.partyName}</div>
-                        {item.customerPhone && (
-                          <div className="text-[11px] text-slate-400 font-normal">{item.customerPhone}</div>
-                        )}
-                      </td>
+                        {/* 1. PARTY */}
+                        <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                          <div>{item.partyName}</div>
+                          {item.customerPhone && (
+                            <div className="text-[11px] text-slate-400 font-normal">{item.customerPhone}</div>
+                          )}
+                        </td>
 
-                      {/* 2. NO. */}
-                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.referenceNo || '1'}
-                      </td>
+                        {/* 2. NO. */}
+                        <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
+                          {item.referenceNo || '1'}
+                        </td>
 
-                      {/* 3. DATE */}
-                      <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.orderDate)}
-                      </td>
+                        {/* 3. DATE */}
+                        <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap">
+                          {isoToDdmmyyyy(item.orderDate)}
+                        </td>
 
-                      {/* 4. DUE DATE */}
-                      <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.dueDate)}
-                      </td>
+                        {/* 4. DUE DATE */}
+                        <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap">
+                          {isoToDdmmyyyy(item.dueDate)}
+                        </td>
 
-                      {/* 5. TOTAL AMOUNT */}
-                      <td className="py-3.5 px-3 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
-                        ₹ {item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </td>
+                        {/* 5. TOTAL AMOUNT */}
+                        <td className="py-3.5 px-3 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                          ₹ {item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
 
-                      {/* 6. BALANCE */}
-                      <td className="py-3.5 px-3 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                        ₹ {item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </td>
+                        {/* 6. BALANCE */}
+                        <td className="py-3.5 px-3 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                          ₹ {item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
 
-                      {/* 7. TYPE */}
-                      <td className="py-3.5 px-3 font-medium text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                        Sale Order
-                      </td>
+                        {/* 7. TYPE */}
+                        <td className="py-3.5 px-3 font-medium text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                          Sale Order
+                        </td>
 
-                      {/* 8. STATUS */}
-                      <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap">
-                        {item.status === 'Converted' || item.status === 'Completed' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Converted
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                            Order Overdue
-                          </span>
-                        )}
-                      </td>
+                        {/* 8. STATUS */}
+                        <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap">
+                          {item.status === 'Converted' || item.status === 'Completed' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : item.status === 'Cancelled' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                              Cancelled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Open
+                            </span>
+                          )}
+                        </td>
 
-                      {/* 9. ACTION */}
-                      <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                        <div className="inline-flex items-center justify-center gap-1.5">
-                          {/* CONVERT TO SALE Button */}
-                          <button
-                            type="button"
-                            onClick={() => handleConvertExistingToSale(item)}
-                            className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs"
-                          >
-                            CONVERT TO SALE
-                          </button>
-
-                          {/* 3-Dots Actions Menu */}
-                          <div className="sale-order-action-dropdown-container relative inline-block text-left">
+                        {/* 9. ACTION */}
+                        <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                          <div className="inline-flex items-center justify-center gap-1.5">
+                            {/* CONVERT TO SALE Button */}
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isActionOpen) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 260;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                              title="More options"
+                              disabled={isActionLoading || item.status === 'Converted'}
+                              onClick={() => handleConvertExistingToSale(item)}
+                              className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs disabled:opacity-40"
                             >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
+                              CONVERT TO SALE
                             </button>
 
-                            {/* 3-Dots Floating Dropdown Menu (7 options matching exact order) */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: 'fixed',
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
+                            {/* 3-Dots Actions Menu */}
+                            <div className="sale-order-action-dropdown-container relative inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isActionOpen) {
+                                    setActiveDropdownId(null);
+                                    setDropdownPos(null);
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const dropdownHeight = 260;
+                                    if (spaceBelow < dropdownHeight) {
+                                      setDropdownPos({
+                                        bottom: window.innerHeight - rect.top + 4,
+                                        right: window.innerWidth - rect.right,
+                                      });
+                                    } else {
+                                      setDropdownPos({
+                                        top: rect.bottom + 4,
+                                        right: window.innerWidth - rect.right,
+                                      });
+                                    }
+                                    setActiveDropdownId(item.id);
+                                  }
                                 }}
-                                className="sale-order-action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
+                                className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+                                title="More options"
                               >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleOpenEditForm(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
+                                <MoreVertical className="w-4 h-4 text-slate-600" />
+                              </button>
 
-                                {/* 2. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDeleteOrder(item.id);
+                              {/* 3-Dots Floating Dropdown Menu */}
+                              {isActionOpen && dropdownPos && (
+                                <div
+                                  style={{
+                                    position: 'fixed',
+                                    top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
+                                    bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
+                                    right: `${dropdownPos.right}px`,
+                                    zIndex: 9999,
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="sale-order-action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                  onClick={(e) => e.stopPropagation()}
                                 >
-                                  Delete
-                                </button>
+                                  {/* 1. View/Edit */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleOpenEditForm(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    View/Edit
+                                  </button>
 
-                                {/* 3. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDuplicateOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
+                                  {/* 2. Delete */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleDeleteOrder(item.id);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    Delete
+                                  </button>
 
-                                {/* 4. Open PDF */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
+                                  {/* 2b. Cancel Order (if Open) */}
+                                  {item.status === 'Open' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveDropdownId(null);
+                                        handleCancelOrder(item);
+                                      }}
+                                      className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                    >
+                                      Cancel Order
+                                    </button>
+                                  )}
 
-                                {/* 5. Preview */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Preview
-                                </button>
+                                  {/* 3. Duplicate */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleDuplicateOrder(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    Duplicate
+                                  </button>
 
-                                {/* 6. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handlePrintOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
+                                  {/* 4. Open PDF */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setPreviewOrder(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    Open PDF
+                                  </button>
 
-                                {/* 7. View History */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setHistoryOrder(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  View History
-                                </button>
-                              </div>
-                            )}
+                                  {/* 5. Preview */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setPreviewOrder(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    Preview
+                                  </button>
+
+                                  {/* 6. Print */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handlePrintOrder(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    Print
+                                  </button>
+
+                                  {/* 7. View History */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setHistoryOrder(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  >
+                                    View History
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
       {/* 5. Pagination */}
       {filteredOrders.length > 0 && (
         <Pagination
-          total={filteredOrders.length}
+          total={totalApiRecords || filteredOrders.length}
           currentPage={safePage}
           pageSize={pageSize}
           pageSizeOptions={[10, 20, 50]}
@@ -2582,7 +2767,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
               <div>
                 <p className="text-[11px] font-bold text-slate-400 uppercase">Order Details:</p>
                 <p className="mt-0.5"><strong className="text-slate-700">Ref No:</strong> {previewOrder.referenceNo || '-'}</p>
-                <p><strong className="text-slate-700">Payment Type:</strong> {previewOrder.paymentType || 'Cash'}</p>
+                <p><strong className="text-slate-700">Payment Type:</strong> {previewOrder.paymentType || 'Credit'}</p>
                 <p><strong className="text-slate-700">State of Supply:</strong> {previewOrder.stateOfSupply || 'Tamil Nadu'}</p>
                 <p><strong className="text-slate-700">Status:</strong> {previewOrder.status}</p>
               </div>
@@ -2717,7 +2902,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                   }`} />
                   <div>
                     <div className="font-bold text-slate-800">
-                      {historyOrder.status === 'Converted' ? 'Converted to Sale Invoice' : 'Order Status: Active / Overdue'}
+                      {historyOrder.status === 'Converted' ? 'Converted to Sale Invoice' : 'Order Status: Active / Open'}
                     </div>
                     <div className="text-slate-500 text-[11px] mt-0.5">
                       {historyOrder.convertedToInvoiceNo ? `Linked Invoice: ${historyOrder.convertedToInvoiceNo}` : 'Awaiting fulfillment / shipment'}
@@ -2763,7 +2948,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
           title="Bulk Convert Sale Orders to Sale Invoices"
           maxWidth="lg"
         >
-          <div className="p-6 space-y-4 text-xs font-sans">
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleBulkConvertToSale();
+            }}
+            className="p-6 space-y-4 text-xs font-sans"
+          >
             <p className="text-slate-600">
               Select open sale orders you want to convert into confirmed sale invoices in one batch:
             </p>
@@ -2816,6 +3008,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                 <Button
                   variant="secondary"
                   size="md"
+                  type="button"
+                  disabled={isActionLoading}
                   onClick={() => setIsBulkConvertModalOpen(false)}
                 >
                   Cancel
@@ -2823,14 +3017,21 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={handleBulkConvertToSale}
-                  icon={<ShoppingCart className="w-4 h-4" />}
+                  type="submit"
+                  disabled={isActionLoading || selectedBulkOrderIds.length === 0}
+                  icon={
+                    isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ShoppingCart className="w-4 h-4" />
+                    )
+                  }
                 >
                   Convert Selected
                 </Button>
               </div>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
     </div>

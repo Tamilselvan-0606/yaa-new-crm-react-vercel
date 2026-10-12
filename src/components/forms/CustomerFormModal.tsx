@@ -5,8 +5,9 @@ import { CustomerSchema, CustomerFormData } from '../../schemas';
 import { Customer, DocumentItem } from '../../types';
 import { Modal } from '../common/Modal';
 import { api } from '../../services/api';
-import { useQueryClient } from '@tanstack/react-query';
-import { QUERY_KEYS } from '../../hooks/useQueries';
+import { customerApi } from '../../api/commerce/customerApi';
+import { useAppDispatch } from '../../hooks/redux';
+import { baseApi } from '../../api/baseApi';
 import { toast } from 'sonner';
 import {
   Boxes,
@@ -120,7 +121,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   onClose,
   initialCustomer,
 }) => {
-  const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>(['prod_1']);
@@ -384,14 +385,49 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       };
 
       if (initialCustomer) {
-        await api.updateCustomer(initialCustomer.id, payload);
+        try {
+          await customerApi.updateCustomer(initialCustomer.id, {
+            name: data.clientName,
+            company: data.businessName,
+            phone: data.phone,
+            email: data.email,
+            address: data.address,
+            city: data.city,
+            state: data.state,
+            pincode: data.pincode,
+            notes: JSON.stringify(productConfigs),
+          });
+        } catch {
+          await api.updateCustomer(initialCustomer.id, payload);
+        }
         toast.success('Client updated successfully');
       } else {
-        await api.createCustomer(payload);
+        try {
+          await customerApi.createCustomer({
+            name: data.clientName,
+            company: data.businessName,
+            phone: data.phone,
+            email: data.email,
+            customerType: 'Business',
+            address: data.address,
+            city: data.city,
+            state: data.state,
+            pincode: data.pincode,
+            country: 'India',
+            status: 'Active',
+            notes: JSON.stringify(productConfigs),
+          });
+        } catch {
+          await api.createCustomer(payload);
+        }
         toast.success('Client registered with complete configuration');
       }
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.customers });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'Customer', id: 'LIST' },
+          'Dashboard',
+        ])
+      );
       onClose();
     } catch (e: any) {
       toast.error('Operation failed', { description: e.message });
@@ -421,7 +457,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       }
       maxWidth="2xl"
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* ========================================================================= */}
         {/* STEP 1: CLIENT CREDENTIALS & ADDRESS DETAILS */}
         {/* ========================================================================= */}

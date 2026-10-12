@@ -28,15 +28,19 @@ import {
   Check,
   Users,
   UsersRound,
+  RefreshCw,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { useAuth } from '../../context/AuthContext';
-import { useCustomers, useLeads, useProducts } from '../../hooks/useQueries';
+import { useLeads } from '../../hooks/useQueries';
+import { customerApi, mapApiCustomerToSalesCustomer } from '../../api/commerce/customerApi';
 import { EstimatePDFDocument } from '../../components/quotes/EstimatePDFDocument';
 import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
+import { quoteApi, organizationApi, OrganizationApiItem, QuoteApiItem } from '../../api';
 
 export interface Quotation {
   id: string;
@@ -75,9 +79,39 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const pluralTerm = 'Quotations';
   const lowerSingularTerm = 'quotation';
   const lowerPluralTerm = 'quotations';
-  const { data: appCustomers = [] } = useCustomers();
+  const [appCustomers, setAppCustomers] = useState<Array<{ id: string; name: string; company: string; email: string; phone: string; location: string }>>([]);
   const { data: appLeads = [] } = useLeads();
-  const { data: appProducts = [] } = useProducts();
+
+  useEffect(() => {
+    // Platform Administrator operates across Organizations, not commerce customers
+    if (isSuperAdmin) {
+      return;
+    }
+
+    let isMounted = true;
+    const fetchCusts = async () => {
+      try {
+        const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
+            id: sc.id,
+            name: sc.name,
+            company: sc.company || sc.name,
+            email: sc.email || '',
+            phone: sc.phone || '',
+            location: [sc.city, sc.state].filter(Boolean).join(', '),
+          }));
+          setAppCustomers(mapped);
+        }
+      } catch (err) {
+        console.warn('Failed to load customers for quotes:', err);
+      }
+    };
+    fetchCusts();
+    return () => {
+      isMounted = false;
+    };
+  }, [isSuperAdmin]);
 
   // Combine real app customers and leads for unified client selector
   const SUPER_ADMIN_ORGS = ['YaaCreations', 'Polihills', 'Enmin Labs'];
@@ -139,243 +173,120 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     })),
   ];
 
-  // Super Admin: restrict client dropdown to only the allowed orgs, one item per organization
-  const superAdminClients = SUPER_ADMIN_ORGS.map((orgName, index) => {
-    const existing = allClients.find(
-      (c) => (c.company || '').trim().toLowerCase() === orgName.toLowerCase()
-    );
-    const fallback = SUPER_ADMIN_ORGS_DATA[orgName.toLowerCase()];
-    return {
-      id: existing ? existing.id : `super_org_${index + 1}`,
-      name: existing?.name || fallback?.name || '',
-      company: orgName,
-      email: existing?.email || fallback?.email || '',
-      phone: existing?.phone || fallback?.phone || '',
-      location: existing?.location || fallback?.location || '',
-      type: 'Customer' as const,
+  // Live Organizations from Platform API
+  const [platformOrgs, setPlatformOrgs] = useState<OrganizationApiItem[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchOrgs = async () => {
+      try {
+        const res = await organizationApi.getOrganizations(1, 100);
+        if (isMounted && res.data) {
+          setPlatformOrgs(res.data);
+        }
+      } catch (err) {
+        console.error('Failed to load organizations for quotes:', err);
+      }
     };
-  });
+    fetchOrgs();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Super Admin: Map real platform organizations so IDs are genuine backend UUIDs
+  const superAdminClients = useMemo(() => {
+    if (platformOrgs.length > 0) {
+      return platformOrgs.map((org) => ({
+        id: org.id,
+        name: org.name,
+        company: org.name,
+        email: org.email || '',
+        phone: org.phone || '',
+        location: '',
+        type: 'Customer' as const,
+      }));
+    }
+    return SUPER_ADMIN_ORGS.map((orgName, index) => {
+      const fallback = SUPER_ADMIN_ORGS_DATA[orgName.toLowerCase()];
+      return {
+        id: `super_org_${index + 1}`,
+        name: fallback?.name || orgName,
+        company: orgName,
+        email: fallback?.email || '',
+        phone: fallback?.phone || '',
+        location: fallback?.location || '',
+        type: 'Customer' as const,
+      };
+    });
+  }, [platformOrgs]);
 
   const availableClients = isSuperAdmin ? superAdminClients : allClients;
 
-  const SUPER_ADMIN_SAMPLE_QUOTES: Quotation[] = [
-    {
-      id: 'est_sa_1',
-      estimateNumber: 'EST-10245',
-      referenceNumber: 'REF-HF-089',
-      date: '2 Sep 2026',
-      expiryDate: '2 Oct 2026',
-      customerId: 'cust_101',
-      customerName: 'Alex Rivera',
-      customerCompany: 'YaaCreations',
-      customerEmail: 'yaaadmin@gmail.com',
-      customerPhone: '+91 98765 43210',
-      customerLocation: 'Hyderabad, TG',
-      productName: 'YaaCreations',
-      status: 'DRAFT',
-      amount: 45000.00,
-      hasAttachment: true,
-      notes: 'Omnichannel routing setup with high-speed automated call routing SLA.',
-      items: [
-        { id: '1', description: 'Yaa Connect - Enterprise Scale License (Annual)', quantity: 1, unitPrice: 35000.00, total: 35000.00 },
-        { id: '2', description: 'Dedicated Telecom Carrier Provisioning & Webhooks', quantity: 1, unitPrice: 10000.00, total: 10000.00 },
-      ],
-    },
-    {
-      id: 'est_sa_2',
-      estimateNumber: 'EST-10246',
-      referenceNumber: 'REF-NG-314',
-      date: '28 Aug 2026',
-      expiryDate: '28 Sep 2026',
-      customerId: 'cust_102',
-      customerName: 'Sarah Jenkins',
-      customerCompany: 'Polihills',
-      customerEmail: 'info@polihills.com',
-      customerPhone: '+91 98765 43211',
-      customerLocation: 'Hyderabad, TG',
-      productName: 'Polihills',
-      status: 'DRAFT',
-      amount: 28500.00,
-      hasAttachment: false,
-      notes: 'Enterprise Authority & Omnichannel social campaign with 16 studio-grade reels.',
-      items: [
-        { id: '1', description: 'Enterprise Authority & Omnichannel Marketing (Q3)', quantity: 1, unitPrice: 24000.00, total: 24000.00 },
-        { id: '2', description: '4K Studio Production & Influencer Gifting Kit', quantity: 1, unitPrice: 4500.00, total: 4500.00 },
-      ],
-    },
-    {
-      id: 'est_sa_3',
-      estimateNumber: 'EST-10247',
-      referenceNumber: 'REF-VL-921',
-      date: '24 Aug 2026',
-      expiryDate: '24 Sep 2026',
-      customerId: 'lead_101',
-      customerName: 'Vikram Malhotra',
-      customerCompany: 'Enmin Labs',
-      customerEmail: 'hello@enminlabs.io',
-      customerPhone: '+91 98765 43212',
-      customerLocation: 'Hyderabad, TG',
-      productName: 'Enmin Labs',
-      status: 'DRAFT',
-      amount: 62000.00,
-      hasAttachment: true,
-      notes: 'Multi-warehouse customs document automation & telecom integration proposal.',
-      items: [
-        { id: '1', description: 'Multi-Warehouse Enterprise Hub Integration', quantity: 1, unitPrice: 50000.00, total: 50000.00 },
-        { id: '2', description: 'Priority 24/7 SLA & Data Migration Onboarding', quantity: 1, unitPrice: 12000.00, total: 12000.00 },
-      ],
-    },
-  ];
+  // Real backend quotes state
+  const [quotes, setQuotes] = useState<Quotation[]>([]);
+  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const ADMIN_SAMPLE_QUOTES: Quotation[] = [
-    {
-      id: 'est_admin_1',
-      estimateNumber: 'EST-10241',
-      referenceNumber: 'REF-YC-001',
-      date: '2 Sep 2026',
-      expiryDate: '2 Oct 2026',
-      customerId: 'prod_1',
-      customerName: 'Marcus Vance',
-      customerCompany: 'Yaa connect',
-      customerEmail: 'sales@yaaconnect.com',
-      customerPhone: '+91 98765 43210',
-      customerLocation: 'Hyderabad, TG',
-      productName: 'Yaa connect',
-      status: 'ACCEPTED',
-      amount: 45000.00,
-      hasAttachment: true,
-      notes: 'Enterprise Omnichannel Communication & Team Collaboration setup.',
-      items: [
-        { id: '1', description: 'Yaa Connect - Enterprise Scale Omnichannel Suite (Annual)', quantity: 1, unitPrice: 35000.00, total: 35000.00 },
-        { id: '2', description: 'Telecom Gateway & Custom Webhook Routing SLA', quantity: 1, unitPrice: 10000.00, total: 10000.00 },
-      ],
-    },
-    {
-      id: 'est_admin_2',
-      estimateNumber: 'EST-10242',
-      referenceNumber: 'REF-DM-002',
-      date: '28 Aug 2026',
-      expiryDate: '28 Sep 2026',
-      customerId: 'prod_2',
-      customerName: 'Dr. Anita Sharma',
-      customerCompany: 'Doc motez',
-      customerEmail: 'contact@docmotez.com',
-      customerPhone: '+91 98765 43211',
-      customerLocation: 'Bangalore, KA',
-      productName: 'Doc motez',
-      status: 'SENT',
-      amount: 28500.00,
-      hasAttachment: false,
-      notes: 'Automated Clinical Practice Management & Doctor Telehealth license.',
-      items: [
-        { id: '1', description: 'Doc Motez - Practice Professional (5 Practitioners)', quantity: 1, unitPrice: 24000.00, total: 24000.00 },
-        { id: '2', description: 'EHR Record Storage & Telehealth Video Provisioning', quantity: 1, unitPrice: 4500.00, total: 4500.00 },
-      ],
-    },
-    {
-      id: 'est_admin_3',
-      estimateNumber: 'EST-10243',
-      referenceNumber: 'REF-DQ-003',
-      date: '24 Aug 2026',
-      expiryDate: '24 Sep 2026',
-      customerId: 'prod_3',
-      customerName: 'Dr. Ramesh Kumar',
-      customerCompany: 'Doc DentQ',
-      customerEmail: 'info@docdentq.com',
-      customerPhone: '+91 98765 43212',
-      customerLocation: 'Chennai, TN',
-      productName: 'Doc DentQ',
-      status: 'DRAFT',
-      amount: 32000.00,
-      hasAttachment: true,
-      notes: 'Specialized Dental Clinic & Orthodontic Care System implementation.',
-      items: [
-        { id: '1', description: 'Doc DentQ - Orthodontic Pro (Multi-Chair & DICOM)', quantity: 1, unitPrice: 25000.00, total: 25000.00 },
-        { id: '2', description: 'Digital Charting & WhatsApp Patient Recall Automation', quantity: 1, unitPrice: 7000.00, total: 7000.00 },
-      ],
-    },
-    {
-      id: 'est_admin_4',
-      estimateNumber: 'EST-10244',
-      referenceNumber: 'REF-AA-004',
-      date: '15 Aug 2026',
-      expiryDate: '15 Sep 2026',
-      customerId: 'prod_4',
-      customerName: 'Karthik Raja',
-      customerCompany: 'Aarudam AI',
-      customerEmail: 'enterprise@aarudamai.com',
-      customerPhone: '+91 98765 43213',
-      customerLocation: 'Hyderabad, TG',
-      productName: 'Aarudam AI',
-      status: 'SENT',
-      amount: 62000.00,
-      hasAttachment: true,
-      notes: 'Autonomous Agent Intelligence & Enterprise NLP Solutions package.',
-      items: [
-        { id: '1', description: 'Aarudam AI - Autonomous Enterprise Model (1M Token)', quantity: 1, unitPrice: 50000.00, total: 50000.00 },
-        { id: '2', description: 'Multi-Agent Swarm Setup & Custom Fine-Tuning SLA', quantity: 1, unitPrice: 12000.00, total: 12000.00 },
-      ],
-    },
-    {
-      id: 'est_admin_5',
-      estimateNumber: 'EST-10245',
-      referenceNumber: 'REF-TL-005',
-      date: '10 Aug 2026',
-      expiryDate: '10 Sep 2026',
-      customerId: 'prod_5',
-      customerName: 'Rajesh Nair',
-      customerCompany: 'Turfylock',
-      customerEmail: 'booking@turfylock.com',
-      customerPhone: '+91 98765 43214',
-      customerLocation: 'Kochi, KL',
-      productName: 'Turfylock',
-      status: 'ACCEPTED',
-      amount: 18000.00,
-      hasAttachment: false,
-      notes: 'Sports Turf, Arena Booking & Slot Management Platform deployment.',
-      items: [
-        { id: '1', description: 'Turfylock - Multi-Sport Complex Automation (5 Turfs)', quantity: 1, unitPrice: 15000.00, total: 15000.00 },
-        { id: '2', description: 'Floodlight IoT Relay Integration & WhatsApp Gateway', quantity: 1, unitPrice: 3000.00, total: 3000.00 },
-      ],
-    },
-    {
-      id: 'est_admin_6',
-      estimateNumber: 'EST-10246',
-      referenceNumber: 'REF-MK-006',
-      date: '5 Aug 2026',
-      expiryDate: '5 Sep 2026',
-      customerId: 'prod_6',
-      customerName: 'Priya Sundaram',
-      customerCompany: 'Digital Marketing',
-      customerEmail: 'growth@digitalgrowth.agency',
-      customerPhone: '+91 98765 43215',
-      customerLocation: 'Mumbai, MH',
-      productName: 'Digital Marketing',
-      status: 'EXPIRED',
-      amount: 24000.00,
-      hasAttachment: false,
-      notes: 'Performance Growth, SEO & Omnichannel Campaign Agency package.',
-      items: [
-        { id: '1', description: 'Digital Marketing - Growth Velocity Engine (Monthly)', quantity: 1, unitPrice: 18000.00, total: 18000.00 },
-        { id: '2', description: 'Studio Content Production & Meta/Google Ads Funnel', quantity: 1, unitPrice: 6000.00, total: 6000.00 },
-      ],
-    },
-  ];
+  // Helper to format ISO date to readable string
+  const formatIsoDate = (isoStr?: string): string => {
+    if (!isoStr) return '';
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch {
+      return isoStr;
+    }
+  };
 
-  const [quotes, setQuotes] = useState<Quotation[]>(() =>
-    isSuperAdmin ? SUPER_ADMIN_SAMPLE_QUOTES : ADMIN_SAMPLE_QUOTES
-  );
+  // Map backend QuoteApiItem to UI Quotation format
+  const mapApiQuoteToUi = (item: QuoteApiItem): Quotation => {
+    return {
+      id: item.id,
+      estimateNumber: item.estimateNumber || 'EST-0000',
+      referenceNumber: item.referenceNumber || '',
+      date: formatIsoDate(item.date),
+      expiryDate: formatIsoDate(item.expiryDate),
+      customerId: item.customerId || item.organizationId,
+      customerName: item.customerName || item.customerCompany || 'Client',
+      customerCompany: item.customerCompany || item.customerName || 'Company',
+      customerEmail: item.customerEmail || '',
+      customerPhone: item.customerPhone || '',
+      customerLocation: item.customerLocation || '',
+      productName: item.productName || 'Quotation',
+      status: item.status,
+      amount: Number(item.amount) || 0,
+      hasAttachment: false,
+      notes: item.notes || '',
+      items: (item.items || []).map((it, idx) => ({
+        id: it.id || `item_${idx}`,
+        description: it.description || '',
+        quantity: Number(it.quantity) || 1,
+        unitPrice: Number(it.unitPrice) || 0,
+        total: Number(it.amount) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
+      })),
+    };
+  };
 
   const [activeStatusDropdownId, setActiveStatusDropdownId] = useState<string | null>(null);
   const [statusDropdownPos, setStatusDropdownPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
 
-  const handleStatusChange = (quoteId: string, newStatus: Quotation['status']) => {
-    setQuotes((prev) =>
-      prev.map((q) => (q.id === quoteId ? { ...q, status: newStatus } : q))
-    );
-    setActiveStatusDropdownId(null);
-    setStatusDropdownPos(null);
-    showToast('success', 'Status Updated', `Quotation status set to ${newStatus}.`);
+  const handleStatusChange = async (quoteId: string, newStatus: Quotation['status']) => {
+    try {
+      await quoteApi.updateQuote(quoteId, { status: newStatus });
+      setQuotes((prev) =>
+        prev.map((q) => (q.id === quoteId ? { ...q, status: newStatus } : q))
+      );
+      showToast('success', 'Status Updated', `Quotation status updated to ${newStatus}.`);
+    } catch (err: any) {
+      console.error('Failed to update status:', err);
+      showToast('error', 'Status Update Failed', err?.response?.data?.error?.message || 'Could not update status');
+    } finally {
+      setActiveStatusDropdownId(null);
+      setStatusDropdownPos(null);
+    }
   };
 
   // Pending state - tracks what's typed/selected (not yet applied)
@@ -461,6 +372,35 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setIsCreateModalOpen(false);
     navigate('/quotes');
   };
+
+  // Fetch Quotes from Backend API
+  const fetchQuotes = async () => {
+    try {
+      setIsLoadingQuotes(true);
+      const params = {
+        page: currentPage,
+        limit: pageSize,
+        search: appliedSearch.trim() || undefined,
+        status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+        sortBy: 'createdAt' as const,
+        sortOrder: 'desc' as const,
+      };
+      const res = await quoteApi.getQuotes(params);
+      if (res && res.data) {
+        setQuotes(res.data.map(mapApiQuoteToUi));
+        setTotalRecords(res.pagination?.totalRecords ?? res.data.length);
+      }
+    } catch (err: any) {
+      console.error('Failed to load quotes:', err);
+      showToast('error', 'Failed to Load Quotes', err?.response?.data?.error?.message || 'Could not fetch quotes');
+    } finally {
+      setIsLoadingQuotes(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQuotes();
+  }, [currentPage, pageSize, appliedSearch, appliedStatus]);
 
   const handleSearchChange = (val: string) => {
     setPendingSearch(val);
@@ -623,7 +563,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     d.setDate(d.getDate() + 30);
     return formatDateToDDMMYYYY(d);
   });
-  const [projectName, setProjectName] = useState(() => (isSuperAdmin ? '' : (appProducts[0]?.name || 'Yaa connect')));
+  const [projectName, setProjectName] = useState(() => (isSuperAdmin ? '' : 'Yaa connect'));
 
   // File upload state
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -789,35 +729,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const sampleTax2 = subTotal * 0.07; // 7.00%
   const grandTotal = subTotal + sampleTax1 + sampleTax2;
 
-  // Filtered quotes based on applied state
-  const filteredQuotes = quotes.filter((q) => {
-    // Super Admin: restrict to only 3 orgs
-    if (isSuperAdmin) {
-      const orgAllowed = SUPER_ADMIN_ORGS.some(
-        (name) => q.customerCompany.trim().toLowerCase() === name.trim().toLowerCase()
-      );
-      if (!orgAllowed) return false;
-    }
-
-    const matchesSearch =
-      q.estimateNumber.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      q.customerName.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      q.customerCompany.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      q.referenceNumber.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      q.productName.toLowerCase().includes(appliedSearch.toLowerCase());
-
-    const matchesStatus = appliedStatus === 'ALL' || q.status === appliedStatus;
-    return matchesSearch && matchesStatus;
-  });
-
-  const pagedQuotes = filteredQuotes.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
+  const pagedQuotes = quotes;
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedIds(filteredQuotes.map((q) => q.id));
+      setSelectedIds(quotes.map((q) => q.id));
     } else {
       setSelectedIds([]);
     }
@@ -829,7 +745,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     );
   };
 
-  const handleCreateQuote = (e: React.FormEvent) => {
+  const handleCreateQuote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim() && !customerCompany.trim()) {
       showToast(
@@ -841,66 +757,93 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       );
       return;
     }
-    if (itemsList.length === 0 || subTotal <= 0) {
-      showToast('error', 'Add Items', 'Please add at least one item with a valid rate.');
+    if (itemsList.length === 0) {
+      showToast('error', 'Add Items', 'Please add at least one line item.');
       return;
     }
 
-    const created: Quotation = {
-      id: `est_${Date.now()}`,
-      estimateNumber: newEstimateNumber,
-      referenceNumber: newReferenceNumber,
-      date: estimateDate || formatDateToDDMMYYYY(new Date()),
-      expiryDate: expiryDate || formatDateToDDMMYYYY(new Date(Date.now() + 30 * 86400000)),
-      customerId: selectedClientId || undefined,
-      customerName: customerName,
-      customerCompany: customerCompany,
-      customerEmail: customerEmail,
-      customerPhone: customerPhone,
-      customerLocation: customerLocation,
+    // Determine target customer / organization UUID for backend
+    let targetOrgId = selectedClientId;
+    if (!targetOrgId || targetOrgId.startsWith('super_org_') || targetOrgId.startsWith('prod_')) {
+      const matchOrg = platformOrgs.find(
+        (o) =>
+          o.name.trim().toLowerCase() === customerCompany.trim().toLowerCase() ||
+          o.name.trim().toLowerCase() === customerName.trim().toLowerCase()
+      );
+      if (matchOrg) {
+        targetOrgId = matchOrg.id;
+      } else if (platformOrgs.length > 0) {
+        targetOrgId = platformOrgs[0].id;
+      }
+    }
+
+    if (!targetOrgId) {
+      showToast('error', 'Organization Required', 'A valid platform organization must be selected.');
+      return;
+    }
+
+    const payload = {
+      customerId: targetOrgId,
+      organizationId: targetOrgId,
+      referenceNumber: newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+      date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
+      expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       productName: projectName || (isSuperAdmin ? 'Standard Provision' : 'General Service'),
-      status: 'DRAFT',
-      amount: grandTotal,
-      hasAttachment: !!uploadedFile,
-      notes: newNotes,
+      notes: newNotes || undefined,
       items: itemsList.map((it) => ({
-        id: it.id,
-        description: it.description || 'Custom Service Provision',
-        quantity: Number(it.quantity) || 1,
-        unitPrice: Number(it.unitPrice) || 0,
-        discount: Number(it.discount) || 0,
-        total: Number(it.total) || 0,
+        description: it.description || 'Service Line',
+        quantity: Math.max(1, Number(it.quantity) || 1),
+        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+        taxRate: Number(it.taxPercent) || 18,
       })),
     };
 
-    setQuotes([created, ...quotes]);
-    handleCloseCreate();
+    try {
+      setIsSubmitting(true);
+      const res = await quoteApi.createQuote(payload);
+      if (res && res.data) {
+        showToast('success', `${singularTerm} Created`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} created successfully.`);
+        handleCloseCreate();
 
-    // Reset Form
-    setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-    setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
-    setSelectedClientId('');
-    setCustomerName('');
-    setCustomerCompany('');
-    setCustomerLocation('');
-    setCustomerEmail('');
-    setCustomerPhone('');
-    setUploadedFile(null);
-    setEstimateDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(new Date()));
-    const nextMonth = new Date();
-    nextMonth.setDate(nextMonth.getDate() + 30);
-    setExpiryDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(nextMonth));
-    setNewNotes('');
-    setItemsList([]);
+        // Reset Form
+        setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
+        setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+        setSelectedClientId('');
+        setCustomerName('');
+        setCustomerCompany('');
+        setCustomerLocation('');
+        setCustomerEmail('');
+        setCustomerPhone('');
+        setUploadedFile(null);
+        setEstimateDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(new Date()));
+        const nextMonth = new Date();
+        nextMonth.setDate(nextMonth.getDate() + 30);
+        setExpiryDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(nextMonth));
+        setNewNotes('');
+        setItemsList([]);
 
-    showToast('success', `${singularTerm} Created`, `${singularTerm} #${created.estimateNumber} successfully generated.`);
+        // Refresh quote list from backend
+        fetchQuotes();
+      }
+    } catch (err: any) {
+      console.error('Failed to create quote:', err);
+      showToast('error', 'Creation Failed', err?.response?.data?.error?.message || 'Could not create quote.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (selectedIds.length === 0) return;
-    setQuotes((prev) => prev.filter((q) => !selectedIds.includes(q.id)));
-    setSelectedIds([]);
-    showToast('info', `Deleted ${pluralTerm}`, `Selected ${lowerPluralTerm} have been removed.`);
+    try {
+      await Promise.all(selectedIds.map((id) => quoteApi.deleteQuote(id)));
+      showToast('info', `Deleted ${pluralTerm}`, `Selected ${lowerPluralTerm} have been removed.`);
+      setSelectedIds([]);
+      fetchQuotes();
+    } catch (err: any) {
+      console.error('Failed to delete selected quotes:', err);
+      showToast('error', 'Delete Failed', err?.response?.data?.error?.message || 'Could not delete selected quotes.');
+    }
   };
 
   const getStatusBadge = (status: Quotation['status']) => {
@@ -1105,7 +1048,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">+91 98200 12345</span>
+                  <span className="text-slate-700 flex-1">+91 98765 43210</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
@@ -1119,7 +1062,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Company Address</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">402 Tech Hub, Business Bay, Mumbai, MH 400051</span>
+                  <span className="text-slate-700 flex-1">Plot No. 42, Image Gardens Rd, VIP Hills, Silicon Valley, Madhapur, Hyderabad, Telangana 500081</span>
                 </div>
               </div>
             </div>
@@ -1382,7 +1325,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
         {/* Full-Page Form Canvas */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
-          <form id="create-quote-fullpage-form" onSubmit={handleCreateQuote} className="space-y-6">
+          <form noValidate onSubmit={handleCreateQuote} className="space-y-6">
             {/* ===================================================================
                 SUPER ADMIN FORM: Flat 3-column Grid (Restored)
                 =================================================================== */}
@@ -2400,10 +2343,20 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               </button>
               <button
                 type="submit"
-                className="h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
+                disabled={isSubmitting}
+                className="h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <Check className="w-4 h-4 text-white stroke-[2.5]" />
-                <span>Save {singularTerm}</span>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 text-white stroke-[2.5]" />
+                    <span>Save {singularTerm}</span>
+                  </>
+                )}
               </button>
             </div>
           </form>
@@ -2461,10 +2414,21 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           />
         }
         rightSlot={
-          <span className="text-xs font-semibold text-slate-500 pr-2">
-            Total {pluralTerm} :{' '}
-            <span className="text-[#33077C] font-bold">{filteredQuotes.length}</span>
-          </span>
+          <div className="flex items-center gap-3 pr-2">
+            <button
+              type="button"
+              onClick={fetchQuotes}
+              disabled={isLoadingQuotes}
+              className="p-1.5 text-slate-400 hover:text-[#33077C] rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              title="Refresh Quotes"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingQuotes ? 'animate-spin text-[#33077C]' : ''}`} />
+            </button>
+            <span className="text-xs font-semibold text-slate-500">
+              Total {pluralTerm} :{' '}
+              <span className="text-[#33077C] font-bold">{totalRecords}</span>
+            </span>
+          </div>
         }
       />
 
@@ -2496,7 +2460,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               </tr>
             </thead>
             <tbody className="text-sm">
-              {filteredQuotes.length === 0 ? (
+              {isLoadingQuotes ? (
+                <tr>
+                  <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-[#33077C]" />
+                    <p className="font-bold text-slate-700 text-sm">Loading {lowerPluralTerm}...</p>
+                  </td>
+                </tr>
+              ) : quotes.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200">
                     <FileText className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
@@ -2796,9 +2767,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       </div>
 
       {/* Pagination */}
-      {filteredQuotes.length > 0 && (
+      {totalRecords > 0 && (
         <Pagination
-          total={filteredQuotes.length}
+          total={totalRecords}
           currentPage={currentPage}
           pageSize={pageSize}
           pageSizeOptions={[5, 10, 20, 50]}
@@ -2873,16 +2844,50 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               <span className="group-hover:text-slate-900 transition-colors text-[13px]">Print</span>
             </button>
 
+            {/* 4. Convert to Invoice */}
+            {targetQuote.status !== 'DECLINED' && targetQuote.status !== 'EXPIRED' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setOpenActionMenuId(null);
+                    setActionDropdownPos(null);
+                    showToast('info', 'Converting Quotation', `Converting #${targetQuote.estimateNumber} to invoice...`);
+                    const res = await quoteApi.convertQuote(targetQuote.id, { target: 'INVOICE' });
+                    if (res) {
+                      showToast('success', 'Quotation Converted', `Successfully converted #${targetQuote.estimateNumber} to Invoice.`);
+                      fetchQuotes();
+                    }
+                  } catch (err: any) {
+                    console.error('Failed to convert quotation:', err);
+                    showToast('error', 'Conversion Failed', err?.response?.data?.error?.message || 'Could not convert quote.');
+                  }
+                }}
+                className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
+              >
+                <span className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <FileSpreadsheet className="w-3.5 h-3.5 stroke-[2.2]" />
+                </span>
+                <span className="group-hover:text-slate-900 transition-colors text-[13px]">Convert to Invoice</span>
+              </button>
+            )}
+
             <div className="h-px bg-slate-100 my-1" />
 
-            {/* 4. Delete */}
+            {/* 5. Delete */}
             <button
               type="button"
-              onClick={() => {
-                setQuotes((prev) => prev.filter((q) => q.id !== targetQuote.id));
-                showToast('info', 'Quotation Deleted', `Quotation #${targetQuote.estimateNumber} removed.`);
-                setOpenActionMenuId(null);
-                setActionDropdownPos(null);
+              onClick={async () => {
+                try {
+                  setOpenActionMenuId(null);
+                  setActionDropdownPos(null);
+                  await quoteApi.deleteQuote(targetQuote.id);
+                  showToast('info', 'Quotation Deleted', `Quotation #${targetQuote.estimateNumber} removed.`);
+                  fetchQuotes();
+                } catch (err: any) {
+                  console.error('Failed to delete quote:', err);
+                  showToast('error', 'Delete Failed', err?.response?.data?.error?.message || 'Could not delete quote.');
+                }
               }}
               className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer group"
             >

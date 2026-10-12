@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
   Building2,
@@ -33,6 +34,11 @@ import {
   AlertCircle,
   X,
   Check,
+  Network,
+  RefreshCw,
+  ArrowLeft,
+  UsersRound,
+  ShoppingCart,
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { Button } from '../../components/common/Button';
@@ -40,9 +46,12 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { CustomSelect } from '../../components/common/CustomSelect';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
-import { organizationApi } from '../../api';
+import { organizationApi, subOrganizationApi, SubOrganizationApiItem } from '../../api';
 import { OrganizationApiItem } from '../../api/platform/organizationTypes';
+import { subscriptionPlanApi } from '../../api/platform/subscriptionPlanApi';
+import { getStoredOrganizationId } from '../../api/config';
 
 interface OrganizationItem {
   id: string;
@@ -75,6 +84,21 @@ const ORGANIZATION_TYPE_OPTIONS = [
   'Sales Management',
 ];
 
+export const parseOrganizationTypeNumber = (type: string | number | undefined): number => {
+  if (typeof type === 'number') return type;
+  if (!type) return 0;
+  const lower = type.toString().trim().toLowerCase();
+  if (lower === '1' || lower === 'client management' || lower === 'client') return 1;
+  if (lower === '2' || lower === 'sales management' || lower === 'sale management' || lower === 'sales') return 2;
+  return 0; // 'All' or other defaults to 0
+};
+
+export const formatOrganizationTypeName = (type: string | number | undefined): string => {
+  if (type === 1 || type === '1' || type === 'Client Management') return 'Client Management';
+  if (type === 2 || type === '2' || type === 'Sales Management' || type === 'Sale Management') return 'Sales Management';
+  return 'All';
+};
+
 const REGISTRATION_TYPE_OPTIONS = [
   'Proprietorship',
   'Partnership',
@@ -84,17 +108,7 @@ const REGISTRATION_TYPE_OPTIONS = [
   'Other',
 ];
 
-const SUBSCRIPTION_PLAN_OPTIONS = [
-  'Enterprise Pro',
-  'Growth Tier',
-  'Business Starter',
-  'Yaa Gold',
-  'Yaa Silver',
-  'Yaa Bronze',
-  'Yaa Diamond',
-  'Yaa Platinum',
-  'Hospital Enterprise',
-];
+// Subscription plan options are loaded dynamically from the API
 
 const STATUS_OPTIONS: ('Active' | 'Inactive' | 'Suspend')[] = [
   'Active',
@@ -108,23 +122,61 @@ const mapApiOrgToItem = (apiOrg: OrganizationApiItem): OrganizationItem => {
     name: apiOrg.name || 'Unnamed Organization',
     code: apiOrg.code || 'ORG',
     legalName: apiOrg.legalName || apiOrg.name || '',
-    organizationType: apiOrg.organizationType || 'All',
-    industry: 'Enterprise Business',
-    location: 'Corporate HQ',
-    subscriptionPlan: 'Enterprise Pro',
-    branchesCount: 1,
-    membersCount: 1,
-    status: apiOrg.active ? 'Active' : 'Inactive',
+    organizationType: formatOrganizationTypeName(apiOrg.organizationType),
+    industry: apiOrg.industry || '',
+    location: apiOrg.location || '',
+    subscriptionPlan: apiOrg.subscriptionPlan || '',
+    branchesCount: apiOrg.branchesCount ?? 0,
+    membersCount: apiOrg.membersCount ?? 0,
+    status: (apiOrg.status as OrganizationItem['status']) || (apiOrg.active ? 'Active' : 'Inactive'),
     createdAt: apiOrg.createdAt ? new Date(apiOrg.createdAt).toISOString().split('T')[0] : '',
     email: apiOrg.email || '',
     phone: apiOrg.phone || '',
-    whatsapp: apiOrg.phone || '',
-    contactPerson: apiOrg.user?.name || '',
+    whatsapp: apiOrg.whatsapp || '',
+    contactPerson: apiOrg.contactPerson || apiOrg.user?.name || '',
     gstNumber: apiOrg.gstNumber || '',
     panNumber: apiOrg.panNumber || '',
-    registrationType: 'Pvt Ltd',
-    address: '',
-    subOrganizationSupport: false,
+    registrationType: apiOrg.registrationType || '',
+    address: apiOrg.address || '',
+    logo: apiOrg.logo || '',
+    subOrganizationSupport: apiOrg.subOrganizationSupport ?? false,
+  };
+};
+
+const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
+  const rawStatus = (sub.status || 'Active').toString();
+  const normalizedStatus: OrganizationItem['status'] =
+    rawStatus.toLowerCase().startsWith('suspend')
+      ? 'Suspend'
+      : rawStatus.toLowerCase().startsWith('inact')
+      ? 'Inactive'
+      : rawStatus.toLowerCase().startsWith('pend')
+      ? 'Pending'
+      : 'Active';
+
+  return {
+    id: sub.id,
+    name: sub.name || 'Unnamed Sub-Organization',
+    code: sub.code || 'SUB-01',
+    legalName: sub.legalName || sub.name || '',
+    organizationType: sub.organizationType || '',
+    industry: sub.industry || '',
+    location: sub.location || sub.address || '',
+    subscriptionPlan: sub.subscriptionPlan || '',
+    branchesCount: sub.branchesCount ?? 0,
+    membersCount: sub.membersCount ?? 0,
+    status: normalizedStatus,
+    createdAt: sub.createdAt ? new Date(sub.createdAt).toISOString().split('T')[0] : '',
+    email: sub.email || sub.user?.email || '',
+    phone: sub.phone || '',
+    whatsapp: sub.whatsapp || sub.phone || '',
+    contactPerson: sub.contactPerson || sub.user?.name || '',
+    gstNumber: sub.gstNumber || '',
+    panNumber: sub.panNumber || '',
+    registrationType: sub.registrationType || '',
+    address: sub.address || '',
+    logo: sub.logo || '',
+    subOrganizationSupport: sub.subOrganizationSupport ?? false,
   };
 };
 
@@ -142,12 +194,64 @@ const formatDate = (dateStr: string) => {
   }
 };
 
+const DEFAULT_CLIENT_SUB_ORGS: OrganizationItem[] = [];
+
+const DEFAULT_SALE_SUB_ORGS: OrganizationItem[] = [];
+
 export const OrganizationView: React.FC = () => {
   const { currentUser, isSuperAdmin, showToast } = useAuth();
-  const isOrgSuperAdmin = currentUser?.role === 'ADMIN' || currentUser?.role === 'Admin';
+  const { activeOrgType, setOrgType, isSaleManagement, isClientManagement } = useActiveOrgType();
+
+  const userRole = (currentUser?.role || '').toString().toUpperCase();
+  const isOrgSuperAdmin =
+    userRole === 'ORG_ADMIN' ||
+    userRole === 'ORGADMIN' ||
+    userRole === 'ADMIN' ||
+    currentUser?.role === 'ADMIN' ||
+    currentUser?.role === 'Admin' ||
+    currentUser?.email?.toLowerCase() === 'orgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'orgsuperadmin@gmail.com';
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const parentOrgIdParam = searchParams.get('parentOrgId');
+  const parentOrgNameParam = searchParams.get('parentOrgName');
+  const parentOrgCodeParam = searchParams.get('parentOrgCode');
+
+  // In-page parent organization context for Sub-Organizations mode
+  const [parentOrgContext, setParentOrgContext] = useState<{
+    id: string;
+    name: string;
+    code: string;
+    subscriptionPlan?: string;
+  } | null>(() => {
+    if (parentOrgIdParam) {
+      return {
+        id: parentOrgIdParam,
+        name: parentOrgNameParam || 'Organization',
+        code: parentOrgCodeParam || 'ORG',
+      };
+    }
+    return null;
+  });
+
+  // Keep state in sync with URL search params
+  useEffect(() => {
+    if (parentOrgIdParam) {
+      setParentOrgContext({
+        id: parentOrgIdParam,
+        name: parentOrgNameParam || 'Organization',
+        code: parentOrgCodeParam || 'ORG',
+      });
+    } else {
+      setParentOrgContext(null);
+    }
+  }, [parentOrgIdParam, parentOrgNameParam, parentOrgCodeParam]);
+
+  const isSubOrgMode = isOrgSuperAdmin || !!parentOrgContext;
 
   const [organizations, setOrganizations] = useState<OrganizationItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [subscriptionPlanOptions, setSubscriptionPlanOptions] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Pagination states from server
@@ -155,26 +259,142 @@ export const OrganizationView: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
   const [totalRecords, setTotalRecords] = useState(0);
 
-  // Fetch Organizations from live API
-  const loadOrganizations = async (page = currentPage, limit = pageSize) => {
+  // Pending state - tracks what's typed/selected (not yet applied)
+  const [pendingSearch, setPendingSearch] = useState('');
+  const [pendingStatus, setPendingStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspend'>('All');
+  // Applied state - what actually drives the filter (set only on Apply)
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [appliedStatus, setAppliedStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspend'>('All');
+
+  // Fetch Organizations or Sub-Organizations strictly scoped to the active suite
+  const loadOrganizations = async (page = currentPage, limit = pageSize, search = appliedSearch, status = appliedStatus) => {
     setIsLoading(true);
     try {
-      const res = await organizationApi.getOrganizations(page, limit);
-      if (res && res.success && Array.isArray(res.data)) {
-        const mapped = res.data.map(mapApiOrgToItem);
-        setOrganizations(mapped);
-        if (res.pagination) {
-          setTotalRecords(res.pagination.totalRecords || mapped.length);
-        } else {
-          setTotalRecords(mapped.length);
+      if (isSubOrgMode) {
+        // Active organization context for sub-organizations
+        const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
+        const res = await subOrganizationApi.getSubOrganizations(
+          {
+            page_no: page,
+            page_size: limit,
+            pagination_required: 'true',
+            search: search.trim() || undefined,
+            status: status !== 'All' ? (status === 'Suspend' ? 'Suspended' : status) : undefined,
+          },
+          targetParentId || undefined
+        );
+        const parentOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        let apiItems: OrganizationItem[] = [];
+
+        try {
+          const res = await subOrganizationApi.getSubOrganizations(
+            {
+              page_no: page,
+              page_size: limit,
+              pagination_required: 'true',
+              search: search.trim() || undefined,
+              status: status !== 'All' ? (status === 'Suspend' ? 'Suspended' : status) : undefined,
+            },
+            parentOrgId || undefined
+          );
+
+          if (res && (res.success || Array.isArray(res.data))) {
+            const list = Array.isArray(res.data) ? res.data : [];
+            apiItems = list.map(mapSubOrgToItem);
+          }
+        } catch (apiErr) {
+          console.warn('Backend sub-organization listing notice:', apiErr);
         }
+
+        // Matching logic: separate Client Management vs Sales Management
+        const isItemForSuite = (item: OrganizationItem) => {
+          const typeStr = (item.organizationType || '').toLowerCase();
+          if (isSaleManagement) {
+            return typeStr.includes('sale');
+          } else {
+            return typeStr.includes('client') || !typeStr.includes('sale');
+          }
+        };
+
+        const orgsMap = new Map<string, OrganizationItem>();
+
+        // 1. Add API items strictly matching this suite
+        apiItems.filter(isItemForSuite).forEach((org) => {
+          orgsMap.set(org.name.toLowerCase(), {
+            ...org,
+            organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+          });
+        });
+
+        // 2. Add locally created items strictly matching this suite
+        const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
+        if (savedCatalog) {
+          try {
+            const parsed = JSON.parse(savedCatalog);
+            if (Array.isArray(parsed)) {
+              // Sanitize legacy mock names from catalog
+              const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
+              const filteredCatalog = parsed.filter((savedOrg: any) => !mockNames.includes((savedOrg.name || '').toLowerCase()));
+              if (filteredCatalog.length !== parsed.length) {
+                localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filteredCatalog));
+              }
+
+              filteredCatalog.forEach((savedOrg: any) => {
+                const sType = (savedOrg.organizationType || '').toLowerCase();
+                const sName = (savedOrg.name || '').toLowerCase();
+                const matches = isSaleManagement
+                  ? sType.includes('sale')
+                  : sType.includes('client') || !sType.includes('sale');
+
+                if (matches && !orgsMap.has(sName)) {
+                  orgsMap.set(sName, {
+                    id: savedOrg.id || `sub_${Date.now()}`,
+                    name: savedOrg.name,
+                    code: savedOrg.code || `SUB-${savedOrg.name.slice(0, 3).toUpperCase()}`,
+                    legalName: savedOrg.legalName || savedOrg.name,
+                    organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+                    industry: savedOrg.industry || (isSaleManagement ? 'Retail & Distribution' : 'Business & Services'),
+                    location: savedOrg.location || 'Chennai',
+                    subscriptionPlan: savedOrg.subscriptionPlan || (isSaleManagement ? 'ERP Standard' : 'Yaa Growth'),
+                    branchesCount: savedOrg.branchesCount ?? 0,
+                    membersCount: savedOrg.membersCount ?? 0,
+                    status: savedOrg.status || 'Active',
+                    createdAt: savedOrg.createdAt || new Date().toISOString().split('T')[0],
+                    contactPerson: savedOrg.contactPerson || 'Operations Lead',
+                  });
+                }
+              });
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }
+
+        const suiteSubOrgs = Array.from(orgsMap.values());
+        setOrganizations(suiteSubOrgs);
+        setTotalRecords(suiteSubOrgs.length);
       } else {
-        setOrganizations([]);
-        setTotalRecords(0);
+        const res = await organizationApi.getOrganizations(page, limit);
+        if (res && res.success && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiOrgToItem);
+          setOrganizations(mapped);
+          if (res.pagination) {
+            setTotalRecords(res.pagination.totalRecords || mapped.length);
+          } else {
+            setTotalRecords(mapped.length);
+          }
+        } else {
+          setOrganizations([]);
+          setTotalRecords(0);
+        }
       }
     } catch (err: any) {
       console.error('Failed to load organizations:', err);
-      showToast('error', 'Failed to fetch organizations', err?.message || 'Could not connect to API');
+      showToast(
+        'error',
+        isSubOrgMode ? 'Failed to fetch sub-organizations' : 'Failed to fetch organizations',
+        err?.message || 'Could not connect to API'
+      );
       setOrganizations([]);
     } finally {
       setIsLoading(false);
@@ -182,15 +402,21 @@ export const OrganizationView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadOrganizations(currentPage, pageSize);
-  }, [currentPage, pageSize]);
+    loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
+  }, [currentPage, pageSize, appliedSearch, appliedStatus, isSubOrgMode, parentOrgContext?.id, isOrgSuperAdmin, isSaleManagement]);
 
-  // Pending state - tracks what's typed/selected (not yet applied)
-  const [pendingSearch, setPendingSearch] = useState('');
-  const [pendingStatus, setPendingStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspend'>('All');
-  // Applied state - what actually drives the filter (set only on Apply)
-  const [appliedSearch, setAppliedSearch] = useState('');
-  const [appliedStatus, setAppliedStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspend'>('All');
+  // Load subscription plans from API once on mount
+  useEffect(() => {
+    subscriptionPlanApi.getSubscriptionPlans({ limit: 100, status: 'Active' })
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data)) {
+          setSubscriptionPlanOptions(res.data.map((p) => p.name));
+        }
+      })
+      .catch(() => {
+        // Silently fall back to empty list; user can still type manually
+      });
+  }, []);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingOrg, setEditingOrg] = useState<OrganizationItem | null>(null);
@@ -204,6 +430,36 @@ export const OrganizationView: React.FC = () => {
     orgName: string;
   } | null>(null);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
+
+  const handleOpenSubOrgManager = (org: OrganizationItem) => {
+    setParentOrgContext({
+      id: org.id,
+      name: org.name,
+      code: org.code,
+      subscriptionPlan: org.subscriptionPlan,
+    });
+    setSearchParams({
+      parentOrgId: org.id,
+      parentOrgName: org.name,
+      parentOrgCode: org.code,
+    });
+    // Reset filters and page
+    setPendingSearch('');
+    setPendingStatus('All');
+    setAppliedSearch('');
+    setAppliedStatus('All');
+    setCurrentPage(1);
+  };
+
+  const handleExitSubOrgMode = () => {
+    setParentOrgContext(null);
+    setSearchParams({});
+    setPendingSearch('');
+    setPendingStatus('All');
+    setAppliedSearch('');
+    setAppliedStatus('All');
+    setCurrentPage(1);
+  };
 
   const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
     e.stopPropagation();
@@ -244,12 +500,15 @@ export const OrganizationView: React.FC = () => {
   const handleUpdateStatus = async (id: string, newStatus: 'Active' | 'Pending' | 'Inactive' | 'Suspend') => {
     try {
       setIsProcessingAction(true);
-      await organizationApi.updateOrganization(id, {
-        name: organizations.find((o) => o.id === id)?.name,
-      });
-      await loadOrganizations(currentPage, pageSize);
+      if (isSubOrgMode) {
+        const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
+        await subOrganizationApi.updateSubOrganizationStatus(id, newStatus === 'Suspend' ? 'Suspended' : newStatus, targetParentId || undefined);
+      } else {
+        await organizationApi.updateOrganizationStatus(id, newStatus as 'Active' | 'Inactive' | 'Suspend');
+      }
+      await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
       setActiveDropdownId(null);
-      showToast('success', 'Status Updated', `Organization updated successfully.`);
+      showToast('success', 'Status Updated', `${isSubOrgMode ? 'Sub-organization' : 'Organization'} status updated to ${newStatus}.`);
     } catch (err: any) {
       showToast('error', 'Update Failed', err?.message || 'Could not update status.');
     } finally {
@@ -314,7 +573,7 @@ export const OrganizationView: React.FC = () => {
     setName('');
     setCode('');
     setLegalName('');
-    setOrganizationType('All');
+    setOrganizationType(isSaleManagement ? 'Sales Management' : 'Client Management');
     setIndustry('');
     setLocation('');
     setSubscriptionPlan('');
@@ -342,7 +601,7 @@ export const OrganizationView: React.FC = () => {
     setOrganizationType(org.organizationType || 'All');
     setIndustry(org.industry);
     setLocation(org.location);
-    setSubscriptionPlan(org.subscriptionPlan || 'Enterprise Pro');
+    setSubscriptionPlan(org.subscriptionPlan || '');
     setContactPerson(org.contactPerson || '');
     setEmail(org.email || '');
     setPhone(org.phone || '');
@@ -350,7 +609,7 @@ export const OrganizationView: React.FC = () => {
     setLogo(org.logo || '');
     setGstNumber(org.gstNumber || '');
     setPanNumber(org.panNumber || '');
-    setRegistrationType(org.registrationType || 'Pvt Ltd');
+    setRegistrationType(org.registrationType || '');
     setFormStatus(org.status);
     setAddress(org.address || '');
     setPassword('');
@@ -369,33 +628,121 @@ export const OrganizationView: React.FC = () => {
     setIsSubmitting(true);
     try {
       if (editingOrg) {
-        await organizationApi.updateOrganization(editingOrg.id, {
-          name: name.trim(),
-          legalName: legalName.trim() || name.trim(),
-          organizationType: organizationType || 'All',
-          gstNumber: gstNumber.trim() || undefined,
-          panNumber: panNumber.trim() || undefined,
-          email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
-          password: password.trim() || undefined,
-        });
-        showToast('success', 'Organization Updated', `${name} has been updated.`);
+        // Build a partial payload with only the fields that changed
+        const patch: Record<string, any> = {};
+
+        const t = (v: string) => v.trim();
+
+        // String fields — send updated value (or empty string if cleared)
+        if (t(code).toUpperCase() !== editingOrg.code)                                             patch.code = t(code).toUpperCase();
+        if (t(name) !== editingOrg.name)                                                            patch.name = t(name);
+        const resolvedLegal = t(legalName) || t(name);
+        if (resolvedLegal !== editingOrg.legalName)                                                 patch.legalName = resolvedLegal;
+        if ((organizationType || 'All') !== (editingOrg.organizationType || 'All')) {
+          patch.organizationType = parseOrganizationTypeNumber(organizationType);
+        }
+        if (t(industry) !== (editingOrg.industry || ''))                                            patch.industry = t(industry);
+        if (t(location) !== (editingOrg.location || ''))                                            patch.location = t(location);
+        if (t(subscriptionPlan) !== (editingOrg.subscriptionPlan || ''))                            patch.subscriptionPlan = t(subscriptionPlan);
+        if (t(contactPerson) !== (editingOrg.contactPerson || ''))                                  patch.contactPerson = t(contactPerson);
+        if (t(email) !== (editingOrg.email || ''))                                                  patch.email = t(email);
+        if (t(phone) !== (editingOrg.phone || ''))                                                  patch.phone = t(phone);
+        if (t(whatsapp) !== (editingOrg.whatsapp || ''))                                            patch.whatsapp = t(whatsapp);
+        if (t(gstNumber) !== (editingOrg.gstNumber || ''))                                          patch.gstNumber = t(gstNumber);
+        if (t(panNumber) !== (editingOrg.panNumber || ''))                                          patch.panNumber = t(panNumber);
+        if ((registrationType || '') !== (editingOrg.registrationType || ''))                       patch.registrationType = registrationType || '';
+        if (t(address) !== (editingOrg.address || ''))                                              patch.address = t(address);
+        if (logo !== (editingOrg.logo || ''))                                                       patch.logo = logo || '';
+
+        // Non-string fields
+        if (formStatus !== editingOrg.status)                                                       patch.status = formStatus;
+        if (subOrganizationSupport !== !!editingOrg.subOrganizationSupport)                         patch.subOrganizationSupport = subOrganizationSupport;
+
+        // Password — only if a new one is entered
+        if (t(password)) patch.password = t(password);
+
+        if (isSubOrgMode) {
+          // Edit existing sub-organization via PATCH/PUT
+          const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
+          await subOrganizationApi.updateSubOrganization(
+            editingOrg.id,
+            patch,
+            targetParentId || undefined
+          );
+          showToast('success', 'Sub-Organization Updated', `${name} has been updated.`);
+        } else {
+          await organizationApi.updateOrganization(editingOrg.id, patch);
+          showToast('success', 'Organization Updated', `${name} has been updated.`);
+        }
       } else {
-        await organizationApi.createOrganization({
-          code: code.trim().toUpperCase() || `ORG-${Date.now().toString().slice(-4)}`,
-          name: name.trim(),
-          organizationType: organizationType || 'All',
-          legalName: legalName.trim() || name.trim(),
-          gstNumber: gstNumber.trim() || undefined,
-          panNumber: panNumber.trim() || undefined,
-          email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
-          password: password.trim() || undefined,
-        });
-        showToast('success', 'Organization Created', `${name} has been successfully created.`);
+        if (isSubOrgMode) {
+          const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
+          const targetSuiteType = organizationType && organizationType !== 'All'
+            ? organizationType
+            : (isSaleManagement ? 'Sales Management' : 'Client Management');
+
+          await subOrganizationApi.createSubOrganization(
+            {
+              code: code.trim().toUpperCase() || `SUB-${Date.now().toString().slice(-4)}`,
+              name: name.trim(),
+              legalName: legalName.trim() || name.trim(),
+              organizationType: targetSuiteType,
+              industry: industry.trim() || undefined,
+              location: location.trim() || undefined,
+              subscriptionPlan: subscriptionPlan.trim() || undefined,
+              contactPerson: contactPerson.trim() || undefined,
+              email: email.trim() || undefined,
+              phone: phone.trim() || undefined,
+              whatsapp: whatsapp.trim() || undefined,
+              gstNumber: gstNumber.trim() || undefined,
+              panNumber: panNumber.trim() || undefined,
+              registrationType: registrationType.trim() || undefined,
+              address: address.trim() || undefined,
+              logo: logo || undefined,
+              subOrganizationSupport,
+              status: formStatus as any,
+              password: password.trim() || undefined,
+            },
+            targetParentId || undefined
+          );
+
+          // Persist to localStorage catalog so header dropdown immediately syncs
+          const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
+          let catalog: any[] = [];
+          if (savedCatalog) {
+            try {
+              const parsed = JSON.parse(savedCatalog);
+              if (Array.isArray(parsed)) catalog = parsed;
+            } catch (e) {}
+          }
+          catalog.push({
+            id: `sub_${Date.now()}`,
+            name: name.trim(),
+            organizationType: targetSuiteType,
+          });
+          localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(catalog));
+          window.dispatchEvent(new CustomEvent('orgChanged', { detail: { organizationType: targetSuiteType } }));
+          window.dispatchEvent(new CustomEvent('subOrgChanged', { detail: { name: name.trim(), organizationType: targetSuiteType } }));
+          window.dispatchEvent(new CustomEvent('subOrganizationsChanged'));
+
+          showToast('success', 'Sub-Organization Created', `${name} has been successfully created under ${targetSuiteType}.`);
+        } else {
+          await organizationApi.createOrganization({
+            code: code.trim().toUpperCase() || `ORG-${Date.now().toString().slice(-4)}`,
+            name: name.trim(),
+            organizationType: parseOrganizationTypeNumber(organizationType),
+            legalName: legalName.trim() || name.trim(),
+            gstNumber: gstNumber.trim() || undefined,
+            panNumber: panNumber.trim() || undefined,
+            email: email.trim() || undefined,
+            phone: phone.trim() || undefined,
+            password: password.trim() || undefined,
+          });
+          showToast('success', 'Organization Created', `${name} has been successfully created.`);
+        }
       }
       setIsModalOpen(false);
-      await loadOrganizations(currentPage, pageSize);
+      await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
       showToast('error', 'Operation Failed', err?.message || 'Could not save organization.');
     } finally {
@@ -445,27 +792,90 @@ export const OrganizationView: React.FC = () => {
         <div>
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              <Building2 className="w-4.5 h-4.5" />
+              {isSubOrgMode ? <Network className="w-4.5 h-4.5" /> : <Building2 className="w-4.5 h-4.5" />}
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              {isOrgSuperAdmin ? 'Sub Organization' : 'Organizations'}
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
+              <span>{isOrgSuperAdmin || isSubOrgMode ? 'Sub Organization' : 'Organizations'}</span>
+              {isOrgSuperAdmin && (
+                <span
+                  className={`text-xs px-2.5 py-0.5 rounded-full font-extrabold uppercase tracking-wider flex items-center gap-1.5 ${
+                    isSaleManagement
+                      ? 'bg-purple-100 text-[#33077C] border border-purple-200'
+                      : 'bg-blue-100 text-blue-700 border border-blue-200'
+                  }`}
+                >
+                  {isSaleManagement ? (
+                    <>
+                      <ShoppingCart className="w-3.5 h-3.5" />
+                      Sale Management Suite
+                    </>
+                  ) : (
+                    <>
+                      <UsersRound className="w-3.5 h-3.5" />
+                      Client Management Suite
+                    </>
+                  )}
+                </span>
+              )}
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             {isOrgSuperAdmin
-              ? 'Manage sub organizations, multi-tenant units, and corporate profiles'
+              ? `Manage sub organizations strictly for ${isSaleManagement ? 'Sale Management' : 'Client Management'} operations`
               : 'Manage enterprise organizations, multi-tenant units, and corporate profiles'}
           </p>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 shrink-0 flex-wrap">
+          {parentOrgContext && (
+            <button
+              type="button"
+              onClick={handleExitSubOrgMode}
+              className="h-10 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 flex items-center gap-2 text-slate-700 font-semibold text-xs sm:text-sm transition-all cursor-pointer shadow-2xs active:scale-95"
+              title="Back to Organizations"
+            >
+              <ArrowLeft className="w-4 h-4 text-slate-600" />
+              <span>Back</span>
+            </button>
+          )}
+
+          {/* Suite Switcher Tabs inside OrganizationView */}
+          {isOrgSuperAdmin && (
+            <div className="bg-slate-100 p-1 rounded-xl flex items-center border border-slate-200/80 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setOrgType('Client Management')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  !isSaleManagement
+                    ? 'bg-white text-[#33077C] shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UsersRound className="w-3.5 h-3.5" />
+                <span>Client Mgmt</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setOrgType('Sales Management')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  isSaleManagement
+                    ? 'bg-white text-[#33077C] shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span>Sale Mgmt</span>
+              </button>
+            </div>
+          )}
+
           <Button
             variant="primary"
             size="md"
             onClick={handleOpenAddModal}
             icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
           >
-            Add New Organization
+            {isOrgSuperAdmin || isSubOrgMode ? 'Add Sub Organization' : 'Add New Organization'}
           </Button>
         </div>
       </div>
@@ -497,13 +907,16 @@ export const OrganizationView: React.FC = () => {
         }
       />
 
-      {/* Organizations Table matching 2nd reference image UI */}
+      {/* Organizations Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[900px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ORGANIZATION & CODE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                  {isSubOrgMode ? 'CONTACT PERSON' : 'ORGANIZATION TYPE'}
+                </th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUBSCRIPTION PLANS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
@@ -515,7 +928,7 @@ export const OrganizationView: React.FC = () => {
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="py-20 text-center text-slate-500 border border-slate-200">
+                  <td colSpan={8} className="py-20 text-center text-slate-500 border border-slate-200">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="w-6 h-6 border-2 border-[#33077C] border-t-transparent rounded-full animate-spin" />
                       <span className="text-xs font-semibold text-slate-500">Loading organizations...</span>
@@ -524,16 +937,16 @@ export const OrganizationView: React.FC = () => {
                 </tr>
               ) : filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No organizations found matching your search.
                   </td>
                 </tr>
               ) : (
                 filteredOrgs.map((org) => {
                   const initials = org.name.substring(0, 2).toUpperCase();
-                  const phone = org.phone || '+91 98765 43210';
-                  const whatsappVal = org.whatsapp || org.phone || '+91 98765 43210';
-                  const email = org.email || 'contact@org.com';
+                  const phone = org.phone || '';
+                  const whatsappVal = org.whatsapp || org.phone || '';
+                  const email = org.email || '';
 
                   return (
                     <tr key={org.id} className="hover:bg-slate-50/80 transition-colors">
@@ -553,17 +966,8 @@ export const OrganizationView: React.FC = () => {
                               <span className="text-xs font-semibold text-[#4309A2]">
                                 ({org.code})
                               </span>
-                              {org.organizationType && (
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-                                  org.organizationType === 'Sales Management'
-                                    ? 'bg-purple-50 text-[#33077C] border-purple-200'
-                                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                }`}>
-                                  {org.organizationType}
-                                </span>
-                              )}
                             </div>
-                            {org.contactPerson && (
+                            {!isSubOrgMode && org.contactPerson && (
                               <p className="text-xs text-slate-500 font-medium mt-0.5">
                                 {org.contactPerson}
                               </p>
@@ -572,58 +976,86 @@ export const OrganizationView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* 2. Contact Info Actions */}
+                      {/* 2. Contact Person (for Sub Org) or Organization Type (for Parent Org) */}
+                      <td className="py-4 px-5 border border-slate-200 text-center">
+                        <span className="text-sm font-semibold text-slate-800">
+                          {isSubOrgMode ? (org.contactPerson || '-') : (org.organizationType || '-')}
+                        </span>
+                      </td>
+
+                      {/* 3. Contact Info Actions */}
                       <td className="py-4 px-4 border border-slate-200">
                         <div className="flex items-center justify-center gap-2">
                           {/* Phone */}
                           <div className="relative group">
                             <button
                               type="button"
-                              onClick={(e) => handleCopy(e, phone, `${org.id}-phone`)}
-                              className="w-8 h-8 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors cursor-pointer"
+                              onClick={(e) => phone && handleCopy(e, phone, `${org.id}-phone`)}
+                              disabled={!phone}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+                                phone
+                                  ? 'bg-blue-50 hover:bg-blue-100 text-blue-600 cursor-pointer'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                              }`}
                             >
                               <Phone className="w-3.5 h-3.5" />
                             </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-phone`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${org.id}-phone` ? 'Phone number copied' : phone}
-                            </div>
+                            {phone && (
+                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-phone`
+                                ? 'opacity-100 bg-emerald-600 scale-100'
+                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
+                                }`}>
+                                {copiedKey === `${org.id}-phone` ? 'Phone number copied' : phone}
+                              </div>
+                            )}
                           </div>
 
                           {/* WhatsApp */}
                           <div className="relative group">
                             <button
                               type="button"
-                              onClick={(e) => handleCopy(e, whatsappVal, `${org.id}-wa`)}
-                              className="w-8 h-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-600 flex items-center justify-center transition-colors cursor-pointer"
+                              onClick={(e) => whatsappVal && handleCopy(e, whatsappVal, `${org.id}-wa`)}
+                              disabled={!whatsappVal}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+                                whatsappVal
+                                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 cursor-pointer'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                              }`}
                             >
                               <MessageCircle className="w-3.5 h-3.5" />
                             </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-wa`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${org.id}-wa` ? 'WhatsApp number copied' : whatsappVal}
-                            </div>
+                            {whatsappVal && (
+                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-wa`
+                                ? 'opacity-100 bg-emerald-600 scale-100'
+                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
+                                }`}>
+                                {copiedKey === `${org.id}-wa` ? 'WhatsApp number copied' : whatsappVal}
+                              </div>
+                            )}
                           </div>
 
                           {/* Email */}
                           <div className="relative group">
                             <button
                               type="button"
-                              onClick={(e) => handleCopy(e, email, `${org.id}-email`)}
-                              className="w-8 h-8 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-600 flex items-center justify-center transition-colors cursor-pointer"
+                              onClick={(e) => email && handleCopy(e, email, `${org.id}-email`)}
+                              disabled={!email}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+                                email
+                                  ? 'bg-purple-50 hover:bg-purple-100 text-purple-600 cursor-pointer'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                              }`}
                             >
                               <Mail className="w-3.5 h-3.5" />
                             </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-email`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${org.id}-email` ? 'Email address copied' : email}
-                            </div>
+                            {email && (
+                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-email`
+                                ? 'opacity-100 bg-emerald-600 scale-100'
+                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
+                                }`}>
+                                {copiedKey === `${org.id}-email` ? 'Email address copied' : email}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -631,18 +1063,28 @@ export const OrganizationView: React.FC = () => {
                       {/* 3. Subscription Plans */}
                       <td className="py-4 px-5 border border-slate-200">
                         <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-[#33077C] font-bold text-xs shadow-2xs">
-                            <Layers className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
-                            {org.subscriptionPlan || 'Enterprise Pro'}
-                          </span>
+                          {org.subscriptionPlan ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-[#33077C] font-bold text-xs shadow-2xs">
+                              <Layers className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
+                              {org.subscriptionPlan}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-semibold text-xs">-</span>
+                          )}
                         </div>
                       </td>
 
                       {/* 4. Location */}
                       <td className="py-4 px-5 border border-slate-200">
                         <div className="flex items-center gap-2 font-medium text-slate-900">
-                          <MapPin className="w-4 h-4 text-[#4309A2] shrink-0" />
-                          <span>{org.location}</span>
+                          {org.location ? (
+                            <>
+                              <MapPin className="w-4 h-4 text-[#4309A2] shrink-0" />
+                              <span>{org.location}</span>
+                            </>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
                         </div>
                       </td>
 
@@ -755,7 +1197,7 @@ export const OrganizationView: React.FC = () => {
                 : { top: `${dropdownPos.top}px` }),
               right: `${dropdownPos.right}px`,
             }}
-            className="w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] action-dropdown-menu animate-in fade-in zoom-in-95 duration-100 text-left"
+            className="w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] action-dropdown-menu animate-in fade-in zoom-in-95 duration-100 text-left"
           >
             {/* 1. View */}
             <button
@@ -788,6 +1230,24 @@ export const OrganizationView: React.FC = () => {
               </div>
               <span className="font-semibold text-slate-800 text-[13px]">Edit</span>
             </button>
+
+            {/* 2.5. Sub-Organizations (only for parent orgs when subOrganizationSupport=true) */}
+            {!isSubOrgMode && targetOrg.subOrganizationSupport && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveDropdownId(null);
+                  setDropdownPos(null);
+                  handleOpenSubOrgManager(targetOrg);
+                }}
+                className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
+              >
+                <div className="w-7 h-7 rounded-full bg-[#0ea5e9] flex items-center justify-center text-white shrink-0 shadow-xs">
+                  <Network className="w-3.5 h-3.5 stroke-[2.5]" />
+                </div>
+                <span className="font-semibold text-slate-800 text-[13px] whitespace-nowrap">Sub-Organizations</span>
+              </button>
+            )}
 
             {/* 3. Suspend */}
             <button
@@ -828,29 +1288,6 @@ export const OrganizationView: React.FC = () => {
               </div>
               <span className="font-semibold text-slate-800 text-[13px]">Inactive</span>
             </button>
-
-            {/* Divider */}
-            <div className="my-1.5 border-t border-slate-100" />
-
-            {/* 5. Delete */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveDropdownId(null);
-                setDropdownPos(null);
-                setConfirmAction({
-                  type: 'Delete',
-                  orgId: targetOrg.id,
-                  orgName: targetOrg.name,
-                });
-              }}
-              className="w-full px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50/70 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
-            >
-              <div className="w-7 h-7 rounded-full bg-[#EF4444] flex items-center justify-center text-white shrink-0 shadow-xs">
-                <Trash2 className="w-3.5 h-3.5 stroke-[2.5]" />
-              </div>
-              <span className="font-bold text-rose-600 text-[13px]">Delete</span>
-            </button>
           </div>
         );
       })()}
@@ -860,19 +1297,27 @@ export const OrganizationView: React.FC = () => {
         <Modal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
-          title={editingOrg ? 'Edit Organization' : 'Add Organization'}
-          subtitle="Configure organization profile, subscription tier, and contact details"
+          title={
+            editingOrg
+              ? (isSubOrgMode ? 'Edit Sub Organization' : 'Edit Organization')
+              : (isSubOrgMode ? 'Add Sub Organization' : 'Add Organization')
+          }
+          subtitle={
+            isSubOrgMode
+              ? 'Configure sub organization profile, credentials, and contact details'
+              : 'Configure organization profile, subscription tier, and contact details'
+          }
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
           hideCloseButton={true}
         >
           <form onSubmit={handleSubmit} className="space-y-4.5 p-2 sm:p-4">
-            {/* Row 1: Organization Logo, Organization Name, Organization Code */}
+            {/* Row 1: Logo, Name, Code */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Organization Logo
+                  {isSubOrgMode ? 'Sub Organization Logo' : 'Organization Logo'}
                 </label>
                 <div className="flex items-center gap-2.5">
                   <input
@@ -910,7 +1355,7 @@ export const OrganizationView: React.FC = () => {
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Organization Name <span className="text-slate-500">*</span>
+                  {isSubOrgMode ? 'Sub Organization Name' : 'Organization Name'} <span className="text-slate-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -923,7 +1368,7 @@ export const OrganizationView: React.FC = () => {
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Organization Code <span className="text-slate-500">*</span>
+                  {isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'} <span className="text-slate-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -935,20 +1380,35 @@ export const OrganizationView: React.FC = () => {
               </div>
             </div>
 
-            {/* Row 2: Organization Type, Legal Entity Name, Company Registration Type */}
+            {/* Row 2: (Suite / Org Type) + Legal Entity Name + Company Registration Type */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Organization Type
-                </label>
-                <CustomSelect
-                  value={organizationType}
-                  onChange={(val) => setOrganizationType(val)}
-                  options={ORGANIZATION_TYPE_OPTIONS}
-                  placeholder="Select organization type"
-                  activeColor="brand"
-                />
-              </div>
+              {isOrgSuperAdmin ? (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Sub Organization Suite <span className="text-[#33077C] font-bold">*</span>
+                  </label>
+                  <CustomSelect
+                    value={organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
+                    onChange={(val) => setOrganizationType(val)}
+                    options={['Client Management', 'Sales Management']}
+                    placeholder="Select sub-organization suite"
+                    activeColor="brand"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Organization Type
+                  </label>
+                  <CustomSelect
+                    value={organizationType}
+                    onChange={(val) => setOrganizationType(val)}
+                    options={ORGANIZATION_TYPE_OPTIONS}
+                    placeholder="Select organization type"
+                    activeColor="brand"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -974,22 +1434,40 @@ export const OrganizationView: React.FC = () => {
                   activeColor="brand"
                 />
               </div>
+
+              {/* In Sub Organization mode, Status cleanly fills the 3rd slot of Row 2 */}
+              {isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Status
+                  </label>
+                  <CustomSelect
+                    value={formStatus}
+                    onChange={(val) => setFormStatus(val as 'Active' | 'Inactive' | 'Suspend')}
+                    options={STATUS_OPTIONS}
+                    placeholder="Select status"
+                    activeColor="brand"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Row 3: Status, Subscription Plan, GST Number */}
+            {/* Row 3: Subscription Plan (or Status if not sub-org), GST Number, PAN Number (3 per row) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Status
-                </label>
-                <CustomSelect
-                  value={formStatus}
-                  onChange={(val) => setFormStatus(val as 'Active' | 'Inactive' | 'Suspend')}
-                  options={STATUS_OPTIONS}
-                  placeholder="Select status"
-                  activeColor="brand"
-                />
-              </div>
+              {!isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Status
+                  </label>
+                  <CustomSelect
+                    value={formStatus}
+                    onChange={(val) => setFormStatus(val as 'Active' | 'Inactive' | 'Suspend')}
+                    options={STATUS_OPTIONS}
+                    placeholder="Select status"
+                    activeColor="brand"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -998,7 +1476,7 @@ export const OrganizationView: React.FC = () => {
                 <CustomSelect
                   value={subscriptionPlan}
                   onChange={(val) => setSubscriptionPlan(val)}
-                  options={SUBSCRIPTION_PLAN_OPTIONS}
+                  options={subscriptionPlanOptions}
                   placeholder="Select subscription plan"
                   activeColor="brand"
                 />
@@ -1015,21 +1493,38 @@ export const OrganizationView: React.FC = () => {
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
                 />
               </div>
+
+              {/* In Sub Organization mode, PAN Number fills the 3rd slot of Row 3 */}
+              {isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    PAN Number
+                  </label>
+                  <input
+                    type="text"
+                    value={panNumber}
+                    onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Row 4: PAN Number, Industry / Domain, Location / HQ City */}
+            {/* Row 4: (PAN Number if parent org), Industry / Domain, Location / HQ City, Contact Person Name (3 per row) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  PAN Number
-                </label>
-                <input
-                  type="text"
-                  value={panNumber}
-                  onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
-                />
-              </div>
+              {!isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    PAN Number
+                  </label>
+                  <input
+                    type="text"
+                    value={panNumber}
+                    onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1054,21 +1549,38 @@ export const OrganizationView: React.FC = () => {
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                 />
               </div>
+
+              {/* In Sub Organization mode, Contact Person Name fills the 3rd slot of Row 4 */}
+              {isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Contact Person Name
+                  </label>
+                  <input
+                    type="text"
+                    value={contactPerson}
+                    onChange={(e) => setContactPerson(e.target.value)}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Row 5: Contact Person Name, Contact Phone, WhatsApp Number */}
+            {/* Row 5: (Contact Person if parent org) + Contact Phone + WhatsApp + Official Email (3 per row) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Contact Person Name
-                </label>
-                <input
-                  type="text"
-                  value={contactPerson}
-                  onChange={(e) => setContactPerson(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
-              </div>
+              {!isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Contact Person Name
+                  </label>
+                  <input
+                    type="text"
+                    value={contactPerson}
+                    onChange={(e) => setContactPerson(e.target.value)}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1093,21 +1605,38 @@ export const OrganizationView: React.FC = () => {
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                 />
               </div>
+
+              {/* In Sub Organization mode, Official Email fills the 3rd slot of Row 5 */}
+              {isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Official Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Row 6: Official Email, Password, Address, and Sub-organization support (3 items per row layout) */}
+            {/* Row 6: (Official Email if parent org) + Password + Address (3 per row) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Official Email
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
-              </div>
+              {!isSubOrgMode && (
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Official Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1144,7 +1673,7 @@ export const OrganizationView: React.FC = () => {
                 />
               </div>
 
-              {isSuperAdmin && (
+              {isSuperAdmin && !isSubOrgMode && (
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                     Sub-Organization Support
@@ -1210,8 +1739,12 @@ export const OrganizationView: React.FC = () => {
         <Modal
           isOpen={!!viewingOrg}
           onClose={() => setViewingOrg(null)}
-          title="Organization Details"
-          subtitle="View profile, contact information, and active subscription plan"
+          title={isOrgSuperAdmin ? 'Sub Organization Details' : 'Organization Details'}
+          subtitle={
+            isOrgSuperAdmin
+              ? 'View sub organization profile, contact information, and details'
+              : 'View profile, contact information, and active subscription plan'
+          }
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
@@ -1283,7 +1816,7 @@ export const OrganizationView: React.FC = () => {
 
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border border-slate-200 text-[#33077C] font-bold text-xs shadow-2xs">
                   <Layers className="w-3.5 h-3.5 text-[#33077C]" />
-                  <span>{viewingOrg.subscriptionPlan || 'Enterprise Pro'}</span>
+                  <span>{viewingOrg.subscriptionPlan || '-'}</span>
                 </span>
               </div>
             </div>
@@ -1302,11 +1835,11 @@ export const OrganizationView: React.FC = () => {
                 <div className="space-y-3 text-xs sm:text-[13px]">
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-slate-400 font-medium shrink-0">Organization Type</span>
-                    <span className="font-bold text-slate-800 text-right">{viewingOrg.organizationType || 'Client Management'}</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.organizationType || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Registration Type</span>
-                    <span className="font-bold text-slate-800 text-right">{viewingOrg.registrationType || 'Pvt Ltd'}</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.registrationType || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">GST Number</span>
@@ -1442,9 +1975,9 @@ export const OrganizationView: React.FC = () => {
 
             {/* Title */}
             <h3 className="text-lg font-bold text-slate-800">
-              {confirmAction.type === 'Delete' && 'Delete Organization'}
-              {confirmAction.type === 'Suspend' && 'Suspend Organization'}
-              {confirmAction.type === 'Inactive' && 'Deactivate Organization'}
+              {confirmAction.type === 'Delete' && (isSubOrgMode ? 'Delete Sub Organization' : 'Delete Organization')}
+              {confirmAction.type === 'Suspend' && (isSubOrgMode ? 'Suspend Sub Organization' : 'Suspend Organization')}
+              {confirmAction.type === 'Inactive' && (isSubOrgMode ? 'Deactivate Sub Organization' : 'Deactivate Organization')}
             </h3>
 
             {/* Description */}

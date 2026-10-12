@@ -209,6 +209,23 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
               handleOpen();
             }
           }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              if (isOpen && filteredOptions.length > 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                handleSelect(filteredOptions[0].value);
+              } else if (isOpen) {
+                e.preventDefault();
+                e.stopPropagation();
+                handleClose();
+              }
+            } else if (e.key === 'Escape' && isOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              handleClose();
+            }
+          }}
           className={`w-full bg-transparent border-none outline-none truncate placeholder-slate-400 ${
             selectedOption && !isTyping ? 'font-bold text-slate-900' : 'font-medium text-slate-800'
           } ${disabled ? 'cursor-not-allowed text-slate-400' : 'cursor-text'}`}

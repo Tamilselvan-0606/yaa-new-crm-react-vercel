@@ -27,6 +27,10 @@ export default defineConfig(() => {
       },
     },
 
+    optimizeDeps: {
+      include: ['@reduxjs/toolkit', 'react-redux'],
+    },
+
     server: {
       host: true,
       port: 5173,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { useCustomers } from '../../hooks/useQueries';
+import { customerApi, mapApiCustomerToSalesCustomer } from '../../api/commerce/customerApi';
 import { api } from '../../services/api';
 import { ContentItem, ContentType, ContentStatus, PlatformType, ApprovalStatus } from '../../types';
 import {
@@ -51,7 +51,26 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
   onCloseInitialCreate,
 }) => {
   const { currentUser, users, isAdmin, showToast } = useAuth();
-  const { data: customers = [] } = useCustomers();
+  const [customers, setCustomers] = useState<any[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCustomers = async () => {
+      try {
+        const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          setCustomers(res.data.map(mapApiCustomerToSalesCustomer));
+        }
+      } catch (err) {
+        console.warn('Failed to load customers in ContentPlannerView:', err);
+      }
+    };
+    fetchCustomers();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const [contentList, setContentList] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'deliverables' | 'kanban' | 'grid' | 'calendar'>('deliverables');
@@ -889,7 +908,7 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
           title="Generate Client Monthly Deliverables Schedule"
           maxWidth="lg"
         >
-          <form onSubmit={handleGenerateBatchSchedule} className="space-y-4">
+          <form noValidate onSubmit={handleGenerateBatchSchedule} className="space-y-4">
             <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 text-xs text-purple-900 leading-relaxed">
               <strong className="font-bold flex items-center gap-1 text-[#33077C] mb-0.5">
                 <Sparkles className="w-3.5 h-3.5 text-[#4309A2]" />
@@ -1064,7 +1083,7 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
           title={`Upload Completed ${uploadingItem.contentType}: ${uploadingItem.title}`}
           maxWidth="md"
         >
-          <form onSubmit={handleSaveUpload} className="space-y-4">
+          <form noValidate onSubmit={handleSaveUpload} className="space-y-4">
             <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs text-blue-900">
               Deliverable for: <strong>{uploadingItem.clientName}</strong> (Slot #{uploadingItem.deliverableNumber || 1}) &bull; Scheduled for: <strong>{uploadingItem.scheduledDate}</strong>
             </div>
@@ -1171,7 +1190,7 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
           title={`Request Revision: ${revisionItem.title}`}
           maxWidth="md"
         >
-          <form onSubmit={handleSaveRevision} className="space-y-4">
+          <form noValidate onSubmit={handleSaveRevision} className="space-y-4">
             <div className="p-3 bg-rose-50 rounded-xl border border-rose-100 text-xs text-rose-900">
               Provide specific changes or feedback for <strong>{revisionItem.assignedStaffName}</strong> to revise on this deliverable.
             </div>

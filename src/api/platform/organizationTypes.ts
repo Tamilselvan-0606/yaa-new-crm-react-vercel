@@ -3,12 +3,24 @@ export interface OrganizationApiItem {
   code: string;
   name: string;
   active: boolean;
-  organizationType: string;
+  status?: string;
+  organizationType?: string;
   legalName?: string;
+  registrationType?: string;
+  subscriptionPlan?: string;
   gstNumber?: string;
   panNumber?: string;
+  industry?: string;
+  location?: string;
+  address?: string;
+  contactPerson?: string;
   email?: string;
   phone?: string;
+  whatsapp?: string;
+  logo?: string;
+  subOrganizationSupport?: boolean;
+  branchesCount?: number;
+  membersCount?: number;
   userId?: string | null;
   parentId?: string | null;
   createdAt: string;
@@ -64,7 +76,7 @@ export interface OrganizationDeleteResponse {
 export interface CreateOrganizationRequest {
   code: string;
   name: string;
-  organizationType: string;
+  organizationType: number | string;
   legalName?: string;
   gstNumber?: string;
   panNumber?: string;
@@ -74,12 +86,24 @@ export interface CreateOrganizationRequest {
 }
 
 export interface UpdateOrganizationRequest {
+  code?: string;
   name?: string;
   legalName?: string;
-  organizationType?: string;
+  organizationType?: number | string;
+  registrationType?: string;
+  subscriptionPlan?: string;
   gstNumber?: string;
   panNumber?: string;
+  industry?: string;
+  location?: string;
+  address?: string;
+  contactPerson?: string;
   email?: string;
   phone?: string;
+  whatsapp?: string;
+  logo?: string;
+  status?: string;
+  subOrganizationSupport?: boolean;
   password?: string;
+  [key: string]: any;
 }

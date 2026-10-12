@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { api } from '../../services/api';
-import { Product } from '../../types';
+import {
+  clientProductApi,
+  ClientProductApiItem,
+  CreateClientProductRequest,
+  UpdateClientProductRequest,
+} from '../../api';
 import {
   Boxes,
   Plus,
@@ -33,8 +37,9 @@ import { CustomSelect } from '../../components/common/CustomSelect';
 export const ProductsView: React.FC = () => {
   const { showToast } = useAuth();
 
-  // Products Data
-  const [products, setProducts] = useState<Product[]>([]);
+  // Products Data from real API
+  const [products, setProducts] = useState<ClientProductApiItem[]>([]);
+  const [totalProducts, setTotalProducts] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Search & Filter State
@@ -54,7 +59,7 @@ export const ProductsView: React.FC = () => {
 
   // Add / Edit Product Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editingProduct, setEditingProduct] = useState<ClientProductApiItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
@@ -72,7 +77,7 @@ export const ProductsView: React.FC = () => {
     description: '',
     websiteUrl: '',
     applicationUrl: '',
-    supportPhone: '+91 98765 43210',
+    supportPhone: '',
     badge: 'Active Suite',
     color: '#33077C',
   });
@@ -80,11 +85,26 @@ export const ProductsView: React.FC = () => {
   const loadProducts = async () => {
     try {
       setLoading(true);
-      const data = await api.getProducts();
-      setProducts(data || []);
-    } catch (err) {
+      const res = await clientProductApi.getProducts({
+        page,
+        limit: pageSize,
+        search: appliedSearch.trim() || undefined,
+        status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+      });
+
+      if (res && res.success) {
+        setProducts(res.data || []);
+        const total = res.pagination?.totalRecords ?? res.data?.length ?? 0;
+        setTotalProducts(total);
+      } else {
+        setProducts([]);
+        setTotalProducts(0);
+      }
+    } catch (err: any) {
       console.error('Failed to load products:', err);
-      showToast?.('error', 'Error', 'Failed to load products');
+      showToast?.('error', 'Error', err?.message || 'Failed to load products');
+      setProducts([]);
+      setTotalProducts(0);
     } finally {
       setLoading(false);
     }
@@ -92,7 +112,7 @@ export const ProductsView: React.FC = () => {
 
   useEffect(() => {
     loadProducts();
-  }, []);
+  }, [page, pageSize, appliedSearch, appliedStatus]);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -128,7 +148,7 @@ export const ProductsView: React.FC = () => {
   };
 
   // Helper: Generates 2-letter uppercase initials for product avatar matching reference (YC, DM, DD, AA, TU, etc.)
-  const getProductInitials = (prod?: Product): string => {
+  const getProductInitials = (prod?: ClientProductApiItem): string => {
     if (!prod?.name) return 'PR';
     const nameLower = prod.name.toLowerCase();
     if (nameLower.includes('yaa connect')) return 'YC';
@@ -161,42 +181,11 @@ export const ProductsView: React.FC = () => {
     }
   };
 
-  // Helper: Resolve contact person name for product (e.g., Alex Rivera, Sarah Jenkins, Vikram Malhotra)
-  const getProductContactPerson = (prod: Product): string => {
+  // Helper: Resolve contact person name for product
+  const getProductContactPerson = (prod: ClientProductApiItem): string => {
     if (prod.contactPerson) return prod.contactPerson;
-    const nameLower = (prod.name || '').toLowerCase();
-    if (nameLower.includes('yaa connect')) return 'Alex Rivera';
-    if (nameLower.includes('doc motez') || nameLower.includes('motez')) return 'Sarah Jenkins';
-    if (nameLower.includes('dentq') || nameLower.includes('dent')) return 'Marcus Chen';
-    if (nameLower.includes('aarudam')) return 'Sarah Jenkins';
-    if (nameLower.includes('turfy')) return 'Alex Rivera';
-    if (nameLower.includes('marketing') || nameLower.includes('digital')) return 'Alex Rivera';
-    return prod.documents?.[0]?.uploadedBy || 'Alex Rivera';
+    return 'Alex Rivera';
   };
-
-  // Filtered Products
-  const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        q === '' ||
-        p.name.toLowerCase().includes(q) ||
-        (p.code && p.code.toLowerCase().includes(q)) ||
-        (p.tagline && p.tagline.toLowerCase().includes(q)) ||
-        (p.description && p.description.toLowerCase().includes(q));
-
-      const matchesStatus =
-        appliedStatus === 'ALL' ||
-        (p.status || 'Active') === appliedStatus;
-      return matchesSearch && matchesStatus;
-    });
-  }, [products, appliedSearch, appliedStatus]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pagedProducts = useMemo(() => {
-    return filteredProducts.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredProducts, safePage, pageSize]);
 
   // Modal Handlers
   const handleOpenAddModal = () => {
@@ -224,7 +213,7 @@ export const ProductsView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (prod: Product) => {
+  const handleOpenEditModal = (prod: ClientProductApiItem) => {
     setEditingProduct(prod);
     setFormData({
       name: prod.name || '',
@@ -258,31 +247,32 @@ export const ProductsView: React.FC = () => {
 
     try {
       setSubmitting(true);
-      const payload = {
+      const payload: CreateClientProductRequest = {
         name: formData.name.trim(),
-        code: formData.code.trim() || formData.name.trim().toUpperCase().replace(/\s+/g, '_'),
-        contactPerson: formData.contactPerson.trim(),
-        mobileNumber: formData.mobileNumber.trim(),
-        supportPhone: formData.supportPhone.trim(),
-        supportWhatsapp: formData.supportWhatsapp.trim(),
-        supportEmail: formData.supportEmail.trim(),
-        gstNumber: formData.gstNumber.trim(),
-        panNumber: formData.panNumber.trim(),
-        hqCity: formData.hqCity.trim(),
-        address: formData.address.trim(),
+        code: formData.code.trim() || undefined,
+        contactPerson: formData.contactPerson.trim() || undefined,
+        mobileNumber: formData.mobileNumber.trim() || undefined,
+        supportPhone: formData.supportPhone.trim() || undefined,
+        supportWhatsapp: formData.supportWhatsapp.trim() || undefined,
+        supportEmail: formData.supportEmail.trim() || undefined,
+        gstNumber: formData.gstNumber.trim() || undefined,
+        panNumber: formData.panNumber.trim() || undefined,
+        hqCity: formData.hqCity.trim() || undefined,
+        address: formData.address.trim() || undefined,
         ...(formData.status ? { status: formData.status as 'Active' | 'Inactive' | 'Suspended' } : {}),
-        tagline: formData.tagline.trim(),
-        description: formData.description.trim(),
-        websiteUrl: formData.websiteUrl.trim(),
-        applicationUrl: formData.applicationUrl.trim(),
+        tagline: formData.tagline.trim() || undefined,
+        description: formData.description.trim() || undefined,
+        websiteUrl: formData.websiteUrl.trim() || undefined,
+        applicationUrl: formData.applicationUrl.trim() || undefined,
         badge: formData.badge.trim() || 'Active Suite',
         color: formData.color || '#33077C',
       };
+
       if (editingProduct) {
-        await api.updateProduct(editingProduct.id, payload);
+        await clientProductApi.updateProduct(editingProduct.id, payload as UpdateClientProductRequest);
         showToast?.('success', 'Product Updated', `Saved changes for "${formData.name}"`);
       } else {
-        await api.createProduct({ ...payload, iconName: 'Boxes' });
+        await clientProductApi.createProduct(payload);
         showToast?.('success', 'Product Created', `Added "${formData.name}" to products list`);
       }
       setIsModalOpen(false);
@@ -297,16 +287,16 @@ export const ProductsView: React.FC = () => {
 
   // View Product Modal State
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
+  const [viewingProduct, setViewingProduct] = useState<ClientProductApiItem | null>(null);
 
-  const handleViewProduct = (prod: Product) => {
+  const handleViewProduct = (prod: ClientProductApiItem) => {
     setViewingProduct(prod);
     setIsViewModalOpen(true);
   };
 
-  const handleUpdateStatus = async (prod: Product, newStatus: 'Active' | 'Inactive' | 'Suspended') => {
+  const handleUpdateStatus = async (prod: ClientProductApiItem, newStatus: 'Active' | 'Inactive' | 'Suspended') => {
     try {
-      await api.updateProduct(prod.id, { status: newStatus });
+      await clientProductApi.patchProductStatus(prod.id, { status: newStatus });
       showToast?.('success', 'Status Updated', `Product "${prod.name}" status changed to ${newStatus}`);
       await loadProducts();
     } catch (err: any) {
@@ -314,10 +304,10 @@ export const ProductsView: React.FC = () => {
     }
   };
 
-  const handleDeleteProduct = async (prod: Product) => {
+  const handleDeleteProduct = async (prod: ClientProductApiItem) => {
     if (!confirm(`Are you sure you want to delete "${prod.name}"? This action cannot be undone.`)) return;
     try {
-      await api.deleteProduct(prod.id);
+      await clientProductApi.deleteProduct(prod.id);
       showToast?.('success', 'Product Deleted', `Deleted "${prod.name}" from catalog`);
       await loadProducts();
     } catch (err: any) {
@@ -393,7 +383,7 @@ export const ProductsView: React.FC = () => {
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
               Total Products :{' '}
-              <span className="text-[#33077C] font-bold">{filteredProducts.length}</span>
+              <span className="text-[#33077C] font-bold">{totalProducts}</span>
             </span>
           </div>
         }
@@ -424,17 +414,17 @@ export const ProductsView: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ) : pagedProducts.length === 0 ? (
+              ) : products.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No products found matching your criteria.
                   </td>
                 </tr>
               ) : (
-                pagedProducts.map((prod, idx) => {
-                  const activePlansCount = prod.plans?.length || 0;
-                  const clientsCount = prod.activeCustomersCount ?? 0;
-                  const leadsCount = prod.activeLeadsCount ?? 0;
+                products.map((prod, idx) => {
+                  const activePlansCount = prod.plansCount ?? prod.plans?.length ?? 0;
+                  const clientsCount = prod.activeSubscriptions ?? 0;
+                  const leadsCount = 0;
 
                   // Product contact info
                   const phone = prod.supportPhone || '+91 98765 43210';
@@ -752,10 +742,10 @@ export const ProductsView: React.FC = () => {
       </div>
 
       {/* 4. Pagination */}
-      {filteredProducts.length > 0 && (
+      {totalProducts > 0 && (
         <Pagination
-          currentPage={safePage}
-          total={filteredProducts.length}
+          currentPage={page}
+          total={totalProducts}
           pageSize={pageSize}
           onPageChange={(p) => setPage(p)}
           onPageSizeChange={(size) => {

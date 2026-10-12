@@ -24,9 +24,13 @@ import {
   getStoredToken,
   setStoredToken,
   removeStoredToken,
+  getStoredOrganizationId,
+  setStoredOrganizationId,
 } from '../api/config';
 import { authApi } from '../api/auth/authApi';
 import { ApiUser, ApiLoginResponse } from '../api/auth/authTypes';
+
+import { executeTokenRefresh } from '../api/baseApi';
 
 export { authApi };
 export type { ApiUser, ApiLoginResponse };
@@ -51,15 +55,39 @@ axiosClient.interceptors.request.use(
     if (currentUserId) {
       config.headers['x-user-id'] = currentUserId;
     }
+    const orgId = getStoredOrganizationId();
+    if (orgId) {
+      config.headers['x-organization-id'] = orgId;
+    }
     return config;
   },
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor: Format error messages
+// Response Interceptor: Format error messages & silent token refresh on 401
 axiosClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config;
+    const is401 = error.response?.status === 401;
+
+    // Silent Token Refresh on 401
+    if (is401 && originalRequest && !originalRequest._retry) {
+      if (
+        originalRequest.url?.includes('/auth/refresh') ||
+        originalRequest.url?.includes('/auth/login')
+      ) {
+        return Promise.reject(error);
+      }
+
+      originalRequest._retry = true;
+      const newToken = await executeTokenRefresh();
+      if (newToken) {
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return axiosClient(originalRequest);
+      }
+    }
+
     const message =
       error.response?.data?.error?.message ||
       error.response?.data?.message ||
@@ -96,6 +124,23 @@ class ApiService {
     localStorage.setItem(USER_ID_STORAGE_KEY, id);
   }
 
+  getUserId(): string | null {
+    return localStorage.getItem(USER_ID_STORAGE_KEY);
+  }
+
+  getUser(): User | null {
+    try {
+      const raw = localStorage.getItem(USER_CACHE_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setUser(user: User): void {
+    localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(user));
+  }
+
   decodeToken(token: string): JwtPayload | null {
     try {
       return jwtDecode<JwtPayload>(token);
@@ -105,47 +150,172 @@ class ApiService {
   }
 
   // Format backend API user to application User interface
-  private mapApiUserToAppUser(apiUser: ApiUser): User {
-    const roleCode =
-      typeof apiUser.role === 'object' && apiUser.role?.code
+  mapApiUserToAppUser(apiUser: ApiUser): User {
+    const rawRole =
+      (typeof apiUser.role === 'object' && apiUser.role?.code)
         ? apiUser.role.code
-        : typeof apiUser.role === 'string'
+        : (typeof apiUser.role === 'string' && apiUser.role)
         ? apiUser.role
+        : apiUser.memberships?.[0]?.role?.code
+        ? apiUser.memberships[0].role.code
         : apiUser.isPlatformAdmin
         ? 'SUPER_ADMIN'
-        : 'ADMIN';
+        : 'ORG_ADMIN';
+
+    const normalizedRole = (rawRole || '').toUpperCase();
+    let roleCode: Role = 'ORG_ADMIN';
+
+    if (normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'SUPERADMIN' || apiUser.isPlatformAdmin) {
+      roleCode = 'SUPER_ADMIN';
+    } else if (
+      normalizedRole === 'ORG_ADMIN' ||
+      normalizedRole === 'ORGADMIN' ||
+      normalizedRole === 'ADMIN' ||
+      normalizedRole === 'ORGSUPERADMIN'
+    ) {
+      roleCode = 'ORG_ADMIN';
+    } else if (normalizedRole === 'SUB_ORG_ADMIN' || normalizedRole === 'SUBORGADMIN') {
+      roleCode = 'SUB_ORG_ADMIN';
+    } else if (normalizedRole === 'BRANCH_ADMIN' || normalizedRole === 'BRANCHADMIN') {
+      roleCode = 'BRANCH_ADMIN';
+    } else if (normalizedRole === 'STAFF') {
+      roleCode = 'STAFF';
+    } else {
+      roleCode = rawRole as Role;
+    }
+
+    const primaryMembership =
+      apiUser.memberships?.find((m) => m.organizationId === apiUser.organizationId) ||
+      apiUser.memberships?.[0];
+    const membershipOrgId = primaryMembership?.organizationId || apiUser.organizationId;
+    if (membershipOrgId) {
+      setStoredOrganizationId(membershipOrgId);
+    }
+
+    const organization =
+      apiUser.organization ||
+      primaryMembership?.organization;
+
+    const orgType =
+      organization?.organizationType ??
+      apiUser.organizationType ??
+      primaryMembership?.organization?.organizationType;
+
+    const orgTypeName =
+      organization?.organizationTypeName ??
+      apiUser.organizationTypeName ??
+      primaryMembership?.organization?.organizationTypeName;
+
+    const orgName = organization?.name || apiUser.name;
+    if (orgName) {
+      localStorage.setItem('active_organization', orgName);
+      localStorage.setItem('active_organization_orgsuperadmin', orgName);
+    }
+
+    const normOrgTypeStr = orgType !== undefined && orgType !== null ? String(orgType).trim() : '';
+    const normOrgTypeName = String(orgTypeName ?? '').replace(/_/g, ' ').toUpperCase().trim();
+
+    if (normOrgTypeStr !== '') {
+      localStorage.setItem('user_organization_type', normOrgTypeStr);
+      if (orgTypeName) localStorage.setItem('user_organization_type_name', String(orgTypeName));
+    }
+
+    // Immediately synchronize active suite mode based on organization capability
+    if (normOrgTypeStr === '1' || normOrgTypeName === 'CLIENT MANAGEMENT') {
+      localStorage.setItem('active_org_type_view', 'Client Management');
+      localStorage.setItem('active_org_type_orgsuperadmin', 'Client Management');
+      localStorage.setItem('user_organization_type', '1');
+      localStorage.setItem('user_organization_type_name', 'CLIENT_MANAGEMENT');
+      window.dispatchEvent(new CustomEvent('orgTypeChanged', { detail: 'Client Management' }));
+    } else if (normOrgTypeStr === '2' || normOrgTypeName === 'SALE MANAGEMENT' || normOrgTypeName === 'SALES MANAGEMENT') {
+      localStorage.setItem('active_org_type_view', 'Sales Management');
+      localStorage.setItem('active_org_type_orgsuperadmin', 'Sales Management');
+      localStorage.setItem('user_organization_type', '2');
+      localStorage.setItem('user_organization_type_name', 'SALE_MANAGEMENT');
+      window.dispatchEvent(new CustomEvent('orgTypeChanged', { detail: 'Sales Management' }));
+    } else if (normOrgTypeStr === '0' || normOrgTypeName === 'ALL') {
+      localStorage.setItem('user_organization_type', '0');
+      localStorage.setItem('user_organization_type_name', 'ALL');
+      if (!localStorage.getItem('active_org_type_view')) {
+        localStorage.setItem('active_org_type_view', 'Client Management');
+      }
+    }
+
+    const getRoleTitle = (r: string) => {
+      switch (r) {
+        case 'SUPER_ADMIN':
+          return 'Platform Super Administrator';
+        case 'ORG_ADMIN':
+          return 'Organisation Administrator';
+        case 'SUB_ORG_ADMIN':
+          return 'Sub Organisation Administrator';
+        case 'BRANCH_ADMIN':
+          return 'Branch Administrator';
+        case 'STAFF':
+          return 'Operational Staff';
+        default:
+          return 'Administrator';
+      }
+    };
 
     return {
       id: apiUser.id,
-      name: apiUser.name || apiUser.email?.split('@')[0] || 'Platform Administrator',
+      name: apiUser.name || apiUser.email?.split('@')[0] || 'User',
       email: apiUser.email,
-      role: roleCode as Role,
-      department: apiUser.isPlatformAdmin ? 'Platform Management' : 'Administration',
+      role: roleCode,
+      organizationId: membershipOrgId,
+      department: apiUser.isPlatformAdmin
+        ? 'Platform Management'
+        : roleCode === 'ORG_ADMIN'
+        ? 'Enterprise Management'
+        : roleCode === 'SUB_ORG_ADMIN'
+        ? 'Company Administration'
+        : roleCode === 'BRANCH_ADMIN'
+        ? 'Branch Operations'
+        : 'Administration',
       avatar: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
       active: apiUser.active ?? true,
       status: apiUser.active === false ? 'Inactive' : 'Active',
       joinedDate: apiUser.emailVerifiedAt ? new Date(apiUser.emailVerifiedAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-      title: apiUser.isPlatformAdmin ? 'Platform Administrator' : 'Administrator',
+      title: getRoleTitle(roleCode),
       assignedProducts: ['PROD_1', 'PROD_2'],
       performanceMetrics: {
         leadsHandled: 0,
         tasksCompleted: 0,
         contentCreated: 0,
       },
+      organization: organization
+        ? {
+            id: organization.id || membershipOrgId || '',
+            name: organization.name || '',
+            organizationType: orgType,
+            organizationTypeName: orgTypeName,
+          }
+        : undefined,
+      organizationType: orgType,
+      organizationTypeName: orgTypeName,
+      memberships: apiUser.memberships,
     };
   }
 
   // Auth: Delegated to centralized src/api/auth/authApi.ts
   async login(email: string, password?: string): Promise<{ success: boolean; token: string; user: User }> {
     const data = await authApi.login({ email, password });
-    if (data && data.accessToken) {
-      const appUser = this.mapApiUserToAppUser(data.user);
-      this.setToken(data.accessToken);
+    const token =
+      data?.accessToken ||
+      data?.data?.token ||
+      data?.data?.accessToken ||
+      (data as any)?.token;
+    const userObj = data?.user || data?.data?.user;
+
+    if (token && userObj) {
+      const appUser = this.mapApiUserToAppUser(userObj);
+      this.setToken(token);
       this.setUserId(appUser.id);
       localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
       return {
         success: true,
-        token: data.accessToken,
+        token: token,
         user: appUser,
       };
     }
@@ -154,14 +324,21 @@ class ApiService {
 
   async refreshToken(): Promise<{ success: boolean; token: string; user: User }> {
     const data = await authApi.refreshToken();
-    if (data && data.accessToken) {
-      const appUser = this.mapApiUserToAppUser(data.user);
-      this.setToken(data.accessToken);
-      this.setUserId(appUser.id);
-      localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
+    const token =
+      data?.accessToken ||
+      data?.data?.token ||
+      data?.data?.accessToken ||
+      (data as any)?.token;
+    const userObj = data?.user || data?.data?.user;
+
+    if (token) {
+      const appUser = userObj ? this.mapApiUserToAppUser(userObj) : (this.getUser() as User);
+      this.setToken(token);
+      if (appUser?.id) this.setUserId(appUser.id);
+      if (appUser) localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
       return {
         success: true,
-        token: data.accessToken,
+        token: token,
         user: appUser,
       };
     }
@@ -197,13 +374,21 @@ class ApiService {
   }
 
   async getCurrentUser(): Promise<User> {
-    const data = await authApi.getCurrentUser();
-    if (data && data.user) {
-      const appUser = this.mapApiUserToAppUser(data.user);
-      this.setUserId(appUser.id);
-      localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
-      return appUser;
+    try {
+      const data = await authApi.getCurrentUser();
+      const userObj = data?.user || (data as any)?.data?.user || (data as any);
+      if (userObj && (userObj.id || userObj.email)) {
+        const appUser = this.mapApiUserToAppUser(userObj);
+        if (appUser?.id) this.setUserId(appUser.id);
+        localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
+        return appUser;
+      }
+    } catch {
+      // Fall through to cached user
     }
+
+    const cached = this.getUser();
+    if (cached) return cached;
     throw new Error('Could not retrieve current user profile');
   }
 

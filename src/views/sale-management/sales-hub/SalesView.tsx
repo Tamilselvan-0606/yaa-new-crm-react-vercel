@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   ShoppingCart,
   Plus,
@@ -36,6 +36,12 @@ import {
   Receipt,
   Share2,
   Forward,
+  UserCheck,
+  RefreshCw,
+  Loader2,
+  Wifi,
+  WifiOff,
+  Database,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -46,7 +52,7 @@ import {
   PaymentSplitItem,
   SalePaymentRecord,
 } from "../../../store/useSalesManagementStore";
-import { useCustomers, useProducts } from "../../../hooks/useQueries";
+import { clientProductApi } from "../../../api/platform/clientProductApi";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -59,7 +65,20 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { SalesCustomer } from "../../../store/useSalesManagementStore";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport, printHtmlElement } from "../../../utils/printUtils";
+import { UniversalShareDropdown, formatInvoiceShare } from "../../../utils/shareUtils";
 import { SalesGraphModal } from "./SalesGraphModal";
+import {
+  commerceInvoiceApi,
+  mapApiInvoiceToSaleTransaction,
+  mapSaleTransactionToInvoicePayload,
+  InvoiceFilterParams,
+  UUID_REGEX,
+  customerApi,
+  mapApiCustomerToSalesCustomer,
+  stockApi,
+  mapApiStockToInventoryStockItem,
+  productApi,
+} from "../../../api";
 
 // Helper functions for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -178,6 +197,20 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
                 placeholder="Search Customer"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (filteredCustomers.length > 0) {
+                      onChange(filteredCustomers[0].id);
+                      setIsOpen(false);
+                    }
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsOpen(false);
+                  }
+                }}
                 className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
               />
               {searchQuery && (
@@ -288,15 +321,55 @@ export const SalesView: React.FC = () => {
   const {
     sales,
     customers = [],
+    salesRepresentatives = [],
+    assignCustomerSalesRep,
     saveSale,
     deleteSale,
     updateSalePayment,
     saveCustomer,
+    setCustomersList,
+    setStocksList,
+    setSalesList,
     getCustomerMetrics,
     stocks,
   } = useSalesManagementStore();
-  const { data: customerList = [] } = useCustomers();
-  const { data: productList = [] } = useProducts();
+  const [customerList, setCustomerList] = useState<any[]>([]);
+  const [productList, setProductList] = useState<any[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadCommerceData = async () => {
+      try {
+        const [custRes, prodRes] = await Promise.all([
+          customerApi.getCustomers({ pagination_required: false, page_size: 100 }).catch(() => null),
+          clientProductApi.getProducts({ limit: 100 }).catch(() => null),
+        ]);
+        if (isMounted) {
+          if (custRes?.data && Array.isArray(custRes.data)) {
+            setCustomerList(custRes.data.map(mapApiCustomerToSalesCustomer));
+          }
+          if (prodRes?.data && Array.isArray(prodRes.data)) {
+            setProductList(
+              prodRes.data.map((p) => ({
+                id: p.id,
+                name: p.name,
+                code: p.code || p.id,
+                plans: p.plans || [],
+              }))
+            );
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load customers/products in SalesView:', err);
+      }
+    };
+    loadCommerceData();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
@@ -307,6 +380,8 @@ export const SalesView: React.FC = () => {
   const [appliedPaymentStatus, setAppliedPaymentStatus] = useState("All");
   const [pendingCustomer, setPendingCustomer] = useState("All");
   const [appliedCustomer, setAppliedCustomer] = useState("All");
+  const [pendingSalesRep, setPendingSalesRep] = useState("All");
+  const [appliedSalesRep, setAppliedSalesRep] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isSalesGraphModalOpen, setIsSalesGraphModalOpen] = useState(false);
@@ -351,6 +426,171 @@ export const SalesView: React.FC = () => {
     null,
   );
   const [editingSale, setEditingSale] = useState<SaleTransaction | null>(null);
+
+  // API States
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(true);
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [totalApiRecords, setTotalApiRecords] = useState(0);
+  const [totalApiPages, setTotalApiPages] = useState(1);
+
+  // Helper to ensure Product UUID
+  const ensureProductUUID = async (item: SaleProductItem): Promise<string> => {
+    if (item.productId && UUID_REGEX.test(item.productId)) {
+      return item.productId;
+    }
+    const foundStock = (stocks || []).find(
+      (s) =>
+        (s.sku && item.sku && s.sku.toLowerCase() === item.sku.toLowerCase()) ||
+        (s.productName && item.productName && s.productName.toLowerCase() === item.productName.toLowerCase()) ||
+        s.id === item.productId ||
+        s.productId === item.productId
+    );
+    if (foundStock) {
+      if (foundStock.productId && UUID_REGEX.test(foundStock.productId)) return foundStock.productId;
+      if (foundStock.id && UUID_REGEX.test(foundStock.id)) return foundStock.id;
+    }
+    const foundProd = (productList as any[]).find(
+      (p: any) =>
+        (p.sku && item.sku && p.sku.toLowerCase() === item.sku.toLowerCase()) ||
+        (p.name && item.productName && p.name.toLowerCase() === item.productName.toLowerCase()) ||
+        p.id === item.productId
+    );
+    if (foundProd && UUID_REGEX.test(foundProd.id)) {
+      return foundProd.id;
+    }
+    try {
+      const createRes = await productApi.createProduct({
+        productName: item.productName || "Sale Item",
+        productCode: item.sku || `PRD-${Date.now().toString().slice(-6)}`,
+        unit: "PCS",
+        category: "General",
+        salePrice: item.unitPrice || 0,
+        purchasePrice: item.purchasePrice || 0,
+      });
+      if (createRes && createRes.data && createRes.data.id) {
+        return createRes.data.id;
+      }
+    } catch (err) {
+      console.warn("Auto-create product fallback:", err);
+    }
+    return item.productId || "a1b2c3d4-0000-4000-8000-000000000101";
+  };
+
+  // Helper to ensure Customer UUID
+  const ensureCustomerUUID = (custId?: string, custName?: string): string | undefined => {
+    if (custId && UUID_REGEX.test(custId)) {
+      return custId;
+    }
+    const foundCust = (customers || []).find(
+      (c) =>
+        c.id === custId ||
+        (c.name && custName && c.name.toLowerCase() === custName.toLowerCase()) ||
+        (c.company && custName && c.company.toLowerCase() === custName.toLowerCase())
+    );
+    if (foundCust && UUID_REGEX.test(foundCust.id)) {
+      return foundCust.id;
+    }
+    const foundInList = (customerList as any[]).find(
+      (c: any) =>
+        c.id === custId ||
+        (c.name && custName && c.name.toLowerCase() === custName.toLowerCase())
+    );
+    if (foundInList && UUID_REGEX.test(foundInList.id)) {
+      return foundInList.id;
+    }
+    return undefined;
+  };
+
+  // Live Invoices Fetching
+  const fetchSalesInvoices = useCallback(async () => {
+    setIsApiLoading(true);
+    try {
+      const params: InvoiceFilterParams = {
+        page_no: currentPage,
+        page_size: pageSize,
+        pagination_required: 'true',
+        sortOrder: "desc",
+      };
+      if (appliedSearch && appliedSearch.trim()) {
+        params.search = appliedSearch.trim();
+      }
+      if (appliedSaleStatus && appliedSaleStatus !== "All") {
+        params.status = appliedSaleStatus;
+      }
+      if (appliedPaymentStatus && appliedPaymentStatus !== "All") {
+        params.paymentStatus = appliedPaymentStatus;
+      }
+      if (appliedCustomer && appliedCustomer !== "All" && UUID_REGEX.test(appliedCustomer)) {
+        params.customerId = appliedCustomer;
+      }
+
+      const res = await commerceInvoiceApi.getInvoices(params);
+      if (res && res.data && Array.isArray(res.data)) {
+        const mapped = res.data.map((inv) => mapApiInvoiceToSaleTransaction(inv));
+        setSalesList(mapped);
+        if (res.pagination) {
+          setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
+          setTotalApiPages(res.pagination.totalPages ?? 1);
+        } else {
+          setTotalApiRecords(mapped.length);
+          setTotalApiPages(1);
+        }
+        setIsApiConnected(true);
+      }
+    } catch (err: any) {
+      console.error("Failed to fetch invoices:", err);
+      setIsApiConnected(false);
+    } finally {
+      setIsApiLoading(false);
+    }
+  }, [currentPage, pageSize, appliedSearch, appliedSaleStatus, appliedPaymentStatus, appliedCustomer, setSalesList]);
+
+  // Master Data Fetching
+  const fetchMasterData = useCallback(async () => {
+    try {
+      const [custRes, stockRes] = await Promise.allSettled([
+        customerApi.getCustomers({ pagination_required: false }),
+        stockApi.getStocks({ pagination_required: false }),
+      ]);
+      if (custRes.status === "fulfilled" && custRes.value?.data) {
+        setCustomersList(custRes.value.data.map(mapApiCustomerToSalesCustomer));
+      }
+      if (stockRes.status === "fulfilled" && stockRes.value?.data) {
+        setStocksList(stockRes.value.data.map(mapApiStockToInventoryStockItem));
+      }
+    } catch (err) {
+      console.warn("Master data load error:", err);
+    }
+  }, [setCustomersList, setStocksList]);
+
+  useEffect(() => {
+    fetchMasterData();
+  }, [fetchMasterData]);
+
+  useEffect(() => {
+    fetchSalesInvoices();
+  }, [fetchSalesInvoices]);
+
+  // Quick Assign Sales Rep Modal State (Table Row Action)
+  const [isAssignInvoiceModalOpen, setIsAssignInvoiceModalOpen] = useState(false);
+  const [assignInvoiceTarget, setAssignInvoiceTarget] = useState<SaleTransaction | null>(null);
+  const [assignRepId, setAssignRepId] = useState("");
+  const [assignStatus, setAssignStatus] = useState("Pending Follow-up");
+  const [assignNextFollowUp, setAssignNextFollowUp] = useState("");
+
+  // Invoice Details Modal Assignment Card State
+  const [detailRepId, setDetailRepId] = useState("");
+  const [detailCollectionStatus, setDetailCollectionStatus] = useState("Pending Follow-up");
+  const [detailNextFollowUp, setDetailNextFollowUp] = useState("");
+
+  useEffect(() => {
+    if (selectedSale) {
+      setDetailRepId(selectedSale.salesRepresentativeId || "");
+      setDetailCollectionStatus(selectedSale.collectionStatus || "Pending Follow-up");
+      setDetailNextFollowUp(selectedSale.nextFollowUpDate || "");
+    }
+  }, [selectedSale]);
 
   // Quick Customer Form State
   const [quickCustomerForm, setQuickCustomerForm] = useState({
@@ -630,8 +870,36 @@ export const SalesView: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
+  // Handle opening View Modal
+  const handleOpenViewInvoice = async (sale: SaleTransaction) => {
+    let targetSale = sale;
+    if (UUID_REGEX.test(sale.id)) {
+      try {
+        const fresh = await commerceInvoiceApi.getInvoiceById(sale.id);
+        if (fresh && fresh.data) {
+          targetSale = mapApiInvoiceToSaleTransaction(fresh.data);
+        }
+      } catch (err) {
+        console.warn("Could not fetch fresh invoice details:", err);
+      }
+    }
+    setSelectedSale(targetSale);
+    setIsInvoiceModalOpen(true);
+  };
+
   // Handle opening Edit Modal
-  const handleOpenEditModal = (sale: SaleTransaction) => {
+  const handleOpenEditModal = async (sale: SaleTransaction) => {
+    let targetSale = sale;
+    if (UUID_REGEX.test(sale.id)) {
+      try {
+        const fresh = await commerceInvoiceApi.getInvoiceById(sale.id);
+        if (fresh && fresh.data) {
+          targetSale = mapApiInvoiceToSaleTransaction(fresh.data);
+        }
+      } catch (err) {
+        console.warn("Could not fetch fresh invoice details for editing:", err);
+      }
+    }
     const existingSplits: PaymentSplitItem[] =
       sale.paymentSplits && sale.paymentSplits.length > 0
         ? JSON.parse(JSON.stringify(sale.paymentSplits))
@@ -1297,20 +1565,20 @@ export const SalesView: React.FC = () => {
     };
   }, [formData]);
 
-  // Generate Invoice Handler (Creates invoice before payment with status UNPAID)
-  const handleGenerateInvoice = () => {
+  // Generate Invoice Handler (Creates invoice on backend and local store)
+  const handleGenerateInvoice = async () => {
     if (!formData.customerName.trim()) {
       toast.error("Please select or specify a customer.");
       return;
     }
-    const validItems = formData.items.filter(
+    const rawValidItems = formData.items.filter(
       (it) => it.productId || it.productName,
     );
-    if (validItems.length === 0) {
+    if (rawValidItems.length === 0) {
       toast.error("Please select at least one valid product.");
       return;
     }
-    const hasInvalidQty = validItems.some(
+    const hasInvalidQty = rawValidItems.some(
       (it) => !it.quantity || it.quantity <= 0,
     );
     if (hasInvalidQty) {
@@ -1318,149 +1586,282 @@ export const SalesView: React.FC = () => {
       return;
     }
 
-    const grandTotal = calculatedTotals.grandTotal;
-    const currentPaid = editingSale?.paidAmount || formData.paidAmount || 0;
-    const balance = Math.max(0, grandTotal - currentPaid);
-    const paymentStatus: SalePaymentStatus =
-      balance <= 0 ? "Paid" : currentPaid > 0 ? "Partial" : "Unpaid";
-    const primaryPaymentMethod =
-      formData.paymentSplits[0]?.method ||
-      formData.paymentMethod ||
-      "Bank Transfer";
+    setIsActionLoading(true);
+    try {
+      const validItems: SaleProductItem[] = await Promise.all(
+        rawValidItems.map(async (it) => {
+          const validProdId = await ensureProductUUID(it);
+          return {
+            ...it,
+            productId: validProdId,
+          };
+        })
+      );
 
-    const salePayload: SaleTransaction = {
-      id: editingSale ? editingSale.id : `sale_${Date.now()}`,
-      invoiceNo:
-        formData.invoiceNo ||
-        `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      invoiceStatus: "Generated",
-      referenceNo: formData.referenceNo,
-      saleDate: formData.saleDate,
-      dueDate: formData.dueDate,
-      customerId: formData.customerId,
-      customerName: formData.customerName,
-      customerCompany: formData.customerCompany,
-      customerPhone: formData.customerPhone,
-      customerEmail: formData.customerEmail,
-      billingAddress: formData.billingAddress,
-      shippingAddress: formData.shippingAddress,
-      items: validItems,
-      subtotal: calculatedTotals.subtotal,
-      withGst: formData.withGst,
-      gstType: formData.gstType,
-      cgst: calculatedTotals.cgst,
-      sgst: calculatedTotals.sgst,
-      igst: calculatedTotals.igst,
-      overallDiscount: calculatedTotals.overallDiscount,
-      totalDiscount: calculatedTotals.totalDiscount,
-      totalTax: calculatedTotals.totalTax,
-      shippingCharges: Number(formData.shippingCharges) || 0,
-      otherCharges: Number(formData.otherCharges) || 0,
-      grandTotal: grandTotal,
-      paidAmount: currentPaid,
-      balance: balance,
-      paymentMethod: primaryPaymentMethod as any,
-      paymentSplits: formData.paymentSplits,
-      paymentRecords:
-        editingSale?.paymentRecords || formData.paymentRecords || [],
-      paymentTerms: formData.paymentTerms || "Net 15 Days",
-      paymentStatus: paymentStatus,
-      saleStatus: "Confirmed",
-      createdBy: editingSale ? editingSale.createdBy : "James Wilson",
-      salesperson: formData.salesperson || "Alex Rivera",
-      notes: formData.notes,
-      createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+      const resolvedCustomerId = ensureCustomerUUID(formData.customerId, formData.customerName);
 
-    saveSale(salePayload);
-    setEditingSale(salePayload);
-    setSelectedSale(salePayload);
-    setFormData((prev) => ({
-      ...prev,
-      invoiceNo: salePayload.invoiceNo,
-      invoiceStatus: "Generated",
-      paidAmount: currentPaid,
-      paymentRecords: salePayload.paymentRecords || [],
-    }));
+      const grandTotal = calculatedTotals.grandTotal;
+      const currentPaid = editingSale?.paidAmount || formData.paidAmount || 0;
+      const balance = Math.max(0, grandTotal - currentPaid);
+      const paymentStatus: SalePaymentStatus =
+        balance <= 0 ? "Paid" : currentPaid > 0 ? "Partial" : "Unpaid";
+      const primaryPaymentMethod =
+        formData.paymentSplits[0]?.method ||
+        formData.paymentMethod ||
+        "Bank Transfer";
 
-    toast.success(
-      `Invoice ${salePayload.invoiceNo} generated successfully! Payment Status: ${paymentStatus.toUpperCase()}`,
-    );
+      const isEdit = Boolean(editingSale && editingSale.id && UUID_REGEX.test(editingSale.id));
+
+      const salePayload: SaleTransaction = {
+        id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
+        invoiceNo: isEdit ? formData.invoiceNo : "",
+        invoiceStatus: "Generated",
+        referenceNo: formData.referenceNo || undefined,
+        saleDate: formData.saleDate,
+        dueDate: formData.dueDate,
+        customerId: resolvedCustomerId || "",
+        customerName: formData.customerName,
+        customerCompany: formData.customerCompany || undefined,
+        customerPhone: formData.customerPhone || undefined,
+        customerEmail: formData.customerEmail || undefined,
+        billingAddress: formData.billingAddress,
+        shippingAddress: formData.shippingAddress || formData.billingAddress,
+        items: validItems,
+        subtotal: calculatedTotals.subtotal,
+        withGst: formData.withGst,
+        gstType: formData.gstType,
+        cgst: calculatedTotals.cgst,
+        sgst: calculatedTotals.sgst,
+        igst: calculatedTotals.igst,
+        overallDiscount: calculatedTotals.overallDiscount,
+        totalDiscount: calculatedTotals.totalDiscount,
+        totalTax: calculatedTotals.totalTax,
+        shippingCharges: Number(formData.shippingCharges) || 0,
+        otherCharges: Number(formData.otherCharges) || 0,
+        grandTotal: grandTotal,
+        paidAmount: currentPaid,
+        balance: balance,
+        paymentMethod: primaryPaymentMethod as any,
+        paymentSplits: formData.paymentSplits.filter((p) => Number(p.amount) > 0),
+        paymentRecords:
+          editingSale?.paymentRecords || formData.paymentRecords || [],
+        paymentTerms: formData.paymentTerms || "Net 15 Days",
+        paymentStatus: paymentStatus,
+        saleStatus: "Confirmed",
+        createdBy: editingSale ? editingSale.createdBy : "James Wilson",
+        salesperson: formData.salesperson || "Alex Rivera",
+        notes: formData.notes || undefined,
+        createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const apiPayload = mapSaleTransactionToInvoicePayload(salePayload);
+
+      let savedApiSale: SaleTransaction;
+      if (isEdit) {
+        const updateRes = await commerceInvoiceApi.updateInvoice(editingSale!.id, apiPayload);
+        if (updateRes.data) {
+          savedApiSale = mapApiInvoiceToSaleTransaction(updateRes.data);
+        } else {
+          savedApiSale = salePayload;
+        }
+      } else {
+        const createRes = await commerceInvoiceApi.createInvoice(apiPayload as any);
+        if (createRes.data) {
+          savedApiSale = mapApiInvoiceToSaleTransaction(createRes.data);
+        } else {
+          savedApiSale = {
+            ...salePayload,
+            invoiceNo: formData.invoiceNo || `INV-${Date.now()}`,
+          };
+        }
+      }
+
+      saveSale(savedApiSale);
+      setEditingSale(savedApiSale);
+      setSelectedSale(savedApiSale);
+      setFormData((prev) => ({
+        ...prev,
+        invoiceNo: savedApiSale.invoiceNo,
+        invoiceStatus: "Generated",
+        paidAmount: savedApiSale.paidAmount,
+        paymentRecords: savedApiSale.paymentRecords || [],
+      }));
+
+      toast.success(
+        `Invoice ${savedApiSale.invoiceNo} ${isEdit ? "updated" : "generated"} successfully! Payment Status: ${savedApiSale.paymentStatus.toUpperCase()}`
+      );
+      await fetchSalesInvoices();
+    } catch (err: any) {
+      console.error("Failed to generate invoice:", err);
+      toast.error(err?.message || "Failed to save invoice to server.");
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Save Draft Sale Handler
-  const handleSaveDraft = () => {
+  const handleSaveDraft = async () => {
     if (!formData.customerName.trim()) {
       toast.error("Please select or specify a customer.");
       return;
     }
-    const validItems = formData.items.filter(
+    const rawValidItems = formData.items.filter(
       (it) => it.productId || it.productName,
     );
-    if (validItems.length === 0) {
+    if (rawValidItems.length === 0) {
       toast.error("Please select at least one valid product.");
       return;
     }
 
-    const grandTotal = calculatedTotals.grandTotal;
-    const currentPaid = formData.paidAmount || 0;
-    const balance = Math.max(0, grandTotal - currentPaid);
-    const paymentStatus: SalePaymentStatus =
-      balance <= 0 ? "Paid" : currentPaid > 0 ? "Partial" : "Unpaid";
-    const primaryPaymentMethod =
-      formData.paymentSplits[0]?.method ||
-      formData.paymentMethod ||
-      "Bank Transfer";
+    setIsActionLoading(true);
+    try {
+      const validItems: SaleProductItem[] = await Promise.all(
+        rawValidItems.map(async (it) => {
+          const validProdId = await ensureProductUUID(it);
+          return {
+            ...it,
+            productId: validProdId,
+          };
+        })
+      );
 
-    const salePayload: SaleTransaction = {
-      id: editingSale ? editingSale.id : `sale_${Date.now()}`,
-      invoiceNo:
-        formData.invoiceNo ||
-        `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      invoiceStatus: formData.invoiceStatus || "Draft",
-      referenceNo: formData.referenceNo,
-      saleDate: formData.saleDate,
-      dueDate: formData.dueDate,
-      customerId: formData.customerId,
-      customerName: formData.customerName,
-      customerCompany: formData.customerCompany,
-      customerPhone: formData.customerPhone,
-      customerEmail: formData.customerEmail,
-      billingAddress: formData.billingAddress,
-      shippingAddress: formData.shippingAddress,
-      items: validItems,
-      subtotal: calculatedTotals.subtotal,
-      withGst: formData.withGst,
-      gstType: formData.gstType,
-      cgst: calculatedTotals.cgst,
-      sgst: calculatedTotals.sgst,
-      igst: calculatedTotals.igst,
-      overallDiscount: calculatedTotals.overallDiscount,
-      totalDiscount: calculatedTotals.totalDiscount,
-      totalTax: calculatedTotals.totalTax,
-      shippingCharges: Number(formData.shippingCharges) || 0,
-      otherCharges: Number(formData.otherCharges) || 0,
-      grandTotal: grandTotal,
-      paidAmount: currentPaid,
-      balance: balance,
-      paymentMethod: primaryPaymentMethod as any,
-      paymentSplits: formData.paymentSplits,
-      paymentRecords: formData.paymentRecords || [],
-      paymentTerms: formData.paymentTerms || "Net 15 Days",
-      paymentStatus: paymentStatus,
-      saleStatus: "Draft",
-      createdBy: editingSale ? editingSale.createdBy : "James Wilson",
-      salesperson: formData.salesperson || "Alex Rivera",
-      notes: formData.notes,
-      createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+      const resolvedCustomerId = ensureCustomerUUID(formData.customerId, formData.customerName);
 
-    saveSale(salePayload);
-    setEditingSale(salePayload);
-    setSelectedSale(salePayload);
-    toast.success(`Draft sale ${salePayload.invoiceNo} saved successfully!`);
+      const grandTotal = calculatedTotals.grandTotal;
+      const currentPaid = formData.paidAmount || 0;
+      const balance = Math.max(0, grandTotal - currentPaid);
+      const paymentStatus: SalePaymentStatus =
+        balance <= 0 ? "Paid" : currentPaid > 0 ? "Partial" : "Unpaid";
+      const primaryPaymentMethod =
+        formData.paymentSplits[0]?.method ||
+        formData.paymentMethod ||
+        "Bank Transfer";
+
+      const isEdit = Boolean(editingSale && editingSale.id && UUID_REGEX.test(editingSale.id));
+
+      const salePayload: SaleTransaction = {
+        id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
+        invoiceNo: isEdit ? formData.invoiceNo : "",
+        invoiceStatus: formData.invoiceStatus || "Draft",
+        referenceNo: formData.referenceNo || undefined,
+        saleDate: formData.saleDate,
+        dueDate: formData.dueDate,
+        customerId: resolvedCustomerId || "",
+        customerName: formData.customerName,
+        customerCompany: formData.customerCompany || undefined,
+        customerPhone: formData.customerPhone || undefined,
+        customerEmail: formData.customerEmail || undefined,
+        billingAddress: formData.billingAddress,
+        shippingAddress: formData.shippingAddress || formData.billingAddress,
+        items: validItems,
+        subtotal: calculatedTotals.subtotal,
+        withGst: formData.withGst,
+        gstType: formData.gstType,
+        cgst: calculatedTotals.cgst,
+        sgst: calculatedTotals.sgst,
+        igst: calculatedTotals.igst,
+        overallDiscount: calculatedTotals.overallDiscount,
+        totalDiscount: calculatedTotals.totalDiscount,
+        totalTax: calculatedTotals.totalTax,
+        shippingCharges: Number(formData.shippingCharges) || 0,
+        otherCharges: Number(formData.otherCharges) || 0,
+        grandTotal: grandTotal,
+        paidAmount: currentPaid,
+        balance: balance,
+        paymentMethod: primaryPaymentMethod as any,
+        paymentSplits: formData.paymentSplits.filter((p) => Number(p.amount) > 0),
+        paymentRecords: formData.paymentRecords || [],
+        paymentTerms: formData.paymentTerms || "Net 15 Days",
+        paymentStatus: paymentStatus,
+        saleStatus: "Draft",
+        createdBy: editingSale ? editingSale.createdBy : "James Wilson",
+        salesperson: formData.salesperson || "Alex Rivera",
+        notes: formData.notes || undefined,
+        createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const apiPayload = mapSaleTransactionToInvoicePayload(salePayload);
+
+      let savedApiSale: SaleTransaction;
+      if (isEdit) {
+        const updateRes = await commerceInvoiceApi.updateInvoice(editingSale!.id, apiPayload);
+        if (updateRes.data) {
+          savedApiSale = mapApiInvoiceToSaleTransaction(updateRes.data);
+        } else {
+          savedApiSale = salePayload;
+        }
+      } else {
+        const createRes = await commerceInvoiceApi.createInvoice(apiPayload as any);
+        if (createRes.data) {
+          savedApiSale = mapApiInvoiceToSaleTransaction(createRes.data);
+        } else {
+          savedApiSale = {
+            ...salePayload,
+            invoiceNo: formData.invoiceNo || `INV-${Date.now()}`,
+          };
+        }
+      }
+
+      saveSale(savedApiSale);
+      setEditingSale(savedApiSale);
+      setSelectedSale(savedApiSale);
+      toast.success(`Draft invoice ${savedApiSale.invoiceNo} saved successfully!`);
+      await fetchSalesInvoices();
+    } catch (err: any) {
+      console.error("Failed to save draft invoice:", err);
+      toast.error(err?.message || "Failed to save draft invoice to server.");
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Void / Cancel Invoice
+  const handleCancelInvoice = async (sale: SaleTransaction) => {
+    if (!confirm(`Are you sure you want to cancel invoice ${sale.invoiceNo}? Restores stock items.`)) {
+      return;
+    }
+    setIsActionLoading(true);
+    try {
+      if (UUID_REGEX.test(sale.id)) {
+        await commerceInvoiceApi.updateStatus(sale.id, "Cancelled");
+      }
+      const updatedSale: SaleTransaction = {
+        ...sale,
+        saleStatus: "Cancelled",
+        updatedAt: new Date().toISOString(),
+      };
+      saveSale(updatedSale);
+      toast.success(`Invoice ${sale.invoiceNo} cancelled successfully.`);
+      await fetchSalesInvoices();
+    } catch (err: any) {
+      console.error("Failed to cancel invoice:", err);
+      toast.error(err?.message || "Failed to cancel invoice.");
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Delete Invoice
+  const handleDeleteSaleInvoice = async (sale: SaleTransaction) => {
+    if (!confirm(`Are you sure you want to void / delete invoice ${sale.invoiceNo}?`)) {
+      return;
+    }
+    setIsActionLoading(true);
+    try {
+      if (UUID_REGEX.test(sale.id)) {
+        await commerceInvoiceApi.deleteInvoice(sale.id);
+      }
+      deleteSale(sale.id);
+      toast.success(`Invoice ${sale.invoiceNo} deleted successfully.`);
+      await fetchSalesInvoices();
+    } catch (err: any) {
+      console.error("Failed to delete invoice:", err);
+      toast.error(err?.message || "Failed to delete invoice.");
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // General Save Sale Form Handler (legacy support for form submit)
@@ -1761,7 +2162,8 @@ export const SalesView: React.FC = () => {
         s.customerName.toLowerCase().includes(q) ||
         (s.customerCompany || "").toLowerCase().includes(q) ||
         s.items.some((it) => it.productName.toLowerCase().includes(q)) ||
-        s.salesperson.toLowerCase().includes(q);
+        s.salesperson.toLowerCase().includes(q) ||
+        (s.salesRepresentativeName || "").toLowerCase().includes(q);
 
       const matchesSaleStatus =
         appliedSaleStatus === "All" ||
@@ -1776,11 +2178,17 @@ export const SalesView: React.FC = () => {
         s.customerId === appliedCustomer ||
         s.customerName === appliedCustomer;
 
+      const matchesSalesRep =
+        appliedSalesRep === "All" ||
+        s.salesRepresentativeId === appliedSalesRep ||
+        s.salesRepresentativeName === appliedSalesRep;
+
       return (
         matchesSearch &&
         matchesSaleStatus &&
         matchesPaymentStatus &&
-        matchesCustomer
+        matchesCustomer &&
+        matchesSalesRep
       );
     });
   }, [
@@ -1789,7 +2197,64 @@ export const SalesView: React.FC = () => {
     appliedSaleStatus,
     appliedPaymentStatus,
     appliedCustomer,
+    appliedSalesRep,
   ]);
+
+  // Open Quick Assign Modal from Table Row Action
+  const handleOpenAssignInvoiceModal = (sale: SaleTransaction) => {
+    setAssignInvoiceTarget(sale);
+    const cust = customers.find((c) => c.id === sale.customerId);
+    setAssignRepId(cust?.salesRepresentativeId || sale.salesRepresentativeId || "");
+    setAssignStatus(sale.collectionStatus || "Pending Follow-up");
+    setAssignNextFollowUp(sale.nextFollowUpDate || "");
+    setIsAssignInvoiceModalOpen(true);
+  };
+
+  // Save Quick Assignment
+  const handleSaveQuickAssignInvoice = () => {
+    if (!assignInvoiceTarget) return;
+    if (!assignRepId) {
+      toast.error("Please select a sales representative");
+      return;
+    }
+    const cust = customers.find((c) => c.id === assignInvoiceTarget.customerId);
+    if (assignInvoiceTarget.customerId) {
+      assignCustomerSalesRep(assignInvoiceTarget.customerId, assignRepId);
+    }
+    const rep = salesRepresentatives.find((r) => r.id === assignRepId);
+
+    toast.success(`Sales Rep assigned to customer ${cust?.name || assignInvoiceTarget.customerName}!`, {
+      description: `Assigned ${rep?.name || 'Representative'} across all customer invoices.`,
+    });
+    setIsAssignInvoiceModalOpen(false);
+    setAssignInvoiceTarget(null);
+  };
+
+  // Save Assignment from Invoice Details Modal Card
+  const handleSaveDetailAssignment = () => {
+    if (!selectedSale) return;
+    if (!detailRepId) {
+      toast.error("Please select a sales representative");
+      return;
+    }
+    const cust = customers.find((c) => c.id === selectedSale.customerId);
+    if (selectedSale.customerId) {
+      assignCustomerSalesRep(selectedSale.customerId, detailRepId);
+    }
+    const rep = salesRepresentatives.find((r) => r.id === detailRepId);
+
+    setSelectedSale({
+      ...selectedSale,
+      salesRepresentativeId: detailRepId,
+      salesRepresentativeName: rep?.name || 'Unassigned',
+      collectionStatus: detailCollectionStatus,
+      nextFollowUpDate: detailNextFollowUp,
+    });
+
+    toast.success(`Sales Rep assigned to customer ${cust?.name || selectedSale.customerName}!`, {
+      description: `Assigned ${rep?.name || 'Representative'} across all customer invoices.`,
+    });
+  };
 
   // Export Sales to Excel Report
   const handleExportExcel = () => {
@@ -2140,8 +2605,7 @@ export const SalesView: React.FC = () => {
 
           {/* Full-Page Form Canvas */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
-            <form
-              onSubmit={(e) => {
+            <form noValidate onSubmit={(e) => {
                 e.preventDefault();
                 handleSaveSale("confirm");
               }}
@@ -3178,7 +3642,7 @@ export const SalesView: React.FC = () => {
                       /* STATE 1: SALE NOT INVOICED (Draft Mode) */
                       <div className="space-y-2.5">
                         <button
-                          type="button"
+                          type="submit"
                           onClick={handleGenerateInvoice}
                           className="w-full py-3.5 px-4 bg-white hover:bg-slate-100 text-[#33077C] font-black text-sm sm:text-base rounded-xl transition-all shadow-md hover:shadow-xl active:scale-[0.98] cursor-pointer text-center flex items-center justify-center gap-2"
                         >
@@ -3621,6 +4085,16 @@ export const SalesView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
+            icon={<RefreshCw className={`w-4 h-4 text-slate-600 ${isApiLoading ? "animate-spin text-[#33077C]" : ""}`} />}
+            onClick={() => fetchSalesInvoices()}
+            disabled={isApiLoading}
+            className="hover:border-slate-400 transition-colors"
+          >
+            {isApiLoading ? "Syncing..." : "Refresh"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
             onClick={handleExportExcel}
             className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
@@ -3766,12 +4240,13 @@ export const SalesView: React.FC = () => {
           <SearchBar
             value={pendingSearch}
             onChange={(val) => setPendingSearch(val)}
-            placeholder="Search by invoice #, customer, product..."
+            placeholder="Search by invoice #, customer, rep, product..."
             onSubmit={() => {
               setAppliedSearch(pendingSearch);
               setAppliedSaleStatus(pendingSaleStatus);
               setAppliedPaymentStatus(pendingPaymentStatus);
               setAppliedCustomer(pendingCustomer);
+              setAppliedSalesRep(pendingSalesRep);
               setCurrentPage(1);
             }}
             onReset={() => {
@@ -3783,6 +4258,8 @@ export const SalesView: React.FC = () => {
               setAppliedPaymentStatus("All");
               setPendingCustomer("All");
               setAppliedCustomer("All");
+              setPendingSalesRep("All");
+              setAppliedSalesRep("All");
               setCurrentPage(1);
             }}
             filterSlot={
@@ -3834,6 +4311,20 @@ export const SalesView: React.FC = () => {
                     ...customerList.map((c) => ({
                       label: c.name || c.company,
                       value: c.id,
+                    })),
+                  ]}
+                />
+
+                <FilterDropdown
+                  placeholder="Sales Rep : All"
+                  value={pendingSalesRep}
+                  onChange={(val) => setPendingSalesRep(val)}
+                  options={[
+                    { label: "Sales Rep : All", value: "All" },
+                    ...salesRepresentatives.map((r) => ({
+                      label: r.name,
+                      value: r.id,
+                      dotColor: r.status === "Active" ? "#10b981" : "#94a3b8",
                     })),
                   ]}
                 />
@@ -3925,7 +4416,7 @@ export const SalesView: React.FC = () => {
                       STATUS
                     </th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      SALESPERSON
+                      SALES REP
                     </th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
                       ACTIONS
@@ -3969,10 +4460,7 @@ export const SalesView: React.FC = () => {
                               <div className="flex flex-col">
                                 <span
                                   className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
-                                  onClick={() => {
-                                    setSelectedSale(sale);
-                                    setIsInvoiceModalOpen(true);
-                                  }}
+                                  onClick={() => handleOpenViewInvoice(sale)}
                                 >
                                   {sale.invoiceNo}
                                 </span>
@@ -4088,14 +4576,26 @@ export const SalesView: React.FC = () => {
                             )}
                           </td>
 
-                          {/* 8. Salesperson */}
+                          {/* 8. Sales Rep */}
                           <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                            <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
-                              {sale.salesperson}
-                            </span>
-                            <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
-                              By: {sale.createdBy}
-                            </span>
+                            <div className="flex flex-col gap-0.5">
+                              {sale.salesRepresentativeName || sale.salesperson ? (
+                                <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
+                                  {sale.salesRepresentativeName || sale.salesperson}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenAssignInvoiceModal(sale);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] hover:underline cursor-pointer"
+                                >
+                                  + Assign Rep
+                                </button>
+                              )}
+                            </div>
                           </td>
 
                           {/* 9. Actions */}
@@ -4115,140 +4615,15 @@ export const SalesView: React.FC = () => {
                               </button>
 
                               {/* 2. Share Action Button with Floating Popover */}
-                              <div className="relative inline-block text-left share-dropdown-container">
-                                <button
-                                  type="button"
-                                  title="Share Invoice"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (activeShareDropdownId === sale.id) {
-                                      setActiveShareDropdownId(null);
-                                      setShareDropdownPos(null);
-                                    } else {
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                      const btnRect = (
-                                        e.currentTarget as HTMLElement
-                                      ).getBoundingClientRect();
-                                      const spaceBelow =
-                                        window.innerHeight - btnRect.bottom;
-                                      const popoverHeight = 160;
-                                      if (spaceBelow < popoverHeight) {
-                                        setShareDropdownPos({
-                                          bottom:
-                                            window.innerHeight -
-                                            btnRect.top +
-                                            4,
-                                          right:
-                                            window.innerWidth -
-                                            btnRect.right -
-                                            10,
-                                        });
-                                      } else {
-                                        setShareDropdownPos({
-                                          top: btnRect.bottom + 4,
-                                          right:
-                                            window.innerWidth -
-                                            btnRect.right -
-                                            10,
-                                        });
-                                      }
-                                      setActiveShareDropdownId(sale.id);
-                                    }
-                                  }}
-                                  className="w-8 h-8 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <Forward className="w-4 h-4 stroke-[2.2] text-[#2563EB]" />
-                                </button>
-
-                                {/* Share Popover Popup */}
-                                {activeShareDropdownId === sale.id &&
-                                  shareDropdownPos && (
-                                    <div
-                                      className="share-dropdown-menu fixed z-[9999] w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                      style={{
-                                        top:
-                                          shareDropdownPos.top !== undefined
-                                            ? `${shareDropdownPos.top}px`
-                                            : "auto",
-                                        bottom:
-                                          shareDropdownPos.bottom !== undefined
-                                            ? `${shareDropdownPos.bottom}px`
-                                            : "auto",
-                                        right: `${shareDropdownPos.right}px`,
-                                      }}
-                                    >
-                                      <div className="text-xs font-bold text-slate-800 mb-2.5 px-1">
-                                        Share
-                                      </div>
-                                      <div className="flex items-center justify-around gap-3 pt-0.5 pb-0.5">
-                                        {/* Email Option */}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleShareEmail(sale);
-                                          }}
-                                          className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-none"
-                                          title="Share via Email"
-                                        >
-                                          <div className="w-11 h-11 rounded-xl border-2 border-blue-200 group-hover:border-blue-400 bg-white group-hover:bg-blue-50/50 flex items-center justify-center transition-all shadow-2xs group-hover:scale-105">
-                                            {/* Gmail / Email Icon */}
-                                            <svg
-                                              viewBox="0 0 24 24"
-                                              className="w-5.5 h-5.5"
-                                              fill="none"
-                                            >
-                                              <path
-                                                d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
-                                                stroke="#EA4335"
-                                                strokeWidth="2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                fill="#fff"
-                                              />
-                                              <path
-                                                d="M22 6l-10 7L2 6"
-                                                stroke="#EA4335"
-                                                strokeWidth="2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                            </svg>
-                                          </div>
-                                          <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">
-                                            Email
-                                          </span>
-                                        </button>
-
-                                        {/* WhatsApp Option */}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleShareWhatsApp(sale);
-                                          }}
-                                          className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-none"
-                                          title="Share via WhatsApp"
-                                        >
-                                          <div className="w-11 h-11 rounded-xl border border-emerald-100 group-hover:border-emerald-300 bg-white group-hover:bg-emerald-50/50 flex items-center justify-center transition-all shadow-2xs group-hover:scale-105">
-                                            {/* WhatsApp Logo */}
-                                            <svg
-                                              viewBox="0 0 24 24"
-                                              className="w-6.5 h-6.5"
-                                              fill="#25D366"
-                                            >
-                                              <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 6.46 17.5 2 12.04 2ZM12.04 20.15C10.56 20.15 9.11 19.76 7.85 19.01L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.8 13.47 3.8 11.91C3.8 7.37 7.5 3.67 12.04 3.67C16.58 3.67 20.28 7.37 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15ZM16.56 14.39C16.31 14.27 15.09 13.67 14.86 13.59C14.63 13.5 14.47 13.46 14.31 13.71C14.14 13.95 13.67 14.51 13.53 14.67C13.39 14.84 13.25 14.86 13 14.73C12.75 14.61 11.95 14.35 11 13.5C10.26 12.84 9.76 12.03 9.62 11.78C9.48 11.54 9.6 11.41 9.73 11.28C9.84 11.17 9.98 10.99 10.1 10.85C10.23 10.71 10.27 10.6 10.35 10.44C10.43 10.28 10.39 10.14 10.33 10.02C10.27 9.9 9.78 8.7 9.58 8.2C9.38 7.72 9.18 7.78 9.03 7.77L8.56 7.76C8.4 7.76 8.13 7.82 7.9 8.07C7.68 8.32 7.04 8.92 7.04 10.14C7.04 11.36 7.93 12.54 8.05 12.7C8.17 12.87 9.8 15.38 12.28 16.45C12.87 16.71 13.33 16.86 13.69 16.97C14.29 17.16 14.83 17.14 15.26 17.07C15.74 17 16.74 16.47 16.95 15.89C17.15 15.3 17.15 14.8 17.09 14.7C17.03 14.6 16.81 14.52 16.56 14.39Z" />
-                                            </svg>
-                                          </div>
-                                          <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">
-                                            WhatsApp
-                                          </span>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                              </div>
+                              <UniversalShareDropdown
+                                id={sale.id}
+                                activeShareId={activeShareDropdownId}
+                                setActiveShareId={setActiveShareDropdownId}
+                                sharePos={shareDropdownPos}
+                                setSharePos={setShareDropdownPos}
+                                getShareData={() => formatInvoiceShare(sale)}
+                                title="Share Invoice"
+                              />
 
                               {/* 3. 3-Dots More Actions Button */}
                               <div className="relative inline-block text-left">
@@ -4321,6 +4696,20 @@ export const SalesView: React.FC = () => {
                                         className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                       >
                                         View/Edit
+                                      </button>
+
+                                      {/* Assign Sales Rep */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveDropdownId(null);
+                                          handleOpenAssignInvoiceModal(sale);
+                                        }}
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-purple-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer flex items-center justify-between font-semibold"
+                                      >
+                                        <span>Assign Sales Rep</span>
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-[#33077C] font-bold">Rep</span>
                                       </button>
 
                                       {/* 2. Generate e-Invoice */}
@@ -5280,6 +5669,112 @@ export const SalesView: React.FC = () => {
               )}
             </div>
 
+            {/* Collection Assignment Section as requested */}
+            <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-purple-50 border border-purple-100 flex items-center justify-center text-[#33077C] shrink-0 shadow-2xs">
+                    <UserCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-[13px] font-bold text-slate-900">
+                      Customer Sales Representative
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Representative assigned to customer {selectedSale.customerName} (applies across all invoices)
+                    </p>
+                  </div>
+                </div>
+
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-50 text-[#33077C] border border-purple-200 text-xs font-bold shadow-2xs">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]" />
+                  Customer Assignment
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                {/* Sales Rep Selector */}
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                    Sales Representative
+                  </label>
+                  <select
+                    value={detailRepId}
+                    onChange={(e) => setDetailRepId(e.target.value)}
+                    className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
+                  >
+                    <option value="">-- Select Sales Rep --</option>
+                    {salesRepresentatives.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name} ({r.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Outstanding Amount */}
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                    Outstanding Amount
+                  </label>
+                  <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center font-bold text-rose-600 text-sm">
+                    ₹{selectedSale.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </div>
+                </div>
+
+                {/* Due Date */}
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                    Due Date
+                  </label>
+                  <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center font-semibold text-slate-700 text-xs">
+                    {selectedSale.dueDate || "Immediate"}
+                  </div>
+                </div>
+
+                {/* Collection Status */}
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                    Collection Status
+                  </label>
+                  <select
+                    value={detailCollectionStatus}
+                    onChange={(e) => setDetailCollectionStatus(e.target.value)}
+                    className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
+                  >
+                    <option value="Pending Follow-up">Pending Follow-up</option>
+                    <option value="Customer Contacted">Customer Contacted</option>
+                    <option value="Promise to Pay">Promise to Pay</option>
+                    <option value="Dispute Raised">Dispute Raised</option>
+                    <option value="Collected">Collected</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                    Next Follow-up
+                  </label>
+                  <input
+                    type="date"
+                    value={detailNextFollowUp}
+                    onChange={(e) => setDetailNextFollowUp(e.target.value)}
+                    className="h-9 px-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 focus:border-[#33077C] outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveDetailAssignment}
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer self-end"
+                >
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                  <span>Save Assignment</span>
+                </button>
+              </div>
+            </div>
+
             {/* Close footer */}
             <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
@@ -5296,6 +5791,114 @@ export const SalesView: React.FC = () => {
       )}
 
       {/* ==========================================
+          MODAL: QUICK ASSIGN SALES REP TO INVOICE (FROM 3-DOTS)
+         ========================================== */}
+      {assignInvoiceTarget && (
+        <Modal
+          isOpen={isAssignInvoiceModalOpen}
+          onClose={() => {
+            setIsAssignInvoiceModalOpen(false);
+            setAssignInvoiceTarget(null);
+          }}
+          title={`Assign Sales Rep to Customer: ${assignInvoiceTarget.customerName}`}
+          subtitle={`Assigning a sales representative to ${assignInvoiceTarget.customerName} applies across all customer transactions.`}
+          maxWidth="lg"
+        >
+          <form noValidate onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveQuickAssignInvoice();
+            }} className="space-y-4 p-1 text-xs">
+            {/* Invoice Quick Summary Banner */}
+            <div className="p-3.5 bg-purple-50/60 rounded-xl border border-purple-200/80 flex items-center justify-between">
+              <div>
+                <span className="font-bold text-[#33077C] text-sm block">
+                  {assignInvoiceTarget.customerName}
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Invoice #{assignInvoiceTarget.invoiceNo} • Grand Total: ₹{assignInvoiceTarget.grandTotal.toLocaleString('en-IN')} | Due: ₹{assignInvoiceTarget.balance.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white text-[#33077C] border border-purple-200 font-bold text-xs shadow-2xs">
+                {assignInvoiceTarget.paymentStatus}
+              </span>
+            </div>
+
+            {/* Sales Rep Selector */}
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
+                Sales Representative <span className="text-rose-500">*</span>
+              </label>
+              <select
+                value={assignRepId}
+                onChange={(e) => setAssignRepId(e.target.value)}
+                className="w-full h-11 px-3.5 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
+              >
+                <option value="">-- Select Sales Representative --</option>
+                {salesRepresentatives.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.mobile}) - {r.status}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Collection Status */}
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
+                Collection Status
+              </label>
+              <select
+                value={assignStatus}
+                onChange={(e) => setAssignStatus(e.target.value)}
+                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 text-xs font-semibold text-slate-800 focus:border-[#33077C] outline-none"
+              >
+                <option value="Pending Follow-up">Pending Follow-up</option>
+                <option value="Customer Contacted">Customer Contacted</option>
+                <option value="Promise to Pay">Promise to Pay</option>
+                <option value="Dispute Raised">Dispute Raised</option>
+                <option value="Collected">Collected</option>
+              </select>
+            </div>
+
+            {/* Next Follow-up Date */}
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
+                Next Follow-up Date (Optional)
+              </label>
+              <input
+                type="date"
+                value={assignNextFollowUp}
+                onChange={(e) => setAssignNextFollowUp(e.target.value)}
+                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 text-xs font-medium text-slate-700 focus:border-[#33077C] outline-none"
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAssignInvoiceModalOpen(false);
+                  setAssignInvoiceTarget(null);
+                }}
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                onClick={handleSaveQuickAssignInvoice}
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <Check className="w-4 h-4 stroke-[2.5]" />
+                <span>Save Assignment</span>
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ==========================================
           MODAL 3: RECORD PAYMENT MODAL (2-COLUMN 5XL LAYOUT)
          ========================================== */}
       {selectedSale && (
@@ -5306,7 +5909,10 @@ export const SalesView: React.FC = () => {
           subtitle={`Record a payment against invoice ${selectedSale.invoiceNo}.`}
           maxWidth="5xl"
         >
-          <div className="space-y-5 pt-1 text-xs font-sans">
+          <form noValidate onSubmit={(e) => {
+              e.preventDefault();
+              handleConfirmPayment();
+            }} className="space-y-5 pt-1 text-xs font-sans">
             {/* 2-Column Responsive Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
               {/* LEFT SIDE: Payment Details (7 cols) */}
@@ -5703,7 +6309,7 @@ export const SalesView: React.FC = () => {
                 Cancel
               </button>
               <button
-                type="button"
+                type="submit"
                 onClick={handleConfirmPayment}
                 className="h-10 px-6 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
@@ -5711,7 +6317,7 @@ export const SalesView: React.FC = () => {
                 <span>Confirm Payment</span>
               </button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
@@ -5725,7 +6331,10 @@ export const SalesView: React.FC = () => {
         subtitle="Add a new customer profile without losing your current sale progress"
         maxWidth="lg"
       >
-        <div className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
+        <form noValidate onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveQuickCustomer();
+          }} className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -5875,7 +6484,7 @@ export const SalesView: React.FC = () => {
               <span>Cancel</span>
             </button>
             <button
-              type="button"
+              type="submit"
               onClick={handleSaveQuickCustomer}
               className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
             >
@@ -5883,7 +6492,7 @@ export const SalesView: React.FC = () => {
               <span>Register &amp; Select</span>
             </button>
           </div>
-        </div>
+        </form>
       </Modal>
 
       {/* ==========================================

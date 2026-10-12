@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 // ==========================================
 // 1. DATA MODELS & INTERFACES
@@ -11,12 +11,14 @@ export interface SaleProductItem {
   id: string;
   productId: string;
   productName: string;
+  name?: string;
   sku?: string;
   batch?: string;
   quantity: number;
   purchasePrice?: number;
   salesPrice?: number;
   unitPrice: number;
+  rate?: number;
   discountPercent?: number;
   taxPercent: number;
   total: number;
@@ -80,6 +82,11 @@ export interface SaleTransaction {
   saleStatus: SaleStatus;
   createdBy: string;
   salesperson: string;
+  salesRepresentativeId?: string;
+  salesRepresentativeName?: string;
+  assignmentSource?: 'Customer Default' | 'Invoice-specific assignment';
+  collectionStatus?: 'Pending Follow-up' | 'Contacted' | 'Promise to Pay' | 'Overdue' | 'Due Today' | 'Settled' | string;
+  nextFollowUpDate?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -116,6 +123,12 @@ export interface SaleQuotation {
   balance: number;
   status: QuotationStatus;
   convertedToInvoiceNo?: string;
+  convertedToType?: 'Invoice' | 'Order' | 'Proforma' | string | null;
+  convertedToId?: string | null;
+  stateOfSupply?: string;
+  roundOff?: number;
+  attachedImageName?: string | null;
+  attachedDocName?: string | null;
   notes?: string;
   terms?: string;
   createdAt: string;
@@ -138,17 +151,24 @@ export interface SalePaymentIn {
   id: string;
   receiptNo: string;
   date: string; // ISO date e.g. "2026-10-05"
+  paymentDate?: string; // alias for date
   customerId?: string;
   partyName: string;
   customerPhone?: string;
   customerCompany?: string;
   paymentType: PaymentInType;
+  paymentMethod?: string; // alias for paymentType
   receivedAmount: number;
+  amount?: number; // alias for receivedAmount
   referenceNo?: string;
   description?: string;
+  notes?: string; // alias for description
   imageAttachment?: string;
   firmName?: string;
+  invoiceId?: string;
   invoiceNo?: string;
+  salesRepresentativeId?: string;
+  salesRepresentativeName?: string;
   status: 'Completed' | 'Pending' | 'Cancelled' | 'Received' | 'Cleared' | 'In Process' | string;
   createdAt: string;
   updatedAt: string;
@@ -242,7 +262,82 @@ export interface SalesCustomer {
   totalSales?: number;
   paidAmount?: number;
   outstandingAmount?: number;
+  salesRepresentativeId?: string;
+  salesRepresentativeName?: string;
+  salesRepresentativeType?: 'Primary' | 'Temporary';
+  assignedDate?: string;
+  assignmentNotes?: string;
   activities?: CustomerActivity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// 1.3 SALES REPRESENTATIVE DATA MODEL
+// ==========================================
+export type SalesRepresentativeStatus = 'Active' | 'Inactive';
+
+export interface SalesRepresentative {
+  id: string;
+  name: string;
+  mobile: string;
+  email?: string;
+  designation?: string;
+  status: SalesRepresentativeStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ==========================================
+// 1.4 COLLECTION MANAGEMENT & FOLLOW-UP DATA MODELS
+// ==========================================
+export type FollowUpOutcome =
+  | 'Customer Contacted'
+  | 'No Response'
+  | 'Promise to Pay'
+  | 'Payment Received'
+  | 'Dispute Raised'
+  | 'Follow-up Required';
+
+export type ContactMethod = 'Phone' | 'WhatsApp' | 'Email' | 'In-Person Visit';
+
+export interface CollectionFollowUp {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  invoiceId?: string;
+  invoiceNo?: string;
+  invoiceNumber?: string; // alias for invoiceNo
+  salesRepresentativeId?: string;
+  salesRepresentativeName?: string;
+  contactMethod?: ContactMethod;
+  followUpDate: string;
+  followUpTime?: string;
+  notes: string;
+  outcome: FollowUpOutcome;
+  hasPromiseToPay?: boolean;
+  promisedAmount?: number;
+  promiseDate?: string;
+  nextFollowUpDate?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export type PromiseToPayStatus = 'Pending' | 'Honoured' | 'Broken';
+
+export interface PromiseToPay {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  invoiceId: string;
+  invoiceNo: string;
+  invoiceNumber?: string; // alias for invoiceNo
+  salesRepresentativeId?: string;
+  salesRepresentativeName?: string;
+  promisedAmount: number;
+  promiseDate: string;
+  notes?: string;
+  status: PromiseToPayStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -312,6 +407,8 @@ export interface PurchaseRequest {
   status: PurchaseRequestStatus;
   items: PurchaseRequestItem[];
   notes?: string;
+  organizationId?: string;
+  totalEstimatedAmount?: number;
   rejectionReason?: string;
   approvedBy?: string;
   approvedAt?: string;
@@ -321,7 +418,14 @@ export interface PurchaseRequest {
 }
 
 // Purchase Order / Purchase Transaction
-export type PurchaseStatus = 'Draft' | 'Ordered' | 'Received' | 'Completed' | 'Cancelled';
+export type PurchaseStatus =
+  | 'Pending'
+  | 'Approved'
+  | 'Draft'
+  | 'Ordered'
+  | 'Received'
+  | 'Completed'
+  | 'Cancelled';
 export type PurchasePaymentStatus = 'Paid' | 'Partial' | 'Unpaid' | 'Pending';
 
 export interface StockBatch {
@@ -357,16 +461,22 @@ export interface PurchaseProductItem {
 export interface PurchaseOrder {
   id: string;
   purchaseNo: string;
+  poNo?: string;
   purchaseInvoiceNo?: string;
   supplierId: string;
   supplierName: string;
   supplierCode?: string;
   purchaseDate: string;
+  orderDate?: string;
+  expectedDeliveryDate?: string;
   dueDate: string;
   items: PurchaseProductItem[];
   subtotal: number;
+  subTotal?: number;
   discount: number;
+  discountAmount?: number;
   tax: number;
+  taxAmount?: number;
   withGst?: boolean;
   gstType?: 'intra_state' | 'inter_state';
   cgst?: number;
@@ -381,13 +491,24 @@ export interface PurchaseOrder {
   paymentTerms: string;
   paymentStatus: PurchasePaymentStatus;
   purchaseStatus: PurchaseStatus;
+  status?: string;
   notes?: string;
+  createdBy?: string;
+  organizationId?: string;
+  supplier?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
 
 // Purchase Return
-export type PurchaseReturnStatus = 'Requested' | 'Approved' | 'Returned' | 'Completed' | 'Cancelled';
+export type PurchaseReturnStatus =
+  | 'Requested'
+  | 'Approved'
+  | 'Dispatched'
+  | 'Completed'
+  | 'Returned'
+  | 'Rejected'
+  | 'Cancelled';
 
 export interface PurchaseReturnItem {
   id: string;
@@ -415,6 +536,8 @@ export interface PurchaseReturn {
   refundStatus: 'Pending' | 'Refunded' | 'Supplier Credit' | 'Adjusted';
   returnStatus: PurchaseReturnStatus;
   notes?: string;
+  organizationId?: string;
+  stockDeducted?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -436,7 +559,11 @@ export interface PaymentOut {
   referenceNo?: string;
   receiptImage?: string;
   notes?: string;
-  status: 'Completed' | 'Pending' | 'Failed';
+  status: 'Completed' | 'Pending' | 'Failed' | 'Cancelled' | string;
+  organizationId?: string;
+  paymentType?: string;
+  createdBy?: string;
+  supplier?: { id: string; name: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -462,354 +589,101 @@ export interface InventoryStockItem {
 // 2. INITIAL SEED DATA
 // ==========================================
 
-export const INITIAL_INVENTORY_STOCKS: InventoryStockItem[] = [
+export const INITIAL_INVENTORY_STOCKS: InventoryStockItem[] = [];
+
+export const INITIAL_SALES_REPRESENTATIVES: SalesRepresentative[] = [];
+
+export const INITIAL_COLLECTION_FOLLOW_UPS: CollectionFollowUp[] = [
   {
-    id: 'stk_1',
-    productId: 'PROD_1001',
-    productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-    sku: 'SKU-ATT-10K',
-    category: 'Grains & Flours',
-    subcategory: 'Flours',
-    unit: 'BAG',
-    inStock: 85,
-    reorderLevel: 15,
-    unitCost: 420,
-    unitPrice: 495,
-    lastUpdated: '2026-09-25T10:00:00Z',
-    batches: [
-      {
-        id: 'bat_att_1',
-        batchNo: 'BAT-ATT-2401',
-        productId: 'PROD_1001',
-        quantity: 85,
-        costPrice: 420,
-        sellingPrice: 495,
-        mfgDate: '2026-08-15',
-        expDate: '2027-02-15',
-        supplierName: 'ITC FMCG Wholesale Distribution Hub',
-        status: 'Active',
-        receivedDate: '2026-08-20',
-      },
-    ],
+    id: 'fup_1',
+    customerId: 'cust_2',
+    customerName: 'Priya Sundaram',
+    invoiceId: 'sale_2',
+    invoiceNo: 'INV-2026-1002',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    contactMethod: 'Phone',
+    followUpDate: '2026-10-06',
+    followUpTime: '11:30 AM',
+    notes: 'Contacted customer regarding overdue balance of ₹7,097.63. Promised payment by 12th Oct.',
+    outcome: 'Promise to Pay',
+    hasPromiseToPay: true,
+    promisedAmount: 7097.63,
+    promiseDate: '2026-10-12',
+    nextFollowUpDate: '2026-10-12',
+    createdBy: 'Kumar',
+    createdAt: '2026-10-06T11:30:00Z',
   },
   {
-    id: 'stk_2',
-    productId: 'PROD_1002',
-    productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-    sku: 'SKU-RIC-05K',
-    category: 'Grains & Flours',
-    subcategory: 'Rice',
-    unit: 'BAG',
-    inStock: 120,
-    reorderLevel: 20,
-    unitCost: 580,
-    unitPrice: 699,
-    lastUpdated: '2026-09-26T14:30:00Z',
-    batches: [
-      {
-        id: 'bat_ric_1',
-        batchNo: 'BAT-RIC-2402',
-        productId: 'PROD_1002',
-        quantity: 120,
-        costPrice: 580,
-        sellingPrice: 699,
-        mfgDate: '2026-07-10',
-        expDate: '2028-07-10',
-        supplierName: 'Tata Consumer Products Central Supply',
-        status: 'Active',
-        receivedDate: '2026-07-15',
-      },
-    ],
+    id: 'fup_2',
+    customerId: 'cust_3',
+    customerName: 'Anand Verma',
+    invoiceId: 'sale_3',
+    invoiceNo: 'INV-2026-1003',
+    salesRepresentativeId: 'rep_1',
+    salesRepresentativeName: 'Arun Kumar',
+    contactMethod: 'WhatsApp',
+    followUpDate: '2026-10-07',
+    followUpTime: '03:15 PM',
+    notes: 'WhatsApp reminder sent regarding upcoming invoice. Customer will clear balance within payment terms.',
+    outcome: 'Customer Contacted',
+    hasPromiseToPay: false,
+    nextFollowUpDate: '2026-10-20',
+    createdBy: 'Arun Kumar',
+    createdAt: '2026-10-07T15:15:00Z',
   },
   {
-    id: 'stk_3',
-    productId: 'PROD_1003',
-    productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-    sku: 'SKU-OIL-01L',
-    category: 'Edible Oils & Ghee',
-    subcategory: 'Cooking Oils',
-    unit: 'PAC',
-    inStock: 240,
-    reorderLevel: 40,
-    unitCost: 138,
-    unitPrice: 165,
-    lastUpdated: '2026-09-27T09:15:00Z',
-    batches: [
-      {
-        id: 'bat_oil_1',
-        batchNo: 'BAT-OIL-2403',
-        productId: 'PROD_1003',
-        quantity: 240,
-        costPrice: 138,
-        sellingPrice: 165,
-        mfgDate: '2026-08-01',
-        expDate: '2027-04-01',
-        supplierName: 'Adani Wilmar & Fortune Oils Depot',
-        status: 'Active',
-        receivedDate: '2026-08-05',
-      },
-    ],
+    id: 'fup_3',
+    customerId: 'cust_1',
+    customerName: 'Ramesh Kumar',
+    invoiceId: 'sale_5',
+    invoiceNo: 'INV-2026-1005',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    contactMethod: 'Phone',
+    followUpDate: '2026-10-08',
+    followUpTime: '10:00 AM',
+    notes: 'Called customer. Customer confirmed payment will be released today via NEFT.',
+    outcome: 'Customer Contacted',
+    hasPromiseToPay: true,
+    promisedAmount: 12000,
+    promiseDate: '2026-10-08',
+    nextFollowUpDate: '2026-10-08',
+    createdBy: 'Kumar',
+    createdAt: '2026-10-08T10:00:00Z',
+  },
+];
+
+export const INITIAL_PROMISES_TO_PAY: PromiseToPay[] = [
+  {
+    id: 'ptp_1',
+    customerId: 'cust_2',
+    customerName: 'Priya Sundaram',
+    invoiceId: 'sale_2',
+    invoiceNo: 'INV-2026-1002',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    promisedAmount: 7097.63,
+    promiseDate: '2026-10-12',
+    notes: 'Customer confirmed payment by bank transfer before noon on 12th Oct.',
+    status: 'Pending',
+    createdAt: '2026-10-06T11:35:00Z',
+    updatedAt: '2026-10-06T11:35:00Z',
   },
   {
-    id: 'stk_4',
-    productId: 'PROD_1004',
-    productName: 'Tata Salt Vacuum Evaporated Iodized (1 Kg)',
-    sku: 'SKU-SLT-01K',
-    category: 'Spices, Salt & Sugar',
-    subcategory: 'Salt',
-    unit: 'PAC',
-    inStock: 350,
-    reorderLevel: 50,
-    unitCost: 22,
-    unitPrice: 28,
-    lastUpdated: '2026-09-28T08:00:00Z',
-    batches: [
-      {
-        id: 'bat_slt_1',
-        batchNo: 'BAT-SLT-2404',
-        productId: 'PROD_1004',
-        quantity: 350,
-        costPrice: 22,
-        sellingPrice: 28,
-        mfgDate: '2026-06-01',
-        expDate: '2028-06-01',
-        supplierName: 'Tata Consumer Products Central Supply',
-        status: 'Active',
-        receivedDate: '2026-06-10',
-      },
-    ],
-  },
-  {
-    id: 'stk_5',
-    productId: 'PROD_1005',
-    productName: 'Premium Unpolished Toor Dal / Arhar Dal (1 Kg)',
-    sku: 'SKU-DAL-01K',
-    category: 'Pulses & Dals',
-    subcategory: 'Dals',
-    unit: 'PAC',
-    inStock: 90,
-    reorderLevel: 20,
-    unitCost: 145,
-    unitPrice: 178,
-    lastUpdated: '2026-09-28T11:00:00Z',
-    batches: [
-      {
-        id: 'bat_dal_1',
-        batchNo: 'BAT-DAL-2405',
-        productId: 'PROD_1005',
-        quantity: 90,
-        costPrice: 145,
-        sellingPrice: 178,
-        mfgDate: '2026-07-20',
-        expDate: '2027-07-20',
-        supplierName: 'ITC FMCG Wholesale Distribution Hub',
-        status: 'Active',
-        receivedDate: '2026-07-25',
-      },
-    ],
-  },
-  {
-    id: 'stk_6',
-    productId: 'PROD_1006',
-    productName: 'Amul Pure Cow Ghee Tin (1 Ltr)',
-    sku: 'SKU-GHE-01L',
-    category: 'Edible Oils & Ghee',
-    subcategory: 'Ghee',
-    unit: 'CAN',
-    inStock: 45,
-    reorderLevel: 10,
-    unitCost: 560,
-    unitPrice: 645,
-    lastUpdated: '2026-09-28T15:00:00Z',
-    batches: [
-      {
-        id: 'bat_ghe_1',
-        batchNo: 'BAT-GHE-2406',
-        productId: 'PROD_1006',
-        quantity: 45,
-        costPrice: 560,
-        sellingPrice: 645,
-        mfgDate: '2026-08-10',
-        expDate: '2027-05-10',
-        supplierName: 'Amul GCMMF Dairy Distributors',
-        status: 'Active',
-        receivedDate: '2026-08-15',
-      },
-    ],
-  },
-  {
-    id: 'stk_7',
-    productId: 'PROD_1007',
-    productName: 'Brooke Bond Red Label Strong Tea (500g)',
-    sku: 'SKU-TEA-500',
-    category: 'Beverages & Tea',
-    subcategory: 'Tea',
-    unit: 'PAC',
-    inStock: 75,
-    reorderLevel: 15,
-    unitCost: 230,
-    unitPrice: 275,
-    lastUpdated: '2026-09-29T08:00:00Z',
-    batches: [
-      {
-        id: 'bat_tea_1',
-        batchNo: 'BAT-TEA-2407',
-        productId: 'PROD_1007',
-        quantity: 75,
-        costPrice: 230,
-        sellingPrice: 275,
-        mfgDate: '2026-08-01',
-        expDate: '2027-08-01',
-        supplierName: 'Hindustan Unilever Regional Agency',
-        status: 'Active',
-        receivedDate: '2026-08-08',
-      },
-    ],
-  },
-  {
-    id: 'stk_8',
-    productId: 'PROD_1008',
-    productName: 'Maggi 2-Minute Masala Noodles (Pack of 12)',
-    sku: 'SKU-MAG-12P',
-    category: 'Packaged Food & Snacks',
-    subcategory: 'Instant Foods',
-    unit: 'PAC',
-    inStock: 110,
-    reorderLevel: 25,
-    unitCost: 142,
-    unitPrice: 168,
-    lastUpdated: '2026-09-29T09:00:00Z',
-    batches: [
-      {
-        id: 'bat_mag_1',
-        batchNo: 'BAT-MAG-2408',
-        productId: 'PROD_1008',
-        quantity: 110,
-        costPrice: 142,
-        sellingPrice: 168,
-        mfgDate: '2026-09-01',
-        expDate: '2027-05-01',
-        supplierName: 'ITC FMCG Wholesale Distribution Hub',
-        status: 'Active',
-        receivedDate: '2026-09-05',
-      },
-    ],
-  },
-  {
-    id: 'stk_9',
-    productId: 'PROD_1009',
-    productName: 'Surf Excel Easy Wash Detergent Powder (1 Kg)',
-    sku: 'SKU-DET-01K',
-    category: 'Cleaning & Household',
-    subcategory: 'Detergents',
-    unit: 'PAC',
-    inStock: 65,
-    reorderLevel: 15,
-    unitCost: 125,
-    unitPrice: 148,
-    lastUpdated: '2026-09-29T10:00:00Z',
-    batches: [
-      {
-        id: 'bat_det_1',
-        batchNo: 'BAT-DET-2409',
-        productId: 'PROD_1009',
-        quantity: 65,
-        costPrice: 125,
-        sellingPrice: 148,
-        mfgDate: '2026-07-15',
-        expDate: '2028-07-15',
-        supplierName: 'Hindustan Unilever Regional Agency',
-        status: 'Active',
-        receivedDate: '2026-07-22',
-      },
-    ],
-  },
-  {
-    id: 'stk_10',
-    productId: 'PROD_1010',
-    productName: 'Cadbury Dairy Milk Silk Chocolate (150g)',
-    sku: 'SKU-CAD-150',
-    category: 'Packaged Food & Snacks',
-    subcategory: 'Chocolates',
-    unit: 'PCS',
-    inStock: 15,
-    reorderLevel: 10,
-    unitCost: 135,
-    unitPrice: 175,
-    lastUpdated: '2026-09-29T11:00:00Z',
-    batches: [
-      {
-        id: 'bat_cad_1',
-        batchNo: 'BAT-CAD-2410',
-        productId: 'PROD_1010',
-        quantity: 15,
-        costPrice: 135,
-        sellingPrice: 175,
-        mfgDate: '2026-08-20',
-        expDate: '2027-08-20',
-        supplierName: 'ITC FMCG Wholesale Distribution Hub',
-        status: 'Active',
-        receivedDate: '2026-08-25',
-      },
-    ],
-  },
-  {
-    id: 'stk_11',
-    productId: 'PROD_1011',
-    productName: 'Dettol Original Liquid Handwash Refill (200ml)',
-    sku: 'SKU-DET-200',
-    category: 'Personal Care',
-    subcategory: 'Handwash',
-    unit: 'PAC',
-    inStock: 8,
-    reorderLevel: 15,
-    unitCost: 38,
-    unitPrice: 49,
-    lastUpdated: '2026-09-29T12:00:00Z',
-    batches: [
-      {
-        id: 'bat_det_2',
-        batchNo: 'BAT-DET-2411',
-        productId: 'PROD_1011',
-        quantity: 8,
-        costPrice: 38,
-        sellingPrice: 49,
-        mfgDate: '2026-06-10',
-        expDate: '2028-06-10',
-        supplierName: 'Hindustan Unilever Regional Agency',
-        status: 'Active',
-        receivedDate: '2026-06-18',
-      },
-    ],
-  },
-  {
-    id: 'stk_12',
-    productId: 'PROD_1012',
-    productName: 'Madhur Pure & Hygienic Refined Sugar (5 Kg)',
-    sku: 'SKU-SGR-05K',
-    category: 'Spices, Salt & Sugar',
-    subcategory: 'Sugar',
-    unit: 'BAG',
-    inStock: 60,
-    reorderLevel: 15,
-    unitCost: 210,
-    unitPrice: 250,
-    lastUpdated: '2026-09-29T13:00:00Z',
-    batches: [
-      {
-        id: 'bat_sgr_1',
-        batchNo: 'BAT-SGR-2412',
-        productId: 'PROD_1012',
-        quantity: 60,
-        costPrice: 210,
-        sellingPrice: 250,
-        mfgDate: '2026-08-10',
-        expDate: '2028-08-10',
-        supplierName: 'Tata Consumer Products Central Supply',
-        status: 'Active',
-        receivedDate: '2026-08-15',
-      },
-    ],
+    id: 'ptp_2',
+    customerId: 'cust_1',
+    customerName: 'Ramesh Kumar',
+    invoiceId: 'sale_5',
+    invoiceNo: 'INV-2026-1005',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    promisedAmount: 12000,
+    promiseDate: '2026-10-08',
+    notes: 'Full balance payment promised for invoice maturing today.',
+    status: 'Pending',
+    createdAt: '2026-10-08T10:05:00Z',
+    updatedAt: '2026-10-08T10:05:00Z',
   },
 ];
 
@@ -840,6 +714,11 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
     openingBalance: 0,
     preferredPaymentMethod: 'Bank Transfer',
     status: 'Active',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    salesRepresentativeType: 'Primary',
+    assignedDate: '2026-08-10',
+    assignmentNotes: 'High priority customer assigned to Kumar',
     notes: 'High-volume wholesale & retail neighborhood grocery mart.',
     tags: ['Supermarket', 'Wholesale', 'Retail'],
     activities: [
@@ -873,6 +752,11 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
     openingBalance: 0,
     preferredPaymentMethod: 'UPI',
     status: 'Active',
+    salesRepresentativeId: 'rep_4',
+    salesRepresentativeName: 'Ravi',
+    salesRepresentativeType: 'Primary',
+    assignedDate: '2026-09-01',
+    assignmentNotes: 'Assigned to Ravi for catering order collections',
     notes: 'Bulk consumer for rice, dals, ghee, and edible oil requirements.',
     tags: ['Catering', 'Commercial', 'Bulk Buyer'],
     activities: [
@@ -906,6 +790,11 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
     openingBalance: 0,
     preferredPaymentMethod: 'Credit',
     status: 'Active',
+    salesRepresentativeId: 'rep_1',
+    salesRepresentativeName: 'Arun Kumar',
+    salesRepresentativeType: 'Primary',
+    assignedDate: '2026-07-15',
+    assignmentNotes: 'Wholesale provision account assigned to Arun',
     notes: 'Community provision & FMCG retail grocery branch.',
     tags: ['Provision', 'FMCG', 'Growth'],
     activities: [
@@ -940,6 +829,11 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
     openingBalance: 0,
     preferredPaymentMethod: 'Cash',
     status: 'Active',
+    salesRepresentativeId: 'rep_2',
+    salesRepresentativeName: 'Kumar',
+    salesRepresentativeType: 'Temporary',
+    assignedDate: '2026-10-01',
+    assignmentNotes: 'Temporary cover for retail walk-in accounts',
     notes: 'Regular household walk-in customer for monthly groceries.',
     tags: ['Walk-in', 'Retail', 'Regular'],
     activities: [
@@ -973,6 +867,11 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
     openingBalance: 0,
     preferredPaymentMethod: 'UPI',
     status: 'Active',
+    salesRepresentativeId: 'rep_1',
+    salesRepresentativeName: 'Arun Kumar',
+    salesRepresentativeType: 'Primary',
+    assignedDate: '2026-05-18',
+    assignmentNotes: 'Bakery chain commercial account',
     notes: 'Bakery chain procuring flours, sugar, butter, and chocolates.',
     tags: ['Bakery', 'Commercial'],
     activities: [
@@ -983,964 +882,21 @@ export const INITIAL_CUSTOMERS: SalesCustomer[] = [
   },
 ];
 
-export const INITIAL_SUPPLIERS: Supplier[] = [
-  {
-    id: 'sup_1',
-    supplierCode: 'SUP-1001',
-    name: 'ITC FMCG Wholesale Distribution Hub',
-    contactPerson: 'Suresh Babu',
-    phone: '+91 98450 11223',
-    email: 'orders@itcwholesalesupply.in',
-    address: 'Plot 45, Peenya Industrial Area Phase 1',
-    city: 'Bengaluru',
-    state: 'Karnataka',
-    country: 'India',
-    pincode: '560058',
-    gstNumber: '29AABCI1234F1Z1',
-    panNumber: 'AABCI1234F',
-    paymentTerms: 'Net 30 Days',
-    creditLimit: 500000,
-    bankName: 'HDFC Bank',
-    accountNumber: '50200012345678',
-    ifscCode: 'HDFC0000123',
-    branchName: 'Peenya, Bengaluru',
-    totalPurchase: 46630,
-    paid: 15000,
-    payable: 31630,
-    status: 'Active',
-    createdAt: '2026-01-15T09:00:00Z',
-    updatedAt: '2026-09-20T10:00:00Z',
-  },
-  {
-    id: 'sup_2',
-    supplierCode: 'SUP-1002',
-    name: 'Hindustan Unilever Regional Agency',
-    contactPerson: 'Rajesh Kannan',
-    phone: '+91 97412 33445',
-    email: 'chennaidist@hul-agency.in',
-    address: '128 SIDCO Industrial Estate, Ambattur',
-    city: 'Chennai',
-    state: 'Tamil Nadu',
-    country: 'India',
-    pincode: '600058',
-    gstNumber: '33AAACH9876K1Z9',
-    panNumber: 'AAACH9876K',
-    paymentTerms: 'Net 15 Days',
-    creditLimit: 400000,
-    bankName: 'ICICI Bank',
-    accountNumber: '001105009988',
-    ifscCode: 'ICIC0000011',
-    branchName: 'Ambattur, Chennai',
-    totalPurchase: 4484,
-    paid: 0,
-    payable: 4484,
-    status: 'Active',
-    createdAt: '2026-02-10T11:00:00Z',
-    updatedAt: '2026-09-18T16:00:00Z',
-  },
-  {
-    id: 'sup_3',
-    supplierCode: 'SUP-1003',
-    name: 'Adani Wilmar & Fortune Oils Depot',
-    contactPerson: 'Manish Shah',
-    phone: '+91 99250 88776',
-    email: 'sales@fortunefoodsdepot.com',
-    address: 'Sector 18, GIDC Naroda Estate',
-    city: 'Ahmedabad',
-    state: 'Gujarat',
-    country: 'India',
-    pincode: '382330',
-    gstNumber: '24AAACA5432M1Z4',
-    panNumber: 'AAACA5432M',
-    paymentTerms: 'Immediate / Cash',
-    creditLimit: 300000,
-    bankName: 'State Bank of India',
-    accountNumber: '30495867201',
-    ifscCode: 'SBIN0001234',
-    branchName: 'Naroda, Ahmedabad',
-    totalPurchase: 21735,
-    paid: 10000,
-    payable: 11735,
-    status: 'Active',
-    createdAt: '2026-03-01T08:30:00Z',
-    updatedAt: '2026-09-24T12:00:00Z',
-  },
-  {
-    id: 'sup_4',
-    supplierCode: 'SUP-1004',
-    name: 'Tata Consumer Products Central Supply',
-    contactPerson: 'Venkat Raman',
-    phone: '+91 98401 44556',
-    email: 'supply@tataconsumerhub.in',
-    address: '88 Whitefield Industrial Area',
-    city: 'Bengaluru',
-    state: 'Karnataka',
-    country: 'India',
-    pincode: '560066',
-    gstNumber: '29AABCT6677N1Z2',
-    panNumber: 'AABCT6677N',
-    paymentTerms: 'Net 30 Days',
-    creditLimit: 600000,
-    bankName: 'Axis Bank',
-    accountNumber: '9120100456789',
-    ifscCode: 'UTIB0000128',
-    branchName: 'Whitefield, Bengaluru',
-    totalPurchase: 16475,
-    paid: 8000,
-    payable: 8475,
-    status: 'Active',
-    createdAt: '2026-01-05T14:00:00Z',
-    updatedAt: '2026-09-26T09:00:00Z',
-  },
-  {
-    id: 'sup_5',
-    supplierCode: 'SUP-1005',
-    name: 'Amul GCMMF Dairy Distributors',
-    contactPerson: 'Nilesh Patel',
-    phone: '+91 98240 55667',
-    email: 'dispatch@amuldairydist.com',
-    address: 'Amul Dairy Road, Anand',
-    city: 'Anand',
-    state: 'Gujarat',
-    country: 'India',
-    pincode: '388001',
-    gstNumber: '24AABCG1122D1Z6',
-    panNumber: 'AABCG1122D',
-    paymentTerms: 'Net 7 Days',
-    creditLimit: 350000,
-    bankName: 'Bank of Baroda',
-    accountNumber: '01890200001234',
-    ifscCode: 'BARB0ANANDX',
-    branchName: 'Anand Main',
-    totalPurchase: 0,
-    paid: 0,
-    payable: 0,
-    status: 'Active',
-    createdAt: '2026-02-15T10:00:00Z',
-    updatedAt: '2026-09-25T11:00:00Z',
-  },
-];
+export const INITIAL_SUPPLIERS: Supplier[] = [];
 
-export const INITIAL_SALES: SaleTransaction[] = [
-  {
-    id: 'sale_1',
-    invoiceNo: 'INV-2026-1001',
-    invoiceStatus: 'Generated',
-    saleDate: '2026-09-27',
-    dueDate: '2026-10-12',
-    customerId: 'cust_1',
-    customerName: 'Ramesh Kumar',
-    customerCompany: 'Kumar Daily Supermarket',
-    customerPhone: '+91 98410 23456',
-    customerEmail: 'ramesh@kumarsupermarket.in',
-    billingAddress: '18 Gandhi Road, T. Nagar, Chennai, Tamil Nadu 600017',
-    shippingAddress: '18 Gandhi Road, T. Nagar, Chennai, Tamil Nadu 600017',
-    items: [
-      {
-        id: 's_item_1',
-        productId: 'PROD_1001',
-        productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-        sku: 'SKU-ATT-10K',
-        quantity: 4,
-        purchasePrice: 420,
-        unitPrice: 495,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 2079,
-      },
-      {
-        id: 's_item_2',
-        productId: 'PROD_1002',
-        productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-        sku: 'SKU-RIC-05K',
-        quantity: 3,
-        purchasePrice: 580,
-        unitPrice: 699,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 2201.85,
-      },
-      {
-        id: 's_item_3',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        sku: 'SKU-OIL-01L',
-        quantity: 10,
-        purchasePrice: 138,
-        unitPrice: 165,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 1732.50,
-      },
-      {
-        id: 's_item_4',
-        productId: 'PROD_1004',
-        productName: 'Tata Salt Vacuum Evaporated Iodized (1 Kg)',
-        sku: 'SKU-SLT-01K',
-        quantity: 20,
-        purchasePrice: 22,
-        unitPrice: 28,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 560,
-      },
-      {
-        id: 's_item_5',
-        productId: 'PROD_1007',
-        productName: 'Brooke Bond Red Label Strong Tea (500g)',
-        sku: 'SKU-TEA-500',
-        quantity: 6,
-        purchasePrice: 230,
-        unitPrice: 275,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 1732.50,
-      },
-    ],
-    subtotal: 7937,
-    totalDiscount: 200,
-    totalTax: 386.85,
-    shippingCharges: 100,
-    otherCharges: 0,
-    grandTotal: 8223.85,
-    paidAmount: 8223.85,
-    balance: 0,
-    paymentMethod: 'Bank Transfer',
-    paymentSplits: [
-      { id: 'ps_101', method: 'Bank Transfer', amount: 8223.85, referenceNo: 'TXN-HDFC-99124' },
-    ],
-    paymentRecords: [
-      {
-        id: 'PAY-000101',
-        invoiceNo: 'INV-2026-1001',
-        paymentDate: '2026-09-27',
-        paymentTime: '10:30 AM',
-        method: 'Bank Transfer',
-        referenceNo: 'TXN-HDFC-99124',
-        amount: 8223.85,
-        status: 'Paid',
-        recordedBy: 'Cashier System',
-        notes: 'Full payment received via NEFT/Bank Transfer.',
-        createdAt: '2026-09-27T10:30:00Z',
-      },
-    ],
-    paymentTerms: 'Net 15 Days',
-    paymentStatus: 'Paid',
-    saleStatus: 'Completed',
-    createdBy: 'Suresh Kumar',
-    salesperson: 'Karthik Raja',
-    notes: 'Monthly bulk replenishment order for T. Nagar Supermarket.',
-    createdAt: '2026-09-27T10:30:00Z',
-    updatedAt: '2026-09-27T11:00:00Z',
-  },
-  {
-    id: 'sale_2',
-    invoiceNo: 'INV-2026-1002',
-    invoiceStatus: 'Generated',
-    saleDate: '2026-09-28',
-    dueDate: '2026-10-05',
-    customerId: 'cust_2',
-    customerName: 'Priya Sundaram',
-    customerCompany: 'Annapoorna Caterers & Kitchen',
-    customerPhone: '+91 98840 55678',
-    customerEmail: 'orders@annapoornacaterers.in',
-    billingAddress: '42 100ft Road, Indiranagar, Bengaluru, Karnataka 560038',
-    shippingAddress: '42 100ft Road, Indiranagar, Bengaluru, Karnataka 560038',
-    items: [
-      {
-        id: 's_item_6',
-        productId: 'PROD_1002',
-        productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-        sku: 'SKU-RIC-05K',
-        quantity: 10,
-        purchasePrice: 580,
-        unitPrice: 699,
-        discountPercent: 5,
-        taxPercent: 5,
-        total: 6972.53,
-      },
-      {
-        id: 's_item_7',
-        productId: 'PROD_1005',
-        productName: 'Premium Unpolished Toor Dal / Arhar Dal (1 Kg)',
-        sku: 'SKU-DAL-01K',
-        quantity: 15,
-        purchasePrice: 145,
-        unitPrice: 178,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 2670,
-      },
-      {
-        id: 's_item_8',
-        productId: 'PROD_1006',
-        productName: 'Amul Pure Cow Ghee Tin (1 Ltr)',
-        sku: 'SKU-GHE-01L',
-        quantity: 4,
-        purchasePrice: 560,
-        unitPrice: 645,
-        discountPercent: 0,
-        taxPercent: 12,
-        total: 2889.60,
-      },
-      {
-        id: 's_item_9',
-        productId: 'PROD_1012',
-        productName: 'Madhur Pure & Hygienic Refined Sugar (5 Kg)',
-        sku: 'SKU-SGR-05K',
-        quantity: 6,
-        purchasePrice: 210,
-        unitPrice: 250,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 1575,
-      },
-    ],
-    subtotal: 13740,
-    totalDiscount: 349.50,
-    totalTax: 707.13,
-    shippingCharges: 0,
-    otherCharges: 0,
-    grandTotal: 14097.63,
-    paidAmount: 7000,
-    balance: 7097.63,
-    paymentMethod: 'UPI',
-    paymentSplits: [
-      { id: 'ps_102', method: 'UPI', amount: 7000, referenceNo: 'UPI-ICICI-8821' },
-    ],
-    paymentRecords: [
-      {
-        id: 'PAY-000102',
-        invoiceNo: 'INV-2026-1002',
-        paymentDate: '2026-09-28',
-        paymentTime: '09:25 AM',
-        method: 'UPI',
-        referenceNo: 'UPI-ICICI-8821',
-        amount: 7000,
-        status: 'Paid',
-        recordedBy: 'Billing Desk',
-        notes: 'Advance 50% deposit received via GooglePay UPI.',
-        createdAt: '2026-09-28T09:25:00Z',
-      },
-    ],
-    paymentTerms: '50% Advance, 50% on Delivery',
-    paymentStatus: 'Partial',
-    saleStatus: 'Confirmed',
-    createdBy: 'Anita Sharma',
-    salesperson: 'Karthik Raja',
-    notes: 'Bulk catering banquet supplies for weekend order.',
-    createdAt: '2026-09-28T09:15:00Z',
-    updatedAt: '2026-09-28T09:30:00Z',
-  },
-  {
-    id: 'sale_3',
-    invoiceNo: 'INV-2026-1003',
-    invoiceStatus: 'Draft',
-    saleDate: '2026-09-28',
-    dueDate: '2026-10-28',
-    customerId: 'cust_3',
-    customerName: 'Anand Verma',
-    customerCompany: 'Verma Provision Store',
-    customerPhone: '+91 99401 88992',
-    customerEmail: 'anand.verma@vermastores.com',
-    billingAddress: '104 Begumpet Main Road, Hyderabad, Telangana 500016',
-    shippingAddress: '104 Begumpet Main Road, Hyderabad, Telangana 500016',
-    items: [
-      {
-        id: 's_item_10',
-        productId: 'PROD_1009',
-        productName: 'Surf Excel Easy Wash Detergent Powder (1 Kg)',
-        sku: 'SKU-DET-01K',
-        quantity: 12,
-        purchasePrice: 125,
-        unitPrice: 148,
-        discountPercent: 0,
-        taxPercent: 18,
-        total: 2095.68,
-      },
-      {
-        id: 's_item_11',
-        productId: 'PROD_1008',
-        productName: 'Maggi 2-Minute Masala Noodles (Pack of 12)',
-        sku: 'SKU-MAG-12P',
-        quantity: 10,
-        purchasePrice: 142,
-        unitPrice: 168,
-        discountPercent: 0,
-        taxPercent: 12,
-        total: 1881.60,
-      },
-      {
-        id: 's_item_12',
-        productId: 'PROD_1010',
-        productName: 'Cadbury Dairy Milk Silk Chocolate (150g)',
-        sku: 'SKU-CAD-150',
-        quantity: 10,
-        purchasePrice: 135,
-        unitPrice: 175,
-        discountPercent: 0,
-        taxPercent: 18,
-        total: 2065,
-      },
-      {
-        id: 's_item_13',
-        productId: 'PROD_1011',
-        productName: 'Dettol Original Liquid Handwash Refill (200ml)',
-        sku: 'SKU-DET-200',
-        quantity: 15,
-        purchasePrice: 38,
-        unitPrice: 49,
-        discountPercent: 0,
-        taxPercent: 18,
-        total: 867.30,
-      },
-    ],
-    subtotal: 5941,
-    totalDiscount: 0,
-    totalTax: 968.58,
-    shippingCharges: 0,
-    otherCharges: 0,
-    grandTotal: 6909.58,
-    paidAmount: 0,
-    balance: 6909.58,
-    paymentMethod: 'Credit',
-    paymentSplits: [],
-    paymentRecords: [],
-    paymentTerms: 'Net 30 Days',
-    paymentStatus: 'Unpaid',
-    saleStatus: 'Draft',
-    createdBy: 'Yaa Admin',
-    salesperson: 'Anita Sharma',
-    notes: 'FMCG and hygiene items dispatch on credit.',
-    createdAt: '2026-09-28T11:45:00Z',
-    updatedAt: '2026-09-28T11:45:00Z',
-  },
-  {
-    id: 'sale_4',
-    invoiceNo: 'INV-2026-1004',
-    invoiceStatus: 'Generated',
-    saleDate: '2026-09-29',
-    dueDate: '2026-09-29',
-    customerId: 'cust_4',
-    customerName: 'Meenakshi Iyer',
-    customerCompany: 'Household Account',
-    customerPhone: '+91 97908 11223',
-    customerEmail: 'meenakshi.iyer@gmail.com',
-    billingAddress: 'Flat 4B, Shanthi Apartments, Mylapore, Chennai, Tamil Nadu 600004',
-    shippingAddress: 'Flat 4B, Shanthi Apartments, Mylapore, Chennai, Tamil Nadu 600004',
-    items: [
-      {
-        id: 's_item_14',
-        productId: 'PROD_1001',
-        productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-        sku: 'SKU-ATT-10K',
-        quantity: 1,
-        purchasePrice: 420,
-        unitPrice: 495,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 519.75,
-      },
-      {
-        id: 's_item_15',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        sku: 'SKU-OIL-01L',
-        quantity: 2,
-        purchasePrice: 138,
-        unitPrice: 165,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 346.50,
-      },
-      {
-        id: 's_item_16',
-        productId: 'PROD_1004',
-        productName: 'Tata Salt Vacuum Evaporated Iodized (1 Kg)',
-        sku: 'SKU-SLT-01K',
-        quantity: 1,
-        purchasePrice: 22,
-        unitPrice: 28,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 28,
-      },
-      {
-        id: 's_item_17',
-        productId: 'PROD_1007',
-        productName: 'Brooke Bond Red Label Strong Tea (500g)',
-        sku: 'SKU-TEA-500',
-        quantity: 1,
-        purchasePrice: 230,
-        unitPrice: 275,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 288.75,
-      },
-    ],
-    subtotal: 1128,
-    totalDiscount: 28,
-    totalTax: 55,
-    shippingCharges: 0,
-    otherCharges: 0,
-    grandTotal: 1155,
-    paidAmount: 1155,
-    balance: 0,
-    paymentMethod: 'Cash',
-    paymentSplits: [
-      { id: 'ps_104', method: 'Cash', amount: 1155, referenceNo: 'CASH-POS-99' },
-    ],
-    paymentRecords: [
-      {
-        id: 'PAY-000104',
-        invoiceNo: 'INV-2026-1004',
-        paymentDate: '2026-09-29',
-        paymentTime: '11:15 AM',
-        method: 'Cash',
-        referenceNo: 'CASH-POS-99',
-        amount: 1155,
-        status: 'Paid',
-        recordedBy: 'Counter Cashier',
-        notes: 'Cash received at POS Counter 1.',
-        createdAt: '2026-09-29T11:15:00Z',
-      },
-    ],
-    paymentTerms: 'Immediate / Cash',
-    paymentStatus: 'Paid',
-    saleStatus: 'Completed',
-    createdBy: 'Counter Cashier',
-    salesperson: 'Anita Sharma',
-    notes: 'Walk-in customer retail bill.',
-    createdAt: '2026-09-29T11:15:00Z',
-    updatedAt: '2026-09-29T11:15:00Z',
-  },
-];
+export const INITIAL_SALES: SaleTransaction[] = [];
 
-export const INITIAL_SALES_RETURNS: SalesReturn[] = [
-  {
-    id: 'ret_1',
-    returnNo: 'SR-2026-0001',
-    invoiceNo: 'INV-2026-1001',
-    saleId: 'sale_1',
-    customerId: 'cust_1',
-    customerName: 'Ramesh Kumar',
-    customerCompany: 'Kumar Daily Supermarket',
-    returnDate: '2026-09-28',
-    items: [
-      {
-        id: 'ret_item_1',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        soldQuantity: 10,
-        returnQuantity: 1,
-        unitPrice: 165,
-        returnAmount: 173.25,
-        reason: 'Damaged',
-        notes: 'Oil pouch found leaking at bottom seal, returned unopened.',
-      },
-    ],
-    returnAmount: 173.25,
-    refundMethod: 'Bank Transfer',
-    refundAmount: 173.25,
-    refundStatus: 'Refunded',
-    returnStatus: 'Refunded',
-    notes: 'Refund transferred to customer bank account.',
-    createdAt: '2026-09-28T10:00:00Z',
-    updatedAt: '2026-09-28T11:30:00Z',
-  },
-];
+export const INITIAL_SALES_RETURNS: SalesReturn[] = [];
 
-export const INITIAL_PURCHASE_REQUESTS: PurchaseRequest[] = [
-  {
-    id: 'pr_1',
-    requestNo: 'PR-2026-0041',
-    requestDate: '2026-09-27',
-    requestedBy: 'Suresh Storekeeper',
-    department: 'Grocery Inventory',
-    requiredDate: '2026-10-05',
-    priority: 'High',
-    status: 'Approved',
-    items: [
-      {
-        id: 'pr_item_1',
-        productId: 'PROD_1002',
-        productName: 'India Gate Super Premium Basmati Rice (5 Kg)',
-        currentStock: 25,
-        requestedQuantity: 80,
-        estimatedUnitPrice: 580,
-        requiredDate: '2026-10-05',
-        remarks: 'Festival bulk demand anticipated.',
-      },
-    ],
-    notes: 'Procure high grade 5kg basmati bags.',
-    approvedBy: 'James Wilson',
-    approvedAt: '2026-09-27T12:00:00Z',
-    createdAt: '2026-09-27T10:00:00Z',
-    updatedAt: '2026-09-27T12:00:00Z',
-  },
-  {
-    id: 'pr_2',
-    requestNo: 'PR-2026-0042',
-    requestDate: '2026-09-28',
-    requestedBy: 'Anita Cashier',
-    department: 'FMCG Counter',
-    requiredDate: '2026-10-02',
-    priority: 'Urgent',
-    status: 'Pending Approval',
-    items: [
-      {
-        id: 'pr_item_2',
-        productId: 'PROD_1011',
-        productName: 'Dettol Original Liquid Handwash Refill (200ml)',
-        currentStock: 8,
-        requestedQuantity: 50,
-        estimatedUnitPrice: 38,
-        requiredDate: '2026-10-02',
-        remarks: 'Current stock below safety threshold (8 units left).',
-      },
-    ],
-    notes: 'Urgent refill order from HUL Agency.',
-    createdAt: '2026-09-28T14:00:00Z',
-    updatedAt: '2026-09-28T14:00:00Z',
-  },
-];
+export const INITIAL_PURCHASE_REQUESTS: PurchaseRequest[] = [];
 
-export const INITIAL_PURCHASES: PurchaseOrder[] = [
-  {
-    id: 'po_1',
-    purchaseNo: 'PO-2026-0201',
-    purchaseInvoiceNo: 'ITC-BILL-9941',
-    supplierId: 'sup_1',
-    supplierName: 'ITC FMCG Wholesale Distribution Hub',
-    supplierCode: 'SUP-1001',
-    purchaseDate: '2026-09-24',
-    dueDate: '2026-10-09',
-    items: [
-      {
-        id: 'po_item_1',
-        productId: 'PROD_1001',
-        productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-        quantity: 50,
-        purchasePrice: 420,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 22050,
-      },
-      {
-        id: 'po_item_2',
-        productId: 'PROD_1005',
-        productName: 'Premium Unpolished Toor Dal / Arhar Dal (1 Kg)',
-        quantity: 100,
-        purchasePrice: 145,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 14500,
-      },
-    ],
-    subtotal: 35500,
-    discount: 0,
-    tax: 1050,
-    shipping: 840,
-    otherCharges: 0,
-    grandTotal: 37390,
-    paidAmount: 15000,
-    balance: 22390,
-    paymentMethod: 'Bank Transfer',
-    paymentTerms: 'Net 15 Days',
-    paymentStatus: 'Partial',
-    purchaseStatus: 'Received',
-    notes: 'Monthly staples consignment received and verified in good condition.',
-    createdAt: '2026-09-24T11:00:00Z',
-    updatedAt: '2026-09-25T15:00:00Z',
-  },
-  {
-    id: 'po_1_2',
-    purchaseNo: 'PO-2026-0204',
-    purchaseInvoiceNo: 'ITC-BILL-9988',
-    supplierId: 'sup_1',
-    supplierName: 'ITC FMCG Wholesale Distribution Hub',
-    supplierCode: 'SUP-1001',
-    purchaseDate: '2026-10-01',
-    dueDate: '2026-10-16',
-    items: [
-      {
-        id: 'po_item_1_3',
-        productId: 'PROD_1001',
-        productName: 'Sunfeast Dark Fantasy Choco Fills (300g)',
-        quantity: 80,
-        purchasePrice: 110,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 9240,
-      },
-    ],
-    subtotal: 8800,
-    discount: 0,
-    tax: 440,
-    shipping: 0,
-    otherCharges: 0,
-    grandTotal: 9240,
-    paidAmount: 0,
-    balance: 9240,
-    paymentMethod: 'Bank Transfer',
-    paymentTerms: 'Net 30 Days',
-    paymentStatus: 'Unpaid',
-    purchaseStatus: 'Ordered',
-    notes: 'Festival special biscuit stock dispatch.',
-    createdAt: '2026-10-01T09:30:00Z',
-    updatedAt: '2026-10-01T09:30:00Z',
-  },
-  {
-    id: 'po_2',
-    purchaseNo: 'PO-2026-0202',
-    purchaseInvoiceNo: 'AW-DEPOT-4401',
-    supplierId: 'sup_3',
-    supplierName: 'Adani Wilmar & Fortune Oils Depot',
-    supplierCode: 'SUP-1003',
-    purchaseDate: '2026-09-26',
-    dueDate: '2026-10-26',
-    items: [
-      {
-        id: 'po_item_3',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        quantity: 150,
-        purchasePrice: 138,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 21735,
-      },
-    ],
-    subtotal: 20700,
-    discount: 0,
-    tax: 1035,
-    shipping: 0,
-    otherCharges: 0,
-    grandTotal: 21735,
-    paidAmount: 10000,
-    balance: 11735,
-    paymentMethod: 'Bank Transfer',
-    paymentTerms: 'Net 30 Days',
-    paymentStatus: 'Partial',
-    purchaseStatus: 'Ordered',
-    notes: 'Edible cooking oil bulk consignment delivery.',
-    createdAt: '2026-09-26T10:00:00Z',
-    updatedAt: '2026-09-26T14:30:00Z',
-  },
-  {
-    id: 'po_3',
-    purchaseNo: 'PO-2026-0203',
-    purchaseInvoiceNo: 'TCP-HUB-1088',
-    supplierId: 'sup_4',
-    supplierName: 'Tata Consumer Products Central Supply',
-    supplierCode: 'SUP-1004',
-    purchaseDate: '2026-09-27',
-    dueDate: '2026-10-12',
-    items: [
-      {
-        id: 'po_item_4',
-        productId: 'PROD_1004',
-        productName: 'Tata Salt Vacuum Evaporated Iodized (1 Kg)',
-        quantity: 200,
-        purchasePrice: 22,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 4400,
-      },
-      {
-        id: 'po_item_5',
-        productId: 'PROD_1007',
-        productName: 'Brooke Bond Red Label Strong Tea (500g)',
-        quantity: 50,
-        purchasePrice: 230,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 12075,
-      },
-    ],
-    subtotal: 15900,
-    discount: 0,
-    tax: 575,
-    shipping: 0,
-    otherCharges: 0,
-    grandTotal: 16475,
-    paidAmount: 8000,
-    balance: 8475,
-    paymentMethod: 'UPI',
-    paymentTerms: 'Immediate / Cash',
-    paymentStatus: 'Partial',
-    purchaseStatus: 'Received',
-    notes: 'Tea cartons and salt bulk sack delivery.',
-    createdAt: '2026-09-27T11:00:00Z',
-    updatedAt: '2026-09-27T16:00:00Z',
-  },
-  {
-    id: 'po_4',
-    purchaseNo: 'PO-2026-0205',
-    purchaseInvoiceNo: 'HUL-INV-8821',
-    supplierId: 'sup_2',
-    supplierName: 'Hindustan Unilever Regional Agency',
-    supplierCode: 'SUP-1002',
-    purchaseDate: '2026-09-29',
-    dueDate: '2026-10-14',
-    items: [
-      {
-        id: 'po_item_6',
-        productId: 'PROD_1011',
-        productName: 'Dettol Original Liquid Handwash Refill (200ml)',
-        quantity: 100,
-        purchasePrice: 38,
-        discountPercent: 0,
-        taxPercent: 18,
-        total: 4484,
-      },
-    ],
-    subtotal: 3800,
-    discount: 0,
-    tax: 684,
-    shipping: 0,
-    otherCharges: 0,
-    grandTotal: 4484,
-    paidAmount: 0,
-    balance: 4484,
-    paymentMethod: 'Bank Transfer',
-    paymentTerms: 'Net 15 Days',
-    paymentStatus: 'Unpaid',
-    purchaseStatus: 'Ordered',
-    notes: 'Personal care consignment.',
-    createdAt: '2026-09-29T10:00:00Z',
-    updatedAt: '2026-09-29T10:00:00Z',
-  },
-];
+export const INITIAL_PURCHASES: PurchaseOrder[] = [];
 
-export const INITIAL_PURCHASE_RETURNS: PurchaseReturn[] = [
-  {
-    id: 'pret_1',
-    returnNo: 'PR-RET-2026-001',
-    purchaseNo: 'PO-2026-0202',
-    purchaseId: 'po_2',
-    supplierId: 'sup_3',
-    supplierName: 'Adani Wilmar & Fortune Oils Depot',
-    returnDate: '2026-09-26',
-    items: [
-      {
-        id: 'pr_ret_item_1',
-        productId: 'PROD_1003',
-        productName: 'Fortune Sunlite Refined Sunflower Oil (1 Ltr Pouch)',
-        purchasedQuantity: 150,
-        returnQuantity: 2,
-        unitPrice: 138,
-        returnAmount: 289.80,
-        reason: 'Damaged',
-        remarks: 'Carton corner punctured, 2 pouches ruptured.',
-      },
-    ],
-    returnAmount: 289.80,
-    refundStatus: 'Supplier Credit',
-    returnStatus: 'Completed',
-    notes: 'Supplier credit note CN-FORTUNE-889 issued.',
-    createdAt: '2026-09-26T15:00:00Z',
-    updatedAt: '2026-09-27T11:00:00Z',
-  },
-];
+export const INITIAL_PURCHASE_RETURNS: PurchaseReturn[] = [];
 
-export const INITIAL_QUOTATIONS: SaleQuotation[] = [
-  {
-    id: 'quot-1',
-    quotationNo: 'EST-001',
-    referenceNo: '1',
-    date: '2026-10-01',
-    validUntil: '2026-10-31',
-    customerId: 'cust_1',
-    partyName: 'Keerthivasan',
-    customerCompany: 'Keerthi Retails & Mart',
-    customerPhone: '+91 98765 43210',
-    customerEmail: 'keerthi@gmail.com',
-    billingAddress: '42, North Car Street, Gandhi Nagar, Madurai, TN - 625020',
-    shippingAddress: '42, North Car Street, Gandhi Nagar, Madurai, TN - 625020',
-    items: [
-      {
-        id: 'item_q1',
-        productId: 'PROD_1001',
-        productName: 'Aashirvaad Superior MP Sharbati Atta (10 Kg)',
-        sku: 'SKU-ATT-10K',
-        quantity: 10,
-        unitPrice: 476.19,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 5000,
-      },
-    ],
-    subtotal: 4761.90,
-    withGst: true,
-    gstType: 'intra_state',
-    cgst: 119.05,
-    sgst: 119.05,
-    discount: 0,
-    taxAmount: 238.10,
-    amount: 5000,
-    balance: 5000,
-    status: 'Open',
-    notes: 'Quotation valid for 30 days from date of issue. Special wholesale pricing applicable.',
-    terms: '1. Prices are inclusive of GST.\n2. Payment terms: 100% on delivery or 15 days credit upon approval.\n3. Goods will be dispatched within 24-48 hours after confirmation.',
-    createdAt: '2026-10-01T10:00:00Z',
-    updatedAt: '2026-10-01T10:00:00Z',
-  },
-];
+export const INITIAL_QUOTATIONS: SaleQuotation[] = [];
 
-export const INITIAL_PAYMENTS_OUT: PaymentOut[] = [
-  {
-    id: 'pay_out_1',
-    paymentNo: 'VPA-2026-001',
-    paymentDate: '2026-09-25',
-    supplierId: 'sup_1',
-    supplierName: 'ITC FMCG Wholesale Distribution Hub',
-    supplierCode: 'SUP-1001',
-    purchaseId: 'po_1',
-    purchaseNo: 'PO-2026-0201',
-    amount: 37390,
-    paymentMode: 'Bank Transfer',
-    referenceNo: 'HDFC-NEFT-99281',
-    notes: 'Paid in full for staples consignment PO-2026-0201',
-    status: 'Completed',
-    createdAt: '2026-09-25T15:00:00Z',
-    updatedAt: '2026-09-25T15:00:00Z',
-  },
-  {
-    id: 'pay_out_2',
-    paymentNo: 'VPA-2026-002',
-    paymentDate: '2026-09-26',
-    supplierId: 'sup_3',
-    supplierName: 'Adani Wilmar & Fortune Oils Depot',
-    supplierCode: 'SUP-1003',
-    purchaseId: 'po_2',
-    purchaseNo: 'PO-2026-0202',
-    amount: 10000,
-    paymentMode: 'Bank Transfer',
-    referenceNo: 'ICICI-IMPS-44912',
-    notes: 'Advance part-payment for edible oils bulk shipment',
-    status: 'Completed',
-    createdAt: '2026-09-26T14:30:00Z',
-    updatedAt: '2026-09-26T14:30:00Z',
-  },
-  {
-    id: 'pay_out_3',
-    paymentNo: 'VPA-2026-003',
-    paymentDate: '2026-09-27',
-    supplierId: 'sup_4',
-    supplierName: 'Tata Consumer Products Central Supply',
-    supplierCode: 'SUP-1004',
-    purchaseId: 'po_3',
-    purchaseNo: 'PO-2026-0203',
-    amount: 16475,
-    paymentMode: 'UPI',
-    referenceNo: 'UPI/tataproducts@icici/3392',
-    notes: 'Direct settlement on delivery of tea & salt stocks',
-    status: 'Completed',
-    createdAt: '2026-09-27T16:00:00Z',
-    updatedAt: '2026-09-27T16:00:00Z',
-  },
-];
+export const INITIAL_PAYMENTS_OUT: PaymentOut[] = [];
 
 // ==========================================
 // 3. STORAGE KEYS & REACTIVE STORE
@@ -1958,9 +914,12 @@ const KEYS = {
   STOCKS: 'yaa_crm_inventory_stocks',
   QUOTATIONS: 'yaa_crm_sale_quotations',
   PAYMENT_INS: 'yaa_crm_sale_payment_ins',
+  SALES_REPRESENTATIVES: 'yaa_crm_sales_representatives',
+  COLLECTION_FOLLOW_UPS: 'yaa_crm_collection_follow_ups',
+  PROMISES_TO_PAY: 'yaa_crm_promises_to_pay',
 };
 
-const SEED_VERSION_KEY = 'yaa_crm_grocery_mock_v3';
+const SEED_VERSION_KEY = 'yaa_crm_grocery_mock_v7';
 const INITIAL_PAYMENT_INS: SalePaymentIn[] = [];
 
 function getStorage<T>(key: string, initial: T): T {
@@ -1978,6 +937,9 @@ function getStorage<T>(key: string, initial: T): T {
       localStorage.setItem(KEYS.STOCKS, JSON.stringify(INITIAL_INVENTORY_STOCKS));
       localStorage.setItem(KEYS.QUOTATIONS, JSON.stringify(INITIAL_QUOTATIONS));
       localStorage.setItem(KEYS.PAYMENT_INS, JSON.stringify(INITIAL_PAYMENT_INS));
+      localStorage.setItem(KEYS.SALES_REPRESENTATIVES, JSON.stringify(INITIAL_SALES_REPRESENTATIVES));
+      localStorage.setItem(KEYS.COLLECTION_FOLLOW_UPS, JSON.stringify(INITIAL_COLLECTION_FOLLOW_UPS));
+      localStorage.setItem(KEYS.PROMISES_TO_PAY, JSON.stringify(INITIAL_PROMISES_TO_PAY));
       localStorage.setItem(SEED_VERSION_KEY, 'true');
       return initial;
     }
@@ -1987,7 +949,131 @@ function getStorage<T>(key: string, initial: T): T {
       localStorage.setItem(key, JSON.stringify(initial));
       return initial;
     }
-    return JSON.parse(raw);
+
+    const parsed = JSON.parse(raw);
+
+    // Auto-purge mock stocks (Aashirvaad Atta, etc.)
+    if (key === KEYS.STOCKS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (s) =>
+          !String(s.productId || s.id).startsWith('PROD_10') &&
+          !String(s.id).startsWith('stk_') &&
+          !String(s.productName || '').includes('Aashirvaad') &&
+          !String(s.productName || '').includes('India Gate')
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.STOCKS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock quotations
+    if (key === KEYS.QUOTATIONS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (q) =>
+          q.id !== 'quot-1' &&
+          q.quotationNo !== 'EST-001' &&
+          q.partyName !== 'Keerthivasan'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.QUOTATIONS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock sales returns
+    if (key === KEYS.SALES_RETURNS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (r) =>
+          r.id !== 'ret_1' &&
+          r.returnNo !== 'SR-2026-0001' &&
+          r.customerName !== 'Ramesh Kumar'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.SALES_RETURNS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock payments-in
+    if (key === KEYS.PAYMENT_INS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (p) =>
+          p.id !== 'pay_in_1' &&
+          p.id !== 'pay_in_2' &&
+          p.receiptNo !== 'REC-2026-0001' &&
+          p.receiptNo !== 'REC-2026-0002'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PAYMENT_INS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock purchase requests
+    if (key === KEYS.PURCHASE_REQUESTS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (pr) =>
+          pr.id !== 'pr_1' &&
+          pr.id !== 'pr_2' &&
+          pr.requestNo !== 'PR-2026-0041' &&
+          pr.requestNo !== 'PR-2026-0042'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PURCHASE_REQUESTS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock purchase orders
+    if (key === KEYS.PURCHASES && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (po) =>
+          po.id !== 'po_1' &&
+          po.id !== 'po_1_2' &&
+          po.id !== 'po_2' &&
+          po.id !== 'po_3' &&
+          po.id !== 'po_4' &&
+          po.id !== 'po-uuid-0001' &&
+          !String(po.purchaseNo || '').startsWith('PO-2026-020')
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PURCHASES, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock purchase returns
+    if (key === KEYS.PURCHASE_RETURNS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (pret) =>
+          pret.id !== 'pret_1' &&
+          pret.id !== 'pret_5501' &&
+          pret.returnNo !== 'PR-RET-2026-001'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PURCHASE_RETURNS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock payment outs
+    if (key === KEYS.PAYMENTS_OUT && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (pout) =>
+          pout.id !== 'pay_out_1' &&
+          pout.id !== 'pay_out_2' &&
+          pout.id !== 'pay_out_3' &&
+          pout.id !== 'pout-uuid-0001' &&
+          !String(pout.paymentNo || '').startsWith('VPA-2026-00')
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PAYMENTS_OUT, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    return parsed;
   } catch (err) {
     console.error(`Failed to read from localStorage for ${key}`, err);
     return initial;
@@ -2037,6 +1123,15 @@ export const useSalesManagementStore = () => {
   const [paymentIns, setPaymentIns] = useState<SalePaymentIn[]>(() =>
     getStorage(KEYS.PAYMENT_INS, INITIAL_PAYMENT_INS)
   );
+  const [salesRepresentatives, setSalesRepresentatives] = useState<SalesRepresentative[]>(() =>
+    getStorage(KEYS.SALES_REPRESENTATIVES, INITIAL_SALES_REPRESENTATIVES)
+  );
+  const [collectionFollowUps, setCollectionFollowUps] = useState<CollectionFollowUp[]>(() =>
+    getStorage(KEYS.COLLECTION_FOLLOW_UPS, INITIAL_COLLECTION_FOLLOW_UPS)
+  );
+  const [promisesToPay, setPromisesToPay] = useState<PromiseToPay[]>(() =>
+    getStorage(KEYS.PROMISES_TO_PAY, INITIAL_PROMISES_TO_PAY)
+  );
 
   const reloadAll = () => {
     setSales(getStorage(KEYS.SALES, INITIAL_SALES));
@@ -2050,6 +1145,9 @@ export const useSalesManagementStore = () => {
     setStocks(getStorage(KEYS.STOCKS, INITIAL_INVENTORY_STOCKS));
     setQuotations(getStorage(KEYS.QUOTATIONS, INITIAL_QUOTATIONS));
     setPaymentIns(getStorage(KEYS.PAYMENT_INS, INITIAL_PAYMENT_INS));
+    setSalesRepresentatives(getStorage(KEYS.SALES_REPRESENTATIVES, INITIAL_SALES_REPRESENTATIVES));
+    setCollectionFollowUps(getStorage(KEYS.COLLECTION_FOLLOW_UPS, INITIAL_COLLECTION_FOLLOW_UPS));
+    setPromisesToPay(getStorage(KEYS.PROMISES_TO_PAY, INITIAL_PROMISES_TO_PAY));
   };
 
   useEffect(() => {
@@ -2165,6 +1263,12 @@ export const useSalesManagementStore = () => {
     setCustomers(updated);
     return updated;
   };
+
+  const setCustomersList = useCallback((newCustomers: SalesCustomer[]) => {
+    setStorage(KEYS.CUSTOMERS, newCustomers);
+    setCustomers(newCustomers);
+    return newCustomers;
+  }, []);
 
   const addCustomerActivity = (customerId: string, action: string, details: string, user: string = 'Current User') => {
     const current = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
@@ -2334,9 +1438,22 @@ export const useSalesManagementStore = () => {
   // ----------------------------------------
   // Sales Actions
   // ----------------------------------------
-  const saveSale = (sale: SaleTransaction) => {
+  const saveSale = (saleInput: SaleTransaction) => {
     const current = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
-    const exists = current.find((s) => s.id === sale.id);
+    const exists = current.find((s) => s.id === saleInput.id);
+
+    // Invoices always reflect the sales representative assigned to the customer
+    let sale = { ...saleInput };
+    const cust = customers.find(
+      (c) => c.id === sale.customerId || c.name.toLowerCase() === sale.customerName?.toLowerCase()
+    );
+
+    if (cust?.salesRepresentativeId) {
+      sale.salesRepresentativeId = cust.salesRepresentativeId;
+      sale.salesRepresentativeName = cust.salesRepresentativeName;
+      sale.assignmentSource = 'Customer Default';
+    }
+
     let updated: SaleTransaction[];
     if (exists) {
       if (exists.saleStatus !== 'Completed' && sale.saleStatus === 'Completed') {
@@ -2488,6 +1605,19 @@ export const useSalesManagementStore = () => {
     return updated;
   };
 
+  const setSalesReturnsList = (list: SalesReturn[]) => {
+    setStorage(KEYS.SALES_RETURNS, list);
+    setSalesReturns(list);
+  };
+
+  const deleteSalesReturn = (id: string) => {
+    const current = getStorage<SalesReturn[]>(KEYS.SALES_RETURNS, INITIAL_SALES_RETURNS);
+    const updated = current.filter((r) => r.id !== id);
+    setStorage(KEYS.SALES_RETURNS, updated);
+    setSalesReturns(updated);
+    return updated;
+  };
+
   // ----------------------------------------
   // Supplier Actions
   // ----------------------------------------
@@ -2513,9 +1643,21 @@ export const useSalesManagementStore = () => {
     return updated;
   };
 
+  const setSuppliersList = useCallback((list: Supplier[]) => {
+    setStorage(KEYS.SUPPLIERS, list);
+    setSuppliers(list);
+    return list;
+  }, []);
+
   // ----------------------------------------
   // Purchase Request Actions
   // ----------------------------------------
+  const setPurchaseRequestsList = useCallback((list: PurchaseRequest[]) => {
+    setStorage(KEYS.PURCHASE_REQUESTS, list);
+    setPurchaseRequests(list);
+    return list;
+  }, []);
+
   const savePurchaseRequest = (pr: PurchaseRequest) => {
     const current = getStorage<PurchaseRequest[]>(KEYS.PURCHASE_REQUESTS, INITIAL_PURCHASE_REQUESTS);
     const exists = current.find((p) => p.id === pr.id);
@@ -2565,6 +1707,12 @@ export const useSalesManagementStore = () => {
   // ----------------------------------------
   // Purchase Actions
   // ----------------------------------------
+  const setPurchasesList = useCallback((list: PurchaseOrder[]) => {
+    setStorage(KEYS.PURCHASES, list);
+    setPurchases(list);
+    return list;
+  }, []);
+
   const savePurchase = (po: PurchaseOrder) => {
     const current = getStorage<PurchaseOrder[]>(KEYS.PURCHASES, INITIAL_PURCHASES);
     const exists = current.find((p) => p.id === po.id);
@@ -2679,6 +1827,12 @@ export const useSalesManagementStore = () => {
   // ----------------------------------------
   // Purchase Return Actions
   // ----------------------------------------
+  const setPurchaseReturnsList = useCallback((list: PurchaseReturn[]) => {
+    setStorage(KEYS.PURCHASE_RETURNS, list);
+    setPurchaseReturns(list);
+    return list;
+  }, []);
+
   const savePurchaseReturn = (pret: PurchaseReturn) => {
     const current = getStorage<PurchaseReturn[]>(KEYS.PURCHASE_RETURNS, INITIAL_PURCHASE_RETURNS);
     const exists = current.find((r) => r.id === pret.id);
@@ -2710,6 +1864,24 @@ export const useSalesManagementStore = () => {
   // ----------------------------------------
   // Quotation / Estimate Actions
   // ----------------------------------------
+  const setSalesList = useCallback((newSales: SaleTransaction[]) => {
+    setStorage(KEYS.SALES, newSales);
+    setSales(newSales);
+    return newSales;
+  }, []);
+
+  const setQuotationsList = useCallback((newQuotations: SaleQuotation[]) => {
+    setStorage(KEYS.QUOTATIONS, newQuotations);
+    setQuotations(newQuotations);
+    return newQuotations;
+  }, []);
+
+  const setStocksList = useCallback((newStocks: InventoryStockItem[]) => {
+    setStorage(KEYS.STOCKS, newStocks);
+    setStocks(newStocks);
+    return newStocks;
+  }, []);
+
   const saveQuotation = (quotation: SaleQuotation) => {
     const current = getStorage<SaleQuotation[]>(KEYS.QUOTATIONS, INITIAL_QUOTATIONS);
     const exists = current.find((q) => q.id === quotation.id);
@@ -2826,6 +1998,12 @@ export const useSalesManagementStore = () => {
   // ----------------------------------------
   // Payment Out Actions
   // ----------------------------------------
+  const setPaymentOutsList = useCallback((list: PaymentOut[]) => {
+    setStorage(KEYS.PAYMENTS_OUT, list);
+    setPaymentOuts(list);
+    return list;
+  }, []);
+
   const savePaymentOut = (po: PaymentOut) => {
     const current = getStorage<PaymentOut[]>(KEYS.PAYMENTS_OUT, INITIAL_PAYMENTS_OUT);
     const exists = current.find((p) => p.id === po.id);
@@ -2989,6 +2167,538 @@ export const useSalesManagementStore = () => {
     return updated;
   };
 
+  const setPaymentInsList = (list: SalePaymentIn[]) => {
+    setStorage(KEYS.PAYMENT_INS, list);
+    setPaymentIns(list);
+  };
+
+  // ----------------------------------------
+  // Sales Representative Actions
+  // ----------------------------------------
+  const saveSalesRepresentative = (rep: Partial<SalesRepresentative> & { name: string; mobile: string; status: SalesRepresentativeStatus }) => {
+    const current = getStorage<SalesRepresentative[]>(KEYS.SALES_REPRESENTATIVES, INITIAL_SALES_REPRESENTATIVES);
+    const exists = rep.id ? current.find((r) => r.id === rep.id) : null;
+    let updated: SalesRepresentative[];
+    let savedRecord: SalesRepresentative;
+
+    if (exists) {
+      savedRecord = {
+        ...exists,
+        ...rep,
+        updatedAt: new Date().toISOString(),
+      };
+      updated = current.map((r) => (r.id === rep.id ? savedRecord : r));
+
+      // If rep name updated, synchronize assigned customers
+      if (rep.name && rep.name !== exists.name) {
+        const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+        const updatedCustomers = currentCustomers.map((c) =>
+          c.salesRepresentativeId === rep.id ? { ...c, salesRepresentativeName: rep.name, updatedAt: new Date().toISOString() } : c
+        );
+        setStorage(KEYS.CUSTOMERS, updatedCustomers);
+        setCustomers(updatedCustomers);
+      }
+    } else {
+      savedRecord = {
+        id: rep.id || `rep_${Date.now()}`,
+        name: rep.name,
+        mobile: rep.mobile,
+        email: rep.email || '',
+        status: rep.status,
+        createdAt: rep.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      updated = [savedRecord, ...current];
+    }
+    setStorage(KEYS.SALES_REPRESENTATIVES, updated);
+    setSalesRepresentatives(updated);
+    return savedRecord;
+  };
+
+  const deleteSalesRepresentative = (id: string) => {
+    const current = getStorage<SalesRepresentative[]>(KEYS.SALES_REPRESENTATIVES, INITIAL_SALES_REPRESENTATIVES);
+    const updated = current.filter((r) => r.id !== id);
+    setStorage(KEYS.SALES_REPRESENTATIVES, updated);
+    setSalesRepresentatives(updated);
+
+    // Unassign customers from this rep
+    const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const updatedCustomers = currentCustomers.map((c) =>
+      c.salesRepresentativeId === id
+        ? { ...c, salesRepresentativeId: undefined, salesRepresentativeName: undefined, updatedAt: new Date().toISOString() }
+        : c
+    );
+    setStorage(KEYS.CUSTOMERS, updatedCustomers);
+    setCustomers(updatedCustomers);
+
+    // Unassign invoices from this rep
+    const currentSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
+    const updatedSales = currentSales.map((s) =>
+      s.salesRepresentativeId === id
+        ? { ...s, salesRepresentativeId: undefined, salesRepresentativeName: undefined, updatedAt: new Date().toISOString() }
+        : s
+    );
+    setStorage(KEYS.SALES, updatedSales);
+    setSales(updatedSales);
+
+    return updated;
+  };
+
+  const setSalesRepresentativesList = (reps: SalesRepresentative[]) => {
+    setStorage(KEYS.SALES_REPRESENTATIVES, reps);
+    setSalesRepresentatives(reps);
+  };
+
+  const assignCustomerSalesRep = (
+    customerId: string,
+    repId: string,
+    assignmentType: 'Primary' | 'Temporary' = 'Primary',
+    effectiveFrom?: string,
+    notes?: string
+  ) => {
+    const rep = salesRepresentatives.find((r) => r.id === repId);
+    const repName = rep?.name || 'Unassigned';
+    const effectiveDate = effectiveFrom || new Date().toISOString().split('T')[0];
+
+    // 1. Update Customer
+    const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const updatedCustomers = currentCustomers.map((c) => {
+      if (c.id === customerId) {
+        const activities = [
+          ...(c.activities || []),
+          {
+            id: `act_${Date.now()}`,
+            action: 'Sales Rep Assigned',
+            details: `Assigned to ${repName} (${assignmentType} Rep, Effective from ${effectiveDate}). ${notes || ''}`.trim(),
+            date: new Date().toISOString(),
+            user: 'Admin',
+          },
+        ];
+        return {
+          ...c,
+          salesRepresentativeId: repId,
+          salesRepresentativeName: repName,
+          salesRepresentativeType: assignmentType,
+          assignedDate: effectiveDate,
+          assignmentNotes: notes,
+          activities,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    setStorage(KEYS.CUSTOMERS, updatedCustomers);
+    setCustomers(updatedCustomers);
+
+    // 2. Cascade assignment to all invoices for this customer
+    const currentSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
+    const updatedSales = currentSales.map((s) => {
+      if (s.customerId === customerId) {
+        return {
+          ...s,
+          salesRepresentativeId: repId,
+          salesRepresentativeName: repName,
+          assignmentSource: 'Customer Default' as const,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return s;
+    });
+    setStorage(KEYS.SALES, updatedSales);
+    setSales(updatedSales);
+  };
+
+  const assignInvoiceSalesRep = (
+    invoiceId: string,
+    repId: string,
+    collectionStatus?: string,
+    nextFollowUpDate?: string
+  ) => {
+    // Sales rep is assigned against the customer, not against the invoice.
+    // Locate the customer for this invoice and assign the sales rep to the customer.
+    const currentSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
+    const targetSale = currentSales.find((s) => s.id === invoiceId);
+    if (targetSale?.customerId) {
+      assignCustomerSalesRep(targetSale.customerId, repId);
+    }
+
+    if (collectionStatus || nextFollowUpDate !== undefined) {
+      const refreshedSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
+      const updatedSales = refreshedSales.map((s) => {
+        if (s.id === invoiceId) {
+          return {
+            ...s,
+            collectionStatus: collectionStatus || s.collectionStatus,
+            nextFollowUpDate: nextFollowUpDate !== undefined ? nextFollowUpDate : s.nextFollowUpDate,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return s;
+      });
+      setStorage(KEYS.SALES, updatedSales);
+      setSales(updatedSales);
+    }
+  };
+
+  // ----------------------------------------
+  // Collection Follow-Up & Timeline Actions
+  // ----------------------------------------
+  const addCollectionFollowUp = (
+    followUp: Omit<CollectionFollowUp, 'id' | 'createdAt'> & { id?: string; createdAt?: string }
+  ) => {
+    const current = getStorage<CollectionFollowUp[]>(KEYS.COLLECTION_FOLLOW_UPS, INITIAL_COLLECTION_FOLLOW_UPS);
+    const newFollowUp: CollectionFollowUp = {
+      ...followUp,
+      id: followUp.id || `fup_${Date.now()}`,
+      createdAt: followUp.createdAt || new Date().toISOString(),
+    };
+    const updated = [newFollowUp, ...current];
+    setStorage(KEYS.COLLECTION_FOLLOW_UPS, updated);
+    setCollectionFollowUps(updated);
+
+    // Add customer activity
+    if (followUp.customerId) {
+      addCustomerActivity(
+        followUp.customerId,
+        `Follow-up: ${followUp.outcome}`,
+        followUp.notes || `Collection follow-up recorded by ${followUp.createdBy}`,
+        followUp.createdBy || 'Collections'
+      );
+    }
+
+    return newFollowUp;
+  };
+
+  const deleteCollectionFollowUp = (id: string) => {
+    const current = getStorage<CollectionFollowUp[]>(KEYS.COLLECTION_FOLLOW_UPS, INITIAL_COLLECTION_FOLLOW_UPS);
+    const updated = current.filter((f) => f.id !== id);
+    setStorage(KEYS.COLLECTION_FOLLOW_UPS, updated);
+    setCollectionFollowUps(updated);
+    return updated;
+  };
+
+  // ----------------------------------------
+  // Promise to Pay Actions
+  // ----------------------------------------
+  const savePromiseToPay = (
+    ptp: Omit<PromiseToPay, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: string }
+  ) => {
+    const current = getStorage<PromiseToPay[]>(KEYS.PROMISES_TO_PAY, INITIAL_PROMISES_TO_PAY);
+    const exists = ptp.id ? current.find((p) => p.id === ptp.id) : null;
+    let updated: PromiseToPay[];
+    let savedRecord: PromiseToPay;
+
+    if (exists) {
+      savedRecord = {
+        ...exists,
+        ...ptp,
+        updatedAt: new Date().toISOString(),
+      };
+      updated = current.map((p) => (p.id === ptp.id ? savedRecord : p));
+    } else {
+      savedRecord = {
+        ...ptp,
+        id: ptp.id || `ptp_${Date.now()}`,
+        status: ptp.status || 'Pending',
+        createdAt: ptp.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      updated = [savedRecord, ...current];
+    }
+
+    setStorage(KEYS.PROMISES_TO_PAY, updated);
+    setPromisesToPay(updated);
+
+    // Also record a follow-up timeline entry
+    addCollectionFollowUp({
+      customerId: ptp.customerId,
+      customerName: ptp.customerName,
+      invoiceId: ptp.invoiceId,
+      invoiceNo: ptp.invoiceNo,
+      salesRepresentativeId: ptp.salesRepresentativeId,
+      salesRepresentativeName: ptp.salesRepresentativeName,
+      followUpDate: new Date().toISOString().split('T')[0],
+      followUpTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      notes: `Promise to Pay recorded: ₹${ptp.promisedAmount.toLocaleString()} on ${ptp.promiseDate}. ${ptp.notes || ''}`.trim(),
+      outcome: 'Promise to Pay',
+      nextFollowUpDate: ptp.promiseDate,
+      createdBy: ptp.salesRepresentativeName || 'Sales Representative',
+    });
+
+    return savedRecord;
+  };
+
+  const updatePromiseToPayStatus = (id: string, status: PromiseToPayStatus) => {
+    const current = getStorage<PromiseToPay[]>(KEYS.PROMISES_TO_PAY, INITIAL_PROMISES_TO_PAY);
+    const updated = current.map((p) =>
+      p.id === id ? { ...p, status, updatedAt: new Date().toISOString() } : p
+    );
+    setStorage(KEYS.PROMISES_TO_PAY, updated);
+    setPromisesToPay(updated);
+    return updated;
+  };
+
+  // ----------------------------------------
+  // Seamless Record Payment Against Collection Invoice
+  // ----------------------------------------
+  const recordCollectionPayment = (params: {
+    invoiceId: string;
+    invoiceNo?: string;
+    customerId?: string;
+    amount: number;
+    paymentDate: string;
+    paymentMethod: string;
+    referenceNo?: string;
+    notes?: string;
+    recordedBy?: string;
+    salesRepresentativeId?: string;
+    salesRepresentativeName?: string;
+  }) => {
+    const sale = sales.find((s) => s.id === params.invoiceId || s.invoiceNo === params.invoiceNo);
+    const invoiceId = params.invoiceId || sale?.id || '';
+    const invoiceNo = params.invoiceNo || sale?.invoiceNo || '';
+    const customerId = params.customerId || sale?.customerId || '';
+    const {
+      amount,
+      paymentDate,
+      paymentMethod,
+      referenceNo,
+      notes,
+      recordedBy = 'Accounts Desk',
+      salesRepresentativeId = sale?.salesRepresentativeId,
+      salesRepresentativeName = sale?.salesRepresentativeName,
+    } = params;
+
+    const customer = customers.find((c) => c.id === customerId);
+    const newReceiptNo = `REC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+
+    // 1. Create Payment-In
+    const newPaymentIn: SalePaymentIn = {
+      id: `payin_${Date.now()}`,
+      receiptNo: newReceiptNo,
+      date: paymentDate || new Date().toISOString().split('T')[0],
+      paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+      customerId,
+      partyName: customer?.name || 'Customer',
+      customerPhone: customer?.phone,
+      customerCompany: customer?.company,
+      paymentType: paymentMethod,
+      paymentMethod,
+      receivedAmount: amount,
+      amount,
+      referenceNo,
+      description: notes || `Collection payment received for invoice ${invoiceNo}`,
+      notes: notes || `Collection payment received for invoice ${invoiceNo}`,
+      invoiceId,
+      invoiceNo,
+      salesRepresentativeId,
+      salesRepresentativeName,
+      status: 'Completed',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const currentPaymentIns = getStorage<SalePaymentIn[]>(KEYS.PAYMENT_INS, INITIAL_PAYMENT_INS);
+    const updatedPaymentIns = [newPaymentIn, ...currentPaymentIns];
+    setStorage(KEYS.PAYMENT_INS, updatedPaymentIns);
+    setPaymentIns(updatedPaymentIns);
+
+    // 2. Update Sale invoice
+    const currentSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
+    const updatedSales = currentSales.map((s) => {
+      if (s.id === invoiceId || s.invoiceNo === invoiceNo) {
+        const newPaid = (s.paidAmount || 0) + amount;
+        const newBalance = Math.max(0, (s.grandTotal || 0) - newPaid);
+        const newStatus: SalePaymentStatus =
+          newBalance <= 0 ? 'Paid' : newPaid > 0 ? 'Partial' : 'Unpaid';
+
+        const paymentRecord: SalePaymentRecord = {
+          id: `PAY-${Date.now().toString().slice(-6)}`,
+          invoiceNo: s.invoiceNo,
+          paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+          method: paymentMethod,
+          referenceNo,
+          amount,
+          status: 'Paid',
+          recordedBy,
+          notes,
+          createdAt: new Date().toISOString(),
+        };
+
+        return {
+          ...s,
+          paidAmount: newPaid,
+          balance: newBalance,
+          paymentStatus: newStatus,
+          paymentRecords: [paymentRecord, ...(s.paymentRecords || [])],
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return s;
+    });
+    setStorage(KEYS.SALES, updatedSales);
+    setSales(updatedSales);
+
+    // 3. Update Customer balances
+    const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const updatedCustomers = currentCustomers.map((c) => {
+      if (c.id === customerId) {
+        const newPaid = (c.paidAmount || 0) + amount;
+        const newOutstanding = Math.max(0, (c.outstandingAmount || 0) - amount);
+        const activities = [
+          ...(c.activities || []),
+          {
+            id: `act_${Date.now()}`,
+            action: 'Payment-In Received',
+            details: `Payment of ₹${amount.toLocaleString()} received for invoice ${invoiceNo} via ${paymentMethod} (Receipt #${newReceiptNo})`,
+            date: new Date().toISOString(),
+            user: recordedBy,
+          },
+        ];
+        return {
+          ...c,
+          paidAmount: newPaid,
+          outstandingAmount: newOutstanding,
+          activities,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return c;
+    });
+    setStorage(KEYS.CUSTOMERS, updatedCustomers);
+    setCustomers(updatedCustomers);
+
+    // 4. Update any pending Promise-to-Pay for this invoice
+    const currentPromises = getStorage<PromiseToPay[]>(KEYS.PROMISES_TO_PAY, INITIAL_PROMISES_TO_PAY);
+    const updatedPromises = currentPromises.map((p) => {
+      if ((p.invoiceId === invoiceId || p.invoiceNo === invoiceNo) && p.status === 'Pending') {
+        return {
+          ...p,
+          status: 'Honoured' as PromiseToPayStatus,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return p;
+    });
+    setStorage(KEYS.PROMISES_TO_PAY, updatedPromises);
+    setPromisesToPay(updatedPromises);
+
+    // 5. Add collection timeline record
+    const newFollowUp: CollectionFollowUp = {
+      id: `fup_${Date.now()}`,
+      customerId,
+      customerName: customer?.name,
+      invoiceId,
+      invoiceNo,
+      salesRepresentativeId: customer?.salesRepresentativeId,
+      salesRepresentativeName: customer?.salesRepresentativeName,
+      followUpDate: paymentDate || new Date().toISOString().split('T')[0],
+      followUpTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      notes: `Payment of ₹${amount.toLocaleString()} received via ${paymentMethod} (Receipt #${newReceiptNo}). Balance updated.`,
+      outcome: 'Payment Received',
+      createdBy: recordedBy,
+      createdAt: new Date().toISOString(),
+    };
+    const currentFollowUps = getStorage<CollectionFollowUp[]>(KEYS.COLLECTION_FOLLOW_UPS, INITIAL_COLLECTION_FOLLOW_UPS);
+    const updatedFollowUps = [newFollowUp, ...currentFollowUps];
+    setStorage(KEYS.COLLECTION_FOLLOW_UPS, updatedFollowUps);
+    setCollectionFollowUps(updatedFollowUps);
+
+    return { receiptNo: newReceiptNo, paymentIn: newPaymentIn };
+  };
+
+  // ----------------------------------------
+  // Performance & Collection Real-time Metrics
+  // ----------------------------------------
+  const getRepresentativeMetrics = (repId: string) => {
+    const assignedCustomers = customers.filter((c) => c.salesRepresentativeId === repId);
+    const assignedCustomerIds = new Set(assignedCustomers.map((c) => c.id));
+
+    const repSales = sales.filter(
+      (s) =>
+        s.saleStatus !== 'Cancelled' &&
+        (assignedCustomerIds.has(s.customerId) || s.salesRepresentativeId === repId)
+    );
+
+    const todayStr = '2026-10-08';
+    const now = new Date();
+    const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const totalOutstanding = repSales.reduce((sum, s) => {
+      const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+      return sum + bal;
+    }, 0);
+
+    const overdueAmount = repSales.reduce((sum, s) => {
+      const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+      const isOverdue = bal > 0 && s.dueDate && s.dueDate < todayStr;
+      return isOverdue ? sum + bal : sum;
+    }, 0);
+
+    const repPayments = paymentIns.filter((p) => {
+      const isCust = p.customerId ? assignedCustomerIds.has(p.customerId) : false;
+      const isThisMonth = p.date ? p.date.startsWith(currentMonthPrefix) : false;
+      return isCust && isThisMonth && p.status !== 'Cancelled';
+    });
+    const collectedThisMonth = repPayments.reduce((sum, p) => sum + (p.receivedAmount || 0), 0);
+
+    const totalInvoiced = repSales.reduce((sum, s) => sum + (s.grandTotal || 0), 0);
+    const totalPaid = repSales.reduce((sum, s) => sum + (s.paidAmount || 0), 0);
+    const collectionRate = totalInvoiced > 0 ? (totalPaid / totalInvoiced) * 100 : 0;
+
+    return {
+      assignedCustomersCount: assignedCustomers.length,
+      assignedCustomers,
+      invoicesCount: repSales.length,
+      totalOutstanding,
+      overdueAmount,
+      collectedThisMonth,
+      totalInvoiced,
+      totalPaid,
+      collectionRate,
+    };
+  };
+
+  const getCollectionDashboardMetrics = (refDate?: string) => {
+    const todayStr = refDate || '2026-10-08';
+    const now = new Date();
+    const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    const activeInvoices = sales.filter((s) => s.saleStatus !== 'Cancelled');
+
+    let totalOutstanding = 0;
+    let overdueAmount = 0;
+    let dueToday = 0;
+
+    activeInvoices.forEach((s) => {
+      const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+      if (bal > 0) {
+        totalOutstanding += bal;
+        if (s.dueDate < todayStr) {
+          overdueAmount += bal;
+        } else if (s.dueDate === todayStr) {
+          dueToday += bal;
+        }
+      }
+    });
+
+    const collectedThisMonth = paymentIns
+      .filter((p) => (p.date ? p.date.startsWith(currentMonthPrefix) : false) && p.status !== 'Cancelled')
+      .reduce((sum, p) => sum + (p.receivedAmount || 0), 0);
+
+    const followUpsTodayCount = collectionFollowUps.filter(
+      (f) => f.followUpDate === todayStr || f.nextFollowUpDate === todayStr
+    ).length;
+
+    return {
+      totalOutstanding,
+      overdueAmount,
+      dueToday,
+      dueTodayAmount: dueToday,
+      followUpsTodayCount,
+      collectedThisMonth,
+    };
+  };
+
   return {
     sales,
     salesReturns,
@@ -3001,7 +2711,12 @@ export const useSalesManagementStore = () => {
     stocks,
     quotations,
     paymentIns,
+    salesRepresentatives,
+    collectionFollowUps,
+    promisesToPay,
     saveCustomer,
+    setCustomersList,
+    setSalesList,
     deleteCustomer,
     updateCustomerStatus,
     getCustomerMetrics,
@@ -3012,25 +2727,47 @@ export const useSalesManagementStore = () => {
     saveSalesReturn,
     updateSalesReturnStatus,
     saveSupplier,
+    setSuppliersList,
     deleteSupplier,
     savePurchaseRequest,
+    setPurchaseRequestsList,
     deletePurchaseRequest,
     updatePurchaseRequestStatus,
     savePurchase,
+    setPurchasesList,
     deletePurchase,
     updatePurchasePayment,
     savePurchaseReturn,
+    setPurchaseReturnsList,
     deletePurchaseReturn,
     savePaymentOut,
+    setPaymentOutsList,
     deletePaymentOut,
     saveQuotation,
+    setQuotationsList,
     deleteQuotation,
     updateQuotationStatus,
     convertQuotationToSale,
     savePaymentIn,
+    setPaymentInsList,
     deletePaymentIn,
     updatePaymentIn,
+    setSalesReturnsList,
+    deleteSalesReturn,
+    saveSalesRepresentative,
+    setSalesRepresentativesList,
+    deleteSalesRepresentative,
+    assignCustomerSalesRep,
+    assignInvoiceSalesRep,
+    addCollectionFollowUp,
+    deleteCollectionFollowUp,
+    savePromiseToPay,
+    updatePromiseToPayStatus,
+    recordCollectionPayment,
+    getRepresentativeMetrics,
+    getCollectionDashboardMetrics,
     adjustStock,
+    setStocksList,
     addStockBatch,
     updateStockItem,
     reloadAll,

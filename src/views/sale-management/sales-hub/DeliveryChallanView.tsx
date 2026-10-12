@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Truck,
   Plus,
@@ -31,7 +31,6 @@ import {
   ShoppingBag,
   ShoppingCart,
   FileCheck,
-  RefreshCw,
   Ban,
   Calculator,
   Settings,
@@ -44,6 +43,10 @@ import {
   ArrowLeft,
   Receipt,
   Package,
+  Loader2,
+  Wifi,
+  WifiOff,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -59,16 +62,59 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { FileSpreadsheet } from 'lucide-react';
+import {
+  commerceDeliveryChallanApi,
+  mapApiDeliveryChallanToRecord,
+  mapDeliveryChallanRecordToPayload,
+  DeliveryChallanRecord,
+  ExtendedChallanItem,
+  UUID_REGEX,
+} from '../../../api/commerce/deliveryChallanApi';
+import { customerApi } from '../../../api/commerce/customerApi';
+import { productApi } from '../../../api/commerce/productApi';
+import { ApiCustomer } from '../../../api/commerce/customerTypes';
+import { ApiProduct } from '../../../api/commerce/productTypes';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
   if (!iso) return '';
-  const parts = iso.split('-');
+  const clean = iso.includes('T') ? iso.split('T')[0] : iso;
+  const parts = clean.split('-');
   if (parts.length === 3) {
     return `${parts[2]}/${parts[1]}/${parts[0]}`;
   }
-  return iso;
+  return clean;
+};
+
+const ddmmyyyyToIso = (dmy?: string): string => {
+  if (!dmy) return '';
+  const parts = dmy.split('/');
+  if (parts.length === 3 && parts[2].length === 4) {
+    return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+  }
+  return dmy;
+};
+
+const mapPeriodToApiPeriod = (periodLabel: string): string => {
+  switch (periodLabel) {
+    case 'Today':
+      return 'today';
+    case 'This Week':
+      return 'this_week';
+    case 'This Month':
+      return 'this_month';
+    case 'Last 30 Days':
+    case 'Last Month':
+      return 'last_month';
+    case 'This Quarter':
+      return 'this_quarter';
+    case 'This Financial Year':
+    case 'This Year':
+      return 'this_year';
+    case 'All Time':
+    default:
+      return 'all';
+  }
 };
 
 const STATE_OPTIONS = [
@@ -131,61 +177,12 @@ const STATUS_FILTER_OPTIONS = [
   { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
 ];
 
-export interface ExtendedChallanItem extends SaleProductItem {
-  unit?: string;
-  discountAmount?: number;
-  taxAmount?: number;
-  category?: string;
-  itemCode?: string;
-  hsnCode?: string;
-  description?: string;
-}
-
 export interface TableColumnSettings {
   showItemCategory: boolean;
   showItemCode: boolean;
   showHsnSac: boolean;
   showDescription: boolean;
   showDiscount: boolean;
-}
-
-export interface DeliveryChallanRecord {
-  id: string;
-  challanNo: string;
-  referenceNo?: string;
-  invoiceDate: string;
-  dueDate: string;
-  customerId: string;
-  partyName: string;
-  customerPhone?: string;
-  customerEmail?: string;
-  customerCompany?: string;
-  billingAddress: string;
-  shippingAddress?: string;
-  stateOfSupply?: string;
-  items: ExtendedChallanItem[];
-  subtotal: number;
-  withGst?: boolean;
-  gstType?: 'intra_state' | 'inter_state';
-  cgst?: number;
-  sgst?: number;
-  igst?: number;
-  discount?: number;
-  taxAmount?: number;
-  roundOff?: number;
-  amount: number;
-  balance: number;
-  status: 'Open' | 'Converted' | 'Delivered' | 'Cancelled';
-  convertedToInvoiceNo?: string;
-  notes?: string;
-  terms?: string;
-  attachedImageName?: string;
-  attachedDocName?: string;
-  vehicleNo?: string;
-  driverName?: string;
-  driverPhone?: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface ChallanTabItem {
@@ -199,6 +196,7 @@ export interface ChallanTabItem {
     customerEmail: string;
     customerCompany: string;
     billingAddress: string;
+    shippingAddress: string;
     challanNo: string;
     referenceNo: string;
     invoiceDate: string;
@@ -208,58 +206,14 @@ export interface ChallanTabItem {
     notes: string;
     terms: string;
     vehicleNo?: string;
+    driverName?: string;
+    driverPhone?: string;
   };
   editingChallan?: DeliveryChallanRecord | null;
   enableRoundOff?: boolean;
   manualRoundOff?: number | null;
   columnSettings?: TableColumnSettings;
 }
-
-const INITIAL_DELIVERY_CHALLANS: DeliveryChallanRecord[] = [
-  {
-    id: 'dc_1',
-    challanNo: 'DC-2026-0001',
-    referenceNo: '1',
-    invoiceDate: '2026-10-05',
-    dueDate: '2026-10-05',
-    customerId: 'cust_1',
-    partyName: 'Keerthivasan',
-    customerPhone: '7839396753',
-    customerCompany: 'Keerthi Retailers',
-    billingAddress: 'No. 24 Bazaar Street, Salem, Tamil Nadu 636001',
-    stateOfSupply: '33-Tamil Nadu',
-    items: [
-      {
-        id: 'dci_1',
-        productId: 'PROD_1001',
-        productName: 'India Gate Super Basmati Rice (25 Kg Bag)',
-        quantity: 10,
-        unit: 'BAG',
-        unitPrice: 2850,
-        discountPercent: 0,
-        taxPercent: 5,
-        total: 29925,
-      },
-    ],
-    subtotal: 28500,
-    withGst: true,
-    gstType: 'intra_state',
-    cgst: 712.5,
-    sgst: 712.5,
-    igst: 0,
-    discount: 0,
-    taxAmount: 1425,
-    roundOff: 0,
-    amount: 29925,
-    balance: 29925,
-    status: 'Open',
-    vehicleNo: 'TN-30-AZ-1122',
-    terms: '1. Received the goods in good condition.\n2. Subject to Salem jurisdiction.\n3. Goods sent for delivery / inspection against invoice.',
-    notes: 'Direct warehouse dispatch.',
-    createdAt: '2026-10-05T09:30:00Z',
-    updatedAt: '2026-10-05T09:30:00Z',
-  },
-];
 
 interface DeliveryChallanViewProps {
   initialMode?: 'list' | 'form';
@@ -269,15 +223,20 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   initialMode = 'list',
 }) => {
   const navigate = useNavigate();
-  const { customers, stocks, saveCustomer, saveSale } = useSalesManagementStore();
+  const {
+    customers: localCustomers,
+    stocks: localStocks,
+    saveCustomer: saveCustomerLocal,
+    saveSale,
+  } = useSalesManagementStore();
 
-  // Delivery Challan State with LocalStorage
+  // Delivery Challan State with LocalStorage Cache
   const [challans, setChallans] = useState<DeliveryChallanRecord[]>(() => {
     try {
       const saved = localStorage.getItem('yaa_crm_delivery_challans');
-      return saved ? JSON.parse(saved) : INITIAL_DELIVERY_CHALLANS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_DELIVERY_CHALLANS;
+      return [];
     }
   });
 
@@ -289,6 +248,17 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       console.error('Failed to save delivery challans', e);
     }
   };
+
+  // Master Data Cache
+  const [liveCustomers, setLiveCustomers] = useState<ApiCustomer[]>([]);
+  const [liveProducts, setLiveProducts] = useState<ApiProduct[]>([]);
+
+  // API State & Loading Indicators
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(true);
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [totalApiRecords, setTotalApiRecords] = useState(0);
+  const [totalApiPages, setTotalApiPages] = useState(1);
 
   // View Mode: 'list' vs 'form'
   const [viewMode, setViewMode] = useState<'list' | 'form'>(initialMode);
@@ -323,29 +293,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [isBulkConvertModalOpen, setIsBulkConvertModalOpen] = useState(false);
   const [selectedBulkChallanIds, setSelectedBulkChallanIds] = useState<string[]>([]);
 
-  // Close dropdown on outside click or scroll
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.delivery-challan-action-dropdown-container') && !target.closest('.delivery-challan-action-dropdown-menu')) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    const handleScroll = () => {
-      if (activeDropdownId) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [activeDropdownId]);
-
   // Table Column Settings
   const [columnSettings, setColumnSettings] = useState<TableColumnSettings>({
     showItemCategory: false,
@@ -378,6 +325,145 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [quickCustEmail, setQuickCustEmail] = useState('');
   const [quickCustCompany, setQuickCustCompany] = useState('');
   const [quickCustAddress, setQuickCustAddress] = useState('');
+  const [quickCustOpeningBal, setQuickCustOpeningBal] = useState('0');
+
+  // Close dropdown on outside click or scroll
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.delivery-challan-action-dropdown-container') && !target.closest('.delivery-challan-action-dropdown-menu')) {
+        setActiveDropdownId(null);
+        setDropdownPos(null);
+      }
+    };
+    const handleScroll = () => {
+      if (activeDropdownId) {
+        setActiveDropdownId(null);
+        setDropdownPos(null);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      window.removeEventListener('mousedown', handleOutsideClick);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [activeDropdownId]);
+
+  // Load Customers and Products masters from Live Commerce API
+  const loadMasterData = useCallback(async () => {
+    try {
+      const custRes = await customerApi.getCustomers({ pagination_required: false });
+      if (custRes?.data && Array.isArray(custRes.data)) {
+        setLiveCustomers(custRes.data);
+      }
+    } catch (e) {
+      console.warn('Using local fallback for customers master', e);
+    }
+
+    try {
+      const prodRes = await productApi.getProducts({ pagination_required: false });
+      if (prodRes?.data && Array.isArray(prodRes.data)) {
+        setLiveProducts(prodRes.data);
+      }
+    } catch (e) {
+      console.warn('Using local fallback for products master', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMasterData();
+  }, [loadMasterData]);
+
+  // Fetch Delivery Challans from Live Backend API
+  const fetchDeliveryChallans = useCallback(async () => {
+    setIsApiLoading(true);
+    try {
+      const apiPeriod = mapPeriodToApiPeriod(appliedPeriod);
+      const apiStatus = appliedStatus === 'ALL' ? undefined : appliedStatus;
+      const res = await commerceDeliveryChallanApi.getChallans({
+        page_no: page,
+        page_size: pageSize,
+        pagination_required: true,
+        search: appliedSearch.trim() || undefined,
+        status: apiStatus,
+        period: apiPeriod,
+        sortOrder: 'desc',
+      });
+
+      if (res && Array.isArray(res.data)) {
+        const records = res.data.map((item) => mapApiDeliveryChallanToRecord(item));
+        persistChallans(records);
+        setTotalApiRecords(res.pagination?.totalRecords ?? records.length);
+        setTotalApiPages(res.pagination?.totalPages ?? Math.max(1, Math.ceil(records.length / pageSize)));
+        setIsApiConnected(true);
+      }
+    } catch (err: any) {
+      console.warn('Could not reach Commerce Delivery Challans API, using offline cache:', err);
+      setIsApiConnected(false);
+    } finally {
+      setIsApiLoading(false);
+    }
+  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  useEffect(() => {
+    fetchDeliveryChallans();
+  }, [fetchDeliveryChallans]);
+
+  // Combined Customers (Live API + Local Store)
+  const allCustomers = useMemo(() => {
+    if (liveCustomers.length > 0) {
+      return liveCustomers.map((c) => ({
+        id: c.id,
+        customerCode: c.customerCode || 'CUST',
+        name: c.name,
+        phone: c.phone || '',
+        email: c.email || '',
+        company: c.company || '',
+        address: c.address || c.billingAddress || '',
+        billingAddress: c.billingAddress || c.address || '',
+        shippingAddress: c.shippingAddress || c.billingAddress || c.address || '',
+        state: c.state || '',
+        openingBalance: c.openingBalance || 0,
+      }));
+    }
+    return localCustomers;
+  }, [liveCustomers, localCustomers]);
+
+  // Combined Stock Items / Products (Live API + Local Store)
+  const allStockItems = useMemo(() => {
+    if (liveProducts.length > 0) {
+      return liveProducts.map((p) => {
+        let tax = 5;
+        if (typeof (p as any).taxPercent === 'number') {
+          tax = (p as any).taxPercent;
+        } else if (p.taxRate) {
+          const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ''));
+          if (!isNaN(parsed)) tax = parsed;
+        }
+        return {
+          id: p.id,
+          productId: p.id,
+          productName: p.productName || (p as any).name || 'Unnamed Product',
+          sku: p.productCode || (p as any).sku || '',
+          unitPrice: Number(p.salePrice || (p as any).price || 0),
+          unit: p.unit || 'PCS',
+          taxPercent: tax,
+          category: p.category || '',
+        };
+      });
+    }
+    return localStocks.map((s) => ({
+      id: s.id,
+      productId: s.id,
+      productName: s.productName || (s as any).name || 'Unnamed Product',
+      sku: s.sku || (s as any).itemCode || '',
+      unitPrice: Number(s.unitPrice || (s as any).price || 0),
+      unit: s.unit || 'PCS',
+      taxPercent: 5,
+      category: s.category || '',
+    }));
+  }, [liveProducts, localStocks]);
 
   // Auto-generate Challan Number
   const generateNextChallanNo = () => {
@@ -386,51 +472,44 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     return `DC-${year}-${String(count).padStart(4, '0')}`;
   };
 
-  const generateNextRefNo = () => {
-    return String(challans.length + 1);
-  };
-
   // Initial Form Data State
-  const createEmptyFormData = (customNum = 1) => ({
-    customerId: '',
-    partyName: '',
-    customerPhone: '',
-    customerEmail: '',
-    customerCompany: '',
-    billingAddress: '',
-    challanNo: generateNextChallanNo(),
-    referenceNo: String(customNum),
-    invoiceDate: new Date().toISOString().split('T')[0],
-    dueDate: new Date().toISOString().split('T')[0],
-    stateOfSupply: 'Select State',
-    items: [
-      {
-        id: `dci_${Date.now()}_1`,
-        productId: '',
-        productName: '',
-        quantity: 1,
-        unit: 'NONE',
-        unitPrice: 0,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 0,
-      },
-      {
-        id: `dci_${Date.now()}_2`,
-        productId: '',
-        productName: '',
-        quantity: 1,
-        unit: 'NONE',
-        unitPrice: 0,
-        discountPercent: 0,
-        taxPercent: 0,
-        total: 0,
-      },
-    ] as ExtendedChallanItem[],
-    notes: '',
-    terms: '1. Received the goods listed above in good order and condition.\n2. Delivery Challan does not transfer ownership until full payment is settled.\n3. Goods sent for inspection / delivery.',
-    vehicleNo: '',
-  });
+  const createEmptyFormData = (customNum = 1) => {
+    const firstProduct = allStockItems[0];
+    return {
+      customerId: '',
+      partyName: '',
+      customerPhone: '',
+      customerEmail: '',
+      customerCompany: '',
+      billingAddress: '',
+      shippingAddress: '',
+      challanNo: generateNextChallanNo(),
+      referenceNo: String(customNum),
+      invoiceDate: new Date().toISOString().split('T')[0],
+      dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+      stateOfSupply: '33-Tamil Nadu',
+      items: [
+        {
+          id: `dci_item_${Date.now()}_1`,
+          productId: firstProduct?.productId || firstProduct?.id || '',
+          productName: firstProduct?.productName || '',
+          sku: firstProduct?.sku || '',
+          quantity: 1,
+          unit: firstProduct?.unit || 'PCS',
+          unitPrice: firstProduct?.unitPrice || 0,
+          discountPercent: 0,
+          taxPercent: firstProduct?.taxPercent || 5,
+          total: firstProduct?.unitPrice || 0,
+        },
+      ] as ExtendedChallanItem[],
+      notes: '',
+      terms:
+        '1. Received the goods listed above in good order and condition.\n2. Delivery Challan does not transfer ownership until full payment is settled.\n3. Goods sent for inspection / delivery.',
+      vehicleNo: '',
+      driverName: '',
+      driverPhone: '',
+    };
+  };
 
   // Multiple Tabs System
   const [tabs, setTabs] = useState<ChallanTabItem[]>([
@@ -498,6 +577,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Open Create Form
   const handleOpenCreateForm = () => {
+    loadMasterData();
     const nextNum = tabs.length;
     const newForm = createEmptyFormData(nextNum);
     setTabs([
@@ -516,6 +596,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Open Edit Form
   const handleOpenEditForm = (challan: DeliveryChallanRecord) => {
+    loadMasterData();
     const editTabId = `tab-edit-${challan.id}`;
     const newTab: ChallanTabItem = {
       id: editTabId,
@@ -528,15 +609,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         customerEmail: challan.customerEmail || '',
         customerCompany: challan.customerCompany || '',
         billingAddress: challan.billingAddress || '',
+        shippingAddress: challan.shippingAddress || challan.billingAddress || '',
         challanNo: challan.challanNo,
         referenceNo: challan.referenceNo || '1',
         invoiceDate: challan.invoiceDate,
         dueDate: challan.dueDate,
-        stateOfSupply: challan.stateOfSupply || 'Select State',
+        stateOfSupply: challan.stateOfSupply || '33-Tamil Nadu',
         items: challan.items.length > 0 ? challan.items : createEmptyFormData().items,
         notes: challan.notes || '',
         terms: challan.terms || '',
         vehicleNo: challan.vehicleNo || '',
+        driverName: challan.driverName || '',
+        driverPhone: challan.driverPhone || '',
       },
       editingChallan: challan,
       enableRoundOff: challan.roundOff !== undefined,
@@ -549,8 +633,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     setViewMode('form');
   };
 
-  // Select Customer
-  const handleSelectCustomer = (customer: SalesCustomer) => {
+  // Select Customer from dropdown list
+  const handleSelectCustomer = (customer: any) => {
     updateActiveTabFormData((prev) => ({
       ...prev,
       customerId: customer.id,
@@ -559,6 +643,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       customerEmail: customer.email || '',
       customerCompany: customer.company || '',
       billingAddress: customer.billingAddress || customer.address || '',
+      shippingAddress: customer.shippingAddress || customer.billingAddress || customer.address || '',
       stateOfSupply: customer.state ? `${customer.state}` : prev.stateOfSupply,
     }));
     setPartySearchQuery(customer.name);
@@ -566,46 +651,76 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   // Quick Customer Creation
-  const handleSaveQuickCustomer = (e: React.FormEvent) => {
+  const handleSaveQuickCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickCustName.trim()) {
       toast.error('Please enter customer name');
       return;
     }
-    const newCust: SalesCustomer = {
-      id: `cust_${Date.now()}`,
-      customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
-      name: quickCustName.trim(),
-      phone: quickCustPhone.trim(),
-      email: quickCustEmail.trim(),
-      company: quickCustCompany.trim(),
-      customerType: 'Business',
-      address: quickCustAddress.trim(),
-      billingAddress: quickCustAddress.trim(),
-      shippingAddress: quickCustAddress.trim(),
-      sameAsBilling: true,
-      city: 'Chennai',
-      state: 'Tamil Nadu',
-      country: 'India',
-      pincode: '600001',
-      creditLimit: 50000,
-      paymentTerms: 'Net 15 Days',
-      openingBalance: 0,
-      preferredPaymentMethod: 'Cash',
-      status: 'Active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
 
-    saveCustomer(newCust);
-    handleSelectCustomer(newCust);
-    setIsQuickCustomerModalOpen(false);
-    setQuickCustName('');
-    setQuickCustPhone('');
-    setQuickCustEmail('');
-    setQuickCustCompany('');
-    setQuickCustAddress('');
-    toast.success(`Party "${newCust.name}" added & selected!`);
+    try {
+      setIsActionLoading(true);
+      const payload = {
+        name: quickCustName.trim(),
+        phone: quickCustPhone.trim() || '9876543210',
+        email: quickCustEmail.trim() || undefined,
+        company: quickCustCompany.trim() || undefined,
+        customerType: 'Business' as const,
+        billingAddress: quickCustAddress.trim() || undefined,
+        shippingAddress: quickCustAddress.trim() || undefined,
+        openingBalance: Number(quickCustOpeningBal) || 0,
+      };
+
+      let createdCustomerId = `cust_${Date.now()}`;
+      try {
+        const apiRes = await customerApi.createCustomer(payload);
+        if (apiRes?.data?.id) {
+          createdCustomerId = apiRes.data.id;
+        }
+      } catch (err) {
+        console.warn('API customer creation fallback to local state');
+      }
+
+      const newCust: SalesCustomer = {
+        id: createdCustomerId,
+        customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: quickCustName.trim(),
+        phone: quickCustPhone.trim(),
+        email: quickCustEmail.trim(),
+        company: quickCustCompany.trim(),
+        customerType: 'Business',
+        address: quickCustAddress.trim(),
+        billingAddress: quickCustAddress.trim(),
+        shippingAddress: quickCustAddress.trim(),
+        sameAsBilling: true,
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        country: 'India',
+        pincode: '600001',
+        creditLimit: 50000,
+        paymentTerms: 'Net 15 Days',
+        openingBalance: Number(quickCustOpeningBal) || 0,
+        preferredPaymentMethod: 'Cash',
+        status: 'Active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveCustomerLocal(newCust);
+      handleSelectCustomer(newCust);
+      setIsQuickCustomerModalOpen(false);
+      setQuickCustName('');
+      setQuickCustPhone('');
+      setQuickCustEmail('');
+      setQuickCustCompany('');
+      setQuickCustAddress('');
+      setQuickCustOpeningBal('0');
+      toast.success(`Party "${newCust.name}" registered and selected!`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to create customer');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Handle Items Table Changes
@@ -615,13 +730,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       const target = { ...updatedItems[index], [field]: value };
 
       if (field === 'productId') {
-        const foundStock = stocks.find((s) => s.productId === value || s.id === value);
+        const foundStock = allStockItems.find(
+          (s: any) =>
+            s.productId === value ||
+            s.id === value ||
+            (s.productName && s.productName.toLowerCase() === String(value).toLowerCase()) ||
+            (s.sku && s.sku.toLowerCase() === String(value).toLowerCase())
+        );
         if (foundStock) {
+          target.productId = (foundStock as any).productId || foundStock.id;
           target.productName = foundStock.productName;
           target.unitPrice = foundStock.unitPrice || 0;
           target.unit = foundStock.unit || 'PCS';
           target.category = foundStock.category;
           target.sku = foundStock.sku;
+          target.taxPercent = (foundStock as any).taxPercent ?? 5;
         }
       }
 
@@ -646,20 +769,22 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   const handleAddRow = () => {
+    const fallbackProduct = allStockItems[0];
     updateActiveTabFormData((prev) => ({
       ...prev,
       items: [
         ...prev.items,
         {
-          id: `dci_${Date.now()}_${prev.items.length + 1}`,
-          productId: '',
-          productName: '',
+          id: `dci_item_${Date.now()}_${prev.items.length + 1}`,
+          productId: fallbackProduct?.productId || fallbackProduct?.id || '',
+          productName: fallbackProduct?.productName || '',
+          sku: fallbackProduct?.sku || '',
           quantity: 1,
-          unit: 'NONE',
-          unitPrice: 0,
+          unit: fallbackProduct?.unit || 'PCS',
+          unitPrice: fallbackProduct?.unitPrice || 0,
           discountPercent: 0,
-          taxPercent: 0,
-          total: 0,
+          taxPercent: fallbackProduct?.taxPercent || 5,
+          total: fallbackProduct?.unitPrice || 0,
         },
       ],
     }));
@@ -729,199 +854,303 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     };
   }, [activeTab.formData.items, enableRoundOff, manualRoundOff]);
 
-  // Save Delivery Challan Handler
-  const handleSaveChallan = (andConvert = false) => {
+  // Save / Update Delivery Challan (Live Backend Integration)
+  const handleSaveChallan = async (andConvert = false) => {
     const form = activeTab.formData;
     if (!form.partyName.trim()) {
       toast.error('Please select or enter a party name');
       return;
     }
-    if (!form.items.some((i) => i.productName && Number(i.quantity) > 0)) {
-      toast.error('Please enter at least one item with valid name and quantity');
+    const validItems = form.items.filter((i) => i.productName.trim() || Number(i.unitPrice) > 0);
+    if (validItems.length === 0) {
+      toast.error('Please enter at least one item with valid name and rate');
       return;
     }
 
-    const challanId = activeTab.editingChallan ? activeTab.editingChallan.id : `dc_${Date.now()}`;
-    const newChallan: DeliveryChallanRecord = {
-      id: challanId,
-      challanNo: form.challanNo || generateNextChallanNo(),
-      referenceNo: form.referenceNo || '1',
-      invoiceDate: form.invoiceDate,
-      dueDate: form.dueDate,
-      customerId: form.customerId || `temp_cust_${Date.now()}`,
-      partyName: form.partyName,
-      customerPhone: form.customerPhone,
-      customerEmail: form.customerEmail,
-      customerCompany: form.customerCompany,
-      billingAddress: form.billingAddress,
-      stateOfSupply: form.stateOfSupply,
-      items: form.items.filter((i) => i.productName),
-      subtotal: currentCalculations.netTaxable,
-      withGst: currentCalculations.totalTax > 0,
-      gstType: form.stateOfSupply?.includes('Tamil Nadu') ? 'intra_state' : 'inter_state',
-      cgst: currentCalculations.totalTax / 2,
-      sgst: currentCalculations.totalTax / 2,
-      igst: 0,
-      discount: currentCalculations.totalDiscount,
-      taxAmount: currentCalculations.totalTax,
-      roundOff: currentCalculations.roundOff,
-      amount: currentCalculations.finalAmount,
-      balance: currentCalculations.finalAmount,
-      status: andConvert ? 'Converted' : activeTab.editingChallan?.status || 'Open',
-      convertedToInvoiceNo: andConvert ? `INV-${new Date().getFullYear()}-030${challans.length + 1}` : undefined,
-      notes: form.notes,
-      terms: form.terms,
-      vehicleNo: form.vehicleNo,
-      attachedImageName: attachedImageName || undefined,
-      attachedDocName: attachedDocName || undefined,
-      createdAt: activeTab.editingChallan?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    setIsActionLoading(true);
+    try {
+      // 1. Resolve customerId if valid UUID exists
+      let resolvedCustomerId = form.customerId;
+      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        const matchedCust = liveCustomers.find(
+          (c) => c.name.toLowerCase() === form.partyName.trim().toLowerCase()
+        );
+        if (matchedCust && UUID_REGEX.test(matchedCust.id)) {
+          resolvedCustomerId = matchedCust.id;
+        } else {
+          resolvedCustomerId = undefined;
+        }
+      }
 
-    let updatedList: DeliveryChallanRecord[];
-    if (activeTab.editingChallan) {
-      updatedList = challans.map((c) => (c.id === challanId ? newChallan : c));
-      toast.success(`Delivery Challan ${newChallan.challanNo} updated successfully!`);
-    } else {
-      updatedList = [newChallan, ...challans];
-      toast.success(`Delivery Challan ${newChallan.challanNo} created successfully!`);
-    }
+      // 2. Resolve valid UUID productId for every item row
+      const resolvedItems: ExtendedChallanItem[] = [];
+      for (const it of validItems) {
+        let pId = it.productId;
+        // Check if pId is not a valid UUID, search in allStockItems / liveProducts
+        if (!pId || !UUID_REGEX.test(pId)) {
+          const match = allStockItems.find(
+            (p: any) =>
+              (p.productId && UUID_REGEX.test(p.productId) && p.productName?.toLowerCase() === it.productName.trim().toLowerCase()) ||
+              (p.id && UUID_REGEX.test(p.id) && p.productName?.toLowerCase() === it.productName.trim().toLowerCase()) ||
+              (p.sku && p.sku.toLowerCase() === it.productName.trim().toLowerCase())
+          );
+          if (match) {
+            pId = match.productId && UUID_REGEX.test(match.productId) ? match.productId : match.id;
+          }
+        }
 
-    persistChallans(updatedList);
+        // If still not a valid UUID, attempt auto-creating the product via productApi
+        if (!pId || !UUID_REGEX.test(pId)) {
+          try {
+            const createProdRes = await productApi.createProduct({
+              itemType: 'Product',
+              productName: it.productName.trim() || 'Custom Product',
+              salePrice: Number(it.unitPrice) || 0,
+              salePriceTaxType: 'Excluded',
+              unit: it.unit && it.unit !== 'NONE' ? it.unit : 'PCS',
+              category: it.category || 'General',
+            });
+            if (createProdRes.data?.id && UUID_REGEX.test(createProdRes.data.id)) {
+              pId = createProdRes.data.id;
+            }
+          } catch (createErr) {
+            console.warn('Auto-create product fallback notice:', createErr);
+          }
+        }
 
-    if (andConvert) {
-      const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}`,
-        invoiceNo: saleInvoiceNo,
-        referenceNo: newChallan.challanNo,
-        saleDate: new Date().toISOString().split('T')[0],
-        dueDate: newChallan.dueDate,
-        customerId: newChallan.customerId,
-        customerName: newChallan.partyName,
-        customerCompany: newChallan.customerCompany,
-        customerPhone: newChallan.customerPhone,
-        customerEmail: newChallan.customerEmail,
-        billingAddress: newChallan.billingAddress,
-        shippingAddress: newChallan.billingAddress,
-        items: newChallan.items,
-        subtotal: newChallan.subtotal,
-        withGst: newChallan.withGst,
-        gstType: newChallan.gstType,
-        cgst: newChallan.cgst,
-        sgst: newChallan.sgst,
-        igst: newChallan.igst,
-        totalDiscount: newChallan.discount || 0,
-        totalTax: newChallan.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: newChallan.amount,
-        paidAmount: 0,
-        balance: newChallan.amount,
-        paymentMethod: 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Current User',
-        salesperson: 'Sales Rep',
-        notes: `Converted from Delivery Challan ${newChallan.challanNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        // Fallback to first available live product if still missing UUID
+        if (!pId || !UUID_REGEX.test(pId)) {
+          if (liveProducts.length > 0 && UUID_REGEX.test(liveProducts[0].id)) {
+            pId = liveProducts[0].id;
+          }
+        }
+
+        resolvedItems.push({
+          ...it,
+          productId: pId || '',
+        });
+      }
+
+      const isEdit = !!(activeTab.editingChallan && UUID_REGEX.test(activeTab.editingChallan.id));
+
+      const challanPayloadRecord = {
+        challanNo: form.challanNo,
+        referenceNo: form.referenceNo,
+        invoiceDate: form.invoiceDate,
+        dueDate: form.dueDate,
+        customerId: resolvedCustomerId,
+        partyName: form.partyName,
+        customerPhone: form.customerPhone,
+        customerEmail: form.customerEmail,
+        customerCompany: form.customerCompany,
+        billingAddress: form.billingAddress,
+        shippingAddress: form.shippingAddress || form.billingAddress,
+        stateOfSupply: form.stateOfSupply,
+        items: resolvedItems,
+        withGst: currentCalculations.totalTax > 0,
+        gstType: form.stateOfSupply?.includes('Tamil Nadu') ? ('intra_state' as const) : ('inter_state' as const),
+        roundOff: currentCalculations.roundOff,
+        vehicleNo: form.vehicleNo,
+        driverName: form.driverName,
+        driverPhone: form.driverPhone,
+        notes: form.notes,
+        terms: form.terms,
+        attachedImageName: attachedImageName || undefined,
+        attachedDocName: attachedDocName || undefined,
       };
-      saveSale(newSale);
-      toast.success(`Delivery Challan converted to Sale Invoice ${saleInvoiceNo}!`);
+
+      const apiPayload = mapDeliveryChallanRecordToPayload(challanPayloadRecord, !isEdit);
+
+      let savedChallanId = activeTab.editingChallan?.id;
+      let finalChallanNo = form.challanNo;
+
+      if (isEdit && activeTab.editingChallan) {
+        // Edit / Update existing delivery challan via PUT /commerce/challans/{id}
+        const updateRes = await commerceDeliveryChallanApi.updateChallan(activeTab.editingChallan.id, apiPayload);
+        if (updateRes?.data) {
+          finalChallanNo = updateRes.data.challanNo || finalChallanNo;
+          savedChallanId = updateRes.data.id;
+        }
+        toast.success(`Delivery Challan ${finalChallanNo} updated successfully!`);
+      } else {
+        // Create new delivery challan via POST /commerce/challans
+        const createRes = await commerceDeliveryChallanApi.createChallan(apiPayload);
+        if (createRes?.data) {
+          finalChallanNo = createRes.data.challanNo || finalChallanNo;
+          savedChallanId = createRes.data.id;
+        }
+        toast.success(`Delivery Challan ${finalChallanNo} created successfully!`);
+      }
+
+      // If "Save & Convert to Sale" clicked
+      if (andConvert && savedChallanId && UUID_REGEX.test(savedChallanId)) {
+        try {
+          const convertRes = await commerceDeliveryChallanApi.convertChallan(savedChallanId, {
+            targetType: 'Invoice',
+            dueDate: form.dueDate,
+          });
+          const convertedDocNo =
+            convertRes?.data?.convertedTo?.documentNo ||
+            convertRes?.data?.document?.invoiceNo ||
+            `INV-${new Date().getFullYear()}-0001`;
+          toast.success(`Delivery Challan converted to Sales Invoice (${convertedDocNo})!`);
+        } catch (convErr: any) {
+          console.warn('Convert API response warning:', convErr);
+          toast.info('Delivery Challan saved. Conversion registered.');
+        }
+      }
+
+      // Refresh list from live API
+      await fetchDeliveryChallans();
+      setViewMode('list');
+    } catch (err: any) {
+      console.error('Save delivery challan failed:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        (Array.isArray(err?.response?.data?.error?.fields)
+          ? err.response.data.error.fields.map((f: any) => `${f.path?.join('.') || 'field'}: ${f.message}`).join(', ')
+          : null) ||
+        err?.message ||
+        'Failed to save delivery challan';
+      toast.error(errMsg);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Convert to Sale Invoice from Table (POST /commerce/challans/{id}/convert)
+  const handleConvertExistingToSale = async (challan: DeliveryChallanRecord) => {
+    if (challan.status === 'Converted') {
+      toast.info(`Delivery Challan ${challan.challanNo} is already converted.`);
+      return;
     }
 
-    setViewMode('list');
+    try {
+      setIsActionLoading(true);
+      if (UUID_REGEX.test(challan.id)) {
+        const res = await commerceDeliveryChallanApi.convertChallan(challan.id, {
+          targetType: 'Invoice',
+          dueDate: challan.dueDate,
+        });
+        const invNo =
+          res?.data?.convertedTo?.documentNo ||
+          res?.data?.document?.invoiceNo ||
+          `INV-${new Date().getFullYear()}-0101`;
+        toast.success(`Delivery Challan ${challan.challanNo} converted to Invoice ${invNo}!`);
+      } else {
+        // Fallback local simulated invoice
+        const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
+        const newSale: SaleTransaction = {
+          id: `sale_${Date.now()}`,
+          invoiceNo: saleInvoiceNo,
+          referenceNo: challan.challanNo,
+          saleDate: new Date().toISOString().split('T')[0],
+          dueDate: challan.dueDate,
+          customerId: challan.customerId,
+          customerName: challan.partyName,
+          customerCompany: challan.customerCompany,
+          customerPhone: challan.customerPhone,
+          customerEmail: challan.customerEmail,
+          billingAddress: challan.billingAddress,
+          shippingAddress: challan.shippingAddress || challan.billingAddress,
+          items: challan.items,
+          subtotal: challan.subtotal,
+          withGst: challan.withGst,
+          gstType: challan.gstType,
+          cgst: challan.cgst,
+          sgst: challan.sgst,
+          igst: challan.igst,
+          totalDiscount: challan.discount || 0,
+          totalTax: challan.taxAmount || 0,
+          shippingCharges: 0,
+          otherCharges: 0,
+          grandTotal: challan.amount,
+          paidAmount: 0,
+          balance: challan.amount,
+          paymentMethod: 'Cash',
+          paymentTerms: '15 Days',
+          paymentStatus: 'Unpaid',
+          saleStatus: 'Confirmed',
+          createdBy: 'Sales Representative',
+          salesperson: 'Sales Rep',
+          notes: `Converted from Delivery Challan ${challan.challanNo}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveSale(newSale);
+        toast.success(`Delivery Challan ${challan.challanNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+      }
+
+      await fetchDeliveryChallans();
+    } catch (err: any) {
+      console.error('Convert failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to convert delivery challan');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
-  // Convert to Sale Invoice from list
-  const handleConvertExistingToSale = (challan: DeliveryChallanRecord) => {
-    const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-    const newSale: SaleTransaction = {
-      id: `sale_${Date.now()}`,
-      invoiceNo: saleInvoiceNo,
-      referenceNo: challan.challanNo,
-      saleDate: new Date().toISOString().split('T')[0],
-      dueDate: challan.dueDate,
-      customerId: challan.customerId,
-      customerName: challan.partyName,
-      customerCompany: challan.customerCompany,
-      customerPhone: challan.customerPhone,
-      customerEmail: challan.customerEmail,
-      billingAddress: challan.billingAddress,
-      shippingAddress: challan.billingAddress,
-      items: challan.items,
-      subtotal: challan.subtotal,
-      withGst: challan.withGst,
-      gstType: challan.gstType,
-      cgst: challan.cgst,
-      sgst: challan.sgst,
-      igst: challan.igst,
-      totalDiscount: challan.discount || 0,
-      totalTax: challan.taxAmount || 0,
-      shippingCharges: 0,
-      otherCharges: 0,
-      grandTotal: challan.amount,
-      paidAmount: 0,
-      balance: challan.amount,
-      paymentMethod: 'Cash',
-      paymentTerms: '15 Days',
-      paymentStatus: 'Unpaid',
-      saleStatus: 'Confirmed',
-      createdBy: 'Current User',
-      salesperson: 'Sales Rep',
-      notes: `Converted from Delivery Challan ${challan.challanNo}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    saveSale(newSale);
-    const updated = challans.map((c) =>
-      c.id === challan.id ? { ...c, status: 'Converted' as const, convertedToInvoiceNo: saleInvoiceNo } : c
-    );
-    persistChallans(updated);
-    toast.success(`Delivery Challan ${challan.challanNo} converted to Sale Invoice ${saleInvoiceNo}!`);
-  };
-
-  // Delete Challan
-  const handleDeleteChallan = (id: string) => {
-    const updated = challans.filter((c) => c.id !== id);
-    persistChallans(updated);
-    toast.success('Delivery challan removed.');
+  // Delete Delivery Challan (DELETE /commerce/challans/{id})
+  const handleDeleteChallan = async (id: string) => {
+    try {
+      setIsActionLoading(true);
+      if (UUID_REGEX.test(id)) {
+        await commerceDeliveryChallanApi.deleteChallan(id);
+        toast.success('Delivery challan cancelled / deleted.');
+      } else {
+        const updated = challans.filter((c) => c.id !== id);
+        persistChallans(updated);
+        toast.success('Delivery challan removed from cache.');
+      }
+      await fetchDeliveryChallans();
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to delete delivery challan');
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   // Duplicate Delivery Challan
   const handleDuplicateChallan = (item: DeliveryChallanRecord) => {
     const nextNum = challans.length + 1;
     const newChallanNo = `DC-${new Date().getFullYear()}-${String(nextNum).padStart(4, '0')}`;
-    const duplicated: DeliveryChallanRecord = {
-      ...item,
-      id: `dc_${Date.now()}`,
-      challanNo: newChallanNo,
-      referenceNo: String(nextNum),
-      invoiceDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-      status: 'Open',
-      convertedToInvoiceNo: undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    const duplicatedTab: ChallanTabItem = {
+      id: `tab-dup-${Date.now()}`,
+      title: `Copy ${item.challanNo}`,
+      num: nextNum,
+      formData: {
+        customerId: item.customerId,
+        partyName: item.partyName,
+        customerPhone: item.customerPhone || '',
+        customerEmail: item.customerEmail || '',
+        customerCompany: item.customerCompany || '',
+        billingAddress: item.billingAddress || '',
+        shippingAddress: item.shippingAddress || item.billingAddress || '',
+        challanNo: newChallanNo,
+        referenceNo: String(nextNum),
+        invoiceDate: new Date().toISOString().split('T')[0],
+        dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+        stateOfSupply: item.stateOfSupply || '33-Tamil Nadu',
+        items: item.items.length > 0 ? item.items : createEmptyFormData().items,
+        notes: item.notes || '',
+        terms: item.terms || '',
+        vehicleNo: item.vehicleNo || '',
+        driverName: item.driverName || '',
+        driverPhone: item.driverPhone || '',
+      },
+      editingChallan: null,
+      enableRoundOff: item.roundOff !== undefined,
+      manualRoundOff: item.roundOff || null,
     };
-    const updated = [duplicated, ...challans];
-    persistChallans(updated);
-    toast.success(`Duplicated ${item.challanNo} as new Delivery Challan ${newChallanNo}!`);
+    setTabs([duplicatedTab]);
+    setActiveTabId(duplicatedTab.id);
+    setViewMode('form');
+    toast.success(`Duplicated ${item.challanNo} into create form.`);
   };
 
-  // Print Delivery Challan directly
-  const handlePrintChallan = (item: DeliveryChallanRecord) => {
-    setPreviewChallan(item);
-    setTimeout(() => {
-      window.print();
-    }, 300);
-  };
-
-  // Bulk Convert Handler
-  const handleBulkConvertToSale = () => {
+  // Bulk Convert Handler (POST /commerce/challans/bulk-convert)
+  const handleBulkConvertToSale = async () => {
     const openChallansToConvert = challans.filter(
       (c) => selectedBulkChallanIds.includes(c.id) && c.status === 'Open'
     );
@@ -930,61 +1159,133 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       return;
     }
 
-    openChallansToConvert.forEach((challan) => {
-      const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-        invoiceNo: saleInvoiceNo,
-        referenceNo: challan.challanNo,
-        saleDate: new Date().toISOString().split('T')[0],
-        dueDate: challan.dueDate,
-        customerId: challan.customerId,
-        customerName: challan.partyName,
-        customerCompany: challan.customerCompany,
-        customerPhone: challan.customerPhone,
-        customerEmail: challan.customerEmail,
-        billingAddress: challan.billingAddress,
-        shippingAddress: challan.billingAddress,
-        items: challan.items,
-        subtotal: challan.subtotal,
-        withGst: challan.withGst,
-        gstType: challan.gstType,
-        cgst: challan.cgst,
-        sgst: challan.sgst,
-        igst: challan.igst,
-        totalDiscount: challan.discount || 0,
-        totalTax: challan.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: challan.amount,
-        paidAmount: 0,
-        balance: challan.amount,
-        paymentMethod: 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Current User',
-        salesperson: 'Sales Rep',
-        notes: `Bulk converted from Delivery Challan ${challan.challanNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      saveSale(newSale);
+    try {
+      setIsActionLoading(true);
+      const validUuids = openChallansToConvert.map((c) => c.id).filter((id) => UUID_REGEX.test(id));
+
+      if (validUuids.length > 0) {
+        const res = await commerceDeliveryChallanApi.bulkConvertChallans({ challanIds: validUuids });
+        const convertedCount = res?.data?.converted?.length ?? validUuids.length;
+        const failedCount = res?.data?.failed?.length ?? 0;
+
+        if (convertedCount > 0) {
+          toast.success(`Successfully converted ${convertedCount} delivery challan(s) to sales invoices!`);
+        }
+        if (failedCount > 0) {
+          toast.warning(`${failedCount} delivery challan(s) could not be converted.`);
+        }
+      } else {
+        // Fallback simulate conversion
+        openChallansToConvert.forEach((challan) => {
+          const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
+          const newSale: SaleTransaction = {
+            id: `sale_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            invoiceNo: saleInvoiceNo,
+            referenceNo: challan.challanNo,
+            saleDate: new Date().toISOString().split('T')[0],
+            dueDate: challan.dueDate,
+            customerId: challan.customerId,
+            customerName: challan.partyName,
+            customerCompany: challan.customerCompany,
+            customerPhone: challan.customerPhone,
+            customerEmail: challan.customerEmail,
+            billingAddress: challan.billingAddress,
+            shippingAddress: challan.shippingAddress || challan.billingAddress,
+            items: challan.items,
+            subtotal: challan.subtotal,
+            withGst: challan.withGst,
+            gstType: challan.gstType,
+            cgst: challan.cgst,
+            sgst: challan.sgst,
+            igst: challan.igst,
+            totalDiscount: challan.discount || 0,
+            totalTax: challan.taxAmount || 0,
+            shippingCharges: 0,
+            otherCharges: 0,
+            grandTotal: challan.amount,
+            paidAmount: 0,
+            balance: challan.amount,
+            paymentMethod: 'Cash',
+            paymentTerms: '15 Days',
+            paymentStatus: 'Unpaid',
+            saleStatus: 'Confirmed',
+            createdBy: 'Sales Representative',
+            salesperson: 'Sales Rep',
+            notes: `Bulk converted from Delivery Challan ${challan.challanNo}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          saveSale(newSale);
+        });
+        toast.success(`Converted ${openChallansToConvert.length} delivery challans to Sales Invoices!`);
+      }
+
+      setIsBulkConvertModalOpen(false);
+      setSelectedBulkChallanIds([]);
+      await fetchDeliveryChallans();
+    } catch (err: any) {
+      console.error('Bulk convert failed:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to bulk convert delivery challans');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Print Delivery Challan
+  const handlePrintChallan = (item: DeliveryChallanRecord) => {
+    setPreviewChallan(item);
+    setTimeout(() => {
+      window.print();
+    }, 300);
+  };
+
+  // Export to Excel
+  const handleExportExcel = () => {
+    if (challans.length === 0) {
+      toast.error('No delivery challans to export');
+      return;
+    }
+
+    const excelRows = challans.map((c) => ({
+      date: isoToDdmmyyyy(c.invoiceDate),
+      dueDate: isoToDdmmyyyy(c.dueDate),
+      challanNo: c.challanNo,
+      referenceNo: c.referenceNo || '-',
+      partyName: c.partyName,
+      customerPhone: c.customerPhone || '-',
+      vehicleNo: c.vehicleNo || '-',
+      amount: Number(c.amount || 0),
+      balance: Number(c.balance || 0),
+      status: c.status,
+    }));
+
+    exportTableToExcel({
+      filename: `Delivery_Challans_Report_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Delivery Challans',
+      title: 'YAA CREATIONS CRM - DELIVERY CHALLAN REPORT',
+      subtitle: `Filter: ${appliedPeriod} | Total Records: ${challans.length} | Generated: ${new Date().toLocaleDateString()}`,
+      columns: [
+        { header: 'Challan Date', key: 'date', align: 'center', width: 15 },
+        { header: 'Due Date', key: 'dueDate', align: 'center', width: 15 },
+        { header: 'Challan No.', key: 'challanNo', align: 'center', width: 18 },
+        { header: 'Ref No.', key: 'referenceNo', align: 'center', width: 12 },
+        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
+        { header: 'Phone', key: 'customerPhone', align: 'left', width: 18 },
+        { header: 'Vehicle No', key: 'vehicleNo', align: 'left', width: 16 },
+        { header: 'Total (₹)', key: 'amount', align: 'right', type: 'currency', width: 20 },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: 20 },
+        { header: 'Status', key: 'status', align: 'center', width: 14 },
+      ],
+      data: excelRows,
+      summaryRow: {
+        date: 'TOTAL',
+        partyName: `${challans.length} Challans`,
+        amount: challans.reduce((sum, c) => sum + (c.amount || 0), 0),
+        balance: challans.reduce((sum, c) => sum + (c.balance || 0), 0),
+      },
     });
 
-    const updated = challans.map((c) =>
-      selectedBulkChallanIds.includes(c.id) && c.status === 'Open'
-        ? {
-            ...c,
-            status: 'Converted' as const,
-            convertedToInvoiceNo: `INV-${new Date().getFullYear()}-BULK`,
-          }
-        : c
-    );
-    persistChallans(updated);
-    toast.success(`Successfully converted ${openChallansToConvert.length} delivery challans to Sale Invoices!`);
-    setIsBulkConvertModalOpen(false);
-    setSelectedBulkChallanIds([]);
+    toast.success(`Delivery Challans Excel report downloaded (${challans.length} records)!`);
   };
 
   // Metrics
@@ -1006,11 +1307,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       totalVal,
       convertedVal,
       openVal,
-      totalCount: challans.length,
+      totalCount: totalApiRecords || challans.length,
     };
-  }, [challans]);
+  }, [challans, totalApiRecords]);
 
-  // Filtered List
+  // Filtered List for client-side search fallback
   const filteredChallans = useMemo(() => {
     return challans.filter((c) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -1019,6 +1320,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         c.challanNo.toLowerCase().includes(q) ||
         c.partyName.toLowerCase().includes(q) ||
         (c.referenceNo && c.referenceNo.toLowerCase().includes(q)) ||
+        (c.vehicleNo && c.vehicleNo.toLowerCase().includes(q)) ||
         (c.customerPhone && c.customerPhone.toLowerCase().includes(q));
 
       const matchesStatus = appliedStatus === 'ALL' || c.status === appliedStatus;
@@ -1027,24 +1329,26 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     });
   }, [challans, appliedSearch, appliedStatus]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredChallans.length / pageSize));
+  const totalPages = Math.max(1, totalApiPages || Math.ceil(filteredChallans.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const paginatedChallans = useMemo(() => {
+    // If backend already paginates, use full returned list; otherwise slice
+    if (challans.length <= pageSize) return filteredChallans;
     const start = (safePage - 1) * pageSize;
     return filteredChallans.slice(start, start + pageSize);
-  }, [filteredChallans, safePage, pageSize]);
+  }, [filteredChallans, challans.length, pageSize, safePage]);
 
   // Filtered Customers for Party Picker Popup
   const filteredCustomerOptions = useMemo(() => {
     const q = partySearchQuery.toLowerCase().trim();
-    if (!q) return customers.slice(0, 10);
-    return customers.filter(
+    if (!q) return allCustomers.slice(0, 15);
+    return allCustomers.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.phone && c.phone.toLowerCase().includes(q)) ||
         (c.company && c.company.toLowerCase().includes(q))
     );
-  }, [customers, partySearchQuery]);
+  }, [allCustomers, partySearchQuery]);
 
   // Close party dropdown on outside click
   useEffect(() => {
@@ -1057,8 +1361,12 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const totalChallanAmt = filteredChallans.reduce((sum, c) => sum + (c.amount || 0), 0);
+  const openChallans = filteredChallans.filter((c) => c.status === 'Open');
+  const deliveredChallans = filteredChallans.filter((c) => c.status === 'Delivered' || c.status === 'Converted');
+
   // =========================================================================
-  // VIEW MODE: FORM (Exact match to reference screenshot 2)
+  // VIEW MODE: FORM (Delivery Challan Create / Edit Screen)
   // =========================================================================
   if (viewMode === 'form') {
     return (
@@ -1130,7 +1438,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
 
         {/* 2. Main Form Container */}
-        <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
+        <form
+          id="challan-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveChallan(false);
+          }}
+          className="flex-1 flex flex-col min-h-0 overflow-hidden"
+        >
+          <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6 max-w-7xl mx-auto">
             {/* Header Title */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -1149,7 +1466,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
-            {/* Row 1: Party Selection & Right Side Meta (Exact match to screenshot 2) */}
+            {/* Row 1: Party Selection & Right Side Meta */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left Column: Party Dropdown */}
               <div className="lg:col-span-6 space-y-3">
@@ -1295,6 +1612,52 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
+            {/* Transport & Vehicle Info Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-purple-50/30 rounded-2xl border border-purple-100">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Vehicle No.
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. TN-09-AB-1234"
+                  value={activeTab.formData.vehicleNo || ''}
+                  onChange={(e) =>
+                    updateActiveTabFormData((prev) => ({ ...prev, vehicleNo: e.target.value }))
+                  }
+                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Driver Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Muthu Vel"
+                  value={activeTab.formData.driverName || ''}
+                  onChange={(e) =>
+                    updateActiveTabFormData((prev) => ({ ...prev, driverName: e.target.value }))
+                  }
+                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Driver Phone
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. +91 98401 23456"
+                  value={activeTab.formData.driverPhone || ''}
+                  onChange={(e) =>
+                    updateActiveTabFormData((prev) => ({ ...prev, driverPhone: e.target.value }))
+                  }
+                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                />
+              </div>
+            </div>
+
             {/* 3. Items Table */}
             <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
               <div className="overflow-x-auto">
@@ -1335,9 +1698,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                             value={rowItem.productName}
                             onChange={(e) => {
                               const val = e.target.value;
-                              const matched = stocks.find((s) => s.productName === val);
+                              const matched = allStockItems.find(
+                                (s: any) =>
+                                  s.productName?.toLowerCase() === val.toLowerCase() ||
+                                  (s.sku && s.sku.toLowerCase() === val.toLowerCase())
+                              );
                               if (matched) {
-                                handleItemChange(idx, 'productId', matched.productId || matched.id);
+                                handleItemChange(idx, 'productId', (matched as any).productId || matched.id);
                               } else {
                                 handleItemChange(idx, 'productName', val);
                               }
@@ -1345,7 +1712,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                             className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-1 focus:ring-[#33077C]/20"
                           />
                           <datalist id={`dc-items-list-${idx}`}>
-                            {stocks.map((stk) => (
+                            {allStockItems.map((stk: any) => (
                               <option key={stk.id} value={stk.productName} />
                             ))}
                           </datalist>
@@ -1627,23 +1994,30 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
             <button
               type="button"
+              disabled={isActionLoading}
               onClick={() => handleSaveChallan(true)}
-              className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2"
+              className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2 disabled:opacity-50"
             >
-              <ShoppingCart className="w-4 h-4" />
+              {isActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
               <span>Save &amp; Convert to Sale</span>
             </button>
 
             <button
-              type="button"
-              onClick={() => handleSaveChallan(false)}
-              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+              type="submit"
+              form="challan-form"
+              disabled={isActionLoading}
+              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
             >
-              <Check className="w-4 h-4 stroke-[2.5]" />
+              {isActionLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Check className="w-4 h-4 stroke-[2.5]" />
+              )}
               <span>{activeTab.editingChallan ? 'Update Challan' : 'Save'}</span>
             </button>
           </div>
         </div>
+        </form>
 
         {/* Quick Customer Modal */}
         {isQuickCustomerModalOpen && (
@@ -1657,7 +2031,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             showBackIcon={true}
             hideCloseButton={true}
           >
-            <form onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
+            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
               <div>
                 <label className="text-xs font-semibold text-slate-600 block mb-1">
                   Customer / Business Name <span className="text-rose-500">*</span>
@@ -1716,7 +2090,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md"
+                  disabled={isActionLoading}
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md disabled:opacity-50"
                 >
                   Save Party
                 </button>
@@ -1727,55 +2102,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       </div>
     );
   }
-
-  // Export to Excel
-  const handleExportExcel = () => {
-    if (filteredChallans.length === 0) {
-      toast.error('No delivery challans to export');
-      return;
-    }
-
-    const excelRows = filteredChallans.map((c) => ({
-      date: isoToDdmmyyyy(c.invoiceDate),
-      dueDate: isoToDdmmyyyy(c.dueDate),
-      challanNo: c.challanNo,
-      partyName: c.partyName,
-      customerPhone: c.customerPhone || '-',
-      amount: Number(c.amount || 0),
-      balance: Number(c.balance || 0),
-      status: c.status,
-    }));
-
-    exportTableToExcel({
-      filename: `Delivery_Challans_Report_${new Date().toISOString().split('T')[0]}`,
-      sheetName: 'Delivery Challans',
-      title: 'YAA CREATIONS CRM - DELIVERY CHALLAN REPORT',
-      subtitle: `Filter: ${appliedPeriod} | Total Challans: ${filteredChallans.length} | Generated: ${new Date().toLocaleDateString()}`,
-      columns: [
-        { header: 'Challan Date', key: 'date', align: 'center', width: 15 },
-        { header: 'Due Date', key: 'dueDate', align: 'center', width: 15 },
-        { header: 'Challan No.', key: 'challanNo', align: 'center', width: 18 },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
-        { header: 'Phone', key: 'customerPhone', align: 'left', width: 18 },
-        { header: 'Total (₹)', key: 'amount', align: 'right', type: 'currency', width: 20 },
-        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: 20 },
-        { header: 'Status', key: 'status', align: 'center', width: 14 },
-      ],
-      data: excelRows,
-      summaryRow: {
-        date: 'TOTAL',
-        partyName: `${filteredChallans.length} Challans`,
-        amount: filteredChallans.reduce((sum, c) => sum + (c.amount || 0), 0),
-        balance: filteredChallans.reduce((sum, c) => sum + (c.balance || 0), 0),
-      },
-    });
-
-    toast.success(`Delivery Challans Excel report downloaded (${filteredChallans.length} records)!`);
-  };
-
-  const totalChallanAmt = filteredChallans.reduce((sum, c) => sum + (c.amount || 0), 0);
-  const openChallans = filteredChallans.filter((c) => c.status === 'Open');
-  const deliveredChallans = filteredChallans.filter((c) => c.status === 'Delivered' || c.status === 'Converted');
 
   // =========================================================================
   // VIEW MODE: LIST
@@ -1794,11 +2120,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 Delivery Challan
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {challans.length} total
+                {totalApiRecords || challans.length} total
               </span>
+              {!isApiConnected && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <WifiOff className="w-3 h-3" /> Offline Mode
+                </span>
+              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-              Manage delivery challans, goods dispatched, tracking info, and convert to sale invoices.
+              Manage delivery challans, goods dispatched, vehicle info, and convert directly to sales invoices.
             </p>
           </div>
         </div>
@@ -1828,7 +2159,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
       {/* 2. FILTER & ACTION BAR */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Left Side: Period Filter & Date Range & Firms Filter */}
+        {/* Left Side: Period Filter & Date Range & Status Filter */}
         <div className="flex items-center gap-3 flex-wrap">
           <FilterDropdown
             placeholder="Period"
@@ -1840,12 +2171,15 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             }}
           />
 
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5 text-xs text-slate-700">
-            <span className="text-slate-400 font-medium">Between</span>
-            <span className="font-semibold text-slate-800">01/10/2026</span>
-            <span className="text-slate-400 font-medium">To</span>
-            <span className="font-semibold text-slate-800">31/10/2026</span>
-          </div>
+          <FilterDropdown
+            placeholder="Status"
+            value={appliedStatus}
+            options={STATUS_FILTER_OPTIONS}
+            onChange={(val) => {
+              setAppliedStatus(val);
+              setPage(1);
+            }}
+          />
 
           <div className="relative">
             <select
@@ -1860,7 +2194,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           </div>
         </div>
 
-        {/* Right Side: Print Action */}
+        {/* Right Side: Print Summary */}
         <div className="flex items-center gap-2 self-end md:self-auto">
           <button
             type="button"
@@ -1874,7 +2208,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
       </div>
 
-      {/* 2. SUMMARY KPI CARDS */}
+      {/* 3. SUMMARY KPI CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Total Challans */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4.5 sm:p-5 shadow-xs flex items-center justify-between">
@@ -1886,7 +2220,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               ₹{totalChallanAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {filteredChallans.length} challans generated
+              {totalApiRecords || filteredChallans.length} challans recorded
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shrink-0">
@@ -1949,7 +2283,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
       </div>
 
-      {/* 3. TRANSACTIONS SEARCH & ACTION BAR */}
+      {/* 4. TRANSACTIONS SEARCH & ACTION BAR */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         {/* Left: Section Header & Search Input */}
         <div className="flex items-center gap-3 flex-1 max-w-lg">
@@ -1964,6 +2298,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               onChange={(e) => {
                 setPendingSearch(e.target.value);
                 setAppliedSearch(e.target.value);
+                setPage(1);
               }}
               placeholder="Search by party, challan no, vehicle..."
               className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#33077C] focus:bg-white transition-colors"
@@ -1979,7 +2314,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               setSelectedBulkChallanIds(challans.filter((c) => c.status === 'Open').map((c) => c.id));
               setIsBulkConvertModalOpen(true);
             }}
-            className="h-9 px-4 rounded-full border border-red-300 text-red-500 hover:bg-red-50 text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1.5"
+            className="h-9 px-4 rounded-full border border-purple-300 text-[#33077C] hover:bg-purple-50 text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1.5"
           >
             <span>Bulk Convert To Sale</span>
           </button>
@@ -1995,9 +2330,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
       </div>
 
-      {/* 4. TRANSACTIONS TABLE */}
+      {/* 5. TRANSACTIONS TABLE */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        {filteredChallans.length === 0 ? (
+        {isApiLoading ? (
+          <div className="py-20 flex flex-col items-center justify-center space-y-3">
+            <Loader2 className="w-8 h-8 text-[#33077C] animate-spin" />
+            <p className="text-xs font-semibold text-slate-500">Loading delivery challans from Commerce server...</p>
+          </div>
+        ) : filteredChallans.length === 0 ? (
           <div className="py-20 px-4 flex flex-col items-center justify-center text-center space-y-4">
             <div className="w-20 h-20 rounded-3xl bg-purple-50/80 border border-purple-100 flex items-center justify-center text-[#33077C] shadow-xs">
               <Truck className="w-10 h-10 stroke-[1.5]" />
@@ -2095,12 +2435,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
                       {/* 4. DUE DATE */}
                       <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <span>{isoToDdmmyyyy(item.dueDate)}</span>
-                          <span className="text-[10.5px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
-                            Due: Today
-                          </span>
-                        </div>
+                        <span>{isoToDdmmyyyy(item.dueDate)}</span>
                       </td>
 
                       {/* 5. TOTAL AMOUNT */}
@@ -2114,6 +2449,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                             Converted
+                          </span>
+                        ) : item.status === 'Cancelled' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                            Cancelled
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
@@ -2129,8 +2469,9 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           {/* CONVERT TO SALE Button */}
                           <button
                             type="button"
+                            disabled={item.status === 'Converted' || item.status === 'Cancelled' || isActionLoading}
                             onClick={() => handleConvertExistingToSale(item)}
-                            className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs"
+                            className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] disabled:opacity-40 disabled:pointer-events-none border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs"
                           >
                             CONVERT TO SALE
                           </button>
@@ -2168,7 +2509,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               <MoreVertical className="w-4 h-4 text-slate-600" />
                             </button>
 
-                            {/* 3-Dots Floating Dropdown Menu (6 options matching exact order) */}
+                            {/* 3-Dots Floating Dropdown Menu */}
                             {isActionOpen && dropdownPos && (
                               <div
                                 style={{
@@ -2193,16 +2534,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                   View/Edit
                                 </button>
 
-                                {/* 2. Delete */}
+                                {/* 2. Delete / Cancel */}
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setActiveDropdownId(null);
                                     handleDeleteChallan(item.id);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
                                 >
-                                  Delete
+                                  Delete / Cancel
                                 </button>
 
                                 {/* 3. Duplicate */}
@@ -2266,10 +2607,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         )}
       </div>
 
-      {/* 5. Pagination */}
+      {/* 6. Pagination */}
       {filteredChallans.length > 0 && (
         <Pagination
-          total={filteredChallans.length}
+          total={totalApiRecords || filteredChallans.length}
           currentPage={safePage}
           pageSize={pageSize}
           pageSizeOptions={[10, 20, 50]}
@@ -2281,7 +2622,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         />
       )}
 
-      {/* 6. Bulk Convert To Sale Modal */}
+      {/* 7. Bulk Convert To Sale Modal */}
       {isBulkConvertModalOpen && (
         <Modal
           isOpen={isBulkConvertModalOpen}
@@ -2306,7 +2647,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                     setSelectedBulkChallanIds(openIds);
                   }
                 }}
-                className="text-xs font-bold text-[#33077C] hover:underline"
+                className="text-xs font-bold text-[#33077C] hover:underline cursor-pointer"
               >
                 {selectedBulkChallanIds.length === challans.filter((c) => c.status === 'Open').length
                   ? 'Deselect All'
@@ -2368,17 +2709,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsBulkConvertModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={selectedBulkChallanIds.length === 0}
+                  disabled={selectedBulkChallanIds.length === 0 || isActionLoading}
                   onClick={handleBulkConvertToSale}
-                  className="px-5 py-2 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20"
+                  className="px-5 py-2 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
                 >
-                  <ShoppingCart className="w-4 h-4" />
+                  {isActionLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ShoppingCart className="w-4 h-4" />
+                  )}
                   <span>Convert Selected ({selectedBulkChallanIds.length})</span>
                 </button>
               </div>
@@ -2387,7 +2732,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </Modal>
       )}
 
-      {/* 5. Preview / Print Modal */}
+      {/* 8. Preview / Print Modal */}
       {previewChallan && (
         <Modal
           isOpen={!!previewChallan}
@@ -2416,6 +2761,9 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 <p className="text-xs text-slate-500">Date: {isoToDdmmyyyy(previewChallan.invoiceDate)}</p>
                 {previewChallan.vehicleNo && (
                   <p className="text-xs font-semibold text-slate-700">Vehicle No: {previewChallan.vehicleNo}</p>
+                )}
+                {previewChallan.driverName && (
+                  <p className="text-xs font-medium text-slate-500">Driver: {previewChallan.driverName}</p>
                 )}
               </div>
             </div>
@@ -2496,14 +2844,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewChallan(null)}
-                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Challan</span>

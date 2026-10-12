@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 import {
   LayoutDashboard,
   Boxes,
@@ -32,6 +33,8 @@ import {
   FilePlus,
   ArrowDownLeft,
   Clock,
+  UserCheck,
+  IndianRupee,
 } from 'lucide-react';
 
 interface SubNavItem {
@@ -105,16 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     location.pathname.startsWith('/sale-management/inventory');
 
   const isBillingSalesRouteActive =
-    location.pathname.startsWith('/sale-management/sales/sale') ||
-    location.pathname.startsWith('/sale-management/sales/quotation') ||
-    location.pathname.startsWith('/sale-management/sales/estimate') ||
-    location.pathname.startsWith('/sale-management/sales/proforma') ||
-    location.pathname.startsWith('/sale-management/sales/sale-order') ||
-    location.pathname.startsWith('/sale-management/sales/order') ||
-    location.pathname.startsWith('/sale-management/sales/delivery-challan') ||
-    location.pathname.startsWith('/sale-management/sales/challan') ||
-    location.pathname.startsWith('/sale-management/sales/payment-in') ||
-    location.pathname.startsWith('/sale-management/sales/return');
+    location.pathname.startsWith('/sale-management/sales');
 
   const isBillingPurchaseRouteActive =
     location.pathname.startsWith('/sale-management/purchase/purchase') ||
@@ -125,7 +119,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     'tasks-group': isTasksRouteActive,
     'sales-group': isSalesRouteActive,
     'proforma-group': isProformaRouteActive,
-    'sale-management-group': isSaleManagementRouteActive,
     'sm-inventory': location.pathname.startsWith('/sale-management/inventory'),
     'sm-sales-hub': location.pathname.startsWith('/sale-management/sales'),
     'sm-purchase': location.pathname.startsWith('/sale-management/purchase'),
@@ -154,16 +147,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [isProformaRouteActive]);
 
   useEffect(() => {
-    if (isSaleManagementRouteActive) {
-      setOpenGroups((prev) => ({
-        ...prev,
-        'sale-management-group': true,
-        'sm-inventory': location.pathname.startsWith('/sale-management/inventory') ? true : prev['sm-inventory'],
-        'sm-sales-hub': location.pathname.startsWith('/sale-management/sales') ? true : prev['sm-sales-hub'],
-        'sm-purchase': location.pathname.startsWith('/sale-management/purchase') ? true : prev['sm-purchase'],
-      }));
+    if (location.pathname.startsWith('/sale-management/inventory')) {
+      setOpenGroups((prev) => ({ ...prev, 'sm-inventory': true }));
     }
-  }, [isSaleManagementRouteActive, location.pathname]);
+    if (location.pathname.startsWith('/sale-management/sales')) {
+      setOpenGroups((prev) => ({ ...prev, 'sm-sales-hub': true }));
+    }
+    if (location.pathname.startsWith('/sale-management/purchase')) {
+      setOpenGroups((prev) => ({ ...prev, 'sm-purchase': true }));
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     setOpenGroups((prev) => ({
@@ -182,109 +175,94 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }));
   };
 
-  const saleManagementSubModules: SubNavItem[] = [
-    {
-      id: 'sm-inventory',
-      label: 'Inventory',
-      icon: Package,
-      children: [
-        { id: 'inventory-category', path: '/sale-management/inventory/category', label: 'Category', icon: Tag },
-        { id: 'inventory-subcategory', path: '/sale-management/inventory/subcategory', label: 'Subcategory', icon: FolderTree },
-        { id: 'inventory-products', path: '/sale-management/inventory/products', label: 'Products', icon: Boxes },
-        { id: 'inventory-stocks', path: '/sale-management/inventory/stocks', label: 'Stocks', icon: Warehouse },
-      ],
-    },
-    {
-      id: 'sm-sales-hub',
-      label: 'Sales Hub',
-      icon: ShoppingCart,
-      children: [
-        { id: 'sales-hub-customer', path: '/sale-management/sales/customer', label: 'Customer', icon: UsersRound },
-        { id: 'sales-hub-quotation', path: '/sale-management/sales/quotation', label: 'Estimate / Quotation', icon: FileSpreadsheet },
-        { id: 'sales-hub-proforma', path: '/sale-management/sales/proforma', label: 'Proforma Invoice', icon: FileText },
-        { id: 'sales-hub-order', path: '/sale-management/sales/sale-order', label: 'Sales Order', icon: ShoppingBag },
-        { id: 'sales-hub-challan', path: '/sale-management/sales/delivery-challan', label: 'Delivery Challan', icon: Truck },
-        { id: 'sales-hub-sales', path: '/sale-management/sales/sale', label: 'Sales Invoice', icon: ShoppingCart },
-        { id: 'sales-hub-payment-in', path: '/sale-management/sales/payment-in', label: 'Payment-In', icon: CreditCard },
-        { id: 'sales-hub-returns', path: '/sale-management/sales/return', label: 'Sales Return / Credit Note', icon: RotateCcw },
-      ],
-    },
-    {
-      id: 'sm-purchase',
-      label: 'Purchase',
-      icon: Truck,
-      children: [
-        { id: 'purchase-supplier', path: '/sale-management/purchase/supplier', label: 'Supplier', icon: UsersRound },
-        { id: 'purchase-request', path: '/sale-management/purchase/request', label: 'Purchase Request', icon: FilePlus },
-        { id: 'purchase-order', path: '/sale-management/purchase/purchase', label: 'Purchase Bills', icon: ShoppingBag },
-        { id: 'purchase-returns', path: '/sale-management/purchase/return', label: 'Purchase Return', icon: ArrowDownLeft },
-        { id: 'purchase-payment-out', path: '/sale-management/purchase/payment-out', label: 'Payment Out', icon: CreditCard },
-        { id: 'purchase-expense', path: '/sale-management/purchase/expense', label: 'Expense', icon: Receipt },
-      ],
-    },
-    {
-      id: 'sm-reports',
-      path: '/sale-management/reports',
-      label: 'Reports',
-      icon: BarChart3,
-    },
-  ];
-
-  // Active Organization Type Detection
-  const getActiveOrgType = (): string => {
-    if (isOrgSuperAdmin) {
-      const savedType = localStorage.getItem('active_org_type_orgsuperadmin');
-      if (savedType) return savedType;
-      const activeOrg = localStorage.getItem('active_organization_orgsuperadmin') || '';
-      if (['fts academy', 'fyndus academy', 'polihills'].includes(activeOrg.toLowerCase())) {
-        return 'Sales Management';
-      }
-      return 'Client Management';
-    }
-    const activeOrg = localStorage.getItem('active_organization') || '';
-    if (['polihills', 'fts academy', 'fyndus academy'].includes(activeOrg.toLowerCase())) {
-      return 'Sales Management';
-    }
-    const savedCatalog = localStorage.getItem('organizations_catalog');
-    if (savedCatalog) {
-      try {
-        const parsed = JSON.parse(savedCatalog);
-        const found = parsed.find((o: any) => o.name?.toLowerCase() === activeOrg.toLowerCase());
-        if (found?.organizationType) return found.organizationType;
-      } catch {}
-    }
-    return 'Client Management';
+  // Separate Top-Level Modules for Inventory, Sales Hub, Purchase, and Sale Report
+  const inventoryNavItem: NavItem = {
+    id: 'sm-inventory',
+    label: 'Inventory',
+    icon: Package,
+    adminOnly: false,
+    children: [
+      { id: 'inventory-category', path: '/sale-management/inventory/category', label: 'Category', icon: Tag },
+      { id: 'inventory-subcategory', path: '/sale-management/inventory/subcategory', label: 'Subcategory', icon: FolderTree },
+      { id: 'inventory-products', path: '/sale-management/inventory/products', label: 'Products', icon: Boxes },
+      { id: 'inventory-stocks', path: '/sale-management/inventory/stocks', label: 'Stocks', icon: Warehouse },
+    ],
   };
 
-  const [activeOrgType, setActiveOrgType] = useState<string>(getActiveOrgType);
+  const salesHubNavItem: NavItem = {
+    id: 'sm-sales-hub',
+    label: 'Sales Hub',
+    icon: ShoppingCart,
+    adminOnly: false,
+    children: [
+      { id: 'sales-hub-customer', path: '/sale-management/sales/customer', label: 'Customer', icon: UsersRound },
+      { id: 'sales-hub-sales-representative', path: '/sale-management/sales/sales-representatives', label: 'Sales Representative', icon: UserCheck },
+      { id: 'sales-hub-quotation', path: '/sale-management/sales/quotation', label: 'Estimate / Quotation', icon: FileSpreadsheet },
+      { id: 'sales-hub-proforma', path: '/sale-management/sales/proforma', label: 'Proforma Invoice', icon: FileText },
+      { id: 'sales-hub-order', path: '/sale-management/sales/sale-order', label: 'Sales Order', icon: ShoppingBag },
+      { id: 'sales-hub-challan', path: '/sale-management/sales/delivery-challan', label: 'Delivery Challan', icon: Truck },
+      { id: 'sales-hub-sales', path: '/sale-management/sales/sale', label: 'Sales Invoice', icon: ShoppingCart },
+      { id: 'sales-hub-payment-in', path: '/sale-management/sales/payment-in', label: 'Payment-In', icon: CreditCard },
+      { id: 'sales-hub-returns', path: '/sale-management/sales/return', label: 'Sales Return / Credit Note', icon: RotateCcw },
+      { id: 'sales-hub-collections', path: '/sale-management/sales/collections', label: 'Collections', icon: IndianRupee },
+    ],
+  };
 
-  useEffect(() => {
-    const handleOrgTypeChange = (e: any) => {
-      if (e?.detail) {
-        setActiveOrgType(typeof e.detail === 'string' ? e.detail : e.detail.organizationType || getActiveOrgType());
-      } else {
-        setActiveOrgType(getActiveOrgType());
+  const purchaseNavItem: NavItem = {
+    id: 'sm-purchase',
+    label: 'Purchase',
+    icon: Truck,
+    adminOnly: false,
+    children: [
+      { id: 'purchase-supplier', path: '/sale-management/purchase/supplier', label: 'Supplier', icon: UsersRound },
+      { id: 'purchase-request', path: '/sale-management/purchase/request', label: 'Purchase Request', icon: FilePlus },
+      { id: 'purchase-order', path: '/sale-management/purchase/purchase', label: 'Purchase Bills', icon: ShoppingBag },
+      { id: 'purchase-returns', path: '/sale-management/purchase/return', label: 'Purchase Return', icon: ArrowDownLeft },
+      { id: 'purchase-payment-out', path: '/sale-management/purchase/payment-out', label: 'Payment Out', icon: CreditCard },
+      { id: 'purchase-expense', path: '/sale-management/purchase/expense', label: 'Expense', icon: Receipt },
+    ],
+  };
+
+  const saleReportNavItem: NavItem = {
+    id: 'sm-reports',
+    path: '/sale-management/reports',
+    label: 'Sale Report',
+    icon: BarChart3,
+    adminOnly: false,
+  };
+
+  const {
+    activeOrgType,
+    setOrgType,
+    isSaleManagement,
+    isAll: isOrgAll,
+    isSaleOnly,
+    isClientOnly,
+  } = useActiveOrgType();
+
+  const orgCaps = {
+    isAll: isOrgAll,
+    isSaleOnly,
+    isClientOnly,
+  };
+
+  const handleSwitchOrgType = (type: 'Client Management' | 'Sales Management') => {
+    setOrgType(type);
+    if (type === 'Sales Management') {
+      const clientOnly = [
+        '/leads', '/quotes', '/proforma', '/sales', '/customers',
+        '/digital-marketing', '/content', '/tasks', '/payments',
+        '/subscriptions', '/employees', '/reports'
+      ];
+      if (clientOnly.some((r) => location.pathname.startsWith(r))) {
+        navigate('/');
       }
-    };
-
-    const handleOrgChange = (e: any) => {
-      if (e?.detail?.organizationType) {
-        setActiveOrgType(e.detail.organizationType);
-      } else {
-        setActiveOrgType(getActiveOrgType());
+    } else if (type === 'Client Management') {
+      if (location.pathname.startsWith('/sale-management')) {
+        navigate('/');
       }
-    };
-
-    window.addEventListener('orgTypeChanged', handleOrgTypeChange);
-    window.addEventListener('orgChanged', handleOrgChange);
-    window.addEventListener('storage', handleOrgTypeChange);
-
-    return () => {
-      window.removeEventListener('orgTypeChanged', handleOrgTypeChange);
-      window.removeEventListener('orgChanged', handleOrgChange);
-      window.removeEventListener('storage', handleOrgTypeChange);
-    };
-  }, [isOrgSuperAdmin]);
+    }
+  };
 
   // Billing Software Specialized Module Groups for Sales Management
   const billingPartiesGroup: NavItem = {
@@ -311,10 +289,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const billingSalesGroup: NavItem = {
     id: 'billing-sales-group',
-    label: 'Sales & Invoices',
+    label: 'Sales Hub',
     icon: ShoppingCart,
     children: [
       { id: 'billing-customers', path: '/sale-management/sales/customer', label: 'Customer', icon: UsersRound },
+      { id: 'billing-sales-representatives', path: '/sale-management/sales/sales-representatives', label: 'Sales Representative', icon: UserCheck },
       { id: 'billing-quotes', path: '/sale-management/sales/quotation', label: 'Estimate / Quotation', icon: FileSpreadsheet },
       { id: 'billing-proforma', path: '/sale-management/sales/proforma', label: 'Proforma Invoice', icon: FileText },
       { id: 'billing-sale-order', path: '/sale-management/sales/sale-order', label: 'Sales Order', icon: ShoppingBag },
@@ -322,6 +301,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'billing-sales-list', path: '/sale-management/sales/sale', label: 'Sales Invoice', icon: Receipt },
       { id: 'billing-payment-in', path: '/sale-management/sales/payment-in', label: 'Payment-In', icon: CreditCard },
       { id: 'billing-sales-returns', path: '/sale-management/sales/return', label: 'Sales Return / Credit Note', icon: RotateCcw },
+      { id: 'billing-collections', path: '/sale-management/sales/collections', label: 'Collections', icon: IndianRupee },
     ],
   };
 
@@ -337,27 +317,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ],
   };
 
-  // Sales Management (Billing Software Suite) Navigation Items
+  const userRole = (currentUser?.role || role || '').toString().toUpperCase();
+  const isBranchAdmin =
+    (userRole === 'BRANCH_ADMIN' ||
+      userRole === 'BRANCHADMIN' ||
+      currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com') &&
+    userRole !== 'ORG_ADMIN' &&
+    userRole !== 'ORGADMIN' &&
+    userRole !== 'ADMIN' &&
+    userRole !== 'SUPER_ADMIN' &&
+    userRole !== 'SUPERADMIN';
+
+  const isSubOrgAdmin =
+    userRole === 'SUB_ORG_ADMIN' ||
+    userRole === 'SUBORGADMIN' ||
+    currentUser?.email?.toLowerCase() === 'suborgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
+
+  const isOrgAdminUser =
+    isOrgSuperAdmin ||
+    userRole === 'ORG_ADMIN' ||
+    userRole === 'ORGADMIN' ||
+    userRole === 'ADMIN' ||
+    currentUser?.email?.toLowerCase() === 'orgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'orgsuperadmin@gmail.com';
+
+  const isStaffUser =
+    userRole === 'STAFF' ||
+    (!isAdmin && !isSuperAdmin && !isOrgSuperAdmin && !isOrgAdminUser && !isBranchAdmin && !isSubOrgAdmin);
+
+  // Sales Management Suite Navigation Items (The 4 modules in the image)
   const salesManagementNavItems: NavItem[] = [
     { id: 'dashboard', path: '/', label: 'Dashboard', icon: LayoutDashboard },
-    ...(isOrgSuperAdmin
+    ...(isOrgSuperAdmin || isOrgAdminUser
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
     { id: 'branches', path: '/branches', label: 'Branches', icon: GitBranch, adminOnly: true },
-    billingPartiesGroup,
-    billingInventoryGroup,
-    billingSalesGroup,
-    billingPurchaseGroup,
-    { id: 'pending-dues', path: '/pending-dues', label: 'Pending Dues & Aging', icon: Clock },
-    { id: 'payments', path: '/payments', label: 'Payments & Receipts', icon: CreditCard },
-    { id: 'reports', path: '/sale-management/reports', label: 'Reports & GST', icon: BarChart3 },
+    inventoryNavItem,
+    salesHubNavItem,
+    purchaseNavItem,
+    saleReportNavItem,
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, count: unreadRemindersCount },
   ];
 
-  // Client Management Suite Menu Items (Includes Client Management + Sale Management)
+  // Client Management Suite Menu Items (Remaining modules)
   const clientManagementNavItems: NavItem[] = [
     { id: 'dashboard', path: '/', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
-    ...(isOrgSuperAdmin
+    ...(isOrgSuperAdmin || isOrgAdminUser
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
     { id: 'branches', path: '/branches', label: 'Branches', icon: GitBranch, adminOnly: true },
@@ -398,20 +404,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'subscriptions', path: '/subscriptions', label: 'Subscriptions', icon: Repeat, adminOnly: false },
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, adminOnly: false, count: unreadRemindersCount },
     { id: 'reports', path: '/reports', label: 'Reports & Analytics', icon: BarChart3, adminOnly: true },
-    {
-      id: 'sale-management-group',
-      label: 'Sale Management',
-      icon: ShoppingBag,
-      adminOnly: false,
-      children: saleManagementSubModules,
-    },
-    {
-      id: 'pending-dues',
-      path: '/pending-dues',
-      label: 'Pending Dues',
-      icon: Clock,
-      adminOnly: false,
-    },
   ];
 
   // Specific navigation modules for Super Admin:
@@ -442,11 +434,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'organization-subscriptions', path: '/organization-subscriptions', label: 'Organization Subscriptions', icon: Repeat },
   ];
 
-  const isBranchAdmin = currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com';
-  const isSubOrgAdmin = currentUser?.email?.toLowerCase() === 'suborgadmin@gmail.com' || currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
-  const isOrgAdminUser = isOrgSuperAdmin || currentUser?.email?.toLowerCase() === 'orgadmin@gmail.com';
-  const isStaffUser = role === 'STAFF' || (!isAdmin && !isSuperAdmin && !isOrgSuperAdmin);
-
   // Dynamic visible items based on logged in user role & organization type
   const getRoleBasedItems = (): NavItem[] => {
     // 1. Super Admin: Full multi-tenant governance, root licensing, quotations, proforma, and global subscriptions
@@ -456,14 +443,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     // 2. Organisation Admin: Multi-branch, Sub-organizations, and complete Client / Sales ERP suites
     if (isOrgAdminUser) {
-      return activeOrgType.toLowerCase() === 'sales management'
+      return isSaleManagement
         ? salesManagementNavItems
         : clientManagementNavItems;
     }
 
     // 3. Sub Organisation Admin (e.g. Yaa Creations / Company Admin): Company CRM, leads, quotes, invoices, tasks, inventory
     if (isSubOrgAdmin) {
-      const items = activeOrgType.toLowerCase() === 'sales management'
+      const items = isSaleManagement
         ? salesManagementNavItems
         : clientManagementNavItems;
       return items.filter((item) => item.id !== 'organization');
@@ -471,7 +458,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     // 4. Branch Admin: Location-scoped leads, quotes, invoices, inventory, payments, reminders
     if (isBranchAdmin) {
-      const items = activeOrgType.toLowerCase() === 'sales management'
+      const items = isSaleManagement
         ? salesManagementNavItems
         : clientManagementNavItems;
       return items.filter((item) => item.id !== 'organization' && item.id !== 'branches');
@@ -490,18 +477,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         'billing-parties-group',
         'billing-inventory-group',
         'billing-sales-group',
-        'sale-management-group',
+        'sm-inventory',
+        'sm-sales-hub',
+        'sm-purchase',
+        'sm-reports',
         'reminders',
-        'pending-dues',
       ];
-      const items = activeOrgType.toLowerCase() === 'sales management'
+      const items = isSaleManagement
         ? salesManagementNavItems
         : clientManagementNavItems;
       return items.filter((item) => staffAllowedIds.includes(item.id) && !item.adminOnly);
     }
 
     // Default Fallback
-    return activeOrgType.toLowerCase() === 'sales management'
+    return isSaleManagement
       ? salesManagementNavItems
       : clientManagementNavItems;
   };
@@ -694,6 +683,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
+        {/* Module Switcher for Organization Type 0 (ALL) - Hidden for Super Admin */}
+        {!isSuperAdmin && orgCaps.isAll && !collapsed && (
+          <div className="px-3 pt-3 pb-2 border-b border-white/10">
+            <div className="bg-black/25 p-1 rounded-xl flex items-center border border-white/10 shadow-inner">
+              <button
+                type="button"
+                id="switch-client-management-button"
+                onClick={() => handleSwitchOrgType('Client Management')}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeOrgType === 'Client Management'
+                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
+                    : 'text-white/70 hover:text-white hover:bg-white/10 font-semibold'
+                }`}
+              >
+                <UsersRound className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Client Mgmt</span>
+              </button>
+
+              <button
+                type="button"
+                id="switch-sales-management-button"
+                onClick={() => handleSwitchOrgType('Sales Management')}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeOrgType === 'Sales Management'
+                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
+                    : 'text-white/70 hover:text-white hover:bg-white/10 font-semibold'
+                }`}
+              >
+                <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Sale Mgmt</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!isSuperAdmin && orgCaps.isAll && collapsed && (
+          <div className="px-2 pt-2.5 pb-2 flex justify-center border-b border-white/10">
+            <button
+              type="button"
+              id="switch-module-collapsed-button"
+              onClick={() => handleSwitchOrgType(activeOrgType === 'Sales Management' ? 'Client Management' : 'Sales Management')}
+              title={`Currently: ${activeOrgType === 'Sales Management' ? 'Sale Management' : 'Client Management'} (Click to switch)`}
+              className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-all cursor-pointer border border-white/20 shadow-xs"
+            >
+              {activeOrgType === 'Sales Management' ? (
+                <ShoppingCart className="w-4.5 h-4.5 text-white" />
+              ) : (
+                <UsersRound className="w-4.5 h-4.5 text-white" />
+              )}
+            </button>
+          </div>
+        )}
+
         {/* Navigation Links */}
         <nav className="mt-2 flex-1 overflow-y-auto overflow-x-hidden space-y-1 px-3 py-2 no-scrollbar">
           {visibleItems.map((item) => {
@@ -843,12 +885,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!collapsed && (
               <div className="flex-1 min-w-0">
                 <p className="text-[15px] font-bold truncate tracking-wide text-white">
-                  {isOrgSuperAdmin
-                    ? 'Org Super Administrator'
+                  {isOrgSuperAdmin || isOrgAdminUser
+                    ? 'Organisation Administrator'
                     : isSuperAdmin
                     ? 'Super Administrator'
-                    : currentUser?.role === 'ADMIN'
-                    ? 'Administrator'
+                    : isSubOrgAdmin
+                    ? 'Sub Org Administrator'
+                    : isBranchAdmin
+                    ? 'Branch Administrator'
                     : 'Staff Member'}
                 </p>
               </div>

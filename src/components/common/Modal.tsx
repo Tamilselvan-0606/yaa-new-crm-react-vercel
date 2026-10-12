@@ -13,6 +13,8 @@ interface ModalProps {
   showBackIcon?: boolean;
   hideCloseButton?: boolean;
   onBack?: () => void;
+  closeOnOutsideClick?: boolean;
+  closeOnEscape?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -27,10 +29,12 @@ export const Modal: React.FC<ModalProps> = ({
   showBackIcon = false,
   hideCloseButton = false,
   onBack,
+  closeOnOutsideClick = false,
+  closeOnEscape = false,
 }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && closeOnEscape) onClose();
     };
     if (isOpen) {
       document.body.style.overflow = 'hidden';
@@ -40,7 +44,7 @@ export const Modal: React.FC<ModalProps> = ({
       document.body.style.overflow = 'unset';
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, closeOnEscape]);
 
   if (!isOpen) return null;
 
@@ -60,7 +64,9 @@ export const Modal: React.FC<ModalProps> = ({
       id="modal-backdrop"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (closeOnOutsideClick && e.target === e.currentTarget) {
+          onClose();
+        }
       }}
     >
       <div

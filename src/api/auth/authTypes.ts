@@ -1,9 +1,19 @@
 import { Role, User } from '../../types';
 
 export interface ApiUserMembership {
+  id?: string;
   organizationId: string;
+  subOrganizationId?: string | null;
+  organization?: {
+    id?: string;
+    name?: string;
+    organizationType?: number | string;
+    organizationTypeName?: string;
+  };
   role: {
+    id?: string;
     code: string;
+    name?: string;
     permissions?: Array<{
       permission: {
         code: string;
@@ -19,6 +29,18 @@ export interface ApiUser {
   active: boolean;
   isPlatformAdmin?: boolean;
   roleId?: string | null;
+  roleCode?: string | null;
+  organizationId?: string | null;
+  subOrganizationId?: string | null;
+  accessibleBranchIds?: string[];
+  organization?: {
+    id?: string;
+    name?: string;
+    organizationType?: number | string;
+    organizationTypeName?: string;
+  };
+  organizationType?: number | string;
+  organizationTypeName?: string;
   role?:
     | {
         id?: string;
@@ -42,13 +64,33 @@ export interface ApiLoginResponse {
   tokenType: string;
   expiresIn: number;
   user: ApiUser;
+  success?: boolean;
+  statusCode?: number;
+  message?: string;
+  data?: {
+    token?: string;
+    accessToken?: string;
+    tokenType?: string;
+    expiresIn?: number;
+    user?: ApiUser;
+  };
 }
 
 export interface ApiRefreshTokenResponse {
   accessToken: string;
-  tokenType: string;
-  expiresIn: number;
-  user: ApiUser;
+  tokenType?: string;
+  expiresIn?: number;
+  user?: ApiUser;
+  success?: boolean;
+  statusCode?: number;
+  message?: string;
+  data?: {
+    token?: string;
+    accessToken?: string;
+    tokenType?: string;
+    expiresIn?: number;
+    user?: ApiUser;
+  };
 }
 
 export interface ApiForgotPasswordRequest {
@@ -77,7 +119,16 @@ export interface ApiEmailVerificationResponse {
   message: string;
 }
 
+export interface ApiVerifyEmailRequest {
+  token: string;
+}
+
+export interface ApiVerifyEmailResponse {
+  message: string;
+}
+
 export interface ApiChangePasswordRequest {
   currentPassword: string;
   newPassword: string;
 }
+

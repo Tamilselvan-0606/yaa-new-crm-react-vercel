@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   ShoppingBag,
   Plus,
@@ -28,6 +28,7 @@ import {
   ArrowLeft,
   Forward,
   FileSpreadsheet,
+  Loader2,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -38,6 +39,17 @@ import {
   PurchaseReturn,
   PurchaseReturnItem,
 } from '../../../store/useSalesManagementStore';
+import {
+  workPurchaseOrderApi,
+  mapApiPurchaseOrderToUi,
+  mapUiToCreatePurchaseOrderPayload,
+  mapUiToUpdatePurchaseOrderPayload,
+  productApi,
+  ApiProduct,
+  supplierApi,
+  ApiSupplier,
+  UUID_REGEX,
+} from '../../../api';
 import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -46,6 +58,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatPurchaseOrderShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
@@ -82,10 +95,22 @@ export const PurchaseOrderView: React.FC = () => {
     suppliers,
     stocks,
     savePurchase,
+    setPurchasesList,
     deletePurchase,
     updatePurchasePayment,
     savePurchaseReturn,
   } = useSalesManagementStore();
+
+  // Live API Integration State
+  const [livePurchases, setLivePurchases] = useState<PurchaseOrder[]>([]);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(false);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
+  const [availableSuppliers, setAvailableSuppliers] = useState<ApiSupplier[]>([]);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -100,11 +125,189 @@ export const PurchaseOrderView: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
   const [priceTaxMode, setPriceTaxMode] = useState<'Without Tax' | 'With Tax'>('Without Tax');
 
+  // Deduplication & Sync Refs (prevents multiple redundant API calls)
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef('');
+  const purchasesRef = useRef(purchases);
+  useEffect(() => {
+    purchasesRef.current = purchases;
+  }, [purchases]);
+
+  // Load products and suppliers from API
+  useEffect(() => {
+    let isMounted = true;
+    productApi
+      .getProducts({ page_size: 100, pagination_required: false })
+      .then((res) => {
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          setAvailableProducts(res.data);
+        }
+      })
+      .catch(() => {});
+
+    supplierApi
+      .getSuppliers({ page_size: 100, pagination_required: false })
+      .then((res) => {
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          setAvailableSuppliers(res.data);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Merged Suppliers list (API + Store fallback)
+  const mergedSuppliers = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; supplierCode?: string; paymentTerms?: string }>();
+    availableSuppliers.forEach((s) => {
+      map.set(s.id, { id: s.id, name: s.name, supplierCode: s.supplierCode, paymentTerms: s.paymentTerms });
+    });
+    suppliers.forEach((s) => {
+      if (!map.has(s.id)) {
+        map.set(s.id, { id: s.id, name: s.name, supplierCode: s.supplierCode, paymentTerms: s.paymentTerms });
+      }
+    });
+    return Array.from(map.values());
+  }, [availableSuppliers, suppliers]);
+
+  // Combined Product Options (API products + Inventory stocks)
+  const productOptions = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        value: string;
+        label: string;
+        subLabel?: string;
+        badge?: string;
+        unitCost: number;
+        unit?: string;
+      }
+    >();
+
+    availableProducts.forEach((p) => {
+      const prodName = p.productName || (p as any).name || 'Product';
+      const prodCode = p.productCode || (p as any).sku || '';
+      const prodCost = Number(p.purchasePrice || (p as any).costPrice || 0);
+      map.set(p.id, {
+        value: p.id,
+        label: prodName,
+        subLabel: prodCode ? `Code: ${prodCode} • Cost: ₹${prodCost.toLocaleString('en-IN')}` : undefined,
+        badge: prodCode || undefined,
+        unitCost: prodCost,
+        unit: p.unit || 'PCS',
+      });
+    });
+
+    stocks.forEach((stk) => {
+      if (!map.has(stk.productId)) {
+        map.set(stk.productId, {
+          value: stk.productId,
+          label: stk.productName,
+          subLabel: stk.sku ? `SKU: ${stk.sku} • Stock: ${stk.inStock ?? 0}` : undefined,
+          badge: stk.sku,
+          unitCost: Number(stk.unitCost || 0),
+          unit: stk.unit || 'PCS',
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [availableProducts, stocks]);
+
+  // Fetch Purchase Orders from Work API with deduplication
+  const fetchPurchaseOrders = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedPurchaseStatus}`;
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsApiLoading(true);
+
+      try {
+        const statusParam =
+          appliedPurchaseStatus !== 'All' ? appliedPurchaseStatus : undefined;
+
+        const response = await workPurchaseOrderApi.getPurchaseOrders({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: statusParam,
+          pagination_required: true,
+        });
+
+        if (response && response.success && Array.isArray(response.data)) {
+          const mapped = response.data.map(mapApiPurchaseOrderToUi);
+          setLivePurchases(mapped);
+          setIsApiConnected(true);
+          setApiErrorMessage(null);
+
+          if (response.pagination) {
+            setTotalApiRecords(response.pagination.totalRecords);
+            setTotalApiPages(response.pagination.totalPages);
+          } else {
+            setTotalApiRecords(mapped.length);
+            setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
+          }
+
+          if (
+            currentPage === 1 &&
+            !appliedSearch.trim() &&
+            appliedPurchaseStatus === 'All'
+          ) {
+            setPurchasesList(mapped);
+          }
+        } else {
+          setIsApiConnected(true);
+          setLivePurchases([]);
+          setTotalApiRecords(0);
+          setTotalApiPages(1);
+        }
+      } catch (err: any) {
+        const errMsg =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          'Work API unavailable, falling back to local store';
+        console.warn('Work Purchase Orders API unavailable:', errMsg);
+        setIsApiConnected(false);
+        setApiErrorMessage(errMsg);
+        setLivePurchases(purchasesRef.current);
+        setTotalApiRecords(null);
+        setTotalApiPages(null);
+      } finally {
+        isFetchingRef.current = false;
+        setIsApiLoading(false);
+      }
+    },
+    [currentPage, pageSize, appliedSearch, appliedPurchaseStatus, setPurchasesList]
+  );
+
+  // Initial and reactive fetch on filter change
+  useEffect(() => {
+    fetchPurchaseOrders();
+  }, [fetchPurchaseOrders]);
+
+  // Debounced Search (450ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (pendingSearch !== appliedSearch) {
+        setAppliedSearch(pendingSearch);
+        setCurrentPage(1);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
+
   // 3-Dots Action dropdown & Share Popover State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Close action dropdown & share popover on click outside or scroll
   useEffect(() => {
@@ -182,22 +385,28 @@ export const PurchaseOrderView: React.FC = () => {
     paymentMethod: 'Bank Transfer',
     paymentTerms: 'Net 30 Days',
     paidAmount: 0,
-    purchaseStatus: 'Ordered',
+    purchaseStatus: 'Pending',
     notes: '',
   });
 
   // Summary Metrics
   const summary = useMemo(() => {
-    const totalAmount = purchases.reduce((acc, p) => acc + p.grandTotal, 0);
+    const pool = isApiConnected ? livePurchases : purchases;
+    const totalAmount = pool.reduce((acc, p) => acc + (p.grandTotal || 0), 0);
     const todayStr = new Date().toISOString().split('T')[0];
-    const todayPurchases = purchases.filter((p) => p.purchaseDate === todayStr);
-    const todayAmount = todayPurchases.reduce((acc, p) => acc + p.grandTotal, 0);
-    const pendingPayments = purchases.reduce((acc, p) => acc + p.balance, 0);
-    const paidCount = purchases.filter((p) => p.paymentStatus === 'Paid').length;
-    const completedCount = purchases.filter((p) => p.purchaseStatus === 'Completed' || p.purchaseStatus === 'Received').length;
+    const todayPurchases = pool.filter((p) => p.purchaseDate === todayStr);
+    const todayAmount = todayPurchases.reduce((acc, p) => acc + (p.grandTotal || 0), 0);
+    const pendingPayments = pool.reduce((acc, p) => acc + (p.balance || 0), 0);
+    const paidCount = pool.filter((p) => p.paymentStatus === 'Paid').length;
+    const completedCount = pool.filter(
+      (p) =>
+        p.purchaseStatus === 'Completed' ||
+        p.purchaseStatus === 'Received' ||
+        p.purchaseStatus === 'Approved'
+    ).length;
 
     return {
-      totalCount: purchases.length,
+      totalCount: totalApiRecords !== null ? totalApiRecords : pool.length,
       totalAmount,
       todayAmount,
       todayCount: todayPurchases.length,
@@ -205,47 +414,44 @@ export const PurchaseOrderView: React.FC = () => {
       paidCount,
       completedCount,
     };
-  }, [purchases]);
+  }, [isApiConnected, livePurchases, purchases, totalApiRecords]);
 
-  const stockOptions = useMemo(() => {
-    return stocks.map((stk) => ({
-      value: stk.productId,
-      label: stk.productName,
-      subLabel: stk.sku ? `SKU: ${stk.sku} • Stock: ${stk.inStock ?? 0} ${stk.unit || 'units'}` : undefined,
-      badge: stk.sku,
-    }));
-  }, [stocks]);
-
-  // Open Create Modal
+  // Open Create Modal (No mock data: uses live products/suppliers if available or clean empty inputs)
   const handleOpenCreateModal = () => {
     const nextPoNo = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const defaultStock = stocks[0] || {
-      productId: 'PROD_1',
-      productName: 'ERP Business Suite Enterprise',
-      unitCost: 15000,
-    };
-
-    const defaultBatchNo = `BAT-SUP-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
 
     const initialItem: PurchaseProductItem = {
       id: `po_it_${Date.now()}`,
-      productId: defaultStock.productId,
-      productName: defaultStock.productName,
-      batch: defaultBatchNo,
+      productId: '',
+      productName: '',
+      batch: '',
       quantity: 1,
       unit: 'NONE',
-      purchasePrice: defaultStock.unitCost,
+      purchasePrice: 0,
       discountPercent: 0,
       discountAmount: 0,
       taxPercent: 18,
-      total: defaultStock.unitCost * 1.18,
+      total: 0,
     };
+
+    const validProduct = productOptions.find((p) => UUID_REGEX.test(p.value)) || productOptions[0];
+    if (validProduct) {
+      initialItem.productId = validProduct.value;
+      initialItem.productName = validProduct.label;
+      initialItem.purchasePrice = validProduct.unitCost;
+      initialItem.unit = validProduct.unit || 'NONE';
+      initialItem.total = Math.round(validProduct.unitCost * 1.18 * 100) / 100;
+    }
+
+    const defaultSupplier =
+      mergedSuppliers.find((s) => UUID_REGEX.test(s.id)) ||
+      (mergedSuppliers.length > 0 ? mergedSuppliers[0] : null);
 
     setFormData({
       purchaseNo: nextPoNo,
       purchaseInvoiceNo: '',
-      supplierId: '',
-      supplierName: '',
+      supplierId: defaultSupplier ? defaultSupplier.id : '',
+      supplierName: defaultSupplier ? defaultSupplier.name : '',
       purchaseDate: new Date().toISOString().split('T')[0],
       dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       items: [initialItem],
@@ -254,9 +460,9 @@ export const PurchaseOrderView: React.FC = () => {
       shipping: 0,
       otherCharges: 0,
       paymentMethod: 'Bank Transfer',
-      paymentTerms: '',
+      paymentTerms: defaultSupplier?.paymentTerms || 'Net 30 Days',
       paidAmount: 0,
-      purchaseStatus: 'Ordered',
+      purchaseStatus: 'Pending',
       notes: '',
     });
     setEditingPurchase(null);
@@ -264,21 +470,27 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   const handleOpenEditModal = (po: PurchaseOrder) => {
+    if (po.purchaseStatus === 'Received' || po.purchaseStatus === 'Cancelled') {
+      toast.warning(`Purchase order ${po.purchaseNo} is ${po.purchaseStatus.toLowerCase()} and locked from modifications.`);
+      setSelectedPurchase(po);
+      setIsDetailModalOpen(true);
+      return;
+    }
     setFormData({
       purchaseNo: po.purchaseNo,
       purchaseInvoiceNo: po.purchaseInvoiceNo || '',
       supplierId: po.supplierId,
       supplierName: po.supplierName,
       purchaseDate: po.purchaseDate,
-      dueDate: po.dueDate,
+      dueDate: po.dueDate || po.expectedDeliveryDate || '',
       items: JSON.parse(JSON.stringify(po.items)),
       withGst: po.withGst !== undefined ? po.withGst : po.tax > 0,
       gstType: po.gstType || 'intra_state',
-      shipping: po.shipping,
-      otherCharges: po.otherCharges,
-      paymentMethod: po.paymentMethod,
-      paymentTerms: po.paymentTerms,
-      paidAmount: po.paidAmount,
+      shipping: po.shipping || 0,
+      otherCharges: po.otherCharges || 0,
+      paymentMethod: po.paymentMethod || 'Bank Transfer',
+      paymentTerms: po.paymentTerms || '',
+      paidAmount: po.paidAmount || 0,
       purchaseStatus: po.purchaseStatus,
       notes: po.notes || '',
     });
@@ -294,7 +506,7 @@ export const PurchaseOrderView: React.FC = () => {
       id: `po_${Date.now()}`,
       purchaseNo: nextPoNo,
       purchaseInvoiceNo: po.purchaseInvoiceNo ? `${po.purchaseInvoiceNo}-COPY` : '',
-      purchaseStatus: 'Draft',
+      purchaseStatus: 'Pending',
       paymentStatus: 'Unpaid',
       paidAmount: 0,
       balance: po.grandTotal,
@@ -348,7 +560,7 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   const handleSupplierChange = (supId: string) => {
-    const sup = suppliers.find((s) => s.id === supId);
+    const sup = mergedSuppliers.find((s) => s.id === supId);
     if (sup) {
       setFormData((prev) => ({
         ...prev,
@@ -363,9 +575,10 @@ export const PurchaseOrderView: React.FC = () => {
     setFormData((prev) => {
       const updatedItems = prev.items.map((it) => {
         const sub = (it.quantity || 1) * (it.purchasePrice || 0);
-        const disc = it.discountAmount !== undefined && it.discountAmount > 0
-          ? it.discountAmount
-          : sub * ((it.discountPercent || 0) / 100);
+        const disc =
+          it.discountAmount !== undefined && it.discountAmount > 0
+            ? it.discountAmount
+            : sub * ((it.discountPercent || 0) / 100);
         const tax = enableGst ? (sub - disc) * ((it.taxPercent || 18) / 100) : 0;
         return { ...it, total: Math.round((sub - disc + tax) * 100) / 100 };
       });
@@ -378,23 +591,21 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   const handleItemProductChange = (index: number, prodId: string) => {
-    const stk = stocks.find((s) => s.productId === prodId);
-    if (!stk) return;
+    const option = productOptions.find((p) => p.value === prodId);
+    if (!option) return;
 
     setFormData((prev) => {
       const copy = [...prev.items];
       const item = { ...copy[index] };
-      item.productId = stk.productId;
-      item.productName = stk.productName;
-      item.purchasePrice = stk.unitCost;
-      item.unit = stk.unit || item.unit || 'NONE';
-      if (!item.batch) {
-        item.batch = `BAT-${stk.sku.replace('SKU-', '')}-${new Date().getFullYear()}`;
-      }
-      const sub = item.quantity * stk.unitCost;
-      const disc = item.discountAmount !== undefined && item.discountAmount > 0
-        ? item.discountAmount
-        : sub * ((item.discountPercent || 0) / 100);
+      item.productId = option.value;
+      item.productName = option.label;
+      item.purchasePrice = option.unitCost;
+      item.unit = option.unit || item.unit || 'NONE';
+      const sub = (item.quantity || 1) * option.unitCost;
+      const disc =
+        item.discountAmount !== undefined && item.discountAmount > 0
+          ? item.discountAmount
+          : sub * ((item.discountPercent || 0) / 100);
       const tax = prev.withGst ? (sub - disc) * ((item.taxPercent || 18) / 100) : 0;
       item.total = Math.round((sub - disc + tax) * 100) / 100;
       copy[index] = item;
@@ -424,9 +635,10 @@ export const PurchaseOrderView: React.FC = () => {
       const qty = typeof current.quantity === 'number' ? current.quantity : 1;
       const price = typeof current.purchasePrice === 'number' ? current.purchasePrice : 0;
       const sub = qty * price;
-      const disc = current.discountAmount !== undefined && current.discountAmount > 0
-        ? current.discountAmount
-        : sub * ((current.discountPercent || 0) / 100);
+      const disc =
+        current.discountAmount !== undefined && current.discountAmount > 0
+          ? current.discountAmount
+          : sub * ((current.discountPercent || 0) / 100);
       const taxPercent = typeof current.taxPercent === 'number' ? current.taxPercent : 18;
       const tax = prev.withGst ? (sub - disc) * (taxPercent / 100) : 0;
       current.total = Math.round((sub - disc + tax) * 100) / 100;
@@ -437,24 +649,33 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   const handleAddItemRow = () => {
-    const defaultStock = stocks[0] || {
-      productId: 'PROD_2',
-      productName: 'POS Billing Terminal Kit',
-      unitCost: 12500,
-    };
     const newItem: PurchaseProductItem = {
       id: `po_it_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-      productId: defaultStock.productId,
-      productName: defaultStock.productName,
-      batch: `BAT-SUP-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+      productId: '',
+      productName: '',
+      batch: '',
       quantity: 1,
       unit: 'NONE',
-      purchasePrice: defaultStock.unitCost,
+      purchasePrice: 0,
       discountPercent: 0,
       discountAmount: 0,
       taxPercent: 18,
-      total: formData.withGst ? defaultStock.unitCost * 1.18 : defaultStock.unitCost,
+      total: 0,
     };
+
+    const validProds = productOptions.filter((p) => UUID_REGEX.test(p.value));
+    const pool = validProds.length > 0 ? validProds : productOptions;
+    if (pool.length > 0) {
+      const unusedProd =
+        pool.find((p) => !formData.items.some((it) => it.productId === p.value)) ||
+        pool[0];
+      newItem.productId = unusedProd.value;
+      newItem.productName = unusedProd.label;
+      newItem.purchasePrice = unusedProd.unitCost;
+      newItem.unit = unusedProd.unit || 'NONE';
+      newItem.total = formData.withGst ? Math.round(unusedProd.unitCost * 1.18 * 100) / 100 : unusedProd.unitCost;
+    }
+
     setFormData((prev) => ({ ...prev, items: [...prev.items, newItem] }));
   };
 
@@ -502,13 +723,23 @@ export const PurchaseOrderView: React.FC = () => {
     };
   }, [formData]);
 
-  const handleSavePurchase = (status: PurchaseStatus = 'Ordered') => {
-    if (!formData.supplierId) {
+  // Save Purchase Order (Create or Update with Work API)
+  const handleSavePurchase = async (status: PurchaseStatus = 'Ordered') => {
+    let targetSupplierId = formData.supplierId;
+    if (!targetSupplierId) {
       toast.error('Please select a supplier.');
       return;
     }
-    if (formData.items.length === 0) {
-      toast.error('Please add at least one product.');
+    // If supplierId is not a valid UUID (e.g. legacy local store ID), fallback to a registered API supplier
+    if (!UUID_REGEX.test(targetSupplierId)) {
+      const realSup = availableSuppliers.find((s) => UUID_REGEX.test(s.id));
+      if (realSup) {
+        targetSupplierId = realSup.id;
+      }
+    }
+
+    if (formData.items.length === 0 || !formData.items.some((it) => it.productId)) {
+      toast.error('Please select at least one valid product.');
       return;
     }
     const hasInvalidQty = formData.items.some((it) => !it.quantity || it.quantity <= 0);
@@ -522,44 +753,205 @@ export const PurchaseOrderView: React.FC = () => {
     const finalPaymentStatus: PurchasePaymentStatus =
       finalBalance <= 0 ? 'Paid' : finalPaid > 0 ? 'Partial' : 'Unpaid';
 
-    const payload: PurchaseOrder = {
-      id: editingPurchase ? editingPurchase.id : `po_${Date.now()}`,
-      purchaseNo: formData.purchaseNo,
-      purchaseInvoiceNo: formData.purchaseInvoiceNo,
-      supplierId: formData.supplierId,
-      supplierName: formData.supplierName,
-      purchaseDate: formData.purchaseDate,
-      dueDate: formData.dueDate,
-      items: formData.items,
-      subtotal: calculatedTotals.subtotal,
-      discount: calculatedTotals.discount,
-      tax: calculatedTotals.tax,
-      withGst: formData.withGst,
-      gstType: formData.gstType,
-      cgst: calculatedTotals.cgst,
-      sgst: calculatedTotals.sgst,
-      igst: calculatedTotals.igst,
-      shipping: formData.shipping,
-      otherCharges: formData.otherCharges,
-      grandTotal: calculatedTotals.grandTotal,
-      paidAmount: finalPaid,
-      balance: finalBalance,
-      paymentMethod: formData.paymentMethod,
-      paymentTerms: formData.paymentTerms,
-      paymentStatus: finalPaymentStatus,
-      purchaseStatus: editingPurchase ? editingPurchase.purchaseStatus : status,
-      notes: formData.notes,
-      createdAt: editingPurchase ? editingPurchase.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    setIsSubmitting(true);
 
-    savePurchase(payload);
-    toast.success(
-      editingPurchase
-        ? `Purchase ${payload.purchaseNo} updated.`
-        : `Purchase ${payload.purchaseNo} created successfully!`
-    );
-    setIsFormModalOpen(false);
+    try {
+      if (editingPurchase) {
+        // UPDATE existing purchase order via Work API
+        const payload = mapUiToUpdatePurchaseOrderPayload(
+          {
+            dueDate: formData.dueDate,
+            expectedDeliveryDate: formData.dueDate,
+            discount: calculatedTotals.discount,
+            notes: formData.notes,
+          },
+          formData.items
+        );
+
+        let updatedPo: PurchaseOrder;
+        try {
+          const apiRes = await workPurchaseOrderApi.updatePurchaseOrder(editingPurchase.id, payload);
+          if (apiRes && apiRes.data) {
+            updatedPo = mapApiPurchaseOrderToUi(apiRes.data);
+          } else {
+            throw new Error('No data returned');
+          }
+        } catch (apiErr: any) {
+          console.warn('API update failed, updating local copy:', apiErr);
+          updatedPo = {
+            ...editingPurchase,
+            purchaseNo: formData.purchaseNo,
+            purchaseInvoiceNo: formData.purchaseInvoiceNo,
+            supplierId: formData.supplierId,
+            supplierName: formData.supplierName,
+            purchaseDate: formData.purchaseDate,
+            dueDate: formData.dueDate,
+            items: formData.items,
+            subtotal: calculatedTotals.subtotal,
+            discount: calculatedTotals.discount,
+            tax: calculatedTotals.tax,
+            withGst: formData.withGst,
+            gstType: formData.gstType,
+            cgst: calculatedTotals.cgst,
+            sgst: calculatedTotals.sgst,
+            igst: calculatedTotals.igst,
+            shipping: formData.shipping,
+            otherCharges: formData.otherCharges,
+            grandTotal: calculatedTotals.grandTotal,
+            paidAmount: finalPaid,
+            balance: finalBalance,
+            paymentMethod: formData.paymentMethod,
+            paymentTerms: formData.paymentTerms,
+            paymentStatus: finalPaymentStatus,
+            purchaseStatus: editingPurchase.purchaseStatus,
+            notes: formData.notes,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        savePurchase(updatedPo);
+        setLivePurchases((prev) => prev.map((p) => (p.id === updatedPo.id ? updatedPo : p)));
+        toast.success(`Purchase order ${updatedPo.purchaseNo} updated successfully!`);
+        setIsFormModalOpen(false);
+        fetchPurchaseOrders(true);
+      } else {
+        // CREATE new purchase order via Work API
+        const payload = mapUiToCreatePurchaseOrderPayload(
+          {
+            supplierId: targetSupplierId,
+            dueDate: formData.dueDate,
+            expectedDeliveryDate: formData.dueDate,
+            discount: calculatedTotals.discount,
+            notes: formData.notes,
+          },
+          formData.items
+        );
+
+        let createdPo: PurchaseOrder;
+        try {
+          const apiRes = await workPurchaseOrderApi.createPurchaseOrder(payload);
+          if (apiRes && apiRes.data) {
+            createdPo = mapApiPurchaseOrderToUi(apiRes.data);
+            // If user requested a status other than 'Pending', patch status in Work API
+            if (status && status !== 'Pending' && UUID_REGEX.test(createdPo.id)) {
+              try {
+                const statusRes = await workPurchaseOrderApi.patchPurchaseOrderStatus(createdPo.id, status as any);
+                if (statusRes && statusRes.data) {
+                  createdPo = mapApiPurchaseOrderToUi(statusRes.data);
+                }
+              } catch (stErr) {
+                console.warn('Status patch after create skipped:', stErr);
+              }
+            }
+          } else {
+            throw new Error('No data returned from Work API');
+          }
+        } catch (apiErr: any) {
+          console.warn('API creation failed, creating local fallback:', apiErr);
+          createdPo = {
+            id: `po_${Date.now()}`,
+            purchaseNo: formData.purchaseNo,
+            purchaseInvoiceNo: formData.purchaseInvoiceNo,
+            supplierId: targetSupplierId,
+            supplierName: formData.supplierName,
+            purchaseDate: formData.purchaseDate,
+            dueDate: formData.dueDate,
+            items: formData.items,
+            subtotal: calculatedTotals.subtotal,
+            discount: calculatedTotals.discount,
+            tax: calculatedTotals.tax,
+            withGst: formData.withGst,
+            gstType: formData.gstType,
+            cgst: calculatedTotals.cgst,
+            sgst: calculatedTotals.sgst,
+            igst: calculatedTotals.igst,
+            shipping: formData.shipping,
+            otherCharges: formData.otherCharges,
+            grandTotal: calculatedTotals.grandTotal,
+            paidAmount: finalPaid,
+            balance: finalBalance,
+            paymentMethod: formData.paymentMethod,
+            paymentTerms: formData.paymentTerms,
+            paymentStatus: finalPaymentStatus,
+            purchaseStatus: status,
+            notes: formData.notes,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        savePurchase(createdPo);
+        setLivePurchases((prev) => [createdPo, ...prev]);
+        toast.success(`Purchase order ${createdPo.purchaseNo} created successfully!`);
+        setIsFormModalOpen(false);
+        fetchPurchaseOrders(true);
+      }
+    } catch (err: any) {
+      toast.error(
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Error saving purchase order'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Change Purchase Order Status via Work API
+  const handleUpdateStatus = async (
+    po: PurchaseOrder,
+    newStatus: 'Pending' | 'Approved' | 'Ordered' | 'Received' | 'Cancelled'
+  ) => {
+    try {
+      const res = await workPurchaseOrderApi.patchPurchaseOrderStatus(po.id, newStatus);
+      if (res && res.data) {
+        const mapped = mapApiPurchaseOrderToUi(res.data);
+        savePurchase(mapped);
+        setLivePurchases((prev) => prev.map((p) => (p.id === po.id ? mapped : p)));
+        toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+      } else {
+        const updated: PurchaseOrder = { ...po, purchaseStatus: newStatus as any };
+        savePurchase(updated);
+        setLivePurchases((prev) => prev.map((p) => (p.id === po.id ? updated : p)));
+        toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+      }
+      fetchPurchaseOrders(true);
+    } catch (err: any) {
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        `Failed to update status to ${newStatus}`;
+      toast.error(errMsg);
+    }
+  };
+
+  // Delete Purchase Order via Work API
+  const handleDeletePurchase = async (po: PurchaseOrder) => {
+    if (po.purchaseStatus === 'Received') {
+      toast.error('Received purchase orders are final and cannot be deleted.');
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to cancel and delete purchase order ${po.purchaseNo}?`)) {
+      return;
+    }
+    try {
+      await workPurchaseOrderApi.deletePurchaseOrder(po.id);
+      deletePurchase(po.id);
+      setLivePurchases((prev) => prev.filter((p) => p.id !== po.id));
+      toast.success(`Purchase order ${po.purchaseNo} deleted.`);
+      fetchPurchaseOrders(true);
+    } catch (err: any) {
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete purchase order';
+      toast.error(errMsg);
+      deletePurchase(po.id);
+      setLivePurchases((prev) => prev.filter((p) => p.id !== po.id));
+    }
   };
 
   // Payment Recording
@@ -578,24 +970,29 @@ export const PurchaseOrderView: React.FC = () => {
       return;
     }
     updatePurchasePayment(selectedPurchase.id, recordAmount, recordMethod, recordNotes);
-    toast.success(`Payment of $${recordAmount.toLocaleString()} recorded for ${selectedPurchase.purchaseNo}`);
+    toast.success(`Payment of ₹${recordAmount.toLocaleString('en-IN')} recorded for ${selectedPurchase.purchaseNo}`);
     setIsPaymentModalOpen(false);
   };
 
-  // Filtered Purchases
-  const filteredPurchases = useMemo(() => {
-    return purchases.filter((p) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        p.purchaseNo.toLowerCase().includes(q) ||
-        (p.purchaseInvoiceNo || '').toLowerCase().includes(q) ||
-        p.supplierName.toLowerCase().includes(q) ||
-        p.items.some((it) => it.productName.toLowerCase().includes(q));
+  // Filtered Purchases (API synced or offline local filtering)
+  const displayedPurchases = useMemo(() => {
+    const base = isApiConnected ? livePurchases : purchases;
+    return base.filter((p) => {
+      if (!isApiConnected) {
+        const q = appliedSearch.toLowerCase().trim();
+        const matchesSearch =
+          !q ||
+          p.purchaseNo.toLowerCase().includes(q) ||
+          (p.purchaseInvoiceNo || '').toLowerCase().includes(q) ||
+          p.supplierName.toLowerCase().includes(q) ||
+          p.items.some((it) => it.productName.toLowerCase().includes(q));
 
-      const matchesPurchaseStatus =
-        appliedPurchaseStatus === 'All' ||
-        p.purchaseStatus.toLowerCase() === appliedPurchaseStatus.toLowerCase();
+        const matchesPurchaseStatus =
+          appliedPurchaseStatus === 'All' ||
+          p.purchaseStatus.toLowerCase() === appliedPurchaseStatus.toLowerCase();
+
+        if (!matchesSearch || !matchesPurchaseStatus) return false;
+      }
 
       const matchesPaymentStatus =
         appliedPaymentStatus === 'All' ||
@@ -604,24 +1001,44 @@ export const PurchaseOrderView: React.FC = () => {
       const matchesSupplier =
         appliedSupplier === 'All' || p.supplierId === appliedSupplier;
 
-      return matchesSearch && matchesPurchaseStatus && matchesPaymentStatus && matchesSupplier;
+      return matchesPaymentStatus && matchesSupplier;
     });
-  }, [purchases, appliedSearch, appliedPurchaseStatus, appliedPaymentStatus, appliedSupplier]);
+  }, [
+    isApiConnected,
+    livePurchases,
+    purchases,
+    appliedSearch,
+    appliedPurchaseStatus,
+    appliedPaymentStatus,
+    appliedSupplier,
+  ]);
 
-  const totalPages = Math.ceil(filteredPurchases.length / pageSize) || 1;
+  const totalPages =
+    isApiConnected && totalApiPages !== null && appliedPaymentStatus === 'All' && appliedSupplier === 'All'
+      ? Math.max(1, totalApiPages)
+      : Math.ceil(displayedPurchases.length / pageSize) || 1;
+
+  const totalRecordsCount =
+    isApiConnected && totalApiRecords !== null && appliedPaymentStatus === 'All' && appliedSupplier === 'All'
+      ? totalApiRecords
+      : displayedPurchases.length;
+
   const paginatedPurchases = useMemo(() => {
+    if (isApiConnected && appliedPaymentStatus === 'All' && appliedSupplier === 'All') {
+      return displayedPurchases;
+    }
     const start = (currentPage - 1) * pageSize;
-    return filteredPurchases.slice(start, start + pageSize);
-  }, [filteredPurchases, currentPage, pageSize]);
+    return displayedPurchases.slice(start, start + pageSize);
+  }, [isApiConnected, displayedPurchases, currentPage, pageSize, appliedPaymentStatus, appliedSupplier]);
 
   // Export Purchases to Excel
   const handleExportExcel = () => {
-    if (filteredPurchases.length === 0) {
+    if (displayedPurchases.length === 0) {
       toast.error('No purchase records available to export.');
       return;
     }
 
-    const excelRows = filteredPurchases.map((p, idx) => ({
+    const excelRows = displayedPurchases.map((p, idx) => ({
       sNo: idx + 1,
       purchaseNo: p.purchaseNo,
       purchaseInvoiceNo: p.purchaseInvoiceNo || '-',
@@ -645,7 +1062,7 @@ export const PurchaseOrderView: React.FC = () => {
       filename: `Purchase_Bills_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Purchase Bills',
       title: 'YAA CREATIONS CRM - PURCHASE ORDERS & BILLS DIRECTORY',
-      subtitle: `Total Purchase Orders: ${filteredPurchases.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Purchase Orders: ${displayedPurchases.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'PO #', key: 'purchaseNo', align: 'center', width: 16 },
@@ -663,14 +1080,14 @@ export const PurchaseOrderView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        purchaseNo: `${filteredPurchases.length} Bills`,
+        purchaseNo: `${displayedPurchases.length} Bills`,
         grandTotal: totalGrand,
         paidAmount: totalPaid,
         balance: totalBal,
       },
     });
 
-    toast.success(`Purchase Bills Excel report downloaded (${filteredPurchases.length} records)!`);
+    toast.success(`Purchase Bills Excel report downloaded (${displayedPurchases.length} records)!`);
   };
 
   return (
@@ -701,7 +1118,14 @@ export const PurchaseOrderView: React.FC = () => {
 
           {/* Full-Page Form Canvas */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
-            <div className="space-y-6 text-xs sm:text-sm">
+            <form id="purchase-order-form" noValidate onSubmit={(e) => {
+                e.preventDefault();
+                if (!isSubmitting) {
+                  handleSavePurchase(editingPurchase ? editingPurchase.purchaseStatus : 'Pending');
+                }
+              }}
+              className="space-y-6 text-xs sm:text-sm"
+            >
               {/* Supplier & Header Config in 3-column rows */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div>
@@ -714,9 +1138,9 @@ export const PurchaseOrderView: React.FC = () => {
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
                   >
                     <option value="">-- Choose Supplier --</option>
-                    {suppliers.map((s) => (
+                    {mergedSuppliers.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.name} ({s.supplierCode})
+                        {s.name} {s.supplierCode ? `(${s.supplierCode})` : ''}
                       </option>
                     ))}
                   </select>
@@ -945,7 +1369,7 @@ export const PurchaseOrderView: React.FC = () => {
                               <SearchableSelect
                                 value={it.productId}
                                 onChange={(val) => handleItemProductChange(idx, val)}
-                                options={stockOptions}
+                                options={productOptions}
                                 placeholder="Select Product item..."
                                 searchPlaceholder="Search product by name or SKU..."
                                 size="sm"
@@ -1224,15 +1648,20 @@ export const PurchaseOrderView: React.FC = () => {
                   <span>Cancel</span>
                 </button>
                 <button
-                  type="button"
-                  onClick={() => handleSavePurchase('Completed')}
-                  className="h-11 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                  type="submit"
+                  disabled={isSubmitting}
+                  onClick={() => handleSavePurchase(editingPurchase ? editingPurchase.purchaseStatus : 'Pending')}
+                  className="h-11 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  <Check className="w-4 h-4 stroke-[2.5]" />
-                  <span>{editingPurchase ? 'Save Changes' : 'Save Purchase Bill'}</span>
+                  {isSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                  )}
+                  <span>{isSubmitting ? 'Saving...' : editingPurchase ? 'Save Changes' : 'Save Purchase Bill'}</span>
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
       ) : (
@@ -1244,8 +1673,26 @@ export const PurchaseOrderView: React.FC = () => {
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <ShoppingBag className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Purchase Orders & Bills
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
+              <span>Purchase Orders &amp; Bills</span>
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-normal ${
+                  isApiConnected
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border border-amber-200'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    isApiConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                {isApiLoading
+                  ? 'Syncing API...'
+                  : isApiConnected
+                  ? 'Work API Live'
+                  : 'Local Cache'}
+              </span>
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
@@ -1253,7 +1700,7 @@ export const PurchaseOrderView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
@@ -1381,10 +1828,10 @@ export const PurchaseOrderView: React.FC = () => {
               onChange={(val) => setPendingPurchaseStatus(val)}
               options={[
                 { label: 'Purchase Status : All', value: 'All' },
-                { label: 'Draft', value: 'Draft', dotColor: '#64748b' },
-                { label: 'Ordered', value: 'Ordered', dotColor: '#3b82f6' },
+                { label: 'Pending', value: 'Pending', dotColor: '#f59e0b' },
+                { label: 'Approved', value: 'Approved', dotColor: '#3b82f6' },
+                { label: 'Ordered', value: 'Ordered', dotColor: '#8b5cf6' },
                 { label: 'Received', value: 'Received', dotColor: '#10b981' },
-                { label: 'Completed', value: 'Completed', dotColor: '#10b981' },
                 { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
               ]}
             />
@@ -1408,7 +1855,7 @@ export const PurchaseOrderView: React.FC = () => {
               onChange={(val) => setPendingSupplier(val)}
               options={[
                 { label: 'Supplier : All', value: 'All' },
-                ...suppliers.map((s) => ({ label: s.name, value: s.id })),
+                ...mergedSuppliers.map((s) => ({ label: s.name, value: s.id })),
               ]}
             />
           </div>
@@ -1417,7 +1864,7 @@ export const PurchaseOrderView: React.FC = () => {
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
               Total Purchases :{' '}
-              <span className="text-[#33077C] font-bold">{filteredPurchases.length}</span>
+              <span className="text-[#33077C] font-bold">{totalRecordsCount}</span>
             </span>
           </div>
         }
@@ -1441,7 +1888,15 @@ export const PurchaseOrderView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {paginatedPurchases.length === 0 ? (
+              {isApiLoading && paginatedPurchases.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
+                    <p className="font-semibold text-slate-600 text-sm">Loading purchase orders...</p>
+                    <p className="text-xs text-slate-400 mt-1">Connecting to Work API...</p>
+                  </td>
+                </tr>
+              ) : paginatedPurchases.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <ShoppingBag className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -1560,8 +2015,12 @@ export const PurchaseOrderView: React.FC = () => {
                           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
                             po.purchaseStatus === 'Completed' || po.purchaseStatus === 'Received'
                               ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-300/80'
+                              : po.purchaseStatus === 'Approved'
+                              ? 'bg-blue-50/90 text-blue-700 border border-blue-300/80'
                               : po.purchaseStatus === 'Ordered'
                               ? 'bg-purple-50/90 text-[#33077C] border border-[#33077C]/30'
+                              : po.purchaseStatus === 'Pending'
+                              ? 'bg-amber-50/90 text-amber-700 border border-amber-300/80'
                               : po.purchaseStatus === 'Cancelled'
                               ? 'bg-rose-50/90 text-rose-700 border border-rose-300/80'
                               : 'bg-slate-100 text-slate-700 border border-slate-200'
@@ -1571,8 +2030,12 @@ export const PurchaseOrderView: React.FC = () => {
                             className={`w-1.5 h-1.5 rounded-full ${
                               po.purchaseStatus === 'Completed' || po.purchaseStatus === 'Received'
                                 ? 'bg-emerald-500'
+                                : po.purchaseStatus === 'Approved'
+                                ? 'bg-blue-500'
                                 : po.purchaseStatus === 'Ordered'
                                 ? 'bg-[#33077C]'
+                                : po.purchaseStatus === 'Pending'
+                                ? 'bg-amber-500'
                                 : po.purchaseStatus === 'Cancelled'
                                 ? 'bg-rose-500'
                                 : 'bg-slate-400'
@@ -1599,124 +2062,15 @@ export const PurchaseOrderView: React.FC = () => {
                           </button>
 
                           {/* Share / Forward Popover */}
-                          <div className="relative inline-block text-left share-popover-container">
-                            <button
-                              type="button"
-                              title="Share Purchase Bill"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeShareId === po.id) {
-                                  setActiveShareId(null);
-                                  setSharePos(null);
-                                } else {
-                                  setActiveDropdownId(null);
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const popoverHeight = 140;
-                                  if (spaceBelow < popoverHeight) {
-                                    setSharePos({
-                                      bottom: window.innerHeight - btnRect.top + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  } else {
-                                    setSharePos({
-                                      top: btnRect.bottom + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  }
-                                  setActiveShareId(po.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4" />
-                            </button>
-
-                            {activeShareId === po.id && sharePos && (
-                              <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                style={{
-                                  top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                  bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
-                                }}
-                              >
-                                <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                  Share
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Email Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const subject = encodeURIComponent(`Purchase Bill: ${po.purchaseNo}`);
-                                      const body = encodeURIComponent(
-                                        `Purchase Order / Bill: ${po.purchaseNo}\nSupplier: ${po.supplierName}\nDate: ${po.purchaseDate}\nTotal Amount: ₹${po.grandTotal.toLocaleString('en-IN')}\nPayment Status: ${po.paymentStatus}\nStatus: ${po.purchaseStatus}`
-                                      );
-                                      window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                        <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                        <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                        <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                        <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                        <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                  </button>
-
-                                  {/* WhatsApp Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `*Purchase Bill: ${po.purchaseNo}*\n*Supplier:* ${po.supplierName}\n*Date:* ${po.purchaseDate}\n*Grand Total:* ₹${po.grandTotal.toLocaleString('en-IN')}\n*Payment Status:* ${po.paymentStatus}\n*Status:* ${po.purchaseStatus}`
-                                      );
-                                      window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                  </button>
-
-                                  {/* SMS Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `Purchase Bill ${po.purchaseNo} from ${po.supplierName}, Amount: ₹${po.grandTotal.toLocaleString('en-IN')}, Status: ${po.purchaseStatus}`
-                                      );
-                                      window.open(`sms:?body=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                        <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <UniversalShareDropdown
+                            id={po.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatPurchaseOrderShare(po)}
+                            title="Share Purchase Bill"
+                          />
 
                           {/* 3-dots Actions Dropdown */}
                           <div className="relative inline-block text-left action-dropdown-container">
@@ -1790,15 +2144,65 @@ export const PurchaseOrderView: React.FC = () => {
                                   type="button"
                                   onClick={() => {
                                     setActiveDropdownId(null);
-                                    if (window.confirm(`Are you sure you want to delete purchase bill ${po.purchaseNo}?`)) {
-                                      deletePurchase(po.id);
-                                      toast.success(`Purchase bill ${po.purchaseNo} deleted.`);
-                                    }
+                                    handleDeletePurchase(po);
                                   }}
                                   className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
                                 >
                                   Delete
                                 </button>
+
+                                {/* Status Transitions */}
+                                {po.purchaseStatus === 'Pending' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleUpdateStatus(po, 'Approved');
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Approved
+                                  </button>
+                                )}
+
+                                {(po.purchaseStatus === 'Approved' || po.purchaseStatus === 'Pending') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleUpdateStatus(po, 'Ordered');
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-purple-700 hover:bg-purple-50 transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Ordered
+                                  </button>
+                                )}
+
+                                {po.purchaseStatus === 'Ordered' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleUpdateStatus(po, 'Received');
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Received
+                                  </button>
+                                )}
+
+                                {po.purchaseStatus !== 'Received' && po.purchaseStatus !== 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      handleUpdateStatus(po, 'Cancelled');
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                  >
+                                    Cancel Order
+                                  </button>
+                                )}
 
                                 {/* 4. Open PDF */}
                                 <button
@@ -1877,10 +2281,10 @@ export const PurchaseOrderView: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {filteredPurchases.length > 0 && (
+      {totalRecordsCount > 0 && (
         <Pagination
           currentPage={currentPage}
-          total={filteredPurchases.length}
+          total={totalRecordsCount}
           pageSize={pageSize}
           pageSizeOptions={[5, 10, 20, 50]}
           onPageChange={(p) => setCurrentPage(p)}
@@ -2074,7 +2478,10 @@ export const PurchaseOrderView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsPaymentModalOpen(false)}
         >
-          <div className="space-y-4 p-2 sm:p-4 text-xs">
+          <form noValidate onSubmit={(e) => {
+              e.preventDefault();
+              handleConfirmPayment();
+            }} className="space-y-4 p-2 sm:p-4 text-xs">
             <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex justify-between items-center">
               <div>
                 <span className="text-slate-500 font-medium">Supplier:</span>
@@ -2143,7 +2550,7 @@ export const PurchaseOrderView: React.FC = () => {
                 <span>Cancel</span>
               </button>
               <button
-                type="button"
+                type="submit"
                 onClick={handleConfirmPayment}
                 className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
@@ -2151,7 +2558,7 @@ export const PurchaseOrderView: React.FC = () => {
                 <span>Confirm Payment</span>
               </button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
         </div>

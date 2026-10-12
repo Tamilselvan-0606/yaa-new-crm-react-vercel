@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
   X,
   CheckCircle2,
-  Check,
   Paperclip,
   Upload,
-  FileText,
   Building2,
 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { CustomSelect } from '../common/CustomSelect';
+import { FormError } from '../common/FormError';
 import { SavedInvoice, InvoicePaymentDetails } from '../../store/useInvoiceStore';
+import { RecordPaymentSchema, RecordPaymentFormData } from '../../validations';
 
 interface RecordPaymentModalProps {
   isOpen: boolean;
@@ -29,64 +31,92 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   invoice,
   onConfirmPayment,
 }) => {
-  const [amountPaid, setAmountPaid] = useState<number>(0);
-  const [taxDeductedType, setTaxDeductedType] = useState<'none' | 'gst' | 'income_tax' | 'both'>('none');
-  const [gstTdsPercentage, setGstTdsPercentage] = useState<number | ''>('');
-  const [incomeTaxTdsPercentage, setIncomeTaxTdsPercentage] = useState<number | ''>('');
-  const [bankDeductions, setBankDeductions] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<string>('');
-  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [referenceId, setReferenceId] = useState<string>('');
-  const [notes, setNotes] = useState<string>('');
   const [attachments, setAttachments] = useState<
     Array<{ id: string; name: string; size: string; type?: string; dataUrl?: string }>
   >([]);
+
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<RecordPaymentFormData>({
+    resolver: zodResolver(RecordPaymentSchema),
+    defaultValues: {
+      amountPaid: 0,
+      paymentDate: new Date().toISOString().split('T')[0],
+      paymentMode: '',
+      taxDeductedType: 'none',
+      gstTdsPercentage: '',
+      incomeTaxTdsPercentage: '',
+      bankDeductions: 0,
+      referenceId: '',
+      notes: '',
+    },
+  });
+
+  const amountPaid = watch('amountPaid') || 0;
+  const taxDeductedType = watch('taxDeductedType') || 'none';
+  const gstTdsPercentage = watch('gstTdsPercentage');
+  const incomeTaxTdsPercentage = watch('incomeTaxTdsPercentage');
+  const bankDeductions = watch('bankDeductions') || 0;
 
   // Initialize or reset when modal opens or invoice changes
   useEffect(() => {
     if (isOpen && invoice) {
       const amt = invoice.paymentDetails?.amountPaid || invoice.grandTotal || 0;
-      setAmountPaid(amt);
-      
       const hasTds = (invoice.paymentDetails?.tdsDeduction || 0) > 0;
       const currentType = (invoice.paymentDetails?.taxDeductedType as any) || (hasTds ? 'income_tax' : 'none');
-      setTaxDeductedType(currentType);
 
+      let gstPct: any = '';
+      let itPct: any = '';
       if (currentType === 'gst') {
-        setGstTdsPercentage(invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : ''));
-        setIncomeTaxTdsPercentage('');
+        gstPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : '');
       } else if (currentType === 'income_tax') {
-        setIncomeTaxTdsPercentage(invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : ''));
-        setGstTdsPercentage('');
+        itPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : '');
       } else if (currentType === 'both') {
-        const gstPct = (invoice.paymentDetails as any)?.gstTdsPercentage ?? '';
-        const itPct = (invoice.paymentDetails as any)?.incomeTaxTdsPercentage ?? '';
-        setGstTdsPercentage(gstPct);
-        setIncomeTaxTdsPercentage(itPct);
-      } else {
-        setGstTdsPercentage('');
-        setIncomeTaxTdsPercentage('');
+        gstPct = (invoice.paymentDetails as any)?.gstTdsPercentage ?? '';
+        itPct = (invoice.paymentDetails as any)?.incomeTaxTdsPercentage ?? '';
       }
 
-      setBankDeductions(invoice.paymentDetails?.bankDeductions || 0);
-      // Always reset to 'Select Payment Mode' on open
-      setPaymentMode('');
-      setPaymentDate(invoice.paymentDetails?.paymentDate || new Date().toISOString().split('T')[0]);
-      setReferenceId(invoice.paymentDetails?.referenceId || '');
-      setNotes(invoice.paymentDetails?.notes || '');
+      reset({
+        amountPaid: amt,
+        taxDeductedType: currentType,
+        gstTdsPercentage: gstPct,
+        incomeTaxTdsPercentage: itPct,
+        bankDeductions: invoice.paymentDetails?.bankDeductions || 0,
+        paymentMode: '',
+        paymentDate: invoice.paymentDetails?.paymentDate || new Date().toISOString().split('T')[0],
+        referenceId: invoice.paymentDetails?.referenceId || '',
+        notes: invoice.paymentDetails?.notes || '',
+      });
+
       setAttachments(invoice.paymentDetails?.attachments || []);
     } else if (!isOpen) {
-      setPaymentMode('');
+      reset({
+        amountPaid: 0,
+        paymentDate: new Date().toISOString().split('T')[0],
+        paymentMode: '',
+        taxDeductedType: 'none',
+        gstTdsPercentage: '',
+        incomeTaxTdsPercentage: '',
+        bankDeductions: 0,
+        referenceId: '',
+        notes: '',
+      });
     }
-  }, [invoice, isOpen]);
+  }, [invoice, isOpen, reset]);
 
   if (!isOpen || !invoice) return null;
 
   // Compute TDS Deduction based on percentage only
   const gstPctNum = taxDeductedType === 'gst' || taxDeductedType === 'both' ? (Number(gstTdsPercentage) || 0) : 0;
   const itPctNum = taxDeductedType === 'income_tax' || taxDeductedType === 'both' ? (Number(incomeTaxTdsPercentage) || 0) : 0;
-  const gstTdsAmount = Math.round((amountPaid || 0) * (gstPctNum / 100) * 100) / 100;
-  const itTdsAmount = Math.round((amountPaid || 0) * (itPctNum / 100) * 100) / 100;
+  const gstTdsAmount = Math.round((Number(amountPaid) || 0) * (gstPctNum / 100) * 100) / 100;
+  const itTdsAmount = Math.round((Number(amountPaid) || 0) * (itPctNum / 100) * 100) / 100;
   const tdsDeduction = gstTdsAmount + itTdsAmount;
 
   // Net Amount Received Calculation
@@ -128,37 +158,36 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const isTaxDeducted = taxDeductedType !== 'none';
-    const gstPct = typeof gstTdsPercentage === 'number' ? gstTdsPercentage : parseFloat(String(gstTdsPercentage)) || 0;
-    const itPct = typeof incomeTaxTdsPercentage === 'number' ? incomeTaxTdsPercentage : parseFloat(String(incomeTaxTdsPercentage)) || 0;
+  const onSubmit = (data: RecordPaymentFormData) => {
+    const isTaxDeducted = data.taxDeductedType !== 'none';
+    const gstPct = typeof data.gstTdsPercentage === 'number' ? data.gstTdsPercentage : parseFloat(String(data.gstTdsPercentage)) || 0;
+    const itPct = typeof data.incomeTaxTdsPercentage === 'number' ? data.incomeTaxTdsPercentage : parseFloat(String(data.incomeTaxTdsPercentage)) || 0;
     
     let sectionLabel: string | undefined = undefined;
-    if (taxDeductedType === 'both') {
+    if (data.taxDeductedType === 'both') {
       sectionLabel = `TDS (GST ${gstPct}% + IT ${itPct}%)`;
-    } else if (taxDeductedType === 'gst' && gstPct > 0) {
+    } else if (data.taxDeductedType === 'gst' && gstPct > 0) {
       sectionLabel = `TDS/TCS (GST ${gstPct}%)`;
-    } else if (taxDeductedType === 'income_tax' && itPct > 0) {
+    } else if (data.taxDeductedType === 'income_tax' && itPct > 0) {
       sectionLabel = `TDS (Income Tax ${itPct}%)`;
     }
 
-    const primaryPct = taxDeductedType === 'both' ? (gstPct + itPct) : taxDeductedType === 'gst' ? gstPct : itPct;
+    const primaryPct = data.taxDeductedType === 'both' ? (gstPct + itPct) : data.taxDeductedType === 'gst' ? gstPct : itPct;
 
     const paymentDetails: InvoicePaymentDetails = {
-      amountPaid: Number(amountPaid) || 0,
-      taxDeductedType,
+      amountPaid: Number(data.amountPaid) || 0,
+      taxDeductedType: data.taxDeductedType,
       tdsSection: sectionLabel,
       tdsPercentage: isTaxDeducted && primaryPct > 0 ? primaryPct : undefined,
-      gstTdsPercentage: (taxDeductedType === 'gst' || taxDeductedType === 'both') && gstPct > 0 ? gstPct : undefined,
-      incomeTaxTdsPercentage: (taxDeductedType === 'income_tax' || taxDeductedType === 'both') && itPct > 0 ? itPct : undefined,
+      gstTdsPercentage: (data.taxDeductedType === 'gst' || data.taxDeductedType === 'both') && gstPct > 0 ? gstPct : undefined,
+      incomeTaxTdsPercentage: (data.taxDeductedType === 'income_tax' || data.taxDeductedType === 'both') && itPct > 0 ? itPct : undefined,
       tdsDeduction: isTaxDeducted ? tdsDeduction : 0,
-      bankDeductions: Number(bankDeductions) || 0,
+      bankDeductions: Number(data.bankDeductions) || 0,
       netReceived,
-      paymentMode,
-      paymentDate,
-      referenceId: referenceId.trim() || undefined,
-      notes: notes.trim() || undefined,
+      paymentMode: data.paymentMode,
+      paymentDate: data.paymentDate,
+      referenceId: (data.referenceId || '').trim() || undefined,
+      notes: (data.notes || '').trim() || undefined,
       attachments,
       recordedAt: new Date().toISOString(),
     };
@@ -176,7 +205,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       showBackIcon={true}
       hideCloseButton={true}
     >
-      <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-5 sm:space-y-6">
         {/* Highlighted Invoice Summary Card */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-gradient-to-r from-slate-50 via-[#33077C]/[0.02] to-indigo-50/30 border border-slate-200/90 rounded-[4px] shadow-2xs">
           <div className="min-w-0">
@@ -212,15 +241,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
-                required
-                value={amountPaid || ''}
-                onChange={(e) => {
-                  const val = parseFloat(e.target.value) || 0;
-                  setAmountPaid(val);
-                }}
+                {...register('amountPaid', { valueAsNumber: true })}
                 className={`${inputClass} pl-7 font-semibold text-slate-800`}
               />
             </div>
+            <FormError message={errors.amountPaid?.message} />
           </div>
 
           {/* Field 2: Payment Date */}
@@ -230,11 +255,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             </label>
             <input
               type="date"
-              required
-              value={paymentDate}
-              onChange={(e) => setPaymentDate(e.target.value)}
+              {...register('paymentDate')}
               className={inputClass}
             />
+            <FormError message={errors.paymentDate?.message} />
           </div>
 
           {/* Field 3: Payment Mode */}
@@ -242,28 +266,28 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <label className={labelClass}>
               Payment Mode <span className="text-rose-500 font-bold">*</span>
             </label>
-            <CustomSelect
-              value={paymentMode}
-              onChange={(val) => setPaymentMode(val)}
-              placeholder="Select Payment Mode"
-              activeColor="brand"
-              options={[
-                'Bank Transfer (NEFT / RTGS)',
-                'UPI / QR Code',
-                'Credit / Debit Card',
-                'Cheque / Demand Draft',
-                'Cash',
-                'Online Gateway',
-                'Other',
-              ]}
+            <Controller
+              control={control}
+              name="paymentMode"
+              render={({ field }) => (
+                <CustomSelect
+                  value={field.value}
+                  onChange={(val) => field.onChange(val)}
+                  placeholder="Select Payment Mode"
+                  activeColor="brand"
+                  options={[
+                    'Bank Transfer (NEFT / RTGS)',
+                    'UPI / QR Code',
+                    'Credit / Debit Card',
+                    'Cheque / Demand Draft',
+                    'Cash',
+                    'Online Gateway',
+                    'Other',
+                  ]}
+                />
+              )}
             />
-            <input
-              type="text"
-              className="sr-only"
-              required
-              value={paymentMode}
-              onChange={() => {}}
-            />
+            <FormError message={errors.paymentMode?.message} />
           </div>
 
           {/* Field 4: Bank Charges / Deductions */}
@@ -275,11 +299,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
-                value={bankDeductions || ''}
-                onChange={(e) => setBankDeductions(parseFloat(e.target.value) || 0)}
+                {...register('bankDeductions', { valueAsNumber: true })}
                 className={`${inputClass} pl-7`}
               />
             </div>
+            <FormError message={errors.bankDeductions?.message} />
           </div>
 
           {/* Field 5: Reference / Transaction # */}
@@ -287,10 +311,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <label className={labelClass}>Reference / Transaction #</label>
             <input
               type="text"
-              value={referenceId}
-              onChange={(e) => setReferenceId(e.target.value)}
+              {...register('referenceId')}
               className={inputClass}
             />
+            <FormError message={errors.referenceId?.message} />
           </div>
 
           {/* Field 6: Attachments */}
@@ -364,14 +388,14 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                     key={opt.id}
                     type="button"
                     onClick={() => {
-                      setTaxDeductedType(opt.id as any);
+                      setValue('taxDeductedType', opt.id as any);
                       if (opt.id === 'none') {
-                        setGstTdsPercentage('');
-                        setIncomeTaxTdsPercentage('');
+                        setValue('gstTdsPercentage', '');
+                        setValue('incomeTaxTdsPercentage', '');
                       } else if (opt.id === 'gst') {
-                        setIncomeTaxTdsPercentage('');
+                        setValue('incomeTaxTdsPercentage', '');
                       } else if (opt.id === 'income_tax') {
-                        setGstTdsPercentage('');
+                        setValue('gstTdsPercentage', '');
                       }
                     }}
                     className={`h-10 px-4 rounded-[4px] text-xs sm:text-[13px] font-semibold transition-all cursor-pointer flex items-center gap-2 ${
@@ -380,12 +404,13 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                         : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
                     }`}
                   >
-                    {isSelected && <Check className="w-4 h-4 stroke-[3] text-white" />}
+                    {isSelected && <span className="w-2 h-2 rounded-full bg-white mr-1" />}
                     <span>{opt.label}</span>
                   </button>
                 );
               })}
             </div>
+            <FormError message={errors.taxDeductedType?.message} />
           </div>
 
           {/* Separate Percentage Inputs */}
@@ -409,16 +434,12 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                       step="0.01"
                       min="0"
                       max="100"
-                      required
-                      value={gstTdsPercentage !== '' ? gstTdsPercentage : ''}
-                      onChange={(e) => {
-                        const val = e.target.value === '' ? '' : parseFloat(e.target.value);
-                        setGstTdsPercentage(val);
-                      }}
+                      {...register('gstTdsPercentage')}
                       className={`${inputClass} pr-8`}
                     />
                     <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-xs">%</span>
                   </div>
+                  <FormError message={errors.gstTdsPercentage?.message} />
                 </div>
               )}
 
@@ -440,16 +461,12 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                       step="0.01"
                       min="0"
                       max="100"
-                      required
-                      value={incomeTaxTdsPercentage !== '' ? incomeTaxTdsPercentage : ''}
-                      onChange={(e) => {
-                        const val = e.target.value === '' ? '' : parseFloat(e.target.value);
-                        setIncomeTaxTdsPercentage(val);
-                      }}
+                      {...register('incomeTaxTdsPercentage')}
                       className={`${inputClass} pr-8`}
                     />
                     <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-xs">%</span>
                   </div>
+                  <FormError message={errors.incomeTaxTdsPercentage?.message} />
                 </div>
               )}
             </div>
@@ -476,13 +493,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
           <label className={labelClass}>Payment Notes & Remarks</label>
           <textarea
             rows={2}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            {...register('notes')}
             className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-[4px] text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
           />
+          <FormError message={errors.notes?.message} />
         </div>
-
-
 
         {/* Modal Footer */}
         <div className="pt-4 mt-2 border-t border-slate-100 flex items-center justify-end gap-3">

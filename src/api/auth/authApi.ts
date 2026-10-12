@@ -10,8 +10,24 @@ import {
   ApiVerifyTokenResponse,
   ApiMeResponse,
   ApiEmailVerificationResponse,
+  ApiVerifyEmailRequest,
+  ApiVerifyEmailResponse,
   ApiChangePasswordRequest,
 } from './authTypes';
+
+/**
+ * Helper to extract access token safely from various response structures
+ */
+export const extractAccessToken = (response: any): string | null => {
+  if (!response) return null;
+  return (
+    response.accessToken ||
+    response.data?.token ||
+    response.data?.accessToken ||
+    response.token ||
+    null
+  );
+};
 
 /**
  * Dedicated Auth API client targeting /api/v1/auth
@@ -26,10 +42,27 @@ export const authHttpClient: AxiosInstance = axios.create({
 
 authHttpClient.interceptors.request.use(
   (config) => {
-    const token = getStoredToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    // Endpoints that use HttpOnly cookie or unauthenticated payload (do not send expired token)
+    const isCookieOrPublicAuth =
+      config.url?.includes('/refresh') ||
+      config.url?.includes('/login') ||
+      config.url?.includes('/forgot-password') ||
+      config.url?.includes('/reset-password');
+
+    if (!isCookieOrPublicAuth) {
+      const token = getStoredToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } else {
+      delete config.headers.Authorization;
     }
+
+    if (config.url?.includes('/refresh')) {
+      config.headers['X-CSRF-Protection'] = '1';
+      config.headers['accept'] = '*/*';
+    }
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -68,7 +101,7 @@ export const authApi = {
     return res.data;
   },
 
-  // POST /refresh
+  // POST /refresh - Rotates session and issues new access token via yaa_crm_refresh HttpOnly cookie
   refreshToken: async (): Promise<ApiRefreshTokenResponse> => {
     const res = await authHttpClient.post<ApiRefreshTokenResponse>(
       '/refresh',
@@ -76,6 +109,7 @@ export const authApi = {
       {
         headers: {
           'X-CSRF-Protection': '1',
+          'accept': '*/*',
         },
       }
     );
@@ -118,6 +152,13 @@ export const authApi = {
   // POST /request-email-verification
   requestEmailVerification: async (): Promise<ApiEmailVerificationResponse> => {
     const res = await authHttpClient.post<ApiEmailVerificationResponse>('/request-email-verification');
+    return res.data;
+  },
+
+  // POST /verify-email
+  verifyEmail: async (payload: ApiVerifyEmailRequest | string): Promise<ApiVerifyEmailResponse> => {
+    const body = typeof payload === 'string' ? { token: payload } : payload;
+    const res = await authHttpClient.post<ApiVerifyEmailResponse>('/verify-email', body);
     return res.data;
   },
 

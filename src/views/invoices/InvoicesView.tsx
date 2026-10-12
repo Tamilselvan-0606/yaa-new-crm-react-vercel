@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   PlusCircle,
   Pencil,
@@ -38,25 +38,187 @@ import { sendWhatsAppDocument } from '../../services/whatsappGateway';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Pagination } from '../../components/common/Pagination';
+import {
+  proformaInvoiceApi,
+  ProformaInvoiceApiItem,
+  ProformaInvoiceStatus,
+  UpdateProformaRequest,
+  invoiceApi,
+  InvoiceApiItem,
+  InvoiceStatus,
+  UpdateInvoiceRequest,
+  RecordPaymentRequest,
+} from '../../api';
 
 interface InvoicesViewProps {
   isProforma?: boolean;
 }
 
+const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice => {
+  return {
+    id: api.id,
+    invoiceNumber: api.proformaNumber || 'PI-0000',
+    invoiceDate: api.invoiceDate ? api.invoiceDate.split('T')[0] : '',
+    dueDate: api.dueDate ? api.dueDate.split('T')[0] : '',
+    referenceNumbers: api.sourceQuoteId ? [`QUOTE-${api.sourceQuoteId.slice(0, 8)}`] : ['REF-PI'],
+    description: api.notes || 'Proforma Invoice',
+    status: (api.status as any) || 'Draft',
+    client: {
+      id: api.customerId || api.organizationId,
+      company: api.customerName || 'Client Organization',
+      name: api.customerName || 'Customer',
+      email: api.customerEmail || '',
+      phone: api.customerPhone || '',
+      gstin: api.gstin || '33AAAAA0000A1Z5',
+      location: api.billingAddress || 'Chennai, TN',
+      industry: 'Technology',
+    },
+    company: {
+      name: 'Yaa Creations',
+      taxId: '27AABCA1234F1Z8',
+      pan: 'ABCDE1234F',
+      address: 'Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+      email: 'billing@yaacreations.com',
+      phone: '+91 98765 43210',
+    },
+    bank: (api as any).bank || undefined,
+    items: (api.items || []).map((it, idx) => {
+      const qty = Number(it.quantity) || 1;
+      const price = Number(it.unitPrice) || 0;
+      const taxRate = Number(it.gstPercent) || 0;
+      const sub = qty * price;
+      const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
+      const total = Number(it.lineTotal) || sub + taxAmount;
+      return {
+        id: it.id || `pitem_${idx + 1}`,
+        name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+        description: it.itemDescription || '',
+        hsnCode: it.hsnCode || '998314',
+        qty,
+        unitPrice: price,
+        taxPercent: taxRate,
+        discount: 0,
+        subtotal: sub,
+        total,
+      };
+    }),
+    subtotal: Number(api.subTotal) || 0,
+    totalDiscount: Number(api.discountTotal) || 0,
+    taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
+    taxTotal: Number(api.taxTotal) || 0,
+    roundMode: 'none',
+    roundOffAmount: 0,
+    grandTotal: Number(api.grandTotal) || 0,
+    createdAt: api.createdAt,
+    ...(api as any),
+  };
+};
+
+const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
+  const latestPayment = api.payments && api.payments.length > 0 ? api.payments[api.payments.length - 1] : undefined;
+
+  let paymentDetails: InvoicePaymentDetails | undefined = undefined;
+  if (api.amountPaid > 0 || (api.payments && api.payments.length > 0)) {
+    paymentDetails = {
+      amountPaid: Number(api.amountPaid) || 0,
+      taxDeductedType: 'none',
+      tdsDeduction: 0,
+      bankDeductions: 0,
+      netReceived: Number(api.amountPaid) || 0,
+      paymentMode: latestPayment?.paymentMode || 'Bank Transfer',
+      paymentDate: latestPayment?.paymentDate ? latestPayment.paymentDate.split('T')[0] : (api.updatedAt ? api.updatedAt.split('T')[0] : new Date().toISOString().split('T')[0]),
+      referenceId: latestPayment?.referenceNumber || undefined,
+      notes: latestPayment?.notes || undefined,
+      recordedAt: latestPayment?.createdAt || api.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  return {
+    id: api.id,
+    invoiceNumber: api.invoiceNumber || 'INV-0000',
+    invoiceDate: api.invoiceDate ? api.invoiceDate.split('T')[0] : '',
+    dueDate: api.dueDate ? api.dueDate.split('T')[0] : '',
+    referenceNumbers: api.sourceId ? [`REF-${api.sourceId.slice(0, 8)}`] : [],
+    description: api.notes || 'Sales Invoice',
+    status: (api.status as any) || (api.amountPaid >= api.grandTotal - 0.001 ? 'Paid' : api.amountPaid > 0 ? 'Partially Paid' : 'Pending'),
+    client: {
+      id: api.customerId || api.organizationId,
+      company: api.customerName || 'Client Organization',
+      name: api.customerName || 'Customer',
+      email: api.customerEmail || '',
+      phone: api.customerPhone || '',
+      gstin: api.gstin || '33AAAAA0000A1Z5',
+      pan: api.pan || 'AAAAA0000A',
+      location: api.billingAddress || 'Chennai, TN',
+      industry: 'Technology',
+    },
+    company: {
+      name: 'Yaa Creations',
+      taxId: '27AABCA1234F1Z8',
+      pan: 'ABCDE1234F',
+      address: 'Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+      email: 'billing@yaacreations.com',
+      phone: '+91 98765 43210',
+    },
+    bank: (api as any).bank || undefined,
+    items: (api.items || []).map((it, idx) => {
+      const qty = Number(it.quantity) || 1;
+      const price = Number(it.unitPrice) || 0;
+      const taxRate = Number(it.gstPercent) || 0;
+      const sub = qty * price;
+      const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
+      const total = Number(it.lineTotal) || sub + taxAmount;
+      return {
+        id: it.id || it.itemId || `item_${idx + 1}`,
+        name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+        description: it.itemDescription || '',
+        hsnCode: it.hsnCode || '998314',
+        qty,
+        unitPrice: price,
+        taxPercent: taxRate,
+        discount: 0,
+        subtotal: sub,
+        total,
+      };
+    }),
+    subtotal: Number(api.subTotal) || 0,
+    totalDiscount: Number(api.discountTotal) || 0,
+    taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
+    taxTotal: Number(api.taxTotal) || 0,
+    roundMode: 'none',
+    roundOffAmount: 0,
+    grandTotal: Number(api.grandTotal) || 0,
+    paymentDetails,
+    createdAt: api.createdAt,
+    ...(api as any),
+  };
+};
+
 export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }) => {
   const navigate = useNavigate();
   const { showToast, isSuperAdmin } = useAuth();
-  const { invoices: standardInvoices, addInvoice: addStandardInvoice, deleteInvoice: deleteStandardInvoice } = useInvoiceStore();
-  const { proformaInvoices, addProformaInvoice, deleteProformaInvoice } = useProformaInvoiceStore();
+  const { addInvoice: addStandardInvoice, deleteInvoice: deleteStandardInvoice } = useInvoiceStore();
+  const { addProformaInvoice, deleteProformaInvoice } = useProformaInvoiceStore();
 
-  const invoices = isProforma ? proformaInvoices : standardInvoices;
-  const addInvoice = isProforma ? addProformaInvoice : addStandardInvoice;
-  const deleteInvoice = isProforma ? deleteProformaInvoice : deleteStandardInvoice;
+  // Live Backend state for Proformas and Standard Invoices
+  const [liveProformas, setLiveProformas] = useState<SavedInvoice[]>([]);
+  const [isLoadingProformas, setIsLoadingProformas] = useState(false);
+  const [proformaTotalRecords, setProformaTotalRecords] = useState(0);
+
+  const [liveInvoices, setLiveInvoices] = useState<SavedInvoice[]>([]);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [invoicesTotalRecords, setInvoicesTotalRecords] = useState(0);
+
+  const [isConvertingId, setIsConvertingId] = useState<string | null>(null);
+
+  const invoices = isProforma ? liveProformas : liveInvoices;
+  const isLoading = isProforma ? isLoadingProformas : isLoadingInvoices;
+  const totalInvoiceCount = isProforma ? proformaTotalRecords : invoicesTotalRecords;
 
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingStatus, setPendingStatus] = useState<'All' | 'Paid' | 'Partially Paid' | 'Pending' | 'Overdue'>('All');
-  const [appliedStatus, setAppliedStatus] = useState<'All' | 'Paid' | 'Partially Paid' | 'Pending' | 'Overdue'>('All');
+  const [pendingStatus, setPendingStatus] = useState<string>('All');
+  const [appliedStatus, setAppliedStatus] = useState<string>('All');
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -73,6 +235,100 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [editingInvoice, setEditingInvoice] = useState<SavedInvoice | null>(null);
   const [isDuplicateMode, setIsDuplicateMode] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  // Fetch live invoices / proformas from backend API
+  const fetchLiveInvoices = useCallback(async () => {
+    if (isProforma) {
+      setIsLoadingProformas(true);
+      try {
+        const statusParam = appliedStatus === 'All' ? 'ALL' : appliedStatus;
+        const res = await proformaInvoiceApi.getProformaInvoices({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: statusParam,
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+        });
+        if (res.data) {
+          const mapped = res.data.map(mapApiProformaToSavedInvoice);
+          setLiveProformas(mapped);
+          setProformaTotalRecords(res.pagination?.totalRecords ?? mapped.length);
+        }
+      } catch (err) {
+        console.error('Failed to fetch proforma invoices:', err);
+        showToast('error', 'Error Loading Data', 'Failed to load proforma invoices from backend.');
+      } finally {
+        setIsLoadingProformas(false);
+      }
+    } else {
+      setIsLoadingInvoices(true);
+      try {
+        const statusParam = appliedStatus === 'All' ? 'ALL' : appliedStatus;
+        const res = await invoiceApi.getInvoices({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: statusParam,
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+        });
+        if (res.data) {
+          const mapped = res.data.map(mapApiInvoiceToSavedInvoice);
+          setLiveInvoices(mapped);
+          setInvoicesTotalRecords(res.pagination?.totalRecords ?? mapped.length);
+        }
+      } catch (err) {
+        console.error('Failed to fetch invoices:', err);
+        showToast('error', 'Error Loading Data', 'Failed to load invoices from backend.');
+      } finally {
+        setIsLoadingInvoices(false);
+      }
+    }
+  }, [isProforma, currentPage, pageSize, appliedSearch, appliedStatus, showToast]);
+
+  useEffect(() => {
+    fetchLiveInvoices();
+  }, [fetchLiveInvoices]);
+
+  const handleConvertToInvoice = async (inv: SavedInvoice) => {
+    if (inv.status === ('Converted' as any)) {
+      showToast('info', 'Already Converted', `Proforma invoice #${inv.invoiceNumber} was already converted.`);
+      return;
+    }
+    try {
+      setIsConvertingId(inv.id);
+      const res = await proformaInvoiceApi.convertToInvoice(inv.id, {
+        dueDate: inv.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      });
+      showToast(
+        'success',
+        'Converted to Invoice',
+        `Proforma #${inv.invoiceNumber} successfully converted to Invoice #${res.data?.invoice?.invoiceNumber || ''}!`
+      );
+      await fetchLiveInvoices();
+    } catch (err: any) {
+      console.error('Failed to convert proforma to invoice:', err);
+      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to convert proforma to invoice';
+      showToast('error', 'Conversion Error', msg);
+    } finally {
+      setIsConvertingId(null);
+    }
+  };
+
+  const handleProformaStatusChange = async (id: string, newStatus: ProformaInvoiceStatus) => {
+    try {
+      await proformaInvoiceApi.updateProformaInvoice(id, { status: newStatus });
+      setLiveProformas((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: newStatus as any } : item))
+      );
+      showToast('success', 'Status Updated', `Proforma invoice status updated to ${newStatus}.`);
+    } catch (err: any) {
+      console.error('Failed to update proforma status:', err);
+      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update status';
+      showToast('error', 'Status Update Failed', msg);
+    }
+  };
 
   useEffect(() => {
     const handleScrollOrResize = () => {
@@ -189,34 +445,58 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     setIsPaymentModalOpen(true);
   };
 
-  const handleConfirmPayment = (paymentDetails: InvoicePaymentDetails) => {
+  const handleConfirmPayment = async (paymentDetails: InvoicePaymentDetails) => {
     if (!paymentModalInvoice) return;
-    const paid = Number(paymentDetails.amountPaid) || 0;
-    const total = Number(paymentModalInvoice.grandTotal) || 0;
-    const isFullPayment = paid >= total - 0.001;
-    const isPartialPayment = paid > 0 && !isFullPayment;
-    const newStatus: SavedInvoice['status'] = isFullPayment
-      ? 'Paid'
-      : isPartialPayment
-      ? 'Partially Paid'
-      : 'Pending';
+    try {
+      let cleanMode = paymentDetails.paymentMode;
+      if (cleanMode.toLowerCase().includes('bank transfer')) {
+        cleanMode = 'Bank Transfer';
+      } else if (cleanMode.toLowerCase().includes('upi')) {
+        cleanMode = 'UPI';
+      } else if (cleanMode.toLowerCase().includes('card')) {
+        cleanMode = 'Card';
+      } else if (cleanMode.toLowerCase().includes('cash')) {
+        cleanMode = 'Cash';
+      } else if (cleanMode.toLowerCase().includes('cheque')) {
+        cleanMode = 'Cheque';
+      } else if (!cleanMode) {
+        cleanMode = 'Bank Transfer';
+      }
 
-    const updated: SavedInvoice = {
-      ...paymentModalInvoice,
-      status: newStatus,
-      paymentDetails,
-    };
-    addInvoice(updated);
-    if (viewingInvoice && viewingInvoice.id === updated.id) {
-      setViewingInvoice(updated);
+      const refNo =
+        paymentDetails.referenceId?.trim() ||
+        (cleanMode === 'Bank Transfer' ? `UTR${Date.now().toString().slice(-8)}` : undefined);
+
+      const payload: RecordPaymentRequest = {
+        amount: Number(paymentDetails.amountPaid) || 0,
+        paymentDate: paymentDetails.paymentDate || new Date().toISOString().split('T')[0],
+        paymentMode: cleanMode,
+        referenceNumber: refNo,
+        notes: paymentDetails.notes || undefined,
+      };
+
+      await invoiceApi.recordPayment(paymentModalInvoice.id, payload);
+      showToast(
+        'success',
+        'Payment Recorded',
+        `Payment of ₹${payload.amount.toLocaleString()} recorded for #${paymentModalInvoice.invoiceNumber}.`
+      );
+
+      setIsPaymentModalOpen(false);
+      setPaymentModalInvoice(null);
+      await fetchLiveInvoices();
+
+      if (viewingInvoice && viewingInvoice.id === paymentModalInvoice.id) {
+        const refreshed = await invoiceApi.getInvoiceById(paymentModalInvoice.id);
+        if (refreshed.data) {
+          setViewingInvoice(mapApiInvoiceToSavedInvoice(refreshed.data));
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to record payment:', err);
+      const msg = err?.response?.data?.error?.message || err?.message || 'Failed to record payment';
+      showToast('error', 'Payment Failed', msg);
     }
-    setIsPaymentModalOpen(false);
-    setPaymentModalInvoice(null);
-    showToast(
-      'success',
-      'Payment Recorded',
-      `Invoice #${updated.invoiceNumber} status set to ${newStatus}. Net received: ₹${paymentDetails.netReceived.toFixed(2)}`
-    );
   };
 
   // Edit Invoice Form Handlers
@@ -316,7 +596,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     });
   };
 
-  const handleSaveEditInvoice = (e?: React.FormEvent) => {
+  const handleSaveEditInvoice = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!editingInvoice) return;
     const totals = recalculateTotals(editingInvoice.items, editingInvoice.roundMode || 'none');
@@ -324,19 +604,64 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       ...editingInvoice,
       ...totals,
     };
-    addInvoice(updatedInvoice);
+
+    if (isProforma) {
+      try {
+        const updatePayload: UpdateProformaRequest = {
+          status: updatedInvoice.status,
+          invoiceDate: updatedInvoice.invoiceDate,
+          dueDate: updatedInvoice.dueDate,
+          discountTotal: updatedInvoice.totalDiscount,
+          notes: updatedInvoice.description,
+          items: updatedInvoice.items.map((it, idx) => ({
+            itemId: it.id || `SKU-${idx + 1}`,
+            itemDescription: it.name,
+            hsnCode: it.hsnCode || '998314',
+            quantity: Number(it.qty) || 1,
+            unitPrice: Number(it.unitPrice) || 0,
+            gstPercent: Number(it.taxPercent) || 18,
+          })),
+        };
+        await proformaInvoiceApi.updateProformaInvoice(updatedInvoice.id, updatePayload);
+        await fetchLiveInvoices();
+        showToast('success', 'Proforma Invoice Updated', `Proforma invoice #${updatedInvoice.invoiceNumber} updated successfully!`);
+      } catch (err: any) {
+        console.error('Failed to update proforma invoice:', err);
+        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update proforma invoice';
+        showToast('error', 'Update Failed', msg);
+      }
+    } else {
+      try {
+        const updatePayload: UpdateInvoiceRequest = {
+          dueDate: updatedInvoice.dueDate,
+          notes: updatedInvoice.description,
+          discountTotal: updatedInvoice.totalDiscount,
+          billingAddress: updatedInvoice.client.location,
+          items: updatedInvoice.items.map((it, idx) => ({
+            itemId: it.id || `SKU-${idx + 1}`,
+            itemDescription: it.name,
+            hsnCode: it.hsnCode || '998314',
+            quantity: Number(it.qty) || 1,
+            unitPrice: Number(it.unitPrice) || 0,
+            gstPercent: Number(it.taxPercent) || 18,
+          })),
+        };
+        await invoiceApi.updateInvoice(updatedInvoice.id, updatePayload);
+        await fetchLiveInvoices();
+        showToast('success', 'Invoice Updated', `Invoice #${updatedInvoice.invoiceNumber} updated successfully!`);
+      } catch (err: any) {
+        console.error('Failed to update invoice:', err);
+        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to update invoice';
+        showToast('error', 'Update Failed', msg);
+      }
+    }
+
     if (viewingInvoice && viewingInvoice.id === updatedInvoice.id) {
       setViewingInvoice(updatedInvoice);
     }
-    const wasDuplicate = isDuplicateMode;
     setIsEditModalOpen(false);
     setEditingInvoice(null);
     setIsDuplicateMode(false);
-    if (wasDuplicate) {
-      showToast('success', isProforma ? 'Proforma Invoice Created' : 'Invoice Created', `Duplicate ${isProforma ? 'proforma invoice' : 'invoice'} #${updatedInvoice.invoiceNumber} saved to list!`);
-    } else {
-      showToast('success', isProforma ? 'Proforma Invoice Updated' : 'Invoice Updated', `${isProforma ? 'Proforma invoice' : 'Invoice'} #${updatedInvoice.invoiceNumber} updated successfully!`);
-    }
   };
 
   // =========================================================================
@@ -986,65 +1311,38 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   }
 
   // =========================================================================
-  // 2. EMPTY INVOICES STATE
+  // 2. INVOICES TABLE LIST VIEW
   // =========================================================================
-  if (invoices.length === 0) {
-    return (
-      <div className="w-full min-h-[calc(100vh-140px)] flex items-center justify-center p-6">
-        <div className="w-full max-w-xl text-center flex flex-col items-center justify-center space-y-5">
-          {/* Header & Subtitle */}
-          <div className="space-y-2 max-w-md mx-auto">
-            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-              {isProforma ? 'Proforma Invoices' : 'Invoices'}
-            </h2>
-            <p className="text-sm text-slate-400 font-normal leading-relaxed">
-              {isProforma
-                ? 'No proforma invoices recorded yet. Create a new proforma invoice.'
-                : 'No invoices recorded yet. Create a new sale to generate invoices.'}
-            </p>
-          </div>
+  // =========================================================================
+  // 2. INVOICES TABLE LIST VIEW
+  // =========================================================================
+  const pagedInvoices = invoices;
 
-          {/* Action Button */}
-          <div className="pt-2">
-            <Link
-              to={isProforma ? '/proforma/new' : '/sales/new'}
-              style={{ borderRadius: '4px' }}
-              className="inline-flex items-center justify-center font-bold !rounded-[4px] transition-all duration-200 cursor-pointer select-none bg-[#33077C] hover:bg-[#432eb5] text-white shadow-md hover:shadow-lg active:scale-[0.98] h-11 px-6 text-sm gap-2"
-            >
-              <Plus className="w-4 h-4" strokeWidth={2.5} />
-              <span>{isProforma ? 'Create New Proforma Invoice' : 'Create New Sale'}</span>
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // =========================================================================
-  // 3. INVOICES TABLE LIST VIEW
-  // =========================================================================
-  const SUPER_ADMIN_ORGS = ['YaaCreations', 'Polihills', 'Enmin Labs'];
-  const filteredInvoices = invoices.filter((inv) => {
-    // Super Admin: restrict to only 3 orgs
-    if (isSuperAdmin) {
-      const orgAllowed = SUPER_ADMIN_ORGS.some(
-        (name) => (inv.client?.company || '').trim().toLowerCase() === name.trim().toLowerCase()
-      );
-      if (!orgAllowed) return false;
+  const handleDeleteInvoice = async (id: string, number: string) => {
+    if (isProforma) {
+      try {
+        await proformaInvoiceApi.deleteProformaInvoice(id);
+        setLiveProformas((prev) => prev.filter((item) => item.id !== id));
+        setProformaTotalRecords((prev) => Math.max(0, prev - 1));
+        showToast('success', 'Proforma Invoice Deleted', `Proforma invoice #${number} deleted.`);
+      } catch (err: any) {
+        console.error('Failed to delete proforma invoice:', err);
+        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to delete proforma invoice';
+        showToast('error', 'Delete Failed', msg);
+      }
+    } else {
+      try {
+        await invoiceApi.deleteInvoice(id);
+        setLiveInvoices((prev) => prev.filter((item) => item.id !== id));
+        setInvoicesTotalRecords((prev) => Math.max(0, prev - 1));
+        showToast('success', 'Invoice Deleted', `Invoice #${number} deleted successfully.`);
+      } catch (err: any) {
+        console.error('Failed to delete invoice:', err);
+        const msg = err?.response?.data?.error?.message || err?.message || 'Failed to delete invoice';
+        showToast('error', 'Delete Failed', msg);
+      }
     }
-
-    const matchesSearch =
-      inv.invoiceNumber.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      inv.client.company.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      inv.client.name.toLowerCase().includes(appliedSearch.toLowerCase());
-    const matchesStatus = appliedStatus === 'All' || inv.status === appliedStatus;
-    return matchesSearch && matchesStatus;
-  });
-
-  const pagedInvoices = filteredInvoices.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
+  };
 
   return (
     <div className="space-y-6">
@@ -1056,9 +1354,19 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             {isProforma
-              ? 'Manage, view, and print all saved proforma invoices'
+              ? 'Manage, view, convert, and print all saved proforma invoices'
               : 'Manage, view, and print all saved invoices'}
           </p>
+        </div>
+        <div>
+          <Link
+            to={isProforma ? '/proforma/new' : '/sales/new'}
+            style={{ borderRadius: '6px' }}
+            className="inline-flex items-center justify-center font-bold !rounded-[6px] transition-all duration-200 cursor-pointer select-none bg-[#33077C] hover:bg-[#432eb5] text-white shadow-md hover:shadow-lg active:scale-[0.98] h-10 px-4 text-xs sm:text-sm gap-2"
+          >
+            <Plus className="w-4 h-4" strokeWidth={2.5} />
+            <span>{isProforma ? 'Create Proforma Invoice' : 'Create New Sale'}</span>
+          </Link>
         </div>
       </div>
 
@@ -1066,18 +1374,31 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       <SearchBar
         value={pendingSearch}
         onChange={handleSearchChange}
-        placeholder={isProforma ? 'Search proforma #, client, or contact...' : 'Search by invoice #, client, or contact...'}
+        placeholder={isProforma ? 'Search proforma #, customer, GSTIN...' : 'Search by invoice #, customer, GSTIN...'}
         onSubmit={handleApply}
         onReset={handleReset}
         filterSlot={
           <FilterDropdown
-            options={[
-              { label: 'Status : All', value: 'All' },
-              { label: 'Paid', value: 'Paid', dotColor: '#10b981' },
-              { label: 'Partially Paid', value: 'Partially Paid', dotColor: '#f59e0b' },
-              { label: 'Pending', value: 'Pending', dotColor: '#6366f1' },
-              { label: 'Overdue', value: 'Overdue', dotColor: '#ef4444' },
-            ]}
+            options={
+              isProforma
+                ? [
+                    { label: 'Status : All', value: 'All' },
+                    { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
+                    { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
+                    { label: 'Approved', value: 'Approved', dotColor: '#10b981' },
+                    { label: 'Converted', value: 'Converted', dotColor: '#8b5cf6' },
+                    { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
+                  ]
+                : [
+                    { label: 'Status : All', value: 'All' },
+                    { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
+                    { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
+                    { label: 'Partially Paid', value: 'Partially Paid', dotColor: '#f59e0b' },
+                    { label: 'Paid', value: 'Paid', dotColor: '#10b981' },
+                    { label: 'Overdue', value: 'Overdue', dotColor: '#ef4444' },
+                    { label: 'Cancelled', value: 'Cancelled', dotColor: '#64748b' },
+                  ]
+            }
             value={pendingStatus}
             onChange={(val) => setPendingStatus(val as any)}
           />
@@ -1085,14 +1406,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         rightSlot={
           <span className="text-xs font-semibold text-slate-500 pr-2">
             Total {isProforma ? 'Proforma Invoices' : 'Invoices'} :{' '}
-            <span className="text-[#33077C] font-bold">{filteredInvoices.length}</span>
+            <span className="text-[#33077C] font-bold">{totalInvoiceCount}</span>
           </span>
         }
       />
 
       {/* Invoices List Table Section */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-
         {/* Data Table with Full Grid Borders */}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200">
@@ -1103,18 +1423,32 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">{isProforma ? 'PROFORMA DATE' : 'INVOICE DATE'}</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DUE DATE</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">GRAND TOTAL</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PAID AMOUNT</th>
+                {!isProforma && (
+                  <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PAID AMOUNT</th>
+                )}
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
               </tr>
             </thead>
             <tbody className="text-sm">
-              {filteredInvoices.length === 0 ? (
+              {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isProforma ? 7 : 8} className="py-16 text-center text-slate-400 border border-slate-200">
+                    <Loader2 className="w-9 h-9 mx-auto mb-2 animate-spin text-[#33077C]" />
+                    <p className="font-bold text-slate-700 text-sm">
+                      {isProforma ? 'Loading proforma invoices...' : 'Loading invoices...'}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-0.5">Fetching records from server</p>
+                  </td>
+                </tr>
+              ) : pagedInvoices.length === 0 ? (
+                <tr>
+                  <td colSpan={isProforma ? 7 : 8} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Sparkles className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
-                    <p className="font-bold text-slate-700 text-sm">No invoices matched your filter.</p>
-                    <p className="text-xs text-slate-400 mt-0.5">Adjust your search query or filter criteria.</p>
+                    <p className="font-bold text-slate-700 text-sm">No {isProforma ? 'proforma invoices' : 'invoices'} found.</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {isProforma ? 'Create a new proforma invoice to get started.' : 'Create a new sale to generate invoices.'}
+                    </p>
                   </td>
                 </tr>
               ) : (
@@ -1124,7 +1458,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                       <span
                         onClick={() => setViewingInvoice(inv)}
                         className="font-bold text-slate-900 hover:text-[#4309A2] text-sm transition-colors cursor-pointer"
-                        title="View invoice"
+                        title="View details"
                       >
                         {inv.invoiceNumber}
                       </span>
@@ -1132,7 +1466,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <td className="py-4 px-5 border border-slate-200 align-middle text-left">
                       <div>
                         <span className="font-bold text-slate-900 block truncate">{inv.client.company}</span>
-                        <span className="text-[11px] text-slate-400 block truncate">{inv.client.name} &bull; {inv.client.email}</span>
+                        <span className="text-[11px] text-slate-400 block truncate">{inv.client.name} &bull; {inv.client.email || inv.client.phone || ''}</span>
                       </div>
                     </td>
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{inv.invoiceDate}</td>
@@ -1140,65 +1474,90 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center font-bold text-slate-900 font-sans">
                       ₹{inv.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td className="py-4 px-4 border border-slate-200 align-middle text-center font-bold font-sans">
-                      {(() => {
-                        const isPending = inv.status === 'Pending' || (inv.status === 'Overdue' && !inv.paymentDetails?.amountPaid);
-                        const paidAmount = isPending
-                          ? 0
-                          : (inv.paymentDetails?.amountPaid ?? (inv.status === 'Paid' ? inv.grandTotal : 0));
-                        
-                        let tdsAmount = Number(inv.paymentDetails?.tdsDeduction) || 0;
-                        if (tdsAmount === 0 && inv.customFields) {
-                          const tdsField = inv.customFields.find(
-                            (f) => f.label?.toLowerCase().includes('tds') || f.id?.toLowerCase().includes('tds')
-                          );
-                          if (tdsField) {
-                            const parsed = parseFloat(tdsField.value.replace(/[^0-9.]/g, ''));
-                            if (!isNaN(parsed)) tdsAmount = parsed;
+                    {!isProforma && (
+                      <td className="py-4 px-4 border border-slate-200 align-middle text-center font-bold font-sans">
+                        {(() => {
+                          const isPending = inv.status === 'Pending' || (inv.status === 'Overdue' && !inv.paymentDetails?.amountPaid);
+                          const paidAmount = isPending
+                            ? 0
+                            : (inv.paymentDetails?.amountPaid ?? (inv.status === 'Paid' ? inv.grandTotal : 0));
+                          
+                          let tdsAmount = Number(inv.paymentDetails?.tdsDeduction) || 0;
+                          if (tdsAmount === 0 && inv.customFields) {
+                            const tdsField = inv.customFields.find(
+                              (f) => f.label?.toLowerCase().includes('tds') || f.id?.toLowerCase().includes('tds')
+                            );
+                            if (tdsField) {
+                              const parsed = parseFloat(tdsField.value.replace(/[^0-9.]/g, ''));
+                              if (!isNaN(parsed)) tdsAmount = parsed;
+                            }
                           }
-                        }
 
-                        const balanceDue = Math.max(0, inv.grandTotal - paidAmount);
-                        const isPartiallyPaid = inv.status === 'Partially Paid' || (!isPending && paidAmount > 0 && balanceDue > 0.005);
+                          const balanceDue = Math.max(0, inv.grandTotal - paidAmount);
+                          const isPartiallyPaid = inv.status === 'Partially Paid' || (!isPending && paidAmount > 0 && balanceDue > 0.005);
 
-                        return (
-                          <div className="flex flex-col items-center justify-center gap-1.5">
-                            <span className={paidAmount > 0 ? 'text-emerald-600 font-bold' : 'text-slate-400 font-medium'}>
-                              ₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            {tdsAmount > 0 && (
-                              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-rose-500"></span>
-                                <span>TDS Deducted: ₹{tdsAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </div>
-                            )}
-                            {isPartiallyPaid && balanceDue > 0 && (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-50 text-orange-600 whitespace-nowrap">
-                                Due: ₹{balanceDue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          return (
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              <span className={paidAmount > 0 ? 'text-emerald-600 font-bold' : 'text-slate-400 font-medium'}>
+                                ₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </td>
+                              {tdsAmount > 0 && (
+                                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
+                                  <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-rose-500"></span>
+                                  <span>TDS Deducted: ₹{tdsAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                              )}
+                              {isPartiallyPaid && balanceDue > 0 && (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-50 text-orange-600 whitespace-nowrap">
+                                  Due: ₹{balanceDue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center">
-                      <span
-                        className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          inv.status === 'Paid'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : inv.status === 'Partially Paid'
-                              ? 'bg-sky-50 text-sky-700 border border-sky-200'
-                              : inv.status === 'Pending'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-rose-50 text-rose-700 border border-rose-200'
-                        }`}
-                      >
-                        {inv.status === 'Paid' && <CheckCircle2 className="w-3 h-3" />}
-                        {inv.status === 'Partially Paid' && <Clock className="w-3 h-3 text-sky-600" />}
-                        {inv.status === 'Pending' && <Clock className="w-3 h-3" />}
-                        {inv.status === 'Overdue' && <AlertCircle className="w-3 h-3" />}
-                        <span>{inv.status}</span>
-                      </span>
+                      {isProforma ? (
+                        <span
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            inv.status === ('Approved' as any)
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : inv.status === ('Converted' as any)
+                                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                : inv.status === ('Sent' as any)
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                  : inv.status === ('Cancelled' as any)
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          {inv.status === ('Approved' as any) && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                          {inv.status === ('Converted' as any) && <Sparkles className="w-3 h-3 text-purple-600" />}
+                          {inv.status === ('Sent' as any) && <Send className="w-3 h-3 text-blue-600" />}
+                          {inv.status === ('Cancelled' as any) && <AlertCircle className="w-3 h-3 text-rose-600" />}
+                          {inv.status === ('Draft' as any) && <FileText className="w-3 h-3 text-slate-500" />}
+                          <span>{inv.status}</span>
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            inv.status === 'Paid'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : inv.status === 'Partially Paid'
+                                ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                                : inv.status === 'Pending'
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}
+                        >
+                          {inv.status === 'Paid' && <CheckCircle2 className="w-3 h-3" />}
+                          {inv.status === 'Partially Paid' && <Clock className="w-3 h-3 text-sky-600" />}
+                          {inv.status === 'Pending' && <Clock className="w-3 h-3" />}
+                          {inv.status === 'Overdue' && <AlertCircle className="w-3 h-3" />}
+                          <span>{inv.status}</span>
+                        </span>
+                      )}
                     </td>
                     <td className="py-4 px-5 border border-slate-200 align-middle text-center">
                       <div className="relative inline-block text-center">
@@ -1213,7 +1572,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                             } else {
                               const rect = e.currentTarget.getBoundingClientRect();
                               const spaceBelow = window.innerHeight - rect.bottom;
-                              const dropdownHeight = 240;
+                              const dropdownHeight = 280;
 
                               if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
                                 // Open upwards if not enough space below
@@ -1251,9 +1610,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       </div>
 
       {/* Pagination */}
-      {filteredInvoices.length > 0 && (
+      {totalInvoiceCount > 0 && (
         <Pagination
-          total={filteredInvoices.length}
+          total={totalInvoiceCount}
           currentPage={currentPage}
           pageSize={pageSize}
           pageSizeOptions={[5, 10, 20, 50]}
@@ -1287,7 +1646,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                   : { top: `${actionDropdownPos.top}px` }),
                 right: `${actionDropdownPos.right}px`,
               }}
-              className="w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
+              className="w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
             >
               {/* 1. View */}
               <button
@@ -1305,7 +1664,65 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span className="font-semibold text-slate-800 text-[13px]">View</span>
               </button>
 
-              {/* 2. Edit Invoice */}
+              {/* 2. Convert to Invoice (Proforma only) */}
+              {isProforma && (
+                <button
+                  type="button"
+                  disabled={inv.status === ('Converted' as any) || isConvertingId === inv.id}
+                  onClick={() => {
+                    setOpenActionMenuId(null);
+                    setActionDropdownPos(null);
+                    handleConvertToInvoice(inv);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-colors cursor-pointer ${
+                    inv.status === ('Converted' as any)
+                      ? 'text-slate-400 cursor-not-allowed opacity-60'
+                      : 'text-[#33077C] hover:bg-purple-50'
+                  }`}
+                >
+                  <div className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-xs">
+                    {isConvertingId === inv.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
+                    )}
+                  </div>
+                  <span className="font-semibold text-[13px]">
+                    {inv.status === ('Converted' as any) ? 'Converted' : 'Convert to Invoice'}
+                  </span>
+                </button>
+              )}
+
+              {/* 3. Change Status (Proforma only) */}
+              {isProforma && inv.status !== ('Converted' as any) && (
+                <div className="px-3 py-1.5 border-t border-slate-100 my-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Set Status:
+                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {(['Draft', 'Sent', 'Approved', 'Cancelled'] as ProformaInvoiceStatus[]).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => {
+                          setOpenActionMenuId(null);
+                          setActionDropdownPos(null);
+                          handleProformaStatusChange(inv.id, st);
+                        }}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md cursor-pointer transition-colors ${
+                          inv.status === (st as any)
+                            ? 'bg-[#33077C] text-white'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Edit */}
               <button
                 type="button"
                 onClick={() => {
@@ -1323,7 +1740,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span className="font-semibold text-slate-800 text-[13px]">Edit</span>
               </button>
 
-              {/* 3. Duplicate */}
+              {/* 5. Duplicate */}
               <button
                 type="button"
                 onClick={() => {
@@ -1339,7 +1756,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span className="font-semibold text-slate-800 text-[13px]">Duplicate</span>
               </button>
 
-              {/* 4. Send with Channels (Super Admin only) */}
+              {/* 6. Send with Channels (Super Admin only) */}
               {isSuperAdmin && (
                 <div className="relative">
                   <div className="flex items-center justify-between rounded-xl hover:bg-slate-50 transition-colors group">
@@ -1389,7 +1806,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                         }}
                         className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-white text-slate-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:shadow-xs"
                       >
-                        {/* Authentic Gmail Logo */}
                         <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                           <path
                             fill="#4285F4"
@@ -1422,7 +1838,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                         }}
                         className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-white text-slate-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:shadow-xs"
                       >
-                        {/* Authentic WhatsApp Logo */}
                         <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                           <path
                             fill="#25D366"
@@ -1440,47 +1855,48 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </div>
               )}
 
-              {/* 5. Payment Action */}
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenActionMenuId(null);
-                  setActionDropdownPos(null);
-                  handleOpenMarkAsPaid(inv);
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                <div
-                  className={`w-7 h-7 rounded-full text-white flex items-center justify-center shrink-0 shadow-xs ${
-                    inv.status === 'Paid'
-                      ? 'bg-emerald-600/70'
-                      : inv.status === 'Partially Paid'
-                        ? 'bg-sky-500'
-                        : 'bg-[#10B981]'
-                  }`}
+              {/* 7. Payment Action (Standard Invoices only) */}
+              {!isProforma && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenActionMenuId(null);
+                    setActionDropdownPos(null);
+                    handleOpenMarkAsPaid(inv);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                </div>
-                <span className="font-semibold text-slate-800 text-[13px]">
-                  {inv.status === 'Paid'
-                    ? 'Payment Details'
-                    : inv.status === 'Partially Paid'
-                      ? 'Record Payment'
-                      : 'Mark as Paid'}
-                </span>
-              </button>
+                  <div
+                    className={`w-7 h-7 rounded-full text-white flex items-center justify-center shrink-0 shadow-xs ${
+                      inv.status === 'Paid'
+                        ? 'bg-emerald-600/70'
+                        : inv.status === 'Partially Paid'
+                          ? 'bg-sky-500'
+                          : 'bg-[#10B981]'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                  </div>
+                  <span className="font-semibold text-slate-800 text-[13px]">
+                    {inv.status === 'Paid'
+                      ? 'Payment Details'
+                      : inv.status === 'Partially Paid'
+                        ? 'Record Payment'
+                        : 'Mark as Paid'}
+                  </span>
+                </button>
+              )}
 
               <div className="my-1.5 border-t border-slate-100" />
 
-              {/* 6. Delete */}
+              {/* 8. Delete */}
               <button
                 type="button"
                 onClick={() => {
                   setOpenActionMenuId(null);
                   setActionDropdownPos(null);
                   if (window.confirm(`Delete ${isProforma ? 'proforma invoice' : 'invoice'} ${inv.invoiceNumber}?`)) {
-                    deleteInvoice(inv.id);
-                    showToast('success', isProforma ? 'Proforma Invoice Deleted' : 'Invoice Deleted', `${isProforma ? 'Proforma invoice' : 'Invoice'} #${inv.invoiceNumber} deleted.`);
+                    handleDeleteInvoice(inv.id, inv.invoiceNumber);
                   }
                 }}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
@@ -1517,7 +1933,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             setIsDuplicateMode(false);
           }}
         >
-          <div
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveEditInvoice();
+            }}
             className="relative w-full max-w-6xl bg-white rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden my-auto animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
@@ -2152,7 +2573,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span>Cancel</span>
               </button>
               <button
-                type="button"
+                type="submit"
                 onClick={handleSaveEditInvoice}
                 className="h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
               >
@@ -2160,7 +2581,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span>{isDuplicateMode ? 'Duplicate Invoice' : 'Save Changes'}</span>
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
     </div>

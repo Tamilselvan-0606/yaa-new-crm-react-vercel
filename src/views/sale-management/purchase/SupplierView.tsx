@@ -1,4 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
   UsersRound,
   Plus,
@@ -30,12 +32,23 @@ import {
   Printer,
   Forward,
   FileSpreadsheet,
+  Loader2,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
   Supplier,
   SupplierStatus,
 } from '../../../store/useSalesManagementStore';
+import {
+  supplierApi,
+  mapApiSupplierToSupplier,
+  mapSupplierToPayload,
+  ApiSupplier,
+  CreateSupplierPayload,
+  UpdateSupplierPayload,
+} from '../../../api';
+import { SupplierSchema, SupplierFormData } from '../../../validations';
+import { FormError } from '../../../components/common/FormError';
 import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -43,10 +56,28 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatSupplierShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
 
 export const SupplierView: React.FC = () => {
-  const { suppliers, purchases, purchaseReturns, saveSupplier, deleteSupplier } = useSalesManagementStore();
+  const {
+    suppliers: storeSuppliers,
+    purchases,
+    purchaseReturns,
+    saveSupplier,
+    deleteSupplier,
+    setSuppliersList,
+  } = useSalesManagementStore();
+
+  // API State
+  const [apiSuppliers, setApiSuppliers] = useState<Supplier[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isFetching, setIsFetching] = useState<boolean>(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState<boolean>(false);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
+  const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -56,13 +87,17 @@ export const SupplierView: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Fetch tracking refs to prevent duplicate concurrent calls
+  const lastFetchKeyRef = useRef<string>('');
+  const isFetchingRef = useRef<boolean>(false);
+
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
 
   // Share Popover State
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Close action dropdown & share popover on click outside or scroll
   useEffect(() => {
@@ -100,39 +135,120 @@ export const SupplierView: React.FC = () => {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'purchases' | 'returns' | 'payments' | 'outstanding' | 'documents'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'purchases' | 'returns' | 'outstanding'>('overview');
 
-  // Form State
-  const [formData, setFormData] = useState<Omit<Supplier, 'id' | 'createdAt' | 'updatedAt' | 'totalPurchase' | 'paid' | 'payable'>>({
-    supplierCode: '',
-    name: '',
-    contactPerson: '',
-    phone: '',
-    email: '',
-    address: '',
-    city: '',
-    state: '',
-    country: 'India',
-    pincode: '',
-    gstNumber: '',
-    panNumber: '',
-    paymentTerms: 'Net 30 Days',
-    creditLimit: 500000,
-    bankName: '',
-    accountNumber: '',
-    ifscCode: '',
-    branchName: '',
-    status: 'Active',
-    notes: '',
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<SupplierFormData>({
+    resolver: zodResolver(SupplierSchema),
+    defaultValues: {
+      supplierCode: '',
+      name: '',
+      contactPerson: '',
+      phone: '',
+      email: '',
+      address: '',
+      city: '',
+      state: '',
+      country: 'India',
+      pincode: '',
+      gstNumber: '',
+      panNumber: '',
+      paymentTerms: 'Net 30 Days',
+      creditLimit: 500000,
+      bankName: '',
+      accountNumber: '',
+      ifscCode: '',
+      branchName: '',
+      status: 'Active',
+      notes: '',
+    },
   });
+
+  // Load Suppliers from Live API with strict deduplication
+  const loadSuppliers = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
+
+      // Prevent concurrent calls or redundant re-fetching of identical parameters
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+
+      if (forceRefresh || !lastFetchKeyRef.current) {
+        setIsLoading(true);
+      } else {
+        setIsFetching(true);
+      }
+
+      try {
+        const res = await supplierApi.getSuppliers({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: appliedStatus !== 'All' ? appliedStatus : undefined,
+          pagination_required: true,
+        });
+
+        if (res && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiSupplierToSupplier);
+          setApiSuppliers(mapped);
+
+          if (res.pagination) {
+            setTotalRecords(res.pagination.totalRecords ?? mapped.length);
+            setTotalPages(res.pagination.totalPages ?? (Math.ceil(mapped.length / pageSize) || 1));
+          } else {
+            setTotalRecords(mapped.length);
+            setTotalPages(Math.ceil(mapped.length / pageSize) || 1);
+          }
+        } else {
+          setApiSuppliers([]);
+          setTotalRecords(0);
+          setTotalPages(1);
+        }
+      } catch (err: any) {
+        console.error('Failed to load suppliers from API:', err);
+        setApiSuppliers([]);
+        setTotalRecords(0);
+        setTotalPages(1);
+
+        if (forceRefresh) {
+          const errMsg =
+            err?.response?.data?.error?.message ||
+            err?.response?.data?.message ||
+            err?.message ||
+            'Failed to fetch suppliers from server';
+          toast.error(errMsg);
+        }
+      } finally {
+        setIsLoading(false);
+        setIsFetching(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [currentPage, pageSize, appliedSearch, appliedStatus]
+  );
+
+  // Single effect to load suppliers on query/page changes
+  useEffect(() => {
+    loadSuppliers();
+  }, [loadSuppliers]);
+
+  // Active display list
+  const displaySuppliers = apiSuppliers;
 
   // Summary Metrics
   const summary = useMemo(() => {
-    const totalCount = suppliers.length;
-    const activeCount = suppliers.filter((s) => s.status === 'Active').length;
-    const inactiveCount = suppliers.filter((s) => s.status === 'Inactive' || s.status === 'Blocked').length;
-    const totalPayables = suppliers.reduce((acc, s) => acc + (s.payable || 0), 0);
-    const newSuppliersCount = suppliers.filter((s) => {
+    const totalCount = totalRecords || displaySuppliers.length;
+    const activeCount = displaySuppliers.filter((s) => s.status === 'Active').length;
+    const inactiveCount = displaySuppliers.filter((s) => s.status === 'Inactive' || s.status === 'Blocked').length;
+    const totalPayables = displaySuppliers.reduce((acc, s) => acc + (s.payable || 0), 0);
+    const newSuppliersCount = displaySuppliers.filter((s) => {
       const monthAgo = new Date(Date.now() - 30 * 86400000);
       return new Date(s.createdAt) >= monthAgo;
     }).length;
@@ -144,12 +260,12 @@ export const SupplierView: React.FC = () => {
       totalPayables,
       newSuppliersCount,
     };
-  }, [suppliers]);
+  }, [displaySuppliers, totalRecords]);
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
     const nextCode = `SUP-${Math.floor(1000 + Math.random() * 9000)}`;
-    setFormData({
+    reset({
       supplierCode: nextCode,
       name: '',
       contactPerson: '',
@@ -158,11 +274,11 @@ export const SupplierView: React.FC = () => {
       address: '',
       city: '',
       state: '',
-      country: '',
+      country: 'India',
       pincode: '',
       gstNumber: '',
       panNumber: '',
-      paymentTerms: '',
+      paymentTerms: 'Net 30 Days',
       creditLimit: 0,
       bankName: '',
       accountNumber: '',
@@ -177,40 +293,59 @@ export const SupplierView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (sup: Supplier) => {
-    setFormData({
+    reset({
       supplierCode: sup.supplierCode,
       name: sup.name,
-      contactPerson: sup.contactPerson,
+      contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
-      email: sup.email,
-      address: sup.address,
-      city: sup.city,
-      state: sup.state,
-      country: sup.country,
-      pincode: sup.pincode,
+      email: sup.email || '',
+      address: sup.address || '',
+      city: sup.city || '',
+      state: sup.state || '',
+      country: sup.country || 'India',
+      pincode: sup.pincode || '',
       gstNumber: sup.gstNumber || '',
       panNumber: sup.panNumber || '',
-      paymentTerms: sup.paymentTerms,
-      creditLimit: sup.creditLimit,
+      paymentTerms: sup.paymentTerms || 'Net 30 Days',
+      creditLimit: sup.creditLimit || 0,
       bankName: sup.bankName || '',
       accountNumber: sup.accountNumber || '',
       ifscCode: sup.ifscCode || '',
       branchName: sup.branchName || '',
-      status: sup.status,
+      status: (sup.status as 'Active' | 'Inactive' | 'Blocked') || 'Active',
       notes: sup.notes || '',
     });
     setEditingSupplier(sup);
     setIsFormModalOpen(true);
   };
 
+  // Open Details Modal with API refresh
+  const handleOpenDetailModal = async (sup: Supplier) => {
+    setSelectedSupplier(sup);
+    setActiveTab('overview');
+    setIsDetailModalOpen(true);
+
+    try {
+      setIsDetailLoading(true);
+      const res = await supplierApi.getSupplierById(sup.id);
+      if (res && res.data) {
+        setSelectedSupplier(mapApiSupplierToSupplier(res.data));
+      }
+    } catch {
+      // Use cached sup
+    } finally {
+      setIsDetailLoading(false);
+    }
+  };
+
   // Duplicate Supplier Handler
   const handleDuplicateSupplier = (sup: Supplier) => {
     setEditingSupplier(null);
-    const nextCode = `SUP-${String(suppliers.length + 101).padStart(3, '0')}`;
-    setFormData({
+    const nextCode = `SUP-${Math.floor(1000 + Math.random() * 9000)}`;
+    reset({
       supplierCode: nextCode,
       name: `${sup.name} (Copy)`,
-      contactPerson: sup.contactPerson,
+      contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
       email: sup.email ? `copy_${sup.email}` : '',
       address: sup.address,
@@ -230,59 +365,141 @@ export const SupplierView: React.FC = () => {
       notes: sup.notes ? `[Duplicate of ${sup.supplierCode}] ${sup.notes}` : `Duplicate of ${sup.supplierCode}`,
     });
     setIsFormModalOpen(true);
-    toast.info(`Cloned details from ${sup.name} into form.`);
+    toast.info(`Cloned details from "${sup.name}" into form.`);
   };
 
-  // Save Supplier
-  const handleSaveSupplier = () => {
-    if (!formData.name.trim()) {
-      toast.error('Supplier name is required.');
-      return;
-    }
-    if (!formData.contactPerson.trim()) {
-      toast.error('Contact person name is required.');
-      return;
-    }
+  // Save / Update Supplier
+  const onSaveSupplier = async (data: SupplierFormData) => {
+    try {
+      setIsSubmittingForm(true);
 
-    const payload: Supplier = {
-      id: editingSupplier ? editingSupplier.id : `sup_${Date.now()}`,
-      ...formData,
-      totalPurchase: editingSupplier ? editingSupplier.totalPurchase : 0,
-      paid: editingSupplier ? editingSupplier.paid : 0,
-      payable: editingSupplier ? editingSupplier.payable : 0,
-      createdAt: editingSupplier ? editingSupplier.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+      if (editingSupplier) {
+        const payload: UpdateSupplierPayload = {
+          name: data.name.trim(),
+          phone: data.phone.trim(),
+          address: data.address.trim(),
+          city: data.city.trim(),
+          state: data.state.trim(),
+          country: data.country?.trim() || 'India',
+          pincode: data.pincode.trim(),
+          status: data.status || 'Active',
+        };
+        if (data.name?.trim()) payload.company = data.name.trim();
+        if (data.email?.trim()) payload.email = data.email.trim();
+        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
+        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
+        if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
 
-    saveSupplier(payload);
-    toast.success(editingSupplier ? `Supplier ${payload.name} updated.` : `Supplier ${payload.name} added.`);
-    setIsFormModalOpen(false);
+        const res = await supplierApi.updateSupplier(editingSupplier.id, payload);
+        if (res && res.data) {
+          const updated = mapApiSupplierToSupplier(res.data);
+          saveSupplier(updated);
+        } else {
+          saveSupplier({
+            ...editingSupplier,
+            ...data,
+            creditLimit: Number(data.creditLimit) || 0,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        toast.success(`Supplier "${data.name}" updated successfully.`);
+      } else {
+        const payload: CreateSupplierPayload = {
+          name: data.name.trim(),
+          phone: data.phone.trim(),
+          address: data.address.trim(),
+          city: data.city.trim(),
+          state: data.state.trim(),
+          country: data.country?.trim() || 'India',
+          pincode: data.pincode.trim(),
+          status: data.status || 'Active',
+        };
+        if (data.name?.trim()) payload.company = data.name.trim();
+        if (data.email?.trim()) payload.email = data.email.trim();
+        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
+        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
+        if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
+
+        const res = await supplierApi.createSupplier(payload);
+        if (res && res.data) {
+          const created = mapApiSupplierToSupplier(res.data);
+          saveSupplier(created);
+        } else {
+          const newSup: Supplier = {
+            id: `sup_${Date.now()}`,
+            supplierCode: data.supplierCode || `SUP-${Date.now()}`,
+            name: data.name,
+            contactPerson: data.contactPerson || data.name,
+            phone: data.phone || '',
+            email: data.email || '',
+            address: data.address || '',
+            city: data.city || '',
+            state: data.state || '',
+            country: data.country || 'India',
+            pincode: data.pincode || '',
+            gstNumber: data.gstNumber || '',
+            panNumber: data.panNumber || '',
+            paymentTerms: data.paymentTerms || 'Net 30 Days',
+            creditLimit: Number(data.creditLimit) || 0,
+            bankName: data.bankName || '',
+            accountNumber: data.accountNumber || '',
+            ifscCode: data.ifscCode || '',
+            branchName: data.branchName || '',
+            status: data.status || 'Active',
+            notes: data.notes || '',
+            totalPurchase: 0,
+            paid: 0,
+            payable: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          saveSupplier(newSup);
+        }
+        toast.success(`Supplier "${data.name}" added successfully.`);
+      }
+
+      setIsFormModalOpen(false);
+      loadSuppliers(true);
+    } catch (error: any) {
+      console.error('Error saving supplier:', error);
+      const fieldErrors = error?.response?.data?.error?.fields;
+      let msg =
+        error?.response?.data?.error?.message ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Failed to save supplier. Please check required fields.';
+      if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+        msg = fieldErrors.map((f: any) => `${f.path?.join('.') || 'field'}: ${f.message}`).join(' | ');
+      }
+      toast.error(msg);
+    } finally {
+      setIsSubmittingForm(false);
+    }
   };
 
-  // Filtered Suppliers
-  const filteredSuppliers = useMemo(() => {
-    return suppliers.filter((s) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        s.name.toLowerCase().includes(q) ||
-        s.supplierCode.toLowerCase().includes(q) ||
-        s.contactPerson.toLowerCase().includes(q) ||
-        s.email.toLowerCase().includes(q) ||
-        s.phone.toLowerCase().includes(q);
+  // Delete Supplier
+  const handleDeleteSupplier = async (sup: Supplier) => {
+    if (!window.confirm(`Are you sure you want to delete supplier "${sup.name}" (${sup.supplierCode})?`)) {
+      return;
+    }
 
-      const matchesStatus =
-        appliedStatus === 'All' || s.status.toLowerCase() === appliedStatus.toLowerCase();
-
-      return matchesSearch && matchesStatus;
-    });
-  }, [suppliers, appliedSearch, appliedStatus]);
-
-  const totalPages = Math.ceil(filteredSuppliers.length / pageSize) || 1;
-  const paginatedSuppliers = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredSuppliers.slice(start, start + pageSize);
-  }, [filteredSuppliers, currentPage, pageSize]);
+    try {
+      setIsDeletingId(sup.id);
+      await supplierApi.deleteSupplier(sup.id);
+      toast.success(`Supplier "${sup.name}" deleted successfully.`);
+      loadSuppliers(true);
+    } catch (error: any) {
+      console.error('Error deleting supplier:', error);
+      const msg =
+        error?.response?.data?.error?.message ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Failed to delete supplier.';
+      toast.error(msg);
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
 
   // Supplier Details Data Links
   const supplierPurchases = useMemo(() => {
@@ -306,12 +523,12 @@ export const SupplierView: React.FC = () => {
 
   // Export Suppliers to Excel
   const handleExportExcel = () => {
-    if (filteredSuppliers.length === 0) {
+    if (displaySuppliers.length === 0) {
       toast.error('No supplier records available to export.');
       return;
     }
 
-    const excelRows = filteredSuppliers.map((s, idx) => ({
+    const excelRows = displaySuppliers.map((s, idx) => ({
       sNo: idx + 1,
       supplierCode: s.supplierCode,
       name: s.name,
@@ -330,7 +547,7 @@ export const SupplierView: React.FC = () => {
       filename: `Suppliers_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Suppliers Master',
       title: 'YAA CREATIONS CRM - SUPPLIERS & VENDORS DIRECTORY',
-      subtitle: `Total Suppliers: ${filteredSuppliers.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Suppliers: ${displaySuppliers.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Supplier Code', key: 'supplierCode', align: 'center', width: 14 },
@@ -348,12 +565,12 @@ export const SupplierView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        name: `${filteredSuppliers.length} Suppliers`,
+        name: `${displaySuppliers.length} Suppliers`,
         payable: summary.totalPayables,
       },
     });
 
-    toast.success(`Suppliers Excel report downloaded (${filteredSuppliers.length} records)!`);
+    toast.success(`Suppliers Excel report downloaded (${displaySuppliers.length} records)!`);
   };
 
   return (
@@ -428,13 +645,13 @@ export const SupplierView: React.FC = () => {
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Inactive / Blocked</span>
-            <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center">
               <XCircle className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
             <div className="text-xl font-bold text-slate-900">{summary.inactiveCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Dormant vendors</div>
+            <div className="text-xs text-slate-500 mt-0.5">Procurement paused</div>
           </div>
         </div>
 
@@ -446,32 +663,32 @@ export const SupplierView: React.FC = () => {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold text-amber-600">
+            <div className="text-xl font-bold text-slate-900">
               ₹{summary.totalPayables.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">Accounts payable</div>
+            <div className="text-xs text-amber-600 font-medium mt-0.5">Pending vendor payments</div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">New Suppliers</span>
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Plus className="w-4 h-4" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">New (30 Days)</span>
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <Building className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
             <div className="text-xl font-bold text-slate-900">{summary.newSuppliersCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Added in last 30 days</div>
+            <div className="text-xs text-indigo-600 font-medium mt-0.5">Recently onboarded</div>
           </div>
         </div>
       </div>
 
-      {/* 3. Search Bar & Filter Row */}
+      {/* 3. Search & Filter Bar */}
       <SearchBar
+        placeholder="Search by supplier name, code, contact person, phone, email..."
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
-        placeholder="Search by supplier name, code, contact, email..."
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
           setAppliedStatus(pendingStatus);
@@ -501,9 +718,15 @@ export const SupplierView: React.FC = () => {
         }
         rightSlot={
           <div className="flex items-center gap-3 pr-1">
+            {isFetching && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />
+                <span>Updating...</span>
+              </div>
+            )}
             <span className="text-xs font-semibold text-slate-500">
               Total Suppliers :{' '}
-              <span className="text-[#33077C] font-bold">{filteredSuppliers.length}</span>
+              <span className="text-[#33077C] font-bold">{totalRecords || displaySuppliers.length}</span>
             </span>
           </div>
         }
@@ -526,7 +749,15 @@ export const SupplierView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {paginatedSuppliers.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin stroke-[2]" />
+                    <p className="font-semibold text-slate-700 text-sm">Loading suppliers...</p>
+                    <p className="text-xs text-slate-400 mt-1">Fetching live vendor directory from server</p>
+                  </td>
+                </tr>
+              ) : displaySuppliers.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <UsersRound className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -535,7 +766,7 @@ export const SupplierView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                paginatedSuppliers.map((sup) => {
+                displaySuppliers.map((sup) => {
                   const initials = getSupplierInitials(sup.name);
 
                   return (
@@ -549,11 +780,7 @@ export const SupplierView: React.FC = () => {
                           <div className="flex flex-col">
                             <span
                               className="font-bold text-slate-900 text-xs sm:text-[14px] cursor-pointer hover:text-[#33077C] hover:underline"
-                              onClick={() => {
-                                setSelectedSupplier(sup);
-                                setActiveTab('overview');
-                                setIsDetailModalOpen(true);
-                              }}
+                              onClick={() => handleOpenDetailModal(sup)}
                             >
                               {sup.name}
                             </span>
@@ -572,7 +799,7 @@ export const SupplierView: React.FC = () => {
                           </div>
                           <div>
                             <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
-                              {sup.contactPerson}
+                              {sup.contactPerson || sup.name}
                             </span>
                             <span className="text-[10px] text-slate-400 font-medium block">
                               Authorized Contact
@@ -615,15 +842,15 @@ export const SupplierView: React.FC = () => {
 
                       {/* 5. Total Purchase */}
                       <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap font-bold text-slate-900 text-xs sm:text-[13px]">
-                        ₹{sup.totalPurchase.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        ₹{(sup.totalPurchase || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 6. Paid / Payable */}
                       <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap">
                         <div className="font-bold text-emerald-600 text-xs">
-                          ₹{sup.paid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{(sup.paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </div>
-                        {sup.payable > 0 ? (
+                        {(sup.payable || 0) > 0 ? (
                           <div className="text-[10px] text-amber-600 font-semibold mt-0.5">
                             Due: ₹{sup.payable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </div>
@@ -669,132 +896,22 @@ export const SupplierView: React.FC = () => {
                           </button>
 
                           {/* Share / Forward Button with Popover */}
-                          <div className="relative inline-block text-left share-popover-container">
-                            <button
-                              type="button"
-                              title="Share Supplier Details"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeShareId === sup.id) {
-                                  setActiveShareId(null);
-                                  setSharePos(null);
-                                } else {
-                                  setActiveDropdownId(null);
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const popoverHeight = 140;
-                                  if (spaceBelow < popoverHeight) {
-                                    setSharePos({
-                                      bottom: window.innerHeight - btnRect.top + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  } else {
-                                    setSharePos({
-                                      top: btnRect.bottom + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  }
-                                  setActiveShareId(sup.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4" />
-                            </button>
-
-                            {activeShareId === sup.id && sharePos && (
-                              <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                style={{
-                                  top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                  bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
-                                }}
-                              >
-                                <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                  Share
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Email Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const subject = encodeURIComponent(`Supplier Details: ${sup.name}`);
-                                      const body = encodeURIComponent(
-                                        `Supplier: ${sup.name}\nCode: ${sup.supplierCode}\nContact Person: ${sup.contactPerson}\nPhone: ${sup.phone}\nEmail: ${sup.email}\nAddress: ${sup.address || sup.city || ''}`
-                                      );
-                                      window.open(`mailto:${sup.email || ''}?subject=${subject}&body=${body}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1" />
-                                        <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335" />
-                                        <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4" />
-                                        <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853" />
-                                        <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2" />
-                                        <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F" />
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                  </button>
-
-                                  {/* WhatsApp Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `*Supplier Details:*\n*Name:* ${sup.name}\n*Code:* ${sup.supplierCode}\n*Contact Person:* ${sup.contactPerson}\n*Phone:* ${sup.phone}\n*Email:* ${sup.email}`
-                                      );
-                                      const phoneClean = sup.phone.replace(/[^0-9]/g, '');
-                                      window.open(`https://api.whatsapp.com/send?phone=${phoneClean}&text=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z" />
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                  </button>
-
-                                  {/* SMS Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `Supplier Details: ${sup.name} (${sup.supplierCode}) - Contact: ${sup.contactPerson}, Phone: ${sup.phone}`
-                                      );
-                                      const phoneClean = sup.phone.replace(/[^0-9]/g, '');
-                                      window.open(`sms:${phoneClean}?body=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z" />
-                                        <circle cx="8" cy="11" r="1.2" fill="white" />
-                                        <circle cx="12" cy="11" r="1.2" fill="white" />
-                                        <circle cx="16" cy="11" r="1.2" fill="white" />
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <UniversalShareDropdown
+                            id={sup.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatSupplierShare(sup)}
+                            title="Share Supplier Details"
+                          />
 
                           {/* 3-dots Actions Dropdown */}
                           <div className="relative inline-block text-left action-dropdown-container">
                             <button
                               type="button"
                               title="More Options"
+                              disabled={isDeletingId === sup.id}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (activeDropdownId === sup.id) {
@@ -818,9 +935,13 @@ export const SupplierView: React.FC = () => {
                                   setActiveDropdownId(sup.id);
                                 }
                               }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
                             >
-                              <MoreVertical className="w-4 h-4" />
+                              {isDeletingId === sup.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                              ) : (
+                                <MoreVertical className="w-4 h-4" />
+                              )}
                             </button>
                           </div>
 
@@ -862,12 +983,9 @@ export const SupplierView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  if (confirm(`Delete supplier ${sup.name}?`)) {
-                                    deleteSupplier(sup.id);
-                                    toast.success(`Supplier ${sup.name} deleted.`);
-                                  }
+                                  handleDeleteSupplier(sup);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
                               >
                                 Delete
                               </button>
@@ -890,9 +1008,7 @@ export const SupplierView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  setSelectedSupplier(sup);
-                                  setActiveTab('overview');
-                                  setIsDetailModalOpen(true);
+                                  handleOpenDetailModal(sup);
                                 }}
                                 className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
                               >
@@ -939,9 +1055,9 @@ export const SupplierView: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {filteredSuppliers.length > 0 && (
+      {(totalRecords > 0 || displaySuppliers.length > 0) && (
         <Pagination
-          total={filteredSuppliers.length}
+          total={totalRecords || displaySuppliers.length}
           currentPage={currentPage}
           pageSize={pageSize}
           pageSizeOptions={[5, 10, 20, 50]}
@@ -967,7 +1083,7 @@ export const SupplierView: React.FC = () => {
         hideCloseButton={true}
         onBack={() => setIsFormModalOpen(false)}
       >
-        <form onSubmit={(e) => { e.preventDefault(); handleSaveSupplier(); }} className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs">
+        <form noValidate onSubmit={handleSubmit(onSaveSupplier)} className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs">
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -978,9 +1094,10 @@ export const SupplierView: React.FC = () => {
                 type="text"
                 readOnly
                 disabled
-                value={formData.supplierCode}
+                {...register('supplierCode')}
                 className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-700 outline-none cursor-not-allowed select-none"
               />
+              <FormError message={errors.supplierCode?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -988,11 +1105,13 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                required
-                value={formData.name}
-                onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('name')}
+                placeholder="e.g. Agarwal Components Pvt Ltd"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.name ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.name?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1000,11 +1119,13 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                required
-                value={formData.contactPerson}
-                onChange={(e) => setFormData((prev) => ({ ...prev, contactPerson: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('contactPerson')}
+                placeholder="e.g. Ramesh Agarwal"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.contactPerson ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.contactPerson?.message} />
             </div>
           </div>
 
@@ -1012,14 +1133,17 @@ export const SupplierView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Phone Number
+                Phone Number <span className="text-slate-500">*</span>
               </label>
               <input
                 type="text"
-                value={formData.phone}
-                onChange={(e) => setFormData((prev) => ({ ...prev, phone: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('phone')}
+                placeholder="e.g. 9988776655"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.phone ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.phone?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1027,21 +1151,27 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="email"
-                value={formData.email}
-                onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('email')}
+                placeholder="e.g. procurement@agarwal.in"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.email ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.email?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Street Address
+                Street Address <span className="text-slate-500">*</span>
               </label>
               <input
                 type="text"
-                value={formData.address}
-                onChange={(e) => setFormData((prev) => ({ ...prev, address: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('address')}
+                placeholder="e.g. 45 Industrial Area, Phase 2"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.address ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.address?.message} />
             </div>
           </div>
 
@@ -1049,36 +1179,45 @@ export const SupplierView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                City
+                City <span className="text-slate-500">*</span>
               </label>
               <input
                 type="text"
-                value={formData.city}
-                onChange={(e) => setFormData((prev) => ({ ...prev, city: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('city')}
+                placeholder="e.g. Delhi"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.city ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.city?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                State
+                State <span className="text-slate-500">*</span>
               </label>
               <input
                 type="text"
-                value={formData.state}
-                onChange={(e) => setFormData((prev) => ({ ...prev, state: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('state')}
+                placeholder="e.g. Delhi"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.state ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.state?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Pincode
+                Pincode <span className="text-slate-500">*</span>
               </label>
               <input
                 type="text"
-                value={formData.pincode}
-                onChange={(e) => setFormData((prev) => ({ ...prev, pincode: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                {...register('pincode')}
+                placeholder="e.g. 110041"
+                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  errors.pincode ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              <FormError message={errors.pincode?.message} />
             </div>
           </div>
 
@@ -1090,10 +1229,10 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.country}
-                onChange={(e) => setFormData((prev) => ({ ...prev, country: e.target.value }))}
+                {...register('country')}
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.country?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1101,10 +1240,11 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.gstNumber}
-                onChange={(e) => setFormData((prev) => ({ ...prev, gstNumber: e.target.value }))}
+                {...register('gstNumber')}
+                placeholder="e.g. 07AAACA1234A1ZV"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.gstNumber?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1112,14 +1252,15 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.panNumber}
-                onChange={(e) => setFormData((prev) => ({ ...prev, panNumber: e.target.value }))}
+                {...register('panNumber')}
+                placeholder="e.g. AAACA1234A"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.panNumber?.message} />
             </div>
           </div>
 
-          {/* Row 5: Payment Terms | Credit Limit | Bank Name */}
+          {/* Row 5: Payment Terms | Credit Limit | Status */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1127,10 +1268,11 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.paymentTerms}
-                onChange={(e) => setFormData((prev) => ({ ...prev, paymentTerms: e.target.value }))}
+                {...register('paymentTerms')}
+                placeholder="e.g. Net 30"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.paymentTerms?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1139,36 +1281,52 @@ export const SupplierView: React.FC = () => {
               <input
                 type="number"
                 min="0"
-                value={formData.creditLimit}
-                onChange={(e) => setFormData((prev) => ({ ...prev, creditLimit: Number(e.target.value) }))}
+                {...register('creditLimit', { valueAsNumber: true })}
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.creditLimit?.message} />
             </div>
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Status
+              </label>
+              <select
+                {...register('status')}
+                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+              >
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+                <option value="Blocked">Blocked</option>
+              </select>
+              <FormError message={errors.status?.message} />
+            </div>
+          </div>
+
+          {/* Row 6: Bank Name | Account Number | IFSC Code */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Bank Name
               </label>
               <input
                 type="text"
-                value={formData.bankName}
-                onChange={(e) => setFormData((prev) => ({ ...prev, bankName: e.target.value }))}
+                {...register('bankName')}
+                placeholder="e.g. HDFC Bank"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.bankName?.message} />
             </div>
-          </div>
-
-          {/* Row 6: Account Number | IFSC Code | Branch Name */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Account Number
               </label>
               <input
                 type="text"
-                value={formData.accountNumber}
-                onChange={(e) => setFormData((prev) => ({ ...prev, accountNumber: e.target.value }))}
+                {...register('accountNumber')}
+                placeholder="e.g. 50200012345678"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={errors.accountNumber?.message} />
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1176,21 +1334,11 @@ export const SupplierView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.ifscCode}
-                onChange={(e) => setFormData((prev) => ({ ...prev, ifscCode: e.target.value }))}
+                {...register('ifscCode')}
+                placeholder="e.g. HDFC0000123"
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Branch Name
-              </label>
-              <input
-                type="text"
-                value={formData.branchName}
-                onChange={(e) => setFormData((prev) => ({ ...prev, branchName: e.target.value }))}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <FormError message={errors.ifscCode?.message} />
             </div>
           </div>
 
@@ -1205,10 +1353,20 @@ export const SupplierView: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+              disabled={isSubmittingForm}
+              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <Check className="w-4 h-4" />
-              <span>Save</span>
+              {isSubmittingForm ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Save</span>
+                </>
+              )}
             </button>
           </div>
         </form>
@@ -1252,8 +1410,11 @@ export const SupplierView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Status Pill */}
-              <div className="flex items-center shrink-0">
+              {/* Status Pill & Spinner */}
+              <div className="flex items-center gap-2.5 shrink-0">
+                {isDetailLoading && (
+                  <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                )}
                 {selectedSupplier.status === 'Active' && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200/90 shadow-2xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -1289,10 +1450,11 @@ export const SupplierView: React.FC = () => {
                     key={tab.id}
                     type="button"
                     onClick={() => setActiveTab(tab.id as any)}
-                    className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${isActive
-                      ? 'bg-[#33077C] text-white shadow-sm'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs'
-                      }`}
+                    className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                      isActive
+                        ? 'bg-[#33077C] text-white shadow-sm'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs'
+                    }`}
                   >
                     {isActive && (
                       <Check className="w-3.5 h-3.5 stroke-[3] text-white shrink-0" />
@@ -1311,35 +1473,35 @@ export const SupplierView: React.FC = () => {
                   <div className="p-4 bg-purple-50/40 rounded-2xl border border-purple-100 shadow-2xs">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Purchase</span>
                     <div className="text-xl font-bold text-slate-900 mt-1">
-                      ₹{selectedSupplier.totalPurchase.toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.totalPurchase || 0).toLocaleString('en-IN')}
                     </div>
                   </div>
 
                   <div className="p-4 bg-emerald-50/40 rounded-2xl border border-emerald-100 shadow-2xs">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Paid</span>
                     <div className="text-xl font-bold text-emerald-600 mt-1">
-                      ₹{selectedSupplier.paid.toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.paid || 0).toLocaleString('en-IN')}
                     </div>
                   </div>
 
                   <div className="p-4 bg-amber-50/40 rounded-2xl border border-amber-100 shadow-2xs">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Payable</span>
                     <div className="text-xl font-bold text-amber-500 mt-1">
-                      ₹{selectedSupplier.payable.toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.payable || 0).toLocaleString('en-IN')}
                     </div>
                   </div>
 
                   <div className="p-4 bg-slate-50/60 rounded-2xl border border-slate-200 shadow-2xs">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Credit Limit</span>
                     <div className="text-xl font-bold text-slate-900 mt-1">
-                      ₹{selectedSupplier.creditLimit.toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.creditLimit || 0).toLocaleString('en-IN')}
                     </div>
                   </div>
                 </div>
 
                 {/* Two Column Layout Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
-                  {/* Left Column: Company & Registration Details */}
+                  {/* Left Column: Bank & Tax Details */}
                   <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
                     <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
                       <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
@@ -1451,10 +1613,11 @@ export const SupplierView: React.FC = () => {
                               <td className="py-3.5 px-4 text-right font-bold text-emerald-600 border border-slate-200 whitespace-nowrap">₹{paidAmount.toLocaleString('en-IN')}</td>
                               <td className="py-3.5 px-4 text-right font-bold text-amber-600 border border-slate-200 whitespace-nowrap">₹{p.balance.toLocaleString('en-IN')}</td>
                               <td className="py-3.5 px-4 text-center border border-slate-200 whitespace-nowrap">
-                                <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${p.purchaseStatus === 'Completed' || p.purchaseStatus === 'Received'
-                                  ? 'bg-purple-50/80 text-[#33077C] border-purple-200'
-                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                  }`}>
+                                <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${
+                                  p.purchaseStatus === 'Completed' || p.purchaseStatus === 'Received'
+                                    ? 'bg-purple-50/80 text-[#33077C] border-purple-200'
+                                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                }`}>
                                   {p.purchaseStatus}
                                 </span>
                               </td>
@@ -1527,7 +1690,7 @@ export const SupplierView: React.FC = () => {
                           Current Outstanding Payable
                         </td>
                         <td className="py-3.5 px-5 text-right font-bold text-amber-600 border border-slate-200">
-                          ₹{selectedSupplier.payable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{(selectedSupplier.payable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                       </tr>
                       <tr className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">
@@ -1535,7 +1698,7 @@ export const SupplierView: React.FC = () => {
                           Agreed Credit Limit
                         </td>
                         <td className="py-3.5 px-5 text-right font-bold text-slate-900 border border-slate-200">
-                          ₹{selectedSupplier.creditLimit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹{(selectedSupplier.creditLimit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                       </tr>
                       <tr className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">

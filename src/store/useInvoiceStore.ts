@@ -45,7 +45,7 @@ export interface SavedInvoice {
   referenceNumbers: string[];
   description: string;
   customFields?: Array<{ id: string; label: string; value: string; type?: string }>;
-  status: 'Paid' | 'Pending' | 'Partially Paid' | 'Overdue';
+  status: 'Draft' | 'Sent' | 'Partially Paid' | 'Paid' | 'Overdue' | 'Cancelled' | 'Pending' | 'Approved' | 'Converted';
   client: {
     id: string;
     company: string;
@@ -82,6 +82,18 @@ export interface SavedInvoice {
   roundMode?: 'none' | 'up' | 'down';
   roundOffAmount?: number;
   grandTotal: number;
+  amountPaid?: number;
+  balanceDue?: number;
+  payments?: Array<{
+    id: string;
+    invoiceId: string;
+    amount: number;
+    paymentDate: string;
+    paymentMode: string;
+    referenceNumber?: string | null;
+    notes?: string | null;
+    createdAt: string;
+  }>;
   paymentDetails?: InvoicePaymentDetails;
   createdAt: string;
 }

@@ -1,9 +1,35 @@
 import React, { useState, useEffect } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '../../context/AuthContext';
 import { Product, ProductPlan, BillingCycle, PricingType } from '../../types';
+import { PlanSchema, PlanFormData } from '../../validations';
 import { CustomSelect } from '../common/CustomSelect';
+import { FormError } from '../common/FormError';
 import { Modal } from '../common/Modal';
-import { Plus, Check, X } from 'lucide-react';
+import {
+  Plus,
+  Check,
+  X,
+  LayoutDashboard,
+  Building2,
+  GitBranch,
+  Boxes,
+  UsersRound,
+  FileText,
+  FileSpreadsheet,
+  Receipt,
+  CheckSquare,
+  CreditCard,
+  Repeat,
+  Bell,
+  BarChart3,
+  ShoppingBag,
+  Settings,
+  Package,
+  ShoppingCart,
+  Truck,
+} from 'lucide-react';
 
 const GST_RATE_OPTIONS = [
   { value: '18', label: '18% (Standard GST)' },
@@ -33,6 +59,118 @@ const PLAN_STATUS_OPTIONS = [
   'Inactive',
 ];
 
+export interface AppPermissionModule {
+  id: string;
+  name: string;
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+}
+
+export const APPLICATION_MODULES: AppPermissionModule[] = [
+  {
+    id: 'dashboard',
+    name: 'Dashboard',
+    icon: LayoutDashboard,
+    iconColor: '#33077C',
+  },
+  {
+    id: 'organizations',
+    name: 'Organizations & Sub-Orgs',
+    icon: Building2,
+    iconColor: '#2563eb',
+  },
+  {
+    id: 'branches',
+    name: 'Branches',
+    icon: GitBranch,
+    iconColor: '#059669',
+  },
+  {
+    id: 'products',
+    name: 'products',
+    icon: Boxes,
+    iconColor: '#d97706',
+  },
+  {
+    id: 'leads',
+    name: 'Clients & Leads',
+    icon: UsersRound,
+    iconColor: '#7c3aed',
+  },
+  {
+    id: 'quotes',
+    name: 'Quotations',
+    icon: FileText,
+    iconColor: '#0891b2',
+  },
+  {
+    id: 'proforma',
+    name: 'Proforma Invoices',
+    icon: FileSpreadsheet,
+    iconColor: '#4f46e5',
+  },
+  {
+    id: 'invoices',
+    name: 'Invoices',
+    icon: Receipt,
+    iconColor: '#16a34a',
+  },
+  {
+    id: 'work_mgmt',
+    name: 'Work Management',
+    icon: CheckSquare,
+    iconColor: '#ea580c',
+  },
+  {
+    id: 'payments',
+    name: 'Payments',
+    icon: CreditCard,
+    iconColor: '#0284c7',
+  },
+  {
+    id: 'subscriptions',
+    name: 'subscription plans',
+    icon: Repeat,
+    iconColor: '#9333ea',
+  },
+  {
+    id: 'reminders',
+    name: 'Notifications',
+    icon: Bell,
+    iconColor: '#e11d48',
+  },
+  {
+    id: 'reports',
+    name: 'CRM Reports',
+    icon: BarChart3,
+    iconColor: '#0d9488',
+  },
+  {
+    id: 'sm_inventory',
+    name: 'Inventory',
+    icon: Package,
+    iconColor: '#0891b2',
+  },
+  {
+    id: 'sm_sales_hub',
+    name: 'Sales Hub',
+    icon: ShoppingCart,
+    iconColor: '#ca8a04',
+  },
+  {
+    id: 'sm_purchase',
+    name: 'Purchase',
+    icon: Truck,
+    iconColor: '#ea580c',
+  },
+  {
+    id: 'settings',
+    name: 'System Settings',
+    icon: Settings,
+    iconColor: '#475569',
+  },
+];
+
 interface PlanFormModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -45,61 +183,7 @@ interface PlanFormModalProps {
 
 const inputClass =
   'w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all';
-const selectClass =
-  'w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer';
 const labelClass = 'text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5';
-
-const DEFAULT_SPECS: Record<string, Record<string, any>> = {
-  prod_1: {
-    employeeLimit: 25,
-    adminUserLimit: 3,
-    attendance: true,
-    leaveManagement: true,
-    payroll: false,
-    reports: true,
-  },
-  prod_2: {
-    doctorLimit: 3,
-    staffUserLimit: 5,
-    patientLimit: 500,
-    appointmentManagement: true,
-    medicalRecords: true,
-    billing: true,
-    videoConsultation: false,
-  },
-  prod_5: {
-    venueLimit: 1,
-    turfCourtLimit: 2,
-    bookingLimit: 500,
-    onlineBooking: true,
-    paymentIntegration: true,
-    tournamentManagement: false,
-  },
-  prod_4: {
-    astrologerUserLimit: 2,
-    consultationLimit: 200,
-    aiAstrology: true,
-    onlineConsultation: true,
-    bookingManagement: true,
-    customerManagement: true,
-  },
-  prod_6: {
-    monthlyPostLimit: 12,
-    monthlyReelLimit: 4,
-    monthlyVideoLimit: 2,
-    socialMediaManagement: true,
-    seo: false,
-    adsManagement: false,
-  },
-  prod_3: {
-    dentistDoctorLimit: 2,
-    dentalChairLimit: 2,
-    patientLimit: 500,
-    dentalCharting: true,
-    digitalXRayDicom: true,
-    treatmentPlansBilling: true,
-  },
-};
 
 export const PlanFormModal: React.FC<PlanFormModalProps> = ({
   isOpen,
@@ -116,27 +200,55 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
   const [selectedProductId, setSelectedProductId] = useState<string>(
     initialProductId || products[0]?.id || 'prod_1'
   );
-  const [name, setName] = useState('');
   const [isCustomPlanSelected, setIsCustomPlanSelected] = useState(false);
   const [customPlanName, setCustomPlanName] = useState('');
-  const [price, setPrice] = useState<number | string>('');
-  const [gstRate, setGstRate] = useState<number | ''>('');
-  const [currency, setCurrency] = useState('₹');
-  const [billingCycle, setBillingCycle] = useState<BillingCycle | ''>('');
-  const [planType, setPlanType] = useState<PricingType | ''>('');
-  const [status, setStatus] = useState<'Active' | 'Inactive' | ''>('');
-  const [maxBranchLimit, setMaxBranchLimit] = useState<number | string>('');
-  const [description, setDescription] = useState('');
-  const [isPopular, setIsPopular] = useState(false);
   const [features, setFeatures] = useState<string[]>([]);
   const [newFeature, setNewFeature] = useState('');
   const [specs, setSpecs] = useState<Record<string, any>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Module Permissions state: key is module id, value is 'all' or 'none'
+  const [modulePermissions, setModulePermissions] = useState<Record<string, 'all' | 'none'>>(() => {
+    const init: Record<string, 'all' | 'none'> = {};
+    APPLICATION_MODULES.forEach((mod) => {
+      init[mod.id] = 'all';
+    });
+    return init;
+  });
+
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    watch,
+    setValue,
+    formState: { errors, isSubmitting },
+  } = useForm<PlanFormData>({
+    resolver: zodResolver(PlanSchema),
+    defaultValues: {
+      name: '',
+      price: 0,
+      gstRate: 18,
+      currency: '₹',
+      billingCycle: '' as any,
+      planType: '' as any,
+      status: '' as any,
+      maxBranchLimit: '',
+      description: '',
+      isPopular: false,
+      features: [],
+    },
+  });
+
+  const price = watch('price');
+  const gstRate = watch('gstRate');
+  const currency = watch('currency') || '₹';
+  const name = watch('name');
 
   // Auto calculate GST and Total Price
   const numericPrice = Number(price) || 0;
-  const hasPrice = price !== '' && !isNaN(Number(price)) && Number(price) > 0;
-  const numericGst = gstRate !== '' ? Number(gstRate) : 0;
+  const hasPrice = price !== undefined && price !== null && !isNaN(Number(price)) && Number(price) > 0;
+  const numericGst = gstRate !== undefined && gstRate !== '' ? Number(gstRate) : 0;
   const gstAmount = Math.round((numericPrice * numericGst) / 100);
   const totalPriceWithGst = numericPrice + gstAmount;
 
@@ -184,44 +296,67 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
   useEffect(() => {
     if (initialPlan) {
       const isCustom = !['Basic', 'Standard', 'Premium', 'Enterprise'].includes(initialPlan.name || '');
-      setName(initialPlan.name || '');
       setIsCustomPlanSelected(isCustom);
       setCustomPlanName(isCustom ? (initialPlan.name || '') : '');
-      setPrice(initialPlan.price ?? '');
-      setGstRate(18);
-      setCurrency(initialPlan.currency || '₹');
-      setBillingCycle(initialPlan.billingCycle || 'Monthly');
-      setPlanType(initialPlan.pricingType || (initialPlan.customizablePrice ? 'Custom Quote' : 'Fixed'));
-      setStatus(initialPlan.status || 'Active');
-      setMaxBranchLimit(
-        initialPlan.maxBranchLimit !== undefined
-          ? initialPlan.maxBranchLimit
-          : initialPlan.specs?.maxBranchLimit !== undefined
-          ? initialPlan.specs.maxBranchLimit
-          : ''
-      );
-      setDescription(initialPlan.description || '');
-      setIsPopular(!!initialPlan.isPopular);
+      reset({
+        name: initialPlan.name || '',
+        price: initialPlan.price ?? 0,
+        gstRate: (initialPlan.specs as any)?.gstRate ?? 18,
+        currency: initialPlan.currency || '₹',
+        billingCycle: (initialPlan.billingCycle as any) || 'Monthly',
+        planType: (initialPlan.pricingType as any) || (initialPlan.customizablePrice ? 'Custom Quote' : 'Fixed'),
+        status: (initialPlan.status as any) || 'Active',
+        maxBranchLimit:
+          initialPlan.maxBranchLimit !== undefined
+            ? initialPlan.maxBranchLimit
+            : initialPlan.specs?.maxBranchLimit !== undefined
+            ? initialPlan.specs.maxBranchLimit
+            : '',
+        description: initialPlan.description || '',
+        isPopular: !!initialPlan.isPopular,
+        features: initialPlan.features ? [...initialPlan.features] : [],
+      });
       setFeatures(initialPlan.features ? [...initialPlan.features] : []);
       setSpecs(initialPlan.specs || {});
+
+      // Restore module permissions from initialPlan if present
+      const loadedPerms: Record<string, 'all' | 'none'> = {};
+      const planPerms = (initialPlan as any).permissions || (initialPlan.specs as any)?.modulePermissions;
+      APPLICATION_MODULES.forEach((mod) => {
+        if (planPerms && planPerms[mod.id]) {
+          loadedPerms[mod.id] = planPerms[mod.id];
+        } else {
+          loadedPerms[mod.id] = 'all';
+        }
+      });
+      setModulePermissions(loadedPerms);
     } else {
-      setName('');
       setIsCustomPlanSelected(false);
       setCustomPlanName('');
-      setPrice('');
-      setGstRate('');
-      setCurrency('₹');
-      setBillingCycle('');
-      setPlanType('');
-      setStatus('');
-      setMaxBranchLimit('');
-      setDescription('');
-      setIsPopular(false);
+      reset({
+        name: '',
+        price: 0,
+        gstRate: '',
+        currency: '₹',
+        billingCycle: '' as any,
+        planType: '' as any,
+        status: '' as any,
+        maxBranchLimit: '',
+        description: '',
+        isPopular: false,
+        features: [],
+      });
       setFeatures([]);
       const effectiveProdId = initialProductId || products[0]?.id || 'prod_1';
       setSpecs(getInitialProductSpecs(effectiveProdId));
+
+      const defaultPerms: Record<string, 'all' | 'none'> = {};
+      APPLICATION_MODULES.forEach((mod) => {
+        defaultPerms[mod.id] = 'all';
+      });
+      setModulePermissions(defaultPerms);
     }
-  }, [initialPlan, isOpen, initialProductId]);
+  }, [initialPlan, isOpen, initialProductId, reset]);
 
   useEffect(() => {
     if (initialProductId) {
@@ -259,28 +394,56 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
     setFeatures(features.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const finalPlanName = isCustomPlanSelected ? customPlanName.trim() : name.trim();
+  // Master check state for All Access and No Access
+  const allModulesHaveAllAccess = APPLICATION_MODULES.every((m) => modulePermissions[m.id] === 'all');
+  const allModulesHaveNoAccess = APPLICATION_MODULES.every((m) => modulePermissions[m.id] === 'none');
+
+  const handleToggleGlobalAllAccess = (checked: boolean) => {
+    const next: Record<string, 'all' | 'none'> = {};
+    APPLICATION_MODULES.forEach((m) => {
+      next[m.id] = checked ? 'all' : 'none';
+    });
+    setModulePermissions(next);
+  };
+
+  const handleToggleGlobalNoAccess = (checked: boolean) => {
+    const next: Record<string, 'all' | 'none'> = {};
+    APPLICATION_MODULES.forEach((m) => {
+      next[m.id] = checked ? 'none' : 'all';
+    });
+    setModulePermissions(next);
+  };
+
+  const handleSetModuleAccess = (moduleId: string, access: 'all' | 'none') => {
+    setModulePermissions((prev) => ({
+      ...prev,
+      [moduleId]: access,
+    }));
+  };
+
+  const onSubmit = async (data: PlanFormData) => {
+    const finalPlanName = isCustomPlanSelected ? customPlanName.trim() : data.name.trim();
     if (!finalPlanName) return;
 
-    setIsSubmitting(true);
     try {
       const planData: Partial<ProductPlan> = {
         name: finalPlanName,
-        price: Number(price) || 0,
-        currency,
-        billingCycle: (billingCycle as BillingCycle) || 'Monthly',
-        pricingType: planType ? (planType as PricingType) : undefined,
-        customizablePrice: planType === 'Custom Quote',
-        status: (status as 'Active' | 'Inactive') || 'Active',
-        maxBranchLimit: maxBranchLimit !== '' ? Number(maxBranchLimit) : undefined,
-        description: description.trim(),
-        isPopular,
+        price: Number(data.price) || 0,
+        currency: data.currency,
+        billingCycle: (data.billingCycle as BillingCycle) || 'Monthly',
+        pricingType: data.planType ? (data.planType as PricingType) : undefined,
+        customizablePrice: data.planType === 'Custom Quote',
+        status: (data.status as 'Active' | 'Inactive') || 'Active',
+        maxBranchLimit: data.maxBranchLimit !== '' && data.maxBranchLimit !== undefined ? Number(data.maxBranchLimit) : undefined,
+        description: (data.description || '').trim(),
+        isPopular: data.isPopular,
         features: features.filter(Boolean),
+        permissions: modulePermissions,
         specs: {
           ...specs,
-          ...(maxBranchLimit !== '' ? { maxBranchLimit: Number(maxBranchLimit) } : {}),
+          modulePermissions,
+          ...(data.gstRate !== '' && data.gstRate !== undefined ? { gstRate: Number(data.gstRate) } : {}),
+          ...(data.maxBranchLimit !== '' && data.maxBranchLimit !== undefined ? { maxBranchLimit: Number(data.maxBranchLimit) } : {}),
         },
       };
 
@@ -288,8 +451,6 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       onClose();
     } catch (err) {
       console.error(err);
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -380,12 +541,12 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       onClose={onClose}
       title={initialPlan ? `Edit Plan: ${initialPlan.name}` : 'Add Plan'}
       subtitle={isSuperAdmin ? "Set plan pricing, taxes, billing cycle, and plan tier status" : "Configure pricing, billing intervals, and feature limits"}
-      maxWidth="4xl"
+      maxWidth="5xl"
       headerGradient={true}
       showBackIcon={true}
       hideCloseButton={true}
     >
-      <form onSubmit={handleSubmit} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
         {isSuperAdmin ? (
           <div className="space-y-4">
             {/* Row 1: Plan Name (1 col), Price (1 col), GST Rate (1 col) */}
@@ -396,11 +557,10 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                 </label>
                 <input
                   type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  {...register('name')}
                   className={inputClass}
                 />
+                <FormError message={errors.name?.message} />
               </div>
 
               <div>
@@ -413,25 +573,30 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   </span>
                   <input
                     type="number"
-                    min="0"
                     step="any"
-                    required
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
+                    {...register('price', { valueAsNumber: true })}
                     className={`${inputClass} pl-8 font-semibold text-slate-900`}
                   />
                 </div>
+                <FormError message={errors.price?.message} />
               </div>
 
               <div>
                 <label className={labelClass}>GST Rate</label>
-                <CustomSelect
-                  value={gstRate !== '' ? String(gstRate) : ''}
-                  onChange={(val) => setGstRate(val === '' ? '' : Number(val))}
-                  options={GST_RATE_OPTIONS}
-                  placeholder="Select GST Rate"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="gstRate"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value !== undefined && field.value !== '' ? String(field.value) : ''}
+                      onChange={(val) => field.onChange(val === '' ? '' : Number(val))}
+                      options={GST_RATE_OPTIONS}
+                      placeholder="Select GST Rate"
+                      activeColor="brand"
+                    />
+                  )}
                 />
+                <FormError message={errors.gstRate?.message} />
               </div>
             </div>
 
@@ -461,26 +626,40 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                 <label className={labelClass}>
                   Billing Cycle <span className="text-slate-500">*</span>
                 </label>
-                <CustomSelect
-                  value={billingCycle}
-                  onChange={(val) => setBillingCycle(val as any)}
-                  options={BILLING_CYCLE_OPTIONS}
-                  placeholder="Select Billing Cycle"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="billingCycle"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as any)}
+                      options={BILLING_CYCLE_OPTIONS}
+                      placeholder="Select Billing Cycle"
+                      activeColor="brand"
+                    />
+                  )}
                 />
+                <FormError message={errors.billingCycle?.message} />
               </div>
 
               <div>
                 <label className={labelClass}>
                   Plan Type <span className="text-slate-500">*</span>
                 </label>
-                <CustomSelect
-                  value={planType}
-                  onChange={(val) => setPlanType(val as any)}
-                  options={PLAN_TYPE_OPTIONS}
-                  placeholder="Select Plan Type"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="planType"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as any)}
+                      options={PLAN_TYPE_OPTIONS}
+                      placeholder="Select Plan Type"
+                      activeColor="brand"
+                    />
+                  )}
                 />
+                <FormError message={errors.planType?.message} />
               </div>
             </div>
 
@@ -490,13 +669,116 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                 <label className={labelClass}>
                   Status <span className="text-slate-500">*</span>
                 </label>
-                <CustomSelect
-                  value={status}
-                  onChange={(val) => setStatus(val as any)}
-                  options={PLAN_STATUS_OPTIONS}
-                  placeholder="Select Status"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="status"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as any)}
+                      options={PLAN_STATUS_OPTIONS}
+                      placeholder="Select Status"
+                      activeColor="brand"
+                    />
+                  )}
                 />
+                <FormError message={errors.status?.message} />
+              </div>
+            </div>
+
+            {/* Module Permissions Section - Exact Reference Image 2 Design */}
+            <div className="pt-6 sm:pt-8 border-t border-slate-100">
+              <div className="mb-5">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">Module Permissions</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Configure access permissions for each module. Users with "All Access" can use all features, while "No Access" restricts module usage.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse border border-slate-200">
+                    <thead>
+                      <tr className="bg-[#33077C] text-white text-[11px] sm:text-[12px] font-bold uppercase tracking-wider">
+                        <th className="py-3.5 px-5 border border-[#33077C]/30 bg-[#33077C] text-white font-extrabold">MODULE</th>
+                        <th className="py-3.5 px-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white font-extrabold">ALL ACCESS</th>
+                        <th className="py-3.5 px-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white font-extrabold">NO ACCESS</th>
+                        <th className="py-3.5 px-5 text-center border border-[#33077C]/30 bg-[#33077C] text-white font-extrabold">STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-700">
+                      {APPLICATION_MODULES.map((mod) => {
+                        const Icon = mod.icon;
+                        const isAll = modulePermissions[mod.id] === 'all';
+                        const isNone = modulePermissions[mod.id] === 'none';
+
+                        return (
+                          <tr
+                            key={mod.id}
+                            className={`transition-colors hover:bg-slate-50/80 ${
+                              isAll ? 'bg-white' : 'bg-slate-50/40'
+                            }`}
+                          >
+                            {/* Module Name with Icon */}
+                            <td className="py-3.5 px-5 border border-slate-200">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-2xs"
+                                  style={{
+                                    backgroundColor: `${mod.iconColor}15`,
+                                    color: mod.iconColor,
+                                  }}
+                                >
+                                  <Icon className="w-4.5 h-4.5" />
+                                </div>
+                                <span className="font-bold text-slate-800 text-xs sm:text-[13px] tracking-tight">
+                                  {mod.name}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* ALL ACCESS Checkbox */}
+                            <td className="py-3.5 px-4 text-center border border-slate-200">
+                              <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                                <input
+                                  type="checkbox"
+                                  checked={isAll}
+                                  onChange={() => handleSetModuleAccess(mod.id, 'all')}
+                                  className="w-4.5 h-4.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20 accent-emerald-600 cursor-pointer"
+                                />
+                              </label>
+                            </td>
+
+                            {/* NO ACCESS Checkbox (Red/Rose color when checked) */}
+                            <td className="py-3.5 px-4 text-center border border-slate-200">
+                              <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                                <input
+                                  type="checkbox"
+                                  checked={isNone}
+                                  onChange={() => handleSetModuleAccess(mod.id, 'none')}
+                                  className="w-4.5 h-4.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500/20 accent-rose-600 cursor-pointer"
+                                />
+                              </label>
+                            </td>
+
+                            {/* Status Badge */}
+                            <td className="py-3.5 px-5 text-center border border-slate-200">
+                              {isAll ? (
+                                <span className="inline-flex items-center justify-center px-3 py-1 rounded-full text-[11px] font-bold border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-2xs">
+                                  All Access
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center justify-center px-3 py-1 rounded-full text-[11px] font-bold border border-rose-200 bg-rose-50 text-rose-700 shadow-2xs">
+                                  No Access
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
@@ -537,10 +819,10 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   onChange={(val) => {
                     if (val === 'Custom') {
                       setIsCustomPlanSelected(true);
-                      setName('');
+                      setValue('name', '');
                     } else {
                       setIsCustomPlanSelected(false);
-                      setName(val);
+                      setValue('name', val);
                     }
                   }}
                   options={[
@@ -553,6 +835,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   placeholder="Select Plan Name"
                   activeColor="brand"
                 />
+                <FormError message={errors.name?.message} />
               </div>
 
               <div>
@@ -561,10 +844,14 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                 </label>
                 <input
                   type="text"
-                  required={isCustomPlanSelected}
                   disabled={!isCustomPlanSelected}
                   value={isCustomPlanSelected ? customPlanName : name}
-                  onChange={(e) => setCustomPlanName(e.target.value)}
+                  onChange={(e) => {
+                    setCustomPlanName(e.target.value);
+                    if (isCustomPlanSelected) {
+                      setValue('name', e.target.value);
+                    }
+                  }}
                   className={`${inputClass} ${
                     !isCustomPlanSelected
                       ? 'bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed select-none'
@@ -579,42 +866,54 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                 </label>
                 <input
                   type="number"
-                  min="0"
                   step="any"
-                  required
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
+                  {...register('price', { valueAsNumber: true })}
                   className={inputClass}
                 />
+                <FormError message={errors.price?.message} />
               </div>
 
               <div>
                 <label className={labelClass}>
                   Billing Cycle <span className="text-slate-500">*</span>
                 </label>
-                <CustomSelect
-                  value={billingCycle}
-                  onChange={(val) => setBillingCycle(val as any)}
-                  options={BILLING_CYCLE_OPTIONS}
-                  placeholder="Select Billing Cycle"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="billingCycle"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as any)}
+                      options={BILLING_CYCLE_OPTIONS}
+                      placeholder="Select Billing Cycle"
+                      activeColor="brand"
+                    />
+                  )}
                 />
+                <FormError message={errors.billingCycle?.message} />
               </div>
 
               <div>
                 <label className={labelClass}>
                   Status <span className="text-slate-500">*</span>
                 </label>
-                <CustomSelect
-                  value={status}
-                  onChange={(val) => setStatus(val as any)}
-                  options={PLAN_STATUS_OPTIONS}
-                  placeholder="Select Status"
-                  activeColor="brand"
+                <Controller
+                  control={control}
+                  name="status"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as any)}
+                      options={PLAN_STATUS_OPTIONS}
+                      placeholder="Select Status"
+                      activeColor="brand"
+                    />
+                  )}
                 />
               </div>
+            </div>
 
-              {(selectedProductId === 'prod_6' || currentProduct?.code === 'DIGITAL_MARKETING') && (
+            {(selectedProductId === 'prod_6' || currentProduct?.code === 'DIGITAL_MARKETING') && (
                 <>
                   <div>
                     <label className={labelClass}>Monthly Post Limit</label>
@@ -663,7 +962,6 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   </div>
                 </>
               )}
-            </div>
 
             {/* Feature tags if added */}
             {features.length > 0 && (

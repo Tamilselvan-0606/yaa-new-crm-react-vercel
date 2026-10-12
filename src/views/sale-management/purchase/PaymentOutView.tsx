@@ -1,4 +1,8 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { PaymentOutSchema, PaymentOutFormData } from '../../../validations';
+import { FormError } from '../../../components/common/FormError';
 import {
   CreditCard,
   Plus,
@@ -18,12 +22,28 @@ import {
   X,
   Forward,
   FileSpreadsheet,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  XCircle,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
   PaymentOut,
   PaymentOutMode,
+  PurchaseOrder,
 } from '../../../store/useSalesManagementStore';
+import {
+  workPaymentOutApi,
+  mapApiPaymentOutToUi,
+  mapUiToCreatePaymentOutPayload,
+  mapUiToUpdatePaymentOutPayload,
+  supplierApi,
+  ApiSupplier,
+  workPurchaseOrderApi,
+  mapApiPurchaseOrderToUi,
+  UUID_REGEX,
+} from '../../../api';
 import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -32,6 +52,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
 
 const PERIOD_FILTER_OPTIONS = [
@@ -46,13 +67,35 @@ const PERIOD_FILTER_OPTIONS = [
 ];
 
 export const PaymentOutView: React.FC = () => {
-  const { paymentOuts, suppliers, purchases, savePaymentOut, deletePaymentOut } = useSalesManagementStore();
+  const {
+    paymentOuts,
+    suppliers,
+    purchases,
+    savePaymentOut,
+    setPaymentOutsList,
+    deletePaymentOut,
+  } = useSalesManagementStore();
+
+  // Live Work Payments Out API State
+  const [livePayments, setLivePayments] = useState<PaymentOut[]>([]);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(false);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+
+  // Registered Suppliers & Purchase Orders for form dropdowns
+  const [availableSuppliers, setAvailableSuppliers] = useState<ApiSupplier[]>([]);
+  const [availablePurchases, setAvailablePurchases] = useState<PurchaseOrder[]>([]);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [pendingPeriod, setPendingPeriod] = useState('All Payment-Out Invoices');
   const [appliedPeriod, setAppliedPeriod] = useState('All Payment-Out Invoices');
+  const [pendingStatus, setPendingStatus] = useState('All');
+  const [appliedStatus, setAppliedStatus] = useState('All');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [isPeriodOpen, setIsPeriodOpen] = useState(false);
@@ -65,6 +108,155 @@ export const PaymentOutView: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
 
   const periodDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Deduplication & Sync Refs (prevents multiple redundant API calls)
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef('');
+  const paymentOutsRef = useRef(paymentOuts);
+  useEffect(() => {
+    paymentOutsRef.current = paymentOuts;
+  }, [paymentOuts]);
+
+  // Load registered suppliers & purchases for dropdowns
+  useEffect(() => {
+    let isMounted = true;
+
+    supplierApi
+      .getSuppliers({ page_size: 100, pagination_required: false })
+      .then((res) => {
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          setAvailableSuppliers(res.data);
+        }
+      })
+      .catch(() => {});
+
+    workPurchaseOrderApi
+      .getPurchaseOrders({ limit: 100, pagination_required: false })
+      .then((res) => {
+        if (isMounted && res?.data && Array.isArray(res.data)) {
+          setAvailablePurchases(res.data.map(mapApiPurchaseOrderToUi));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Merged Suppliers list (API + Store fallback)
+  const mergedSuppliers = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; supplierCode?: string; payable?: number }>();
+    availableSuppliers.forEach((s) => {
+      map.set(s.id, {
+        id: s.id,
+        name: s.name,
+        supplierCode: s.supplierCode,
+        payable: Number(s.payable ?? (s as any).payableAmount ?? 0),
+      });
+    });
+    suppliers.forEach((s) => {
+      if (!map.has(s.id)) {
+        map.set(s.id, {
+          id: s.id,
+          name: s.name,
+          supplierCode: s.supplierCode,
+          payable: s.payable || 0,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [availableSuppliers, suppliers]);
+
+  // Merged Purchases list (API + Store fallback)
+  const mergedPurchases = useMemo(() => {
+    const map = new Map<string, PurchaseOrder>();
+    availablePurchases.forEach((p) => map.set(p.id, p));
+    purchases.forEach((p) => {
+      if (!map.has(p.id)) map.set(p.id, p);
+    });
+    return Array.from(map.values());
+  }, [availablePurchases, purchases]);
+
+  // Fetch Payments Out from Work API with deduplication
+  const fetchPaymentsOut = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsApiLoading(true);
+
+      try {
+        const statusParam = appliedStatus !== 'All' ? appliedStatus : undefined;
+        const response = await workPaymentOutApi.getPaymentsOut({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: statusParam,
+          pagination_required: true,
+        });
+
+        if (response && response.success && Array.isArray(response.data)) {
+          const mapped = response.data.map(mapApiPaymentOutToUi);
+          setLivePayments(mapped);
+          setIsApiConnected(true);
+          setApiErrorMessage(null);
+
+          if (response.pagination) {
+            setTotalApiRecords(response.pagination.totalRecords);
+            setTotalApiPages(response.pagination.totalPages);
+          } else {
+            setTotalApiRecords(mapped.length);
+            setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
+          }
+
+          if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All') {
+            setPaymentOutsList(mapped);
+          }
+        } else {
+          setIsApiConnected(true);
+          setLivePayments([]);
+          setTotalApiRecords(0);
+          setTotalApiPages(1);
+        }
+      } catch (err: any) {
+        const errMsg =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          'Work API unavailable, falling back to local cache';
+        console.warn('Work Payments Out API unavailable:', errMsg);
+        setIsApiConnected(false);
+        setApiErrorMessage(errMsg);
+        setLivePayments(paymentOutsRef.current);
+        setTotalApiRecords(null);
+        setTotalApiPages(null);
+      } finally {
+        isFetchingRef.current = false;
+        setIsApiLoading(false);
+      }
+    },
+    [currentPage, pageSize, appliedSearch, appliedStatus, setPaymentOutsList]
+  );
+
+  // Initial and reactive fetch on filter change
+  useEffect(() => {
+    fetchPaymentsOut();
+  }, [fetchPaymentsOut]);
+
+  // Debounced Search (450ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (pendingSearch !== appliedSearch) {
+        setAppliedSearch(pendingSearch);
+        setCurrentPage(1);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   // Close period dropdown on click outside
   useEffect(() => {
@@ -81,7 +273,7 @@ export const PaymentOutView: React.FC = () => {
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Close action dropdown and share popover on click outside or scroll
   useEffect(() => {
@@ -122,9 +314,44 @@ export const PaymentOutView: React.FC = () => {
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
 
   // Open Edit Payment Modal
+  const {
+    register,
+    handleSubmit,
+    control,
+    reset,
+    setValue,
+    watch,
+    formState: { errors, isSubmitting },
+  } = useForm<PaymentOutFormData>({
+    resolver: zodResolver(PaymentOutSchema),
+    defaultValues: {
+      paymentNo: '',
+      paymentDate: new Date().toISOString().split('T')[0],
+      supplierId: '',
+      purchaseId: '',
+      amount: '',
+      paymentMode: 'Bank Transfer',
+      referenceNo: '',
+      receiptImage: '',
+      notes: '',
+    },
+  });
+
+  const watchSupplierId = watch('supplierId');
+  const watchPurchaseId = watch('purchaseId');
+  const watchReceiptImage = watch('receiptImage');
+
+  // Active pool of records: API live list if connected, otherwise local store
+  const activePool = isApiConnected ? livePayments : paymentOuts;
+
+  // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   const handleOpenEditModal = (po: PaymentOut) => {
+    if (po.status === 'Cancelled') {
+      toast.error('Cancelled payments cannot be edited.');
+      return;
+    }
     setEditingPaymentId(po.id);
-    setFormData({
+    reset({
       paymentNo: po.paymentNo,
       paymentDate: po.paymentDate,
       supplierId: po.supplierId || '',
@@ -142,8 +369,8 @@ export const PaymentOutView: React.FC = () => {
   // Duplicate Payment Handler
   const handleDuplicatePayment = (po: PaymentOut) => {
     setEditingPaymentId(null);
-    const nextNo = `VPA-${new Date().getFullYear()}-${String(paymentOuts.length + 101).padStart(3, '0')}`;
-    setFormData({
+    const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
+    reset({
       paymentNo: nextNo,
       paymentDate: new Date().toISOString().split('T')[0],
       supplierId: po.supplierId || '',
@@ -158,29 +385,6 @@ export const PaymentOutView: React.FC = () => {
     setIsFormModalOpen(true);
     toast.info(`Cloned details from ${po.paymentNo} into form for editing.`);
   };
-
-  // Form State
-  const [formData, setFormData] = useState<{
-    paymentNo: string;
-    paymentDate: string;
-    supplierId: string;
-    purchaseId: string;
-    amount: number | '';
-    paymentMode: PaymentOutMode;
-    referenceNo: string;
-    receiptImage: string;
-    notes: string;
-  }>({
-    paymentNo: '',
-    paymentDate: new Date().toISOString().split('T')[0],
-    supplierId: '',
-    purchaseId: '',
-    amount: '',
-    paymentMode: 'Bank Transfer',
-    referenceNo: '',
-    receiptImage: '',
-    notes: '',
-  });
 
   // Calculate Display Date/Date Range for Filter by badge
   const periodDateBadgeText = useMemo(() => {
@@ -228,19 +432,20 @@ export const PaymentOutView: React.FC = () => {
 
   // Eligible purchases for selected supplier (pending or partial bills, or currently selected bill when editing)
   const supplierPurchases = useMemo(() => {
-    if (!formData.supplierId) return [];
-    return purchases.filter(
+    if (!watchSupplierId) return [];
+    const supObj = mergedSuppliers.find((s) => s.id === watchSupplierId);
+    return mergedPurchases.filter(
       (p) =>
-        p.supplierId === formData.supplierId &&
-        (p.id === formData.purchaseId || p.paymentStatus === 'Unpaid' || p.paymentStatus === 'Partial' || p.balance > 0)
+        (p.supplierId === watchSupplierId || (supObj && p.supplierName?.toLowerCase() === supObj.name.toLowerCase())) &&
+        (p.id === watchPurchaseId || p.paymentStatus === 'Unpaid' || p.paymentStatus === 'Partial' || p.balance > 0)
     );
-  }, [purchases, formData.supplierId, formData.purchaseId]);
+  }, [mergedPurchases, watchSupplierId, watchPurchaseId, mergedSuppliers]);
 
   // Open Create Payment Modal
   const handleOpenCreateModal = () => {
     setEditingPaymentId(null);
-    const nextNo = `VPA-${new Date().getFullYear()}-${String(paymentOuts.length + 101).padStart(3, '0')}`;
-    setFormData({
+    const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
+    reset({
       paymentNo: nextNo,
       paymentDate: new Date().toISOString().split('T')[0],
       supplierId: '',
@@ -256,85 +461,241 @@ export const PaymentOutView: React.FC = () => {
 
   // When a specific purchase bill is selected, auto-fill the balance amount
   const handlePurchaseSelect = (poId: string) => {
-    const po = purchases.find((p) => p.id === poId);
-    setFormData((prev) => ({
-      ...prev,
-      purchaseId: poId,
-      amount: po ? po.balance : prev.amount,
-    }));
+    setValue('purchaseId', poId);
+    const po = mergedPurchases.find((p) => p.id === poId);
+    if (po) {
+      setValue('amount', po.balance > 0 ? po.balance : po.grandTotal);
+    }
   };
 
   // Submit Payment (Create or Edit)
-  const handleSubmitPayment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.supplierId) {
-      toast.error('Please select a supplier.');
-      return;
-    }
-    const numAmount = Number(formData.amount);
-    if (!numAmount || numAmount <= 0) {
-      toast.error('Please enter a valid payment amount greater than 0.');
+  const onSubmitPayment = async (data: PaymentOutFormData) => {
+    const numAmount = Number(data.amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      toast.error('Payment amount must be greater than 0');
       return;
     }
 
-    const supplierObj = suppliers.find((s) => s.id === formData.supplierId);
-    const purchaseObj = purchases.find((p) => p.id === formData.purchaseId);
-    const existing = editingPaymentId ? paymentOuts.find((p) => p.id === editingPaymentId) : null;
+    // Resolve supplier
+    let supId = data.supplierId;
+    let supplierObj = mergedSuppliers.find((s) => s.id === supId);
+    if (!supplierObj) {
+      supplierObj = mergedSuppliers.find((s) => s.name.toLowerCase() === supId.toLowerCase());
+      if (supplierObj) supId = supplierObj.id;
+    }
 
-    const payload: PaymentOut = {
-      id: editingPaymentId || `pay_out_${Date.now()}`,
-      paymentNo: formData.paymentNo || `VPA-${Date.now()}`,
-      paymentDate: formData.paymentDate,
-      supplierId: formData.supplierId,
-      supplierName: supplierObj?.name || existing?.supplierName || 'Unknown Supplier',
-      supplierCode: supplierObj?.supplierCode || existing?.supplierCode,
-      purchaseId: formData.purchaseId || undefined,
-      purchaseNo: purchaseObj?.purchaseNo || (formData.purchaseId ? existing?.purchaseNo : undefined),
-      amount: numAmount,
-      paymentMode: formData.paymentMode,
-      referenceNo: formData.referenceNo,
-      receiptImage: formData.receiptImage || undefined,
-      notes: formData.notes,
-      status: existing ? existing.status : 'Completed',
-      createdAt: existing ? existing.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    // Ensure supplierId is a valid UUID for the API
+    if (!UUID_REGEX.test(supId)) {
+      const foundSup = availableSuppliers.find((s) => s.id === supId || s.name === supplierObj?.name);
+      if (foundSup && UUID_REGEX.test(foundSup.id)) {
+        supId = foundSup.id;
+      } else if (availableSuppliers.length > 0) {
+        supId = availableSuppliers[0].id;
+      }
+    }
 
-    savePaymentOut(payload);
-    toast.success(
-      editingPaymentId
-        ? `Payment voucher ${payload.paymentNo} updated successfully!`
-        : `Payment ${payload.paymentNo} recorded successfully!`
-    );
-    setEditingPaymentId(null);
-    setIsFormModalOpen(false);
-  };
+    const purchaseObj = mergedPurchases.find((p) => p.id === data.purchaseId);
+    const existing = editingPaymentId ? activePool.find((p) => p.id === editingPaymentId) : null;
 
-  // Delete Payment
-  const handleDeletePayment = (id: string, paymentNo: string) => {
-    if (window.confirm(`Are you sure you want to delete payment record ${paymentNo}?`)) {
-      deletePaymentOut(id);
-      toast.success(`Payment voucher ${paymentNo} deleted.`);
-      setActiveDropdownId(null);
+    if (existing && existing.status === 'Cancelled') {
+      toast.error('Cancelled payments cannot be edited.');
+      return;
+    }
+
+    setIsSubmittingForm(true);
+    try {
+      if (editingPaymentId) {
+        // PUT /work/payments-out/{id}
+        const updatePayload = mapUiToUpdatePaymentOutPayload({
+          amount: numAmount,
+          referenceNo: data.referenceNo,
+          paymentType: data.paymentMode,
+          paymentMode: data.paymentMode,
+          notes: data.notes,
+        });
+
+        let updatedItem: PaymentOut;
+        try {
+          const res = await workPaymentOutApi.updatePaymentOut(editingPaymentId, updatePayload);
+          if (res?.data) {
+            updatedItem = mapApiPaymentOutToUi(res.data);
+            if (data.purchaseId) {
+              updatedItem.purchaseId = data.purchaseId;
+              updatedItem.purchaseNo = purchaseObj?.purchaseNo;
+            }
+            if (data.receiptImage) {
+              updatedItem.receiptImage = data.receiptImage;
+            }
+            if (supplierObj?.name && (!updatedItem.supplierName || updatedItem.supplierName === 'Unknown Supplier')) {
+              updatedItem.supplierName = supplierObj.name;
+            }
+          } else {
+            throw new Error('No data returned');
+          }
+        } catch (apiErr: any) {
+          console.warn('API update failed, saving locally:', apiErr);
+          updatedItem = {
+            ...existing!,
+            amount: numAmount,
+            referenceNo: data.referenceNo || '',
+            paymentMode: data.paymentMode as PaymentOutMode,
+            notes: data.notes || '',
+            receiptImage: data.receiptImage || existing?.receiptImage,
+            purchaseId: data.purchaseId || existing?.purchaseId,
+            purchaseNo: purchaseObj?.purchaseNo || existing?.purchaseNo,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        savePaymentOut(updatedItem);
+        setLivePayments((prev) => prev.map((p) => (p.id === editingPaymentId ? updatedItem : p)));
+        toast.success(`Payment voucher ${updatedItem.paymentNo} updated successfully!`);
+      } else {
+        // POST /work/payments-out
+        const createPayload = mapUiToCreatePaymentOutPayload({
+          supplierId: supId,
+          paymentType: data.paymentMode,
+          paymentMode: data.paymentMode,
+          amount: numAmount,
+          referenceNo: data.referenceNo,
+          notes: data.notes,
+        });
+
+        let createdItem: PaymentOut;
+        try {
+          const res = await workPaymentOutApi.createPaymentOut(createPayload);
+          if (res?.data) {
+            createdItem = mapApiPaymentOutToUi(res.data);
+            if (data.purchaseId) {
+              createdItem.purchaseId = data.purchaseId;
+              createdItem.purchaseNo = purchaseObj?.purchaseNo;
+            }
+            if (data.receiptImage) {
+              createdItem.receiptImage = data.receiptImage;
+            }
+            if (supplierObj?.name && (!createdItem.supplierName || createdItem.supplierName === 'Unknown Supplier')) {
+              createdItem.supplierName = supplierObj.name;
+            }
+          } else {
+            throw new Error('No data returned');
+          }
+        } catch (apiErr: any) {
+          const apiMsg = apiErr?.response?.data?.error?.message || apiErr?.message;
+          console.warn('API create payment-out failed, recording locally:', apiMsg);
+          createdItem = {
+            id: `pout_${Date.now()}`,
+            paymentNo: data.paymentNo || `VPA-${Date.now()}`,
+            paymentDate: data.paymentDate,
+            supplierId: supId,
+            supplierName: supplierObj?.name || 'Unknown Supplier',
+            supplierCode: supplierObj?.supplierCode,
+            purchaseId: data.purchaseId || undefined,
+            purchaseNo: purchaseObj?.purchaseNo,
+            amount: numAmount,
+            paymentMode: data.paymentMode as PaymentOutMode,
+            referenceNo: data.referenceNo || '',
+            receiptImage: data.receiptImage || undefined,
+            notes: data.notes || '',
+            status: 'Completed',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        savePaymentOut(createdItem);
+        setLivePayments((prev) => [createdItem, ...prev]);
+        toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
+      }
+
+      setEditingPaymentId(null);
+      setIsFormModalOpen(false);
+      fetchPaymentsOut(true);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save payment voucher');
+    } finally {
+      setIsSubmittingForm(false);
     }
   };
 
-  // Filtered List based on Search, Period & Date Ranges, Payment Mode, Supplier
+  // Delete / Cancel Payment (voids voucher as Cancelled as per Work API)
+  const handleDeletePayment = async (id: string, paymentNo: string) => {
+    const existing = activePool.find((p) => p.id === id);
+    if (existing?.status === 'Cancelled') {
+      toast.info(`Payment voucher ${paymentNo} is already cancelled.`);
+      return;
+    }
+
+    if (
+      window.confirm(
+        `Are you sure you want to cancel payment voucher ${paymentNo}?\n\nFinancial payments cannot be completely deleted; cancelling voids the voucher and locks it.`
+      )
+    ) {
+      try {
+        await workPaymentOutApi.deletePaymentOut(id);
+        const cancelledPayment: PaymentOut = {
+          ...(existing || {
+            id,
+            paymentNo,
+            paymentDate: new Date().toISOString().split('T')[0],
+            supplierId: '',
+            supplierName: '',
+            amount: 0,
+            paymentMode: 'Bank Transfer',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+          status: 'Cancelled',
+          updatedAt: new Date().toISOString(),
+        };
+        savePaymentOut(cancelledPayment);
+        setLivePayments((prev) =>
+          prev.map((p) => (p.id === id ? { ...p, status: 'Cancelled' } : p))
+        );
+        toast.success(`Payment voucher ${paymentNo} cancelled successfully.`);
+        fetchPaymentsOut(true);
+      } catch (err: any) {
+        console.warn('API cancel failed, updating locally:', err);
+        if (existing) {
+          const cancelledPayment: PaymentOut = {
+            ...existing,
+            status: 'Cancelled',
+            updatedAt: new Date().toISOString(),
+          };
+          savePaymentOut(cancelledPayment);
+          setLivePayments((prev) =>
+            prev.map((p) => (p.id === id ? { ...p, status: 'Cancelled' } : p))
+          );
+        }
+        toast.success(`Payment voucher ${paymentNo} marked as Cancelled.`);
+      } finally {
+        setActiveDropdownId(null);
+      }
+    }
+  };
+
+  // Filtered List based on Search, Period & Date Ranges, Payment Mode, Status
   const filteredPayments = useMemo(() => {
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
 
-    return paymentOuts.filter((p) => {
-      // 1. Search Query
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        p.paymentNo.toLowerCase().includes(q) ||
-        p.supplierName.toLowerCase().includes(q) ||
-        (p.purchaseNo && p.purchaseNo.toLowerCase().includes(q)) ||
-        (p.referenceNo && p.referenceNo.toLowerCase().includes(q));
+    return activePool.filter((p) => {
+      // 1. Search Query (Client fallback if API search not applied)
+      if (!isApiConnected && appliedSearch.trim()) {
+        const q = appliedSearch.toLowerCase().trim();
+        const matchesSearch =
+          p.paymentNo.toLowerCase().includes(q) ||
+          p.supplierName.toLowerCase().includes(q) ||
+          (p.purchaseNo && p.purchaseNo.toLowerCase().includes(q)) ||
+          (p.referenceNo && p.referenceNo.toLowerCase().includes(q));
+        if (!matchesSearch) return false;
+      }
 
-      // 2. Period Filter
+      // 2. Status Filter
+      if (appliedStatus !== 'All') {
+        if (p.status?.toLowerCase() !== appliedStatus.toLowerCase()) return false;
+      }
+
+      // 3. Period Filter
       let matchesPeriod = true;
       const pDate = p.paymentDate; // 'YYYY-MM-DD'
       if (appliedPeriod === 'Today') {
@@ -362,28 +723,73 @@ export const PaymentOutView: React.FC = () => {
         matchesPeriod = pDate >= customStartDate && pDate <= customEndDate;
       }
 
-      // 3. Payment Mode
+      if (!matchesPeriod) return false;
+
+      // 4. Payment Mode
       const matchesMode =
         appliedPaymentMode === 'All' ||
-        p.paymentMode.toLowerCase() === appliedPaymentMode.toLowerCase();
+        p.paymentMode?.toLowerCase() === appliedPaymentMode.toLowerCase();
 
-      return matchesSearch && matchesPeriod && matchesMode;
+      return matchesMode;
     });
-  }, [paymentOuts, appliedSearch, appliedPeriod, customStartDate, customEndDate, appliedPaymentMode]);
+  }, [
+    activePool,
+    isApiConnected,
+    appliedSearch,
+    appliedStatus,
+    appliedPeriod,
+    customStartDate,
+    customEndDate,
+    appliedPaymentMode,
+  ]);
+
+  // Paginated records to display on table
+  const displayedPayments = useMemo(() => {
+    if (
+      isApiConnected &&
+      totalApiRecords !== null &&
+      appliedPeriod === 'All Payment-Out Invoices' &&
+      appliedPaymentMode === 'All'
+    ) {
+      return filteredPayments;
+    }
+    return filteredPayments.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [
+    isApiConnected,
+    totalApiRecords,
+    appliedPeriod,
+    appliedPaymentMode,
+    filteredPayments,
+    currentPage,
+    pageSize,
+  ]);
 
   // Metrics Summary
   const summary = useMemo(() => {
-    const totalDisbursed = filteredPayments.reduce((acc, p) => acc + (p.status === 'Completed' ? p.amount : 0), 0);
+    const totalDisbursed = filteredPayments.reduce(
+      (acc, p) => acc + (p.status !== 'Cancelled' ? p.amount : 0),
+      0
+    );
     const today = new Date().toISOString().split('T')[0];
     const todayPaid = filteredPayments
-      .filter((p) => p.paymentDate === today && p.status === 'Completed')
+      .filter((p) => p.paymentDate === today && p.status !== 'Cancelled')
       .reduce((acc, p) => acc + p.amount, 0);
-    const totalVouchers = filteredPayments.length;
+    const totalVouchers =
+      isApiConnected &&
+      totalApiRecords !== null &&
+      appliedPeriod === 'All Payment-Out Invoices' &&
+      appliedPaymentMode === 'All'
+        ? totalApiRecords
+        : filteredPayments.length;
     const bankPayments = filteredPayments
-      .filter((p) => ['Bank Transfer', 'UPI', 'Net Banking', 'Card'].includes(p.paymentMode))
+      .filter(
+        (p) =>
+          p.status !== 'Cancelled' &&
+          ['Bank Transfer', 'UPI', 'Net Banking', 'Card'].includes(p.paymentMode)
+      )
       .reduce((acc, p) => acc + p.amount, 0);
     const cashPayments = filteredPayments
-      .filter((p) => p.paymentMode === 'Cash')
+      .filter((p) => p.status !== 'Cancelled' && p.paymentMode === 'Cash')
       .reduce((acc, p) => acc + p.amount, 0);
 
     return {
@@ -393,7 +799,7 @@ export const PaymentOutView: React.FC = () => {
       bankPayments,
       cashPayments,
     };
-  }, [filteredPayments]);
+  }, [filteredPayments, isApiConnected, totalApiRecords, appliedPeriod, appliedPaymentMode]);
 
   // Export Payment-Out Records to Excel
   const handleExportExcel = () => {
@@ -415,7 +821,10 @@ export const PaymentOutView: React.FC = () => {
       status: p.status,
     }));
 
-    const grandDisbursed = excelRows.reduce((acc, row) => acc + row.amount, 0);
+    const grandDisbursed = excelRows.reduce(
+      (acc, row) => acc + (row.status !== 'Cancelled' ? row.amount : 0),
+      0
+    );
 
     exportTableToExcel({
       filename: `Payment_Out_Report_${new Date().toISOString().split('T')[0]}`,
@@ -453,8 +862,26 @@ export const PaymentOutView: React.FC = () => {
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <CreditCard className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Payment Out (Vendor Disbursements)
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
+              <span>Payment Out (Vendor Disbursements)</span>
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-normal ${
+                  isApiConnected
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border border-amber-200'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    isApiConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                {isApiLoading
+                  ? 'Syncing API...'
+                  : isApiConnected
+                  ? 'Work API Live'
+                  : 'Local Cache'}
+              </span>
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
@@ -561,6 +988,7 @@ export const PaymentOutView: React.FC = () => {
           setAppliedSearch(pendingSearch);
           setAppliedPeriod(pendingPeriod);
           setAppliedPaymentMode(pendingPaymentMode);
+          setAppliedStatus(pendingStatus);
           setCurrentPage(1);
         }}
         onReset={() => {
@@ -570,6 +998,8 @@ export const PaymentOutView: React.FC = () => {
           setAppliedPeriod('All Payment-Out Invoices');
           setPendingPaymentMode('All');
           setAppliedPaymentMode('All');
+          setPendingStatus('All');
+          setAppliedStatus('All');
           setCurrentPage(1);
         }}
         filterSlot={
@@ -593,6 +1023,25 @@ export const PaymentOutView: React.FC = () => {
                   }
                 }}
                 options={PERIOD_FILTER_OPTIONS}
+              />
+            </div>
+
+            {/* Filter by Status */}
+            <div className="shrink-0">
+              <FilterDropdown
+                placeholder="Status : All"
+                value={pendingStatus}
+                onChange={(val) => {
+                  setPendingStatus(val);
+                  setAppliedStatus(val);
+                  setCurrentPage(1);
+                }}
+                options={[
+                  { label: 'Status : All', value: 'All' },
+                  { label: 'Completed', value: 'Completed' },
+                  { label: 'Pending', value: 'Pending' },
+                  { label: 'Cancelled', value: 'Cancelled' },
+                ]}
               />
             </div>
 
@@ -624,7 +1073,7 @@ export const PaymentOutView: React.FC = () => {
           <div className="flex items-center gap-3 pr-1 whitespace-nowrap">
             <span className="text-xs font-semibold text-slate-500">
               Total Vouchers :{' '}
-              <span className="text-[#33077C] font-bold">{filteredPayments.length}</span>
+              <span className="text-[#33077C] font-bold">{summary.totalVouchers}</span>
             </span>
           </div>
         }
@@ -648,7 +1097,14 @@ export const PaymentOutView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {filteredPayments.length === 0 ? (
+              {isApiLoading ? (
+                <tr>
+                  <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin" />
+                    <p className="font-semibold text-slate-600 text-sm">Fetching outward payments from Work API...</p>
+                  </td>
+                </tr>
+              ) : displayedPayments.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <CreditCard className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -657,254 +1113,171 @@ export const PaymentOutView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredPayments
-                  .slice((currentPage - 1) * pageSize, currentPage * pageSize)
-                  .map((po) => {
-                    return (
-                      <tr
-                        key={po.id}
-                        className="hover:bg-purple-50/20 transition-colors border-b border-slate-200"
-                      >
-                        {/* 1. Voucher No */}
-                        <td className="py-3.5 px-5 border border-slate-200">
-                          <span className="font-semibold text-slate-800 text-xs">
-                            {po.paymentNo}
+                displayedPayments.map((po) => {
+                  return (
+                    <tr
+                      key={po.id}
+                      className="hover:bg-purple-50/20 transition-colors border-b border-slate-200"
+                    >
+                      {/* 1. Voucher No */}
+                      <td className="py-3.5 px-5 border border-slate-200">
+                        <span className="font-semibold text-slate-800 text-xs">
+                          {po.paymentNo}
+                        </span>
+                      </td>
+
+                      {/* 2. Date */}
+                      <td className="py-3.5 px-5 text-slate-800 font-bold text-xs border border-slate-200 whitespace-nowrap">
+                        {(() => {
+                          if (!po.paymentDate) return '—';
+                          const [y, m, d] = po.paymentDate.split('-');
+                          return y && m && d ? `${d}/${m}/${y}` : po.paymentDate;
+                        })()}
+                      </td>
+
+                      {/* 3. Supplier */}
+                      <td className="py-3.5 px-5 border border-slate-200">
+                        <span className="font-semibold text-slate-800 text-xs">{po.supplierName}</span>
+                      </td>
+
+                      {/* 4. Against Bill */}
+                      <td className="py-3 px-4 border border-slate-200 text-center">
+                        {po.purchaseNo ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-md bg-purple-50 text-[#33077C] font-semibold text-[11px] border border-purple-100">
+                            {po.purchaseNo}
                           </span>
-                        </td>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">Direct / Advance</span>
+                        )}
+                      </td>
 
-                        {/* 2. Date */}
-                        <td className="py-3.5 px-5 text-slate-800 font-bold text-xs border border-slate-200 whitespace-nowrap">
-                          {(() => {
-                            if (!po.paymentDate) return '—';
-                            const [y, m, d] = po.paymentDate.split('-');
-                            return y && m && d ? `${d}/${m}/${y}` : po.paymentDate;
-                          })()}
-                        </td>
+                      {/* 5. Payment Mode */}
+                      <td className="py-3 px-4 border border-slate-200 text-center">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                          {po.paymentMode}
+                        </span>
+                      </td>
 
-                        {/* 3. Supplier */}
-                        <td className="py-3.5 px-5 border border-slate-200">
-                          <span className="font-semibold text-slate-800 text-xs">{po.supplierName}</span>
-                        </td>
+                      {/* 6. Reference / UTR */}
+                      <td className="py-3 px-5 text-slate-600 text-xs border border-slate-200">
+                        {po.referenceNo || '—'}
+                      </td>
 
-                        {/* 4. Against Bill */}
-                        <td className="py-3 px-4 border border-slate-200 text-center">
-                          {po.purchaseNo ? (
-                            <span className="inline-block px-2.5 py-0.5 rounded-md bg-purple-50 text-[#33077C] font-semibold text-[11px] border border-purple-100">
-                              {po.purchaseNo}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-xs italic">Direct / Advance</span>
-                          )}
-                        </td>
+                      {/* 7. Amount Paid */}
+                      <td className="py-3.5 px-5 border border-slate-200 text-right">
+                        <span className="font-bold text-slate-900 text-sm">
+                          ₹{po.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </td>
 
-                        {/* 5. Payment Mode */}
-                        <td className="py-3 px-4 border border-slate-200 text-center">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                            {po.paymentMode}
+                      {/* 8. Status */}
+                      <td className="py-3 px-5 border border-slate-200 text-center">
+                        {po.status === 'Cancelled' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                            Cancelled
                           </span>
-                        </td>
-
-                        {/* 6. Reference / UTR */}
-                        <td className="py-3 px-5 text-slate-600 text-xs border border-slate-200">
-                          {po.referenceNo || '—'}
-                        </td>
-
-                        {/* 7. Amount Paid */}
-                        <td className="py-3.5 px-5 border border-slate-200 text-right">
-                          <span className="font-bold text-slate-900 text-sm">
-                            ₹{po.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        ) : po.status === 'Pending' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                            Pending
                           </span>
-                        </td>
-
-                        {/* 8. Status */}
-                        <td className="py-3 px-5 border border-slate-200 text-center">
+                        ) : (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                             {po.status || 'Completed'}
                           </span>
-                        </td>
+                        )}
+                      </td>
 
-                        {/* 9. Actions */}
-                        <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            {/* Print Action */}
+                      {/* 9. Actions */}
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* Print Action */}
+                          <button
+                            type="button"
+                            title="Print Payment Voucher"
+                            onClick={() => {
+                              setSelectedPayment(po);
+                              toast.info(`Preparing print for ${po.paymentNo}...`);
+                              window.print();
+                            }}
+                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+
+                          {/* Share / Forward Popover */}
+                          <UniversalShareDropdown
+                            id={po.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatPaymentOutShare(po)}
+                            title="Share Payment Voucher"
+                          />
+
+                          {/* 3-dots Actions Dropdown */}
+                          <div className="relative inline-block text-left action-dropdown-container">
                             <button
                               type="button"
-                              title="Print Payment Voucher"
-                              onClick={() => {
-                                setSelectedPayment(po);
-                                toast.info(`Preparing print for ${po.paymentNo}...`);
-                                window.print();
+                              title="More Options"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (activeDropdownId === po.id) {
+                                  setActiveDropdownId(null);
+                                  setDropdownPos(null);
+                                } else {
+                                  setActiveShareId(null);
+                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                  const spaceBelow = window.innerHeight - btnRect.bottom;
+                                  const dropdownHeight = 220;
+                                  if (spaceBelow < dropdownHeight) {
+                                    setDropdownPos({
+                                      bottom: window.innerHeight - btnRect.top + 4,
+                                      right: window.innerWidth - btnRect.right,
+                                    });
+                                  } else {
+                                    setDropdownPos({
+                                      top: btnRect.bottom + 4,
+                                      right: window.innerWidth - btnRect.right,
+                                    });
+                                  }
+                                  setActiveDropdownId(po.id);
+                                }
                               }}
                               className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
                             >
-                              <Printer className="w-4 h-4" />
+                              <MoreVertical className="w-4 h-4" />
                             </button>
 
-                            {/* Share / Forward Popover */}
-                            <div className="relative inline-block text-left share-popover-container">
-                              <button
-                                type="button"
-                                title="Share Payment Voucher"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (activeShareId === po.id) {
-                                    setActiveShareId(null);
-                                    setSharePos(null);
-                                  } else {
-                                    setActiveDropdownId(null);
-                                    const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                    const spaceBelow = window.innerHeight - btnRect.bottom;
-                                    const popoverHeight = 140;
-                                    if (spaceBelow < popoverHeight) {
-                                      setSharePos({
-                                        bottom: window.innerHeight - btnRect.top + 6,
-                                        right: window.innerWidth - btnRect.right - 20,
-                                      });
-                                    } else {
-                                      setSharePos({
-                                        top: btnRect.bottom + 6,
-                                        right: window.innerWidth - btnRect.right - 20,
-                                      });
-                                    }
-                                    setActiveShareId(po.id);
-                                  }
+                            {activeDropdownId === po.id && dropdownPos && (
+                              <div
+                                className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
+                                style={{
+                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
+                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
+                                  right: `${dropdownPos.right}px`,
                                 }}
-                                className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
                               >
-                                <Forward className="w-4 h-4" />
-                              </button>
-
-                              {activeShareId === po.id && sharePos && (
-                                <div
-                                  className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                  style={{
-                                    top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                    bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                    right: `${Math.max(12, sharePos.right)}px`,
-                                  }}
-                                >
-                                  <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                    Share
-                                  </div>
-                                  <div className="flex items-center justify-between gap-3">
-                                    {/* Email Option */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveShareId(null);
-                                        const subject = encodeURIComponent(`Payment Voucher: ${po.paymentNo}`);
-                                        const body = encodeURIComponent(
-                                          `Payment Voucher: ${po.paymentNo}\nSupplier: ${po.supplierName}\nDate: ${po.paymentDate}\nAmount Paid: ₹${po.amount.toLocaleString('en-IN')}\nPayment Mode: ${po.paymentMode}\nReference: ${po.referenceNo || 'N/A'}\nStatus: ${po.status || 'Completed'}`
-                                        );
-                                        window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                      }}
-                                      className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                    >
-                                      <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                          <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                          <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                          <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                          <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                          <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                          <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                        </svg>
-                                      </div>
-                                      <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                    </button>
-
-                                    {/* WhatsApp Option */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveShareId(null);
-                                        const text = encodeURIComponent(
-                                          `*Payment Voucher: ${po.paymentNo}*\n*Supplier:* ${po.supplierName}\n*Amount Paid:* ₹${po.amount.toLocaleString('en-IN')}\n*Mode:* ${po.paymentMode}\n*Reference:* ${po.referenceNo || 'N/A'}\n*Status:* ${po.status || 'Completed'}`
-                                        );
-                                        window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                      }}
-                                      className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                    >
-                                      <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                        <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                          <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                        </svg>
-                                      </div>
-                                      <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                    </button>
-
-                                    {/* SMS Option */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveShareId(null);
-                                        const text = encodeURIComponent(
-                                          `Payment Voucher ${po.paymentNo} for ${po.supplierName}, Amount Paid: ₹${po.amount.toLocaleString('en-IN')}, Mode: ${po.paymentMode}, Status: ${po.status || 'Completed'}`
-                                        );
-                                        window.open(`sms:?body=${text}`, '_blank');
-                                      }}
-                                      className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                    >
-                                      <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                        <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                          <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                          <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                          <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                          <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                        </svg>
-                                      </div>
-                                      <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* 3-dots Actions Dropdown */}
-                            <div className="relative inline-block text-left action-dropdown-container">
-                              <button
-                                type="button"
-                                title="More Options"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (activeDropdownId === po.id) {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  } else {
-                                    setActiveShareId(null);
-                                    const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                    const spaceBelow = window.innerHeight - btnRect.bottom;
-                                    const dropdownHeight = 220;
-                                    if (spaceBelow < dropdownHeight) {
-                                      setDropdownPos({
-                                        bottom: window.innerHeight - btnRect.top + 4,
-                                        right: window.innerWidth - btnRect.right,
-                                      });
-                                    } else {
-                                      setDropdownPos({
-                                        top: btnRect.bottom + 4,
-                                        right: window.innerWidth - btnRect.right,
-                                      });
-                                    }
-                                    setActiveDropdownId(po.id);
-                                  }
-                                }}
-                                className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </button>
-
-                              {activeDropdownId === po.id && dropdownPos && (
-                                <div
-                                  className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                  style={{
-                                    top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                    bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                    right: `${dropdownPos.right}px`,
-                                  }}
-                                >
-                                  {/* 1. View/Edit */}
+                                {/* 1. View/Edit */}
+                                {po.status === 'Cancelled' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setSelectedPayment(po);
+                                      setIsDetailModalOpen(true);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-500 hover:bg-slate-50 transition-colors cursor-pointer flex items-center justify-between"
+                                  >
+                                    <span>View Voucher</span>
+                                    <span className="text-[10px] uppercase font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">
+                                      Locked
+                                    </span>
+                                  </button>
+                                ) : (
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -915,79 +1288,90 @@ export const PaymentOutView: React.FC = () => {
                                   >
                                     View/Edit
                                   </button>
+                                )}
 
-                                  {/* 2. Duplicate */}
+                                {/* 2. Duplicate */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveDropdownId(null);
+                                    handleDuplicatePayment(po);
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                >
+                                  Duplicate
+                                </button>
+
+                                {/* 3. Delete / Cancel */}
+                                {po.status === 'Cancelled' ? (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleDuplicatePayment(po);
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                    disabled
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-400 cursor-not-allowed block opacity-60"
                                   >
-                                    Duplicate
+                                    Cancelled (Voided)
                                   </button>
-
-                                  {/* 3. Delete */}
+                                ) : (
                                   <button
                                     type="button"
                                     onClick={() => {
                                       setActiveDropdownId(null);
                                       handleDeletePayment(po.id, po.paymentNo);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
                                   >
-                                    Delete
+                                    Cancel Voucher
                                   </button>
+                                )}
 
-                                  {/* 4. Open PDF */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPayment(po);
-                                      setActiveDropdownId(null);
-                                      toast.info(`Opening PDF for ${po.paymentNo}...`);
-                                      window.print();
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                  >
-                                    Open PDF
-                                  </button>
+                                {/* 4. Open PDF */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPayment(po);
+                                    setActiveDropdownId(null);
+                                    toast.info(`Opening PDF for ${po.paymentNo}...`);
+                                    window.print();
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                >
+                                  Open PDF
+                                </button>
 
-                                  {/* 5. Print */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPayment(po);
-                                      setActiveDropdownId(null);
-                                      toast.info(`Preparing print for ${po.paymentNo}...`);
-                                      window.print();
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                  >
-                                    Print
-                                  </button>
+                                {/* 5. Print */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPayment(po);
+                                    setActiveDropdownId(null);
+                                    toast.info(`Preparing print for ${po.paymentNo}...`);
+                                    window.print();
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                >
+                                  Print
+                                </button>
 
-                                  {/* 6. View History */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPayment(po);
-                                      setIsHistoryModalOpen(true);
-                                      setActiveDropdownId(null);
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                  >
-                                    View History
-                                  </button>
-                                </div>
-                              )}
-                            </div>
+                                {/* 6. View History */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPayment(po);
+                                    setIsHistoryModalOpen(true);
+                                    setActiveDropdownId(null);
+                                  }}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                >
+                                  View History
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -997,7 +1381,14 @@ export const PaymentOutView: React.FC = () => {
       {/* 5. Pagination Matching Reference UI */}
       <Pagination
         currentPage={currentPage}
-        totalItems={filteredPayments.length}
+        totalItems={
+          isApiConnected &&
+          totalApiRecords !== null &&
+          appliedPeriod === 'All Payment-Out Invoices' &&
+          appliedPaymentMode === 'All'
+            ? totalApiRecords
+            : filteredPayments.length
+        }
         pageSize={pageSize}
         onPageChange={(page) => setCurrentPage(page)}
         onPageSizeChange={(size) => {
@@ -1013,7 +1404,15 @@ export const PaymentOutView: React.FC = () => {
         title="Select Custom Date Range"
         maxWidth="sm"
       >
-        <div className="space-y-4">
+        <form noValidate onSubmit={(e) => {
+            e.preventDefault();
+            if (!customStartDate || !customEndDate) {
+              toast.error('Please select both start and end dates.');
+              return;
+            }
+            setAppliedPeriod('Custom');
+            setIsCustomDateModalOpen(false);
+          }} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               Start Date <span className="text-rose-500">*</span>
@@ -1048,22 +1447,14 @@ export const PaymentOutView: React.FC = () => {
               Cancel
             </Button>
             <Button
-              type="button"
+              type="submit"
               variant="primary"
               size="sm"
-              onClick={() => {
-                if (!customStartDate || !customEndDate) {
-                  toast.error('Please select both start and end dates.');
-                  return;
-                }
-                setAppliedPeriod('Custom');
-                setIsCustomDateModalOpen(false);
-              }}
             >
               Apply Range
             </Button>
           </div>
-        </div>
+        </form>
       </Modal>
 
       {/* 6. CREATE / EDIT PAYMENT MODAL matching reference image 2 */}
@@ -1094,7 +1485,7 @@ export const PaymentOutView: React.FC = () => {
             <span className="text-xs sm:text-[13px] font-bold text-white">
               ₹
               {(() => {
-                const s = suppliers.find((sup) => sup.id === formData.supplierId);
+                const s = mergedSuppliers.find((sup) => sup.id === watchSupplierId);
                 const bal = s?.payable || 0;
                 return bal.toLocaleString('en-IN', { minimumFractionDigits: 2 });
               })()}
@@ -1102,7 +1493,7 @@ export const PaymentOutView: React.FC = () => {
           </div>
         }
       >
-        <form onSubmit={handleSubmitPayment} className="space-y-4.5 p-2 sm:p-4">
+        <form noValidate onSubmit={handleSubmit(onSubmitPayment)} className="space-y-4.5 p-2 sm:p-4">
           {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Field 1: Supplier / Vendor */}
@@ -1110,18 +1501,27 @@ export const PaymentOutView: React.FC = () => {
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Supplier / Vendor <span className="text-slate-400 font-normal">*</span>
               </label>
-              <CustomSelect
-                value={formData.supplierId}
-                onChange={(val) => {
-                  setFormData({ ...formData, supplierId: val, purchaseId: '', amount: '' });
-                }}
-                placeholder="Select supplier / vendor"
-                allowClear={true}
-                options={suppliers.map((s) => ({
-                  value: s.id,
-                  label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
-                }))}
+              <Controller
+                control={control}
+                name="supplierId"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value}
+                    onChange={(val) => {
+                      field.onChange(val);
+                      setValue('purchaseId', '');
+                      setValue('amount', '');
+                    }}
+                    placeholder="Select supplier / vendor"
+                    allowClear={true}
+                    options={mergedSuppliers.map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
+                    }))}
+                  />
+                )}
               />
+              <FormError message={errors.supplierId?.message} />
             </div>
 
             {/* Field 2: Bill No (Dropdown) */}
@@ -1129,16 +1529,23 @@ export const PaymentOutView: React.FC = () => {
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Bill No
               </label>
-              <CustomSelect
-                value={formData.purchaseId}
-                onChange={(val) => handlePurchaseSelect(val)}
-                placeholder="Select bill no"
-                allowClear={true}
-                options={supplierPurchases.map((p) => ({
-                  value: p.id,
-                  label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
-                }))}
+              <Controller
+                control={control}
+                name="purchaseId"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value || ''}
+                    onChange={(val) => handlePurchaseSelect(val)}
+                    placeholder="Select bill no"
+                    allowClear={true}
+                    options={supplierPurchases.map((p) => ({
+                      value: p.id,
+                      label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
+                    }))}
+                  />
+                )}
               />
+              <FormError message={errors.purchaseId?.message} />
             </div>
 
             {/* Field 3: Voucher / Payment No */}
@@ -1148,12 +1555,11 @@ export const PaymentOutView: React.FC = () => {
               </label>
               <input
                 type="text"
-                required
-                value={formData.paymentNo}
-                onChange={(e) => setFormData({ ...formData, paymentNo: e.target.value })}
+                {...register('paymentNo')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
                 placeholder="e.g. VPA-2026-001"
               />
+              <FormError message={errors.paymentNo?.message} />
             </div>
           </div>
 
@@ -1166,11 +1572,10 @@ export const PaymentOutView: React.FC = () => {
               </label>
               <input
                 type="date"
-                required
-                value={formData.paymentDate}
-                onChange={(e) => setFormData({ ...formData, paymentDate: e.target.value })}
+                {...register('paymentDate')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white cursor-pointer"
               />
+              <FormError message={errors.paymentDate?.message} />
             </div>
 
             {/* Field 5: Payment Amount */}
@@ -1183,14 +1588,12 @@ export const PaymentOutView: React.FC = () => {
                 <input
                   type="number"
                   step="0.01"
-                  required
-                  min="0.01"
                   placeholder="0.00"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value === '' ? '' : Number(e.target.value) })}
+                  {...register('amount')}
                   className="w-full h-11 pl-9 pr-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-bold text-slate-900 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
                 />
               </div>
+              <FormError message={errors.amount?.message} />
             </div>
 
             {/* Field 6: Payment Mode */}
@@ -1198,20 +1601,27 @@ export const PaymentOutView: React.FC = () => {
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Payment Mode <span className="text-slate-400 font-normal">*</span>
               </label>
-              <CustomSelect
-                value={formData.paymentMode}
-                onChange={(val) => setFormData({ ...formData, paymentMode: val as PaymentOutMode })}
-                placeholder="Select payment mode"
-                options={[
-                  { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
-                  { value: 'UPI', label: 'UPI / QR Code' },
-                  { value: 'Cash', label: 'Cash' },
-                  { value: 'Cheque', label: 'Cheque' },
-                  { value: 'Card', label: 'Debit / Credit Card' },
-                  { value: 'Net Banking', label: 'Net Banking' },
-                  { value: 'Other', label: 'Other' },
-                ]}
+              <Controller
+                control={control}
+                name="paymentMode"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value}
+                    onChange={(val) => field.onChange(val as PaymentOutMode)}
+                    placeholder="Select payment mode"
+                    options={[
+                      { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
+                      { value: 'UPI', label: 'UPI / QR Code' },
+                      { value: 'Cash', label: 'Cash' },
+                      { value: 'Cheque', label: 'Cheque' },
+                      { value: 'Card', label: 'Debit / Credit Card' },
+                      { value: 'Net Banking', label: 'Net Banking' },
+                      { value: 'Other', label: 'Other' },
+                    ]}
+                  />
+                )}
               />
+              <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
 
@@ -1222,10 +1632,10 @@ export const PaymentOutView: React.FC = () => {
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Upload Receipt / Proof
               </label>
-              {formData.receiptImage ? (
+              {watchReceiptImage ? (
                 <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
                   <img
-                    src={formData.receiptImage}
+                    src={watchReceiptImage}
                     alt="Receipt"
                     className="w-7 h-7 rounded-lg object-cover border border-slate-300"
                   />
@@ -1234,8 +1644,8 @@ export const PaymentOutView: React.FC = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, receiptImage: '' })}
-                    className="text-slate-400 hover:text-rose-500 transition-colors p-1"
+                    onClick={() => setValue('receiptImage', '')}
+                    className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
                     title="Remove Image"
                   >
                     <X className="w-4 h-4 stroke-[2.5]" />
@@ -1254,7 +1664,7 @@ export const PaymentOutView: React.FC = () => {
                       if (file) {
                         const reader = new FileReader();
                         reader.onloadend = () => {
-                          setFormData({ ...formData, receiptImage: reader.result as string });
+                          setValue('receiptImage', reader.result as string);
                           toast.success('Receipt image attached successfully!');
                         };
                         reader.readAsDataURL(file);
@@ -1272,10 +1682,10 @@ export const PaymentOutView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.referenceNo}
-                onChange={(e) => setFormData({ ...formData, referenceNo: e.target.value })}
+                {...register('referenceNo')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
               />
+              <FormError message={errors.referenceNo?.message} />
             </div>
 
             {/* Field 9: Notes */}
@@ -1285,10 +1695,10 @@ export const PaymentOutView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                {...register('notes')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
               />
+              <FormError message={errors.notes?.message} />
             </div>
           </div>
 
@@ -1307,10 +1717,21 @@ export const PaymentOutView: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+              disabled={isSubmitting || isSubmittingForm}
+              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
             >
-              <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>{editingPaymentId ? 'Save Changes' : 'Save'}</span>
+              {isSubmitting || isSubmittingForm ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Check className="w-4 h-4 stroke-[2.5]" />
+              )}
+              <span>
+                {isSubmitting || isSubmittingForm
+                  ? 'Saving...'
+                  : editingPaymentId
+                  ? 'Save Changes'
+                  : 'Save'}
+              </span>
             </button>
           </div>
         </form>

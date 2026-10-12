@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
+import { FormError } from '../../components/common/FormError';
 import {
   Mail,
   Lock,
@@ -16,102 +20,131 @@ import {
   Check,
 } from 'lucide-react';
 
+const LoginValidationSchema = z.object({
+  email: z.string().trim().min(1, 'Please enter your email address').email('Please enter a valid email address'),
+  password: z.string().min(1, 'Please enter your password'),
+  rememberMe: z.boolean().optional(),
+});
+type LoginFields = z.infer<typeof LoginValidationSchema>;
+
+const ForgotEmailValidationSchema = z.object({
+  forgotEmail: z.string().trim().min(1, 'Please enter your registered email address').email('Please enter a valid email address'),
+});
+type ForgotEmailFields = z.infer<typeof ForgotEmailValidationSchema>;
+
+const ResetPasswordValidationSchema = z.object({
+  resetToken: z.string().trim().min(1, 'Reset token is required'),
+  newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+  confirmPassword: z.string().min(1, 'Please confirm your password'),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
+});
+type ResetPasswordFields = z.infer<typeof ResetPasswordValidationSchema>;
+
 export const LoginView: React.FC = () => {
   const { login, isLoading } = useAuth();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   // Screen flow: login -> forgot-email -> forgot-reset -> forgot-success
   const [currentScreen, setCurrentScreen] = useState<'login' | 'forgot-email' | 'forgot-reset' | 'forgot-success'>('login');
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [resetToken, setResetToken] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [isSendingForgot, setIsSendingForgot] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
+
+  // React Hook Form for Login
+  const {
+    register: registerLogin,
+    handleSubmit: handleLoginSubmit,
+    formState: { errors: loginErrors, isSubmitting: isLoginSubmitting },
+    getValues: getLoginValues,
+  } = useForm<LoginFields>({
+    resolver: zodResolver(LoginValidationSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+      rememberMe: false,
+    },
+    mode: 'onSubmit',
+  });
+
+  // React Hook Form for Forgot Email
+  const {
+    register: registerForgot,
+    handleSubmit: handleForgotSubmit,
+    setValue: setForgotValue,
+    formState: { errors: forgotErrors, isSubmitting: isSendingForgot },
+  } = useForm<ForgotEmailFields>({
+    resolver: zodResolver(ForgotEmailValidationSchema),
+    defaultValues: {
+      forgotEmail: '',
+    },
+    mode: 'onSubmit',
+  });
+
+  // React Hook Form for Reset Password
+  const {
+    register: registerReset,
+    handleSubmit: handleResetSubmit,
+    reset: resetResetForm,
+    formState: { errors: resetErrors, isSubmitting: isResetting },
+  } = useForm<ResetPasswordFields>({
+    resolver: zodResolver(ResetPasswordValidationSchema),
+    defaultValues: {
+      resetToken: '',
+      newPassword: '',
+      confirmPassword: '',
+    },
+    mode: 'onSubmit',
+  });
 
   const resetToLogin = () => {
     setCurrentScreen('login');
-    setForgotEmail('');
-    setResetToken('');
-    setNewPassword('');
-    setConfirmPassword('');
     setShowNewPassword(false);
     setErrorMsg(null);
+    resetResetForm();
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onLoginSubmit = async (data: LoginFields) => {
     setErrorMsg(null);
-
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail) {
-      setErrorMsg('Please enter your email address');
-      return;
-    }
-
-    if (!password) {
-      setErrorMsg('Please enter your password');
-      return;
-    }
-
-    setSubmitting(true);
     try {
-      const success = await login(trimmedEmail, password);
+      const success = await login(data.email, data.password);
       if (success) {
+        if (typeof window !== 'undefined' && 'PasswordCredential' in window && navigator.credentials) {
+          try {
+            const cred = new (window as any).PasswordCredential({
+              id: data.email,
+              password: data.password,
+              name: data.email,
+            });
+            await navigator.credentials.store(cred);
+          } catch {
+            // Context insecure or user denied, safe to ignore
+          }
+        }
         navigate('/', { replace: true });
       } else {
         setErrorMsg('Invalid email or password. Please verify and try again.');
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Authentication failed. Please try again.');
-    } finally {
-      setSubmitting(false);
     }
   };
 
-  const handleSendForgotPassword = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!forgotEmail.trim()) {
-      toast.error('Please enter your registered email address.');
-      return;
-    }
-    setIsSendingForgot(true);
+  const onForgotSubmit = async (data: ForgotEmailFields) => {
     try {
-      const res = await api.forgotPassword(forgotEmail.trim());
+      const res = await api.forgotPassword(data.forgotEmail);
       toast.success(res.message || 'If the account is eligible, a reset email will be sent.');
       setCurrentScreen('forgot-reset');
     } catch (err: any) {
       toast.error(err.message || 'Failed to send password reset request.');
-    } finally {
-      setIsSendingForgot(false);
     }
   };
 
-  const handleResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetToken.trim()) {
-      toast.error('Please enter the 64-character reset token received in your email.');
-      return;
-    }
-    if (newPassword.length < 6) {
-      toast.error('Password must be at least 6 characters.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error('Passwords do not match.');
-      return;
-    }
-    setIsResetting(true);
+  const onResetSubmit = async (data: ResetPasswordFields) => {
     try {
-      await api.resetPassword(resetToken.trim(), newPassword);
+      await api.resetPassword(data.resetToken, data.newPassword);
       setCurrentScreen('forgot-success');
       toast.success('Password has been reset successfully!');
       setTimeout(() => {
@@ -119,8 +152,6 @@ export const LoginView: React.FC = () => {
       }, 2500);
     } catch (err: any) {
       toast.error(err.message || 'Failed to reset password. Please verify your token.');
-    } finally {
-      setIsResetting(false);
     }
   };
 
@@ -139,7 +170,7 @@ export const LoginView: React.FC = () => {
           {/* Violet Gradient Overlay on left */}
           <div className="absolute inset-0 bg-gradient-to-t from-[#120422] via-[#2A0845]/40 to-transparent lg:bg-gradient-to-r lg:from-[#1B0A33]/20 lg:via-[#2A0845]/40 lg:to-[#120422]/90" />
           <div className="absolute inset-0 bg-[#3B0764]/20 mix-blend-overlay" />
-          
+
           {/* Top Logo on Left */}
           <div className="absolute top-6 left-6 sm:top-10 sm:left-10 z-10">
             <div className="inline-flex items-center gap-3 p-2.5 px-4 bg-white/95 rounded-2xl shadow-2xl shadow-purple-950/60 border border-purple-300/30">
@@ -184,7 +215,7 @@ export const LoginView: React.FC = () => {
       {/* FOREGROUND LAYER: Login Card Placed Dead-Center */}
       <div className="relative z-20 w-full max-w-[460px] my-auto py-6">
         <div className="bg-[#18052E]/90 backdrop-blur-2xl border border-[#A78BFA]/40 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-black/90 text-white ring-1 ring-white/20">
-          
+
           {/* SCREEN 1: LOGIN */}
           {currentScreen === 'login' && (
             <div className="animate-in fade-in duration-200">
@@ -213,33 +244,35 @@ export const LoginView: React.FC = () => {
               )}
 
               {/* Form */}
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form noValidate onSubmit={handleLoginSubmit(onLoginSubmit)} className="space-y-4">
                 {/* Email Input */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Email Address
+                  <label htmlFor="email" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Email Address <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Mail className="w-4 h-4" />
                     </div>
                     <input
+                      id="email"
                       type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      {...registerLogin('email')}
                       placeholder="e.g. admin@yaa.com"
-                      autoComplete="email"
-                      required
-                      className="w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all font-medium"
+                      autoComplete="username"
+                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
+                        loginErrors.email ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                   </div>
+                  <FormError message={loginErrors.email?.message} />
                 </div>
 
                 {/* Password Input */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-semibold text-slate-300">
-                      Password
+                    <label htmlFor="password" className="block text-xs font-semibold text-slate-300">
+                      Password <span className="text-rose-400">*</span>
                     </label>
                   </div>
                   <div className="relative">
@@ -247,13 +280,14 @@ export const LoginView: React.FC = () => {
                       <Lock className="w-4 h-4" />
                     </div>
                     <input
+                      id="password"
                       type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      {...registerLogin('password')}
                       placeholder="Enter your password"
                       autoComplete="current-password"
-                      required
-                      className="w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all font-medium"
+                      className={`w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
+                        loginErrors.password ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                     <button
                       type="button"
@@ -264,15 +298,16 @@ export const LoginView: React.FC = () => {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  <FormError message={loginErrors.password?.message} />
                 </div>
 
                 {/* Remember Me & Forgot Password */}
                 <div className="flex items-center justify-between pt-1">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
+                      id="rememberMe"
                       type="checkbox"
-                      checked={rememberMe}
-                      onChange={(e) => setRememberMe(e.target.checked)}
+                      {...registerLogin('rememberMe')}
                       className="w-4 h-4 rounded border-white/20 bg-white/10 text-[#4309A2] focus:ring-[#4309A2] focus:ring-offset-0 cursor-pointer"
                     />
                     <span className="text-xs text-slate-300 font-medium">Keep me signed in</span>
@@ -281,7 +316,7 @@ export const LoginView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      setForgotEmail(email);
+                      setForgotValue('forgotEmail', getLoginValues('email') || '');
                       setCurrentScreen('forgot-email');
                     }}
                     className="text-xs font-semibold text-[#D8B4FE] hover:text-white hover:underline transition-colors cursor-pointer"
@@ -294,10 +329,10 @@ export const LoginView: React.FC = () => {
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={submitting || isLoading}
+                    disabled={isLoginSubmitting || isLoading}
                     className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#2B3991] via-[#33077C] to-[#4309A2] hover:opacity-95 active:scale-[0.99] text-white font-bold text-sm shadow-lg shadow-[#33077C]/30 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {submitting || isLoading ? (
+                    {isLoginSubmitting || isLoading ? (
                       <>
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         <span>Signing In...</span>
@@ -328,24 +363,26 @@ export const LoginView: React.FC = () => {
                 </p>
               </div>
 
-              <form onSubmit={handleSendForgotPassword} className="space-y-4">
+              <form noValidate onSubmit={handleForgotSubmit(onForgotSubmit)} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Registered Email Address
+                  <label htmlFor="forgotEmail" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Registered Email Address <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Mail className="w-4 h-4" />
                     </div>
                     <input
+                      id="forgotEmail"
                       type="email"
-                      required
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
+                      {...registerForgot('forgotEmail')}
                       placeholder="e.g. admin@yaa.com"
-                      className="w-full pl-10 pr-4 py-3 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all font-medium"
+                      className={`w-full pl-10 pr-4 py-3 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
+                        forgotErrors.forgotEmail ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                   </div>
+                  <FormError message={forgotErrors.forgotEmail?.message} />
                 </div>
 
                 <div className="flex items-center gap-3 pt-3">
@@ -391,41 +428,44 @@ export const LoginView: React.FC = () => {
                 </p>
               </div>
 
-              <form onSubmit={handleResetPassword} className="space-y-4">
+              <form noValidate onSubmit={handleResetSubmit(onResetSubmit)} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Reset Token (64 Hex Characters)
+                  <label htmlFor="resetToken" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Reset Token (64 Hex Characters) <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <KeyRound className="w-4 h-4" />
                     </div>
                     <input
+                      id="resetToken"
                       type="text"
-                      required
-                      value={resetToken}
-                      onChange={(e) => setResetToken(e.target.value)}
+                      {...registerReset('resetToken')}
                       placeholder="e.g. e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                      className="w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-xs font-mono placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all"
+                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-xs font-mono placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all ${
+                        resetErrors.resetToken ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                   </div>
+                  <FormError message={resetErrors.resetToken?.message} />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    New Password
+                  <label htmlFor="newPassword" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    New Password <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Lock className="w-4 h-4" />
                     </div>
                     <input
+                      id="newPassword"
                       type={showNewPassword ? 'text' : 'password'}
-                      required
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
+                      {...registerReset('newPassword')}
                       placeholder="At least 6 characters"
-                      className="w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all font-medium"
+                      className={`w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
+                        resetErrors.newPassword ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                     <button
                       type="button"
@@ -435,25 +475,28 @@ export const LoginView: React.FC = () => {
                       {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  <FormError message={resetErrors.newPassword?.message} />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Confirm New Password
+                  <label htmlFor="confirmPassword" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Confirm New Password <span className="text-rose-400">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Lock className="w-4 h-4" />
                     </div>
                     <input
+                      id="confirmPassword"
                       type={showNewPassword ? 'text' : 'password'}
-                      required
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      {...registerReset('confirmPassword')}
                       placeholder="Re-enter password"
-                      className="w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border border-white/[0.14] rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20 transition-all font-medium"
+                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
+                        resetErrors.confirmPassword ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      }`}
                     />
                   </div>
+                  <FormError message={resetErrors.confirmPassword?.message} />
                 </div>
 
                 <div className="flex items-center gap-3 pt-3">
@@ -517,4 +560,3 @@ export const LoginView: React.FC = () => {
     </div>
   );
 };
-

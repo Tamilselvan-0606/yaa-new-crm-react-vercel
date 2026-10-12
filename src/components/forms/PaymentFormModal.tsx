@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { PaymentSchema, PaymentFormData } from '../../schemas';
@@ -62,7 +62,7 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
       title="Record Payment / Create Invoice"
       subtitle="React Hook Form + Zod Financial Ledger"
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">

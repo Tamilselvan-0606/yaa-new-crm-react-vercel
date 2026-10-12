@@ -34,7 +34,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   className = '',
 }) => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && onSubmit) onSubmit(value);
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onSubmit) onSubmit(value);
+    }
   };
 
   return (

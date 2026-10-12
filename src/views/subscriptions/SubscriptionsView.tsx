@@ -55,6 +55,22 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
+import {
+  subscriptionPlanApi,
+  SubscriptionPlanApiItem,
+  organizationApi,
+  OrganizationApiItem,
+  organizationSubscriptionApi,
+  OrganizationSubscriptionApiItem,
+  clientSubscriptionApi,
+  ClientSubscriptionApiItem,
+  clientProductApi,
+  ClientProductApiItem,
+  productPlanApi,
+  ProductPlanApiItem,
+  customerApi,
+  mapApiCustomerToSalesCustomer,
+} from '../../api';
 
 export interface OrgSubscriptionItem {
   id: string;
@@ -66,6 +82,7 @@ export interface OrgSubscriptionItem {
   email: string;
   phone: string;
   whatsapp?: string;
+  planId?: string;
   plan: string;
   billingCycle: BillingCycle;
   amount: number;
@@ -74,113 +91,8 @@ export interface OrgSubscriptionItem {
   status: 'Active' | 'Expiring Soon' | 'Expired' | 'Cancelled';
   autoRenew: boolean;
   notes?: string;
+  subscriptionNumber?: string;
 }
-
-export const ORG_PLANS = [
-  { name: 'Yaa Diamond', monthlyPrice: 3599, annualPrice: 35990, tier: 'Diamond Specialty Suite' },
-  { name: 'Yaa Platinum', monthlyPrice: 4999, annualPrice: 49990, tier: 'Enterprise Platform Suite' },
-  { name: 'Yaa Gold', monthlyPrice: 2499, annualPrice: 24990, tier: 'Growth Business Platform' },
-  { name: 'Yaa Silver', monthlyPrice: 1749, annualPrice: 17490, tier: 'Standard Business Suite' },
-  { name: 'Yaa Bronze', monthlyPrice: 999, annualPrice: 9990, tier: 'Starter Platform' },
-];
-
-export const INITIAL_ORG_SUBSCRIPTIONS: OrgSubscriptionItem[] = [
-  {
-    id: 'SUB-ORG-101',
-    orgId: 'org_2',
-    orgName: 'Polihills',
-    orgCode: 'POLI-01',
-    industry: 'Real Estate, Commercial Infra & Development',
-    contactPerson: 'Sarah Jenkins',
-    email: 'info@polihills.com',
-    phone: '+91 98765 43211',
-    whatsapp: '+91 98765 43211',
-    plan: 'Yaa Gold',
-    billingCycle: 'Monthly',
-    amount: 2499,
-    startDate: '2025-06-01',
-    endDate: '2026-06-01',
-    status: 'Active',
-    autoRenew: true,
-    notes: 'Primary real estate multi-branch organization contract.',
-  },
-  {
-    id: 'SUB-ORG-102',
-    orgId: 'org_1',
-    orgName: 'YaaCreations',
-    orgCode: 'YC-HQ',
-    industry: 'Media, Branding & Digital Creative Tech',
-    contactPerson: 'Alex Rivera',
-    email: 'yaaadmin@gmail.com',
-    phone: '+91 98765 43210',
-    whatsapp: '+91 98765 43210',
-    plan: 'Yaa Platinum',
-    billingCycle: 'Annually',
-    amount: 49990,
-    startDate: '2025-01-15',
-    endDate: '2026-01-15',
-    status: 'Active',
-    autoRenew: true,
-    notes: 'Platform headquarters enterprise annual subscription.',
-  },
-  {
-    id: 'SUB-ORG-103',
-    orgId: 'org_3',
-    orgName: 'Enmin Labs',
-    orgCode: 'EML-02',
-    industry: 'Software Engineering, AI & Bio-Diagnostics',
-    contactPerson: 'Vikram Malhotra',
-    email: 'hello@enminlabs.io',
-    phone: '+91 98765 43212',
-    whatsapp: '+91 98765 43212',
-    plan: 'Yaa Silver',
-    billingCycle: 'Monthly',
-    amount: 1749,
-    startDate: '2025-09-10',
-    endDate: '2026-09-10',
-    status: 'Active',
-    autoRenew: true,
-    notes: 'Diagnostic and lab workflow platform plan.',
-  },
-  {
-    id: 'SUB-ORG-104',
-    orgId: 'org_4',
-    orgName: 'Apex Global Logistics',
-    orgCode: 'AGL-03',
-    industry: 'Supply Chain & Fleet Automation',
-    contactPerson: 'Marcus Chen',
-    email: 'ops@apexgl.com',
-    phone: '+91 98765 43213',
-    whatsapp: '+91 98765 43213',
-    plan: 'Yaa Gold',
-    billingCycle: 'Annually',
-    amount: 24990,
-    startDate: '2025-08-01',
-    endDate: '2026-08-01',
-    status: 'Expiring Soon',
-    autoRenew: true,
-    notes: 'Annual contract renewal scheduled for upcoming month.',
-  },
-  {
-    id: 'SUB-ORG-105',
-    orgId: 'org_5',
-    orgName: 'CloudCore Solutions',
-    orgCode: 'CCS-04',
-    industry: 'Cloud Infrastructure & SaaS Hosting',
-    contactPerson: 'Neha Sharma',
-    email: 'billing@cloudcore.in',
-    phone: '+91 98765 43214',
-    whatsapp: '+91 98765 43214',
-    plan: 'Yaa Bronze',
-    billingCycle: 'Monthly',
-    amount: 999,
-    startDate: '2025-04-10',
-    endDate: '2026-04-10',
-    status: 'Active',
-    autoRenew: false,
-    notes: 'Starter tier cloud infrastructure setup.',
-  },
-];
 
 const PRODUCT_ICONS: Record<string, any> = {
   prod_1: Boxes,
@@ -323,60 +235,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [subNotes, setSubNotes] = useState('');
 
   // -------------------------------------------------------------
-  // SUPER ADMIN: Organization Subscriptions State & Storage
   // -------------------------------------------------------------
-  const [orgSubscriptions, setOrgSubscriptions] = useState<OrgSubscriptionItem[]>(() => {
-    const saved = localStorage.getItem('org_subscriptions_catalog');
-    if (saved) {
-      try {
-        const parsed: OrgSubscriptionItem[] = JSON.parse(saved);
-        // Validate amounts against current ORG_PLANS pricing; reset if stale
-        const isStale = parsed.some((sub) => {
-          const plan = ORG_PLANS.find((p) => p.name === sub.plan);
-          if (!plan) return false;
-          const expectedAmount =
-            sub.billingCycle === 'Annually' ? plan.annualPrice : plan.monthlyPrice;
-          return sub.amount !== expectedAmount;
-        });
-        if (!isStale) {
-          return parsed.map((sub) =>
-            sub.orgId === 'org_1' || sub.orgName?.toLowerCase() === 'yaacreations'
-              ? { ...sub, email: 'yaaadmin@gmail.com' }
-              : sub
-          );
-        }
-        // Stale data detected &mdash; reset to fresh defaults
-        localStorage.removeItem('org_subscriptions_catalog');
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return INITIAL_ORG_SUBSCRIPTIONS;
-  });
+  // SUPER ADMIN: Organization Subscriptions State (Live API)
+  // -------------------------------------------------------------
+  const [apiOrgSubs, setApiOrgSubs] = useState<OrganizationSubscriptionApiItem[]>([]);
+  const [apiOrgSubsTotal, setApiOrgSubsTotal] = useState(0);
+  const [isOrgSubsLoading, setIsOrgSubsLoading] = useState(false);
 
-  const saveOrgSubscriptions = (data: OrgSubscriptionItem[]) => {
-    setOrgSubscriptions(data);
-    localStorage.setItem('org_subscriptions_catalog', JSON.stringify(data));
-  };
-
-  // Available organizations from catalog
-  const availableOrgs = useMemo(() => {
-    const isOrgSuperAdmin = currentUser?.email?.toLowerCase() === 'orgsuperadmin@gmail.com' || currentUser?.email?.toLowerCase() === 'orgadmin@gmail.com';
-    const storageKey = isOrgSuperAdmin ? 'organizations_catalog_orgsuperadmin' : 'organizations_catalog';
-
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-      try {
-        const parsed: any[] = JSON.parse(saved);
-        if (parsed && parsed.length > 0) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [];
-  }, [currentUser?.email]);
+  // Available organizations from live API
+  const [availableOrgs, setAvailableOrgs] = useState<OrganizationApiItem[]>([]);
 
   // Filter States for Super Admin Organization Subscriptions
   const [pendingOrgPlan, setPendingOrgPlan] = useState('ALL');
@@ -395,32 +262,67 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [orgSubEmail, setOrgSubEmail] = useState('');
   const [orgSubPhone, setOrgSubPhone] = useState('');
   const [orgSubWhatsapp, setOrgSubWhatsapp] = useState('');
+  const [orgSubPlanId, setOrgSubPlanId] = useState('');
   const [orgSubPlan, setOrgSubPlan] = useState('');
-  const [orgSubBillingCycle, setOrgSubBillingCycle] = useState<string>('');
+  const [orgSubBillingCycle, setOrgSubBillingCycle] = useState<string>('Monthly');
   const [orgSubAmount, setOrgSubAmount] = useState<number>(0);
   const [orgSubStartDate, setOrgSubStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [orgSubEndDate, setOrgSubEndDate] = useState(
-    new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  );
+  const [orgSubEndDate, setOrgSubEndDate] = useState('');
   const [orgSubAutoRenew, setOrgSubAutoRenew] = useState(true);
   const [orgSubNotes, setOrgSubNotes] = useState('');
 
-  // Initial Data Load
-  useEffect(() => {
-    loadAllData();
-  }, []);
+  // -------------------------------------------------------------
+  // CLIENT SUBSCRIPTIONS: Live API State (Platform /subscriptions)
+  // -------------------------------------------------------------
+  const [apiClientSubs, setApiClientSubs] = useState<ClientSubscriptionApiItem[]>([]);
+  const [apiClientSubsTotal, setApiClientSubsTotal] = useState(0);
+  const [isClientSubsLoading, setIsClientSubsLoading] = useState(false);
 
-  const loadAllData = async () => {
+  // Initial Data Load (Only for non-superadmin client subscriptions)
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      loadClientDependencies();
+    } else {
+      setLoading(false);
+    }
+  }, [isSuperAdmin]);
+
+  const loadClientDependencies = async () => {
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
-      const [prodsData, subsData, custsData] = await Promise.all([
-        api.getProducts(),
-        api.getSubscriptions(),
-        api.getCustomers().catch(() => []),
+      const [prodsData, custsData] = await Promise.all([
+        clientProductApi.getProducts({ limit: 100 })
+          .then((res) => {
+            if (res && res.success && Array.isArray(res.data)) {
+              return res.data.map((p) => ({
+                id: p.id,
+                name: p.name,
+                code: p.code,
+                plans: (p.plans || []).map((pl: any) => ({
+                  id: pl.id,
+                  name: pl.name,
+                  price: Number(pl.price) || 0,
+                  billingCycle: pl.billingCycle || 'Monthly',
+                  features: pl.features || [],
+                  status: pl.status || 'Active',
+                })),
+              })) as any[];
+            }
+            return [];
+          })
+          .catch(() => []),
+        customerApi.getCustomers({ pagination_required: false, page_size: 100 })
+          .then((res) => {
+            if (res && res.success && Array.isArray(res.data)) {
+              return res.data.map(mapApiCustomerToSalesCustomer) as any;
+            }
+            return [];
+          })
+          .catch(() => []),
       ]);
       const prods = prodsData || [];
       setProducts(prods);
-      setSubscriptions(subsData || []);
       setCustomers(custsData || []);
 
       // Default selected product to Digital Marketing
@@ -437,66 +339,213 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     }
   };
 
-  // -------------------------------------------------------------
-  // SUPER ADMIN: Organization Plans State & Storage
-  // -------------------------------------------------------------
-  const [orgPlans, setOrgPlans] = useState<ProductPlan[]>(() => {
-    const defaultBranchLimits: Record<string, number> = {
-      'Yaa Diamond': 50,
-      'Yaa Platinum': 25,
-      'Yaa Gold': 10,
-      'Yaa Silver': 5,
-      'Yaa Bronze': 2,
-    };
-
-    const saved = localStorage.getItem('superadmin_org_plans_catalog');
-    if (saved) {
-      try {
-        const parsed: ProductPlan[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((p) => {
-            const limit = p.maxBranchLimit !== undefined ? p.maxBranchLimit : (p.specs?.maxBranchLimit !== undefined ? p.specs.maxBranchLimit : (defaultBranchLimits[p.name] ?? 5));
-            return {
-              ...p,
-              description: '',
-              maxBranchLimit: limit,
-              specs: {
-                ...p.specs,
-                maxBranchLimit: limit,
-              },
-            };
-          });
-        }
-      } catch (e) {
-        console.error(e);
+  const loadClientSubscriptions = async (
+    page = subsPage,
+    limit = subsPageSize,
+    search = appliedSubSearch,
+    productFilter = appliedSubProduct,
+    status = appliedSubStatus
+  ) => {
+    if (isSuperAdmin) return;
+    setIsClientSubsLoading(true);
+    try {
+      const matchedProd = productFilter !== 'ALL' ? products.find((p) => p.name.toLowerCase() === productFilter.toLowerCase() || p.id === productFilter) : undefined;
+      const res = await clientSubscriptionApi.getClientSubscriptions({
+        page,
+        limit,
+        search: search.trim() ? search.trim() : undefined,
+        productId: matchedProd?.id,
+        status: status !== 'ALL' && status ? status : undefined,
+        sortBy: 'endDate',
+        sortOrder: 'asc',
+      });
+      if (res.success && Array.isArray(res.data)) {
+        setApiClientSubs(res.data);
+        const total = res.pagination?.totalRecords ?? res.data.length;
+        setApiClientSubsTotal(total);
       }
+    } catch (e: any) {
+      console.error('Failed to load client subscriptions:', e);
+      showToast('error', 'Subscriptions Load Failed', e.message || 'Failed to fetch client subscriptions');
+    } finally {
+      setIsClientSubsLoading(false);
     }
-    return ORG_PLANS.map((op, idx) => {
-      const branchLimit = defaultBranchLimits[op.name] ?? (idx === 0 ? 50 : idx === 1 ? 25 : idx === 2 ? 10 : idx === 3 ? 5 : 2);
-      return {
-        id: `org_plan_${idx + 1}`,
-        name: op.name,
-        price: op.monthlyPrice,
-        billingCycle: 'Monthly' as BillingCycle,
-        pricingType: 'Fixed' as PricingType,
-        tier: op.tier as any,
-        features: ['Organization Platform License', 'Multi-Branch Support', 'Enterprise Governance'],
-        description: '',
-        maxBranchLimit: branchLimit,
-        specs: {
-          maxBranchLimit: branchLimit,
-        },
-        status: 'Active' as const,
-        currency: '₹',
-        customizablePrice: false,
-      } as ProductPlan;
-    });
+  };
+
+  useEffect(() => {
+    if (!isSuperAdmin && viewMode === 'subscriptions') {
+      loadClientSubscriptions(subsPage, subsPageSize, appliedSubSearch, appliedSubProduct, appliedSubStatus);
+    }
+  }, [isSuperAdmin, viewMode, subsPage, subsPageSize, appliedSubSearch, appliedSubProduct, appliedSubStatus]);
+
+  // -------------------------------------------------------------
+  // PRODUCT PLANS: Live API State (Platform /products/{productId}/plans)
+  // -------------------------------------------------------------
+  const [productPlansByProductId, setProductPlansByProductId] = useState<Record<string, ProductPlan[]>>({});
+  const [isProductPlansLoading, setIsProductPlansLoading] = useState(false);
+
+  // Helper to map ProductPlanApiItem from backend to ProductPlan format for UI
+  const mapApiProductPlanToProductPlan = (p: ProductPlanApiItem): ProductPlan => ({
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    billingCycle: (p.billingCycle as BillingCycle) || 'Monthly',
+    features: Array.isArray(p.features) ? p.features : [],
+    status: (p.status as 'Active' | 'Inactive') || 'Active',
+    currency: '₹',
+    pricingType: 'Fixed',
+    description: '',
+    specs: {},
+    isPopular: false,
   });
 
-  const saveOrgPlans = (data: ProductPlan[]) => {
-    setOrgPlans(data);
-    localStorage.setItem('superadmin_org_plans_catalog', JSON.stringify(data));
+  const loadProductPlans = async (productId: string, status?: string) => {
+    if (!productId) return;
+    setIsProductPlansLoading(true);
+    try {
+      const res = await productPlanApi.getProductPlans(productId, {
+        status: status && status !== 'ALL' ? status : undefined,
+      });
+      if (res.success && Array.isArray(res.data)) {
+        const mappedPlans = res.data.map(mapApiProductPlanToProductPlan);
+        setProductPlansByProductId((prev) => ({
+          ...prev,
+          [productId]: mappedPlans,
+        }));
+      }
+    } catch (e: any) {
+      console.error('Failed to load product plans for productId:', productId, e);
+      showToast('error', 'Plans Load Failed', e.message || 'Failed to fetch product plans');
+    } finally {
+      setIsProductPlansLoading(false);
+    }
   };
+
+  useEffect(() => {
+    if (!isSuperAdmin && viewMode === 'plans' && selectedPlanProductId) {
+      loadProductPlans(selectedPlanProductId);
+    }
+  }, [isSuperAdmin, viewMode, selectedPlanProductId]);
+
+  // -------------------------------------------------------------
+  // SUPER ADMIN: Organization Subscription Plans (Live API)
+  // -------------------------------------------------------------
+  const [apiPlans, setApiPlans] = useState<SubscriptionPlanApiItem[]>([]);
+  const [apiPlansTotal, setApiPlansTotal] = useState(0);
+  const [isPlansLoading, setIsPlansLoading] = useState(false);
+
+  // Helper to map SubscriptionPlanApiItem to ProductPlan format for UI compatibility
+  const mapApiPlanToProductPlan = (p: SubscriptionPlanApiItem): ProductPlan => ({
+    id: p.id,
+    name: p.name,
+    price: p.monthlyPrice,
+    billingCycle: (p.billingCycle as BillingCycle) || 'Monthly',
+    pricingType: (p.pricingType as PricingType) || 'Fixed',
+    tier: (p.tier as any) || 'Enterprise',
+    features: p.features || [],
+    description: p.description || '',
+    maxBranchLimit: p.limits?.branches ?? 5,
+    specs: {
+      ...(p.limits || {}),
+      gstRate: p.gstRate,
+      annualPrice: p.annualPrice,
+      maxBranchLimit: p.limits?.branches ?? 5,
+    },
+    status: (p.status as 'Active' | 'Inactive') || 'Active',
+    currency: '₹',
+    customizablePrice: p.pricingType === 'Custom Quote',
+    isPopular: !!p.isPopular,
+  });
+
+  const loadSubscriptionPlans = async (
+    page = plansPage,
+    limit = plansPageSize,
+    search = appliedPlanSearch,
+    status = appliedPlanStatus
+  ) => {
+    if (!isSuperAdmin) return;
+    setIsPlansLoading(true);
+    try {
+      const res = await subscriptionPlanApi.getSubscriptionPlans({
+        page,
+        limit,
+        search: search.trim() ? search.trim() : undefined,
+        status: status !== 'ALL' && status ? status : undefined,
+        sortBy: 'monthlyPrice',
+        sortOrder: 'asc',
+      });
+      if (res.success && Array.isArray(res.data)) {
+        setApiPlans(res.data);
+        setApiPlansTotal(res.pagination?.totalRecords ?? res.data.length);
+      }
+    } catch (e: any) {
+      console.error('Failed to load subscription plans:', e);
+      showToast('error', 'Plans Load Failed', e.message || 'Failed to fetch subscription plans');
+    } finally {
+      setIsPlansLoading(false);
+    }
+  };
+
+  const loadAvailableOrganizations = async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const res = await organizationApi.getOrganizations(1, 100);
+      if (res.success && Array.isArray(res.data)) {
+        setAvailableOrgs(res.data);
+      }
+    } catch (e: any) {
+      console.error('Failed to load organizations for dropdown:', e);
+    }
+  };
+
+  const loadOrganizationSubscriptions = async (
+    page = orgSubsPage,
+    limit = orgSubsPageSize,
+    search = appliedSubSearch,
+    planName = appliedOrgPlan,
+    status = appliedSubStatus
+  ) => {
+    if (!isSuperAdmin) return;
+    setIsOrgSubsLoading(true);
+    try {
+      const matchedPlan = planName !== 'ALL' ? apiPlans.find((p) => p.name.toLowerCase() === planName.toLowerCase()) : undefined;
+      const res = await organizationSubscriptionApi.getOrganizationSubscriptions({
+        page,
+        limit,
+        search: search.trim() ? search.trim() : undefined,
+        planId: matchedPlan?.id,
+        status: status !== 'ALL' && status ? status : undefined,
+        sortBy: 'endDate',
+        sortOrder: 'asc',
+      });
+      if (res.success && Array.isArray(res.data)) {
+        setApiOrgSubs(res.data);
+        setApiOrgSubsTotal(res.pagination?.totalRecords ?? res.data.length);
+      }
+    } catch (e: any) {
+      console.error('Failed to load organization subscriptions:', e);
+      showToast('error', 'Subscriptions Load Failed', e.message || 'Failed to fetch organization subscriptions');
+    } finally {
+      setIsOrgSubsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isSuperAdmin && viewMode === 'plans') {
+      loadSubscriptionPlans(plansPage, plansPageSize, appliedPlanSearch, appliedPlanStatus);
+    }
+  }, [isSuperAdmin, viewMode, plansPage, plansPageSize, appliedPlanSearch, appliedPlanStatus]);
+
+  useEffect(() => {
+    if (isSuperAdmin && viewMode === 'subscriptions') {
+      loadOrganizationSubscriptions(orgSubsPage, orgSubsPageSize, appliedSubSearch, appliedOrgPlan, appliedSubStatus);
+    }
+  }, [isSuperAdmin, viewMode, orgSubsPage, orgSubsPageSize, appliedSubSearch, appliedOrgPlan, appliedSubStatus]);
+
+  // Derived orgPlans from apiPlans
+  const orgPlans = useMemo(() => {
+    return apiPlans.map(mapApiPlanToProductPlan);
+  }, [apiPlans]);
 
   // -------------------------------------------------------------
   // PLAN ACTIONS (Create, Edit, Delete, Duplicate)
@@ -519,113 +568,151 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const handleSavePlan = async (productId: string, planData: Partial<ProductPlan>, planId?: string) => {
     try {
       if (isSuperAdmin || productId === 'prod_org') {
-        let updatedPlans: ProductPlan[];
+        const branchLimit = Number(planData.maxBranchLimit || planData.specs?.maxBranchLimit || 5);
+        const adminUsers = Number(planData.specs?.adminUsers || 10);
+        const staffUsers = Number(planData.specs?.staffUsers || 50);
+        const storageGB = Number(planData.specs?.storageGB || 100);
+        const monthlyPrice = Number(planData.price) || 0;
+        const annualPrice = planData.specs?.annualPrice ? Number(planData.specs.annualPrice) : Math.round(monthlyPrice * 10);
+        const gstRate = planData.specs?.gstRate !== undefined ? Number(planData.specs.gstRate) : 18;
+
+        const generateCode = (nameStr: string) => {
+          return nameStr.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+        };
+
         if (planId) {
-          updatedPlans = orgPlans.map((p) =>
-            p.id === planId ? ({ ...p, ...planData } as ProductPlan) : p
-          );
-          saveOrgPlans(updatedPlans);
-          showToast('success', 'Plan Updated', `Saved pricing and configuration for ${planData.name || 'plan'}.`);
-        } else {
-          const newPlan: ProductPlan = {
-            id: `org_plan_${Date.now()}`,
-            name: planData.name || 'New Enterprise Plan',
-            price: planData.price || 0,
+          const matchedApiPlan = apiPlans.find((p) => p.id === planId);
+          await subscriptionPlanApi.updateSubscriptionPlan(planId, {
+            name: planData.name,
+            code: matchedApiPlan?.code || generateCode(planData.name || 'PLAN'),
+            description: planData.description || matchedApiPlan?.description || '',
+            monthlyPrice,
+            annualPrice,
+            gstRate,
             billingCycle: planData.billingCycle || 'Monthly',
-            pricingType: planData.pricingType || 'Fixed',
-            tier: planData.tier || ('Enterprise' as any),
-            features: planData.features || ['Organization Platform License', 'Multi-Branch Support', 'Enterprise Governance'],
-            description: planData.description || (planData.tier as string) || '',
+            pricingType: (planData.pricingType as any) || 'Fixed',
             status: planData.status || 'Active',
-            currency: planData.currency || '₹',
-            customizablePrice: planData.customizablePrice || false,
-            maxBranchLimit: planData.maxBranchLimit,
-            specs: planData.specs,
-          };
-          updatedPlans = [...orgPlans, newPlan];
-          saveOrgPlans(updatedPlans);
+            features: planData.features || ['Multi-Branch Support', 'Unlimited Leads & Inquiries', 'Advanced Reports'],
+            limits: {
+              adminUsers,
+              staffUsers,
+              branches: branchLimit,
+              storageGB,
+            },
+            isPopular: !!planData.isPopular,
+          });
+          showToast('success', 'Plan Updated', `Successfully updated "${planData.name}".`);
+        } else {
+          await subscriptionPlanApi.createSubscriptionPlan({
+            name: planData.name || 'New Enterprise Plan',
+            code: generateCode(planData.name || `PLAN_${Date.now()}`),
+            description: planData.description || 'Comprehensive enterprise management suite',
+            monthlyPrice,
+            annualPrice,
+            gstRate,
+            billingCycle: planData.billingCycle || 'Monthly',
+            pricingType: (planData.pricingType as any) || 'Fixed',
+            status: planData.status || 'Active',
+            features: planData.features && planData.features.length > 0 ? planData.features : ['Multi-Branch Support', 'Unlimited Leads & Inquiries', 'Advanced Reports'],
+            limits: {
+              adminUsers,
+              staffUsers,
+              branches: branchLimit,
+              storageGB,
+            },
+            isPopular: !!planData.isPopular,
+          });
           showToast('success', 'Plan Created', `New enterprise plan "${planData.name}" created.`);
         }
         setIsPlanModalOpen(false);
+        await loadSubscriptionPlans();
         return;
       }
 
       if (planId) {
-        await api.updateProductPlan(productId, planId, planData);
+        await productPlanApi.updateProductPlan(productId, planId, {
+          name: planData.name,
+          price: Number(planData.price) || 0,
+          billingCycle: planData.billingCycle || 'Monthly',
+          features: planData.features || [],
+          status: planData.status || 'Active',
+        });
         showToast('success', 'Plan Updated', `Saved flexible pricing for ${planData.name}.`);
       } else {
-        await api.createProductPlan(productId, planData);
+        await productPlanApi.createProductPlan(productId, {
+          name: planData.name || 'New Plan',
+          price: Number(planData.price) || 0,
+          billingCycle: planData.billingCycle || 'Monthly',
+          features: planData.features || [],
+          status: planData.status || 'Active',
+        });
         showToast('success', 'Plan Created', `New plan "${planData.name}" added to product.`);
       }
-      await loadAllData();
+      setIsPlanModalOpen(false);
+      await loadProductPlans(productId);
     } catch (e: any) {
-      showToast('error', 'Plan Save Failed', e.message || 'Error occurred while saving plan.');
+      console.error('Plan Save Failed:', e);
+      const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Error occurred while saving plan.';
+      showToast('error', 'Plan Save Failed', errMsg);
       throw e;
     }
   };
 
   const handleDeletePlan = async (product: Product, plan: ProductPlan) => {
-    if (!confirm(`Are you sure you want to remove the plan "${plan.name}" from ${product.name}?`)) {
+    if (!confirm(`Are you sure you want to remove the plan "${plan.name}"?`)) {
       return;
     }
     try {
       if (isSuperAdmin || product.id === 'prod_org') {
-        const updatedPlans = orgPlans.filter((p) => p.id !== plan.id);
-        saveOrgPlans(updatedPlans);
+        await subscriptionPlanApi.deleteSubscriptionPlan(plan.id);
         showToast('success', 'Plan Removed', `Deleted ${plan.name} from enterprise plans.`);
+        await loadSubscriptionPlans();
         return;
       }
 
-      await api.deleteProductPlan(product.id, plan.id);
+      await productPlanApi.deleteProductPlan(product.id, plan.id);
       showToast('success', 'Plan Removed', `Deleted ${plan.name} from ${product.name}.`);
-      await loadAllData();
+      await loadProductPlans(product.id);
     } catch (e: any) {
-      showToast('error', 'Delete Failed', e.message || 'Failed to delete plan.');
+      console.error('Delete Failed:', e);
+      const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Failed to delete plan.';
+      showToast('error', 'Delete Failed', errMsg);
     }
   };
 
-  const handleDuplicatePlan = async (product: Product, plan: ProductPlan) => {
-    try {
-      const duplicatedPlan: Partial<ProductPlan> = {
-        ...plan,
-        name: `${plan.name} (Copy)`,
-        isPopular: false,
-      };
-
-      if (isSuperAdmin || product.id === 'prod_org') {
-        const newPlan: ProductPlan = {
-          ...duplicatedPlan,
-          id: `org_plan_${Date.now()}`,
-        } as ProductPlan;
-        const updatedPlans = [...orgPlans, newPlan];
-        saveOrgPlans(updatedPlans);
-        showToast('success', 'Plan Duplicated', `Created copy of ${plan.name}.`);
-        return;
-      }
-
-      await api.createProductPlan(product.id, duplicatedPlan);
-      showToast('success', 'Plan Duplicated', `Created copy of ${plan.name}.`);
-      await loadAllData();
-    } catch (e: any) {
-      showToast('error', 'Duplicate Failed', e.message);
-    }
+  const handleDuplicatePlan = (product: Product, plan: ProductPlan) => {
+    // Open the form modal pre-filled with a copy of the plan data
+    const duplicatedPlan: ProductPlan = {
+      ...plan,
+      id: '',  // Clear id so it saves as a new plan
+      name: `${plan.name} (Copy)`,
+      isPopular: false,
+    };
+    setPlanModalProductId(product.id);
+    setEditingPlan(duplicatedPlan);
+    setIsPlanModalOpen(true);
   };
 
   // -------------------------------------------------------------
-  // CUSTOMER SUBSCRIPTION ACTIONS (Create, Edit, Renew)
+  // CUSTOMER SUBSCRIPTION ACTIONS (Create, Edit, Renew, Delete via Live API)
   // -------------------------------------------------------------
+  const [subPlanId, setSubPlanId] = useState('');
+
   const handleOpenAssignSubscription = (product?: Product, plan?: ProductPlan) => {
     setEditingSub(null);
     setSubCustomerId('');
     setSubCustomerName('');
-    setSubProductId(product ? product.id : '');
+    const targetProd = product || products[0];
+    setSubProductId(targetProd ? targetProd.id : '');
+    setSubPlanId(plan ? plan.id : '');
     setSubPlanName(plan ? plan.name : '');
-    setSubBillingCycle(plan ? plan.billingCycle : '');
+    setSubBillingCycle(plan ? plan.billingCycle : 'Monthly');
     setSubAmount(plan ? plan.price : '');
-    setSubStartDate('');
-    setSubEndDate('');
+    const today = new Date().toISOString().split('T')[0];
+    setSubStartDate(today);
+    setSubEndDate(computeEndDate(today, (plan ? plan.billingCycle : 'Monthly') || 'Monthly'));
     setSubAutoRenew(true);
-    setSubStatus('');
+    setSubStatus('Active');
     setSubNotes('');
     setIsSubModalOpen(true);
   };
@@ -635,9 +722,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubCustomerId(sub.customerId || '');
     setSubCustomerName(sub.customerName || '');
 
-    const matchedProd = products.find((p) => p.name === sub.productOrService || p.name === sub.productName) || products[0];
+    const matchedProd = products.find((p) => p.name === sub.productOrService || p.name === sub.productName || p.id === (sub as any).productId) || products[0];
     setSubProductId(matchedProd ? matchedProd.id : 'prod_1');
-    setSubPlanName(sub.plan || '');
+    const matchedPlan = matchedProd?.plans?.find((pl) => pl.name === sub.plan || pl.id === (sub as any).planId);
+    setSubPlanId(matchedPlan?.id || (sub as any).planId || '');
+    setSubPlanName(sub.plan || matchedPlan?.name || '');
     setSubBillingCycle(sub.billingCycle || 'Monthly');
     setSubAmount(sub.amount || 0);
     setSubStartDate(sub.startDate || new Date().toISOString().split('T')[0]);
@@ -650,93 +739,109 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   const handleProductChangeInSubModal = (prodId: string) => {
     setSubProductId(prodId);
+    setSubPlanId('');
     setSubPlanName('');
     setSubAmount('');
     setSubBillingCycle('');
   };
 
-  const handlePlanChangeInSubModal = (planName: string) => {
-    setSubPlanName(planName);
+  const handlePlanChangeInSubModal = (planNameOrId: string) => {
     const prod = products.find((p) => p.id === subProductId);
-    const foundPlan = prod?.plans.find((pl) => pl.name === planName);
+    const availablePlans = (subProductId && productPlansByProductId[subProductId]) || prod?.plans || [];
+    const foundPlan = availablePlans.find((pl) => pl.name === planNameOrId || pl.id === planNameOrId);
     if (foundPlan) {
+      setSubPlanId(foundPlan.id);
+      setSubPlanName(foundPlan.name);
       setSubAmount(foundPlan.price);
       setSubBillingCycle(foundPlan.billingCycle);
+      if (subStartDate) {
+        setSubEndDate(computeEndDate(subStartDate, foundPlan.billingCycle));
+      }
+    } else {
+      setSubPlanName(planNameOrId);
     }
   };
 
   const handleSaveSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!subCustomerId) {
+      showToast('error', 'Validation Error', 'Please select a customer.');
+      return;
+    }
+    if (!subProductId) {
+      showToast('error', 'Validation Error', 'Please select a product.');
+      return;
+    }
+
     const prod = products.find((p) => p.id === subProductId);
-    const resolvedProdName = prod ? prod.name : 'OmniFlow ERP';
+    const availablePlans = (subProductId && productPlansByProductId[subProductId]) || prod?.plans || [];
+    const resolvedPlan = availablePlans.find((pl) => pl.name === subPlanName || pl.id === subPlanId);
 
     try {
       if (editingSub) {
-        await api.updateSubscription(editingSub.id, {
+        await clientSubscriptionApi.updateClientSubscription(editingSub.id, {
           customerId: subCustomerId,
-          customerName: subCustomerName,
-          productOrService: resolvedProdName,
-          productName: resolvedProdName,
-          plan: subPlanName,
-          billingCycle: (subBillingCycle || 'Monthly') as BillingCycle,
-          amount: Number(subAmount),
-          startDate: subStartDate,
-          endDate: subEndDate,
-          status: (subStatus || 'Active') as SubscriptionStatus,
+          productId: subProductId,
+          planId: resolvedPlan?.id || (subPlanId || undefined),
+          billingCycle: subBillingCycle || 'Monthly',
+          amount: Number(subAmount) || 0,
+          startDate: subStartDate || undefined,
+          endDate: subEndDate || undefined,
+          status: subStatus || 'Active',
           autoRenew: subAutoRenew,
-          notes: subNotes,
+          notes: subNotes || undefined,
         });
-        showToast('success', 'Subscription Updated', `Updated terms for ${subCustomerName}`);
+        showToast('success', 'Subscription Updated', `Updated terms for ${subCustomerName || 'customer'}`);
       } else {
-        await api.createSubscription({
+        await clientSubscriptionApi.createClientSubscription({
           customerId: subCustomerId,
-          customerName: subCustomerName,
-          productOrService: resolvedProdName,
-          productName: resolvedProdName,
-          plan: subPlanName,
-          billingCycle: (subBillingCycle || 'Monthly') as BillingCycle,
-          amount: Number(subAmount),
-          startDate: subStartDate,
-          endDate: subEndDate,
-          status: (subStatus || 'Active') as SubscriptionStatus,
+          productId: subProductId,
+          planId: resolvedPlan?.id || (subPlanId || undefined),
+          billingCycle: subBillingCycle || 'Monthly',
+          amount: Number(subAmount) || 0,
+          startDate: subStartDate || undefined,
+          endDate: subEndDate || undefined,
+          status: subStatus || 'Active',
           autoRenew: subAutoRenew,
-          notes: subNotes,
+          notes: subNotes || undefined,
         });
-        showToast('success', 'Subscription Created', `Enrolled ${subCustomerName} in ${subPlanName}`);
+        showToast('success', 'Subscription Created', `Enrolled ${subCustomerName || 'customer'} in ${subPlanName || 'plan'}`);
       }
       setIsSubModalOpen(false);
-      loadAllData();
+      await loadClientSubscriptions();
     } catch (e: any) {
-      showToast('error', 'Save Failed', e.message);
+      console.error('Subscription save failed:', e);
+      const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Error occurred while saving subscription.';
+      showToast('error', 'Save Failed', errMsg);
     }
   };
 
   const handleRenewSubscription = async (sub: SubscriptionItem) => {
     try {
-      const currentEnd = new Date(sub.endDate);
-      const monthsToAdd = sub.billingCycle === 'Annually' ? 12 : sub.billingCycle === 'Quarterly' ? 3 : 1;
-      currentEnd.setMonth(currentEnd.getMonth() + monthsToAdd);
-      const newEnd = currentEnd.toISOString().split('T')[0];
-
-      await api.updateSubscription(sub.id, {
-        endDate: newEnd,
-        status: 'Active',
+      await clientSubscriptionApi.renewClientSubscription(sub.id, {
+        billingCycle: sub.billingCycle,
+        amount: sub.amount,
+        notes: sub.notes || 'Renewed by admin',
       });
-      showToast('success', 'Subscription Renewed', `Extended renewal date through ${newEnd}`);
-      loadAllData();
+      showToast('success', 'Subscription Renewed', `Successfully renewed subscription for ${sub.customerName}`);
+      await loadClientSubscriptions();
     } catch (e: any) {
-      showToast('error', 'Renewal Failed', e.message);
+      console.error('Subscription renewal failed:', e);
+      const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Renewal failed.';
+      showToast('error', 'Renewal Failed', errMsg);
     }
   };
 
   const handleDeleteSubscription = async (sub: SubscriptionItem) => {
-    if (!confirm(`Cancel subscription contract for ${sub.customerName}?`)) return;
+    if (!confirm(`Are you sure you want to delete/cancel the subscription for ${sub.customerName}?`)) return;
     try {
-      await api.deleteSubscription(sub.id);
-      showToast('success', 'Subscription Cancelled', `Removed subscription for ${sub.customerName}`);
-      loadAllData();
+      await clientSubscriptionApi.deleteClientSubscription(sub.id);
+      showToast('success', 'Subscription Removed', `Removed subscription for ${sub.customerName}`);
+      await loadClientSubscriptions();
     } catch (e: any) {
-      showToast('error', 'Cancellation Failed', e.message);
+      console.error('Subscription deletion failed:', e);
+      const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Cancellation failed.';
+      showToast('error', 'Cancellation Failed', errMsg);
     }
   };
 
@@ -744,6 +849,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   // SUPER ADMIN: Organization Subscription Actions & Handlers
   // -------------------------------------------------------------
   const handleOpenCreateOrgSub = () => {
+    loadAvailableOrganizations();
+    if (apiPlans.length === 0) {
+      loadSubscriptionPlans(1, 100);
+    }
     setEditingOrgSub(null);
     setOrgSubOrgId('');
     setOrgSubOrgName('');
@@ -764,6 +873,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   };
 
   const handleOpenEditOrgSub = (sub: OrgSubscriptionItem) => {
+    loadAvailableOrganizations();
+    if (apiPlans.length === 0) {
+      loadSubscriptionPlans(1, 100);
+    }
     setEditingOrgSub(sub);
     setOrgSubOrgId(sub.orgId);
     setOrgSubOrgName(sub.orgName);
@@ -795,135 +908,145 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       setOrgSubWhatsapp('');
       return;
     }
-    const org = availableOrgs.find((o: any) => o.id === orgId);
+    const org = availableOrgs.find((o) => o.id === orgId);
     if (org) {
       setOrgSubOrgName(org.name);
       setOrgSubOrgCode(org.code);
-      setOrgSubIndustry(org.industry || '');
-      setOrgSubContactPerson(org.contactPerson || '');
-      setOrgSubEmail(org.email || '');
-      setOrgSubPhone(org.phone || '');
-      setOrgSubWhatsapp(org.whatsapp || org.phone || '');
+      setOrgSubIndustry((org as any).industry || org.organizationType || '');
+      setOrgSubContactPerson((org as any).contactPerson || org.user?.name || org.legalName || '');
+      setOrgSubEmail(org.email || org.user?.email || '');
+      setOrgSubPhone(org.phone || org.user?.phone || '');
+      setOrgSubWhatsapp((org as any).whatsapp || org.phone || org.user?.phone || '');
     }
   };
 
   const handlePlanChangeInOrgModal = (planName: string) => {
     setOrgSubPlan(planName);
-    const found = orgPlans.find((p) => p.name === planName);
-    const fallback = ORG_PLANS.find((p) => p.name === planName);
-    if (found) {
-      const monthly = found.price || 0;
-      const annual = monthly * 10;
+    const foundApiPlan = apiPlans.find((p) => p.name === planName);
+    if (foundApiPlan) {
+      setOrgSubPlanId(foundApiPlan.id);
+      const monthly = foundApiPlan.monthlyPrice || 0;
+      const annual = foundApiPlan.annualPrice || (monthly * 10);
       setOrgSubAmount(orgSubBillingCycle === 'Annually' ? annual : monthly);
-    } else if (fallback) {
-      setOrgSubAmount(orgSubBillingCycle === 'Annually' ? fallback.annualPrice : fallback.monthlyPrice);
     } else {
-      setOrgSubAmount(0);
+      const found = orgPlans.find((p) => p.name === planName);
+      if (found) {
+        setOrgSubPlanId(found.id);
+        const monthly = found.price || 0;
+        const annual = monthly * 10;
+        setOrgSubAmount(orgSubBillingCycle === 'Annually' ? annual : monthly);
+      } else {
+        setOrgSubAmount(0);
+      }
     }
+  };
+
+  // Auto-compute end date based on start date and billing cycle
+  const computeEndDate = (startDate: string, cycle: string): string => {
+    if (!startDate) return '';
+    const d = new Date(startDate);
+    if (isNaN(d.getTime())) return '';
+    if (cycle === 'Annually') {
+      d.setFullYear(d.getFullYear() + 1);
+    } else if (cycle === 'Quarterly') {
+      d.setMonth(d.getMonth() + 3);
+    } else if (cycle === 'Monthly') {
+      d.setMonth(d.getMonth() + 1);
+    } else {
+      d.setMonth(d.getMonth() + 1); // One-Time or unknown
+    }
+    return d.toISOString().split('T')[0];
   };
 
   const handleBillingCycleChangeInOrgModal = (cycle: string) => {
     setOrgSubBillingCycle(cycle);
-    const found = orgPlans.find((p) => p.name === orgSubPlan);
-    const fallback = ORG_PLANS.find((p) => p.name === orgSubPlan);
-    if (found) {
-      const monthly = found.price || 0;
-      const annual = monthly * 10;
+    // Auto-set end date from start date + new cycle
+    if (orgSubStartDate) {
+      setOrgSubEndDate(computeEndDate(orgSubStartDate, cycle));
+    }
+    const foundApiPlan = apiPlans.find((p) => p.name === orgSubPlan);
+    if (foundApiPlan) {
+      const monthly = foundApiPlan.monthlyPrice || 0;
+      const annual = foundApiPlan.annualPrice || (monthly * 12);
       setOrgSubAmount(cycle === 'Annually' ? annual : monthly);
-    } else if (fallback) {
-      setOrgSubAmount(cycle === 'Annually' ? fallback.annualPrice : fallback.monthlyPrice);
+    } else {
+      const found = orgPlans.find((p) => p.name === orgSubPlan);
+      if (found) {
+        const monthly = found.price || 0;
+        const annual = monthly * 12;
+        setOrgSubAmount(cycle === 'Annually' ? annual : monthly);
+      }
     }
   };
 
-  const handleSaveOrgSubscription = (e: React.FormEvent) => {
+  const handleSaveOrgSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!orgSubOrgName.trim()) {
-      showToast('error', 'Validation Error', 'Please select or enter an organization.');
+    if (!orgSubOrgId || orgSubOrgId === 'org_custom') {
+      showToast('error', 'Validation Error', 'Please select a registered organization from the system.');
       return;
     }
-    if (!orgSubPlan.trim()) {
-      showToast('error', 'Validation Error', 'Please select a subscription plan.');
+    const resolvedPlan = apiPlans.find((p) => p.name === orgSubPlan || p.id === orgSubPlanId);
+    if (!resolvedPlan) {
+      showToast('error', 'Validation Error', 'Please select a valid subscription plan.');
       return;
     }
     if (!orgSubBillingCycle) {
       showToast('error', 'Validation Error', 'Please select a billing cycle.');
       return;
     }
-    if (!orgSubStartDate || !orgSubEndDate) {
-      showToast('error', 'Validation Error', 'Please select both start date and next renewal date.');
+    if (!orgSubStartDate) {
+      showToast('error', 'Validation Error', 'Please select a start date.');
       return;
     }
 
-    if (editingOrgSub) {
-      const updated = orgSubscriptions.map((s) =>
-        s.id === editingOrgSub.id
-          ? {
-            ...s,
-            orgId: orgSubOrgId,
-            orgName: orgSubOrgName,
-            orgCode: orgSubOrgCode,
-            industry: orgSubIndustry,
-            contactPerson: orgSubContactPerson,
-            email: orgSubEmail,
-            phone: orgSubPhone,
-            whatsapp: orgSubWhatsapp,
-            plan: orgSubPlan,
-            billingCycle: (orgSubBillingCycle as BillingCycle) || 'Monthly',
-            amount: Number(orgSubAmount),
-            startDate: orgSubStartDate,
-            endDate: orgSubEndDate,
-            autoRenew: orgSubAutoRenew,
-            notes: orgSubNotes,
-          }
-          : s
-      );
-      saveOrgSubscriptions(updated);
-      showToast('success', 'Subscription Updated', `Updated subscription for ${orgSubOrgName}`);
-    } else {
-      const newId = `SUB-ORG-${100 + orgSubscriptions.length + 1}`;
-      const newSub: OrgSubscriptionItem = {
-        id: newId,
-        orgId: orgSubOrgId || `org_${Date.now()}`,
-        orgName: orgSubOrgName,
-        orgCode: orgSubOrgCode || orgSubOrgName.substring(0, 4).toUpperCase(),
-        industry: orgSubIndustry || 'General Enterprise',
-        contactPerson: orgSubContactPerson || 'Primary Contact',
-        email: orgSubEmail,
-        phone: orgSubPhone,
-        whatsapp: orgSubWhatsapp || orgSubPhone,
-        plan: orgSubPlan,
-        billingCycle: (orgSubBillingCycle as BillingCycle) || 'Monthly',
-        amount: Number(orgSubAmount),
+    try {
+      await organizationSubscriptionApi.createOrganizationSubscription({
+        organizationId: orgSubOrgId,
+        planId: resolvedPlan.id,
+        billingCycle: orgSubBillingCycle,
         startDate: orgSubStartDate,
-        endDate: orgSubEndDate,
-        status: 'Active',
+        endDate: orgSubEndDate || undefined,
         autoRenew: orgSubAutoRenew,
-        notes: orgSubNotes,
-      };
-      saveOrgSubscriptions([newSub, ...orgSubscriptions]);
-      showToast('success', 'Subscription Created', `Enrolled ${orgSubOrgName} in ${orgSubPlan}`);
+        notes: orgSubNotes || undefined,
+      });
+      showToast('success', 'Subscription Created', `Enrolled ${orgSubOrgName || 'organization'} in ${resolvedPlan.name}`);
+      setIsOrgSubModalOpen(false);
+      await loadOrganizationSubscriptions();
+    } catch (err: any) {
+      console.error(err);
+      const errMsg = err?.response?.data?.message || err?.response?.data?.error?.message || err.message || 'Failed to create subscription';
+      showToast('error', 'Subscription Failed', errMsg);
     }
-    setIsOrgSubModalOpen(false);
   };
 
-  const handleRenewOrgSubscription = (sub: OrgSubscriptionItem) => {
-    const currentEnd = new Date(sub.endDate);
-    const monthsToAdd = sub.billingCycle === 'Annually' ? 12 : sub.billingCycle === 'Quarterly' ? 3 : 1;
-    currentEnd.setMonth(currentEnd.getMonth() + monthsToAdd);
-    const newEnd = currentEnd.toISOString().split('T')[0];
-
-    const updated = orgSubscriptions.map((s) =>
-      s.id === sub.id ? { ...s, endDate: newEnd, status: 'Active' as const } : s
-    );
-    saveOrgSubscriptions(updated);
-    showToast('success', 'Subscription Renewed', `Extended renewal date for ${sub.orgName} to ${newEnd}`);
+  const handleRenewOrgSubscription = async (sub: OrgSubscriptionItem) => {
+    try {
+      await organizationSubscriptionApi.renewOrganizationSubscription(sub.id, {
+        billingCycle: sub.billingCycle,
+        autoRenew: sub.autoRenew,
+      });
+      showToast('success', 'Subscription Renewed', `Successfully renewed subscription for ${sub.orgName}.`);
+      await loadOrganizationSubscriptions();
+    } catch (err: any) {
+      console.error(err);
+      const errMsg = err?.response?.data?.message || err?.response?.data?.error?.message || err.message || 'Failed to renew subscription';
+      showToast('error', 'Renewal Failed', errMsg);
+    }
   };
 
-  const handleDeleteOrgSubscription = (sub: OrgSubscriptionItem) => {
+  const handleDeleteOrgSubscription = async (sub: OrgSubscriptionItem) => {
     if (!confirm(`Are you sure you want to cancel the subscription for ${sub.orgName}?`)) return;
-    const updated = orgSubscriptions.filter((s) => s.id !== sub.id);
-    saveOrgSubscriptions(updated);
-    showToast('success', 'Subscription Cancelled', `Removed subscription for ${sub.orgName}`);
+    try {
+      await organizationSubscriptionApi.cancelOrganizationSubscription(sub.id, {
+        reason: 'Cancelled by platform administrator',
+      });
+      showToast('success', 'Subscription Cancelled', `Cancelled subscription for ${sub.orgName}`);
+      await loadOrganizationSubscriptions();
+    } catch (err: any) {
+      console.error(err);
+      const errMsg = err?.response?.data?.message || err?.response?.data?.error?.message || err.message || 'Failed to cancel subscription';
+      showToast('error', 'Cancellation Failed', errMsg);
+    }
   };
 
   const getOrgPlanBadge = (planName: string) => {
@@ -958,43 +1081,32 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     );
   };
 
-  // Filtered Organization Subscriptions
-  // Super Admin: restricted to only 3 orgs; all Yaa plans are visible
-  const SUPER_ADMIN_ORGS = ['YaaCreations', 'Polihills', 'Enmin Labs'];
+  // Map live API Organization Subscriptions into OrgSubscriptionItem format
+  const mappedOrgSubs: OrgSubscriptionItem[] = useMemo(() => {
+    return apiOrgSubs.map((item) => ({
+      id: item.id,
+      orgId: item.organizationId,
+      orgName: item.orgName || 'Organization',
+      orgCode: item.orgCode || '',
+      industry: item.industry || '',
+      contactPerson: item.contactPerson || '',
+      email: item.email || '',
+      phone: item.phone || '',
+      planId: item.planId,
+      plan: item.planName || 'Plan',
+      billingCycle: (item.billingCycle as BillingCycle) || 'Monthly',
+      amount: item.amount,
+      startDate: item.startDate,
+      endDate: item.endDate,
+      status: (item.status as any) || 'Active',
+      autoRenew: !!item.autoRenew,
+      notes: item.notes || '',
+      subscriptionNumber: item.subscriptionNumber,
+    }));
+  }, [apiOrgSubs]);
 
-  const filteredOrgSubs = useMemo(() => {
-    return orgSubscriptions.filter((sub) => {
-      // Super Admin org scope restriction (plans unrestricted)
-      if (isSuperAdmin) {
-        const orgAllowed = SUPER_ADMIN_ORGS.some(
-          (name) => sub.orgName.trim().toLowerCase() === name.trim().toLowerCase()
-        );
-        if (!orgAllowed) return false;
-      }
-
-      const q = appliedSubSearch.toLowerCase().trim();
-      const matchesSearch =
-        q === '' ||
-        sub.orgName.toLowerCase().includes(q) ||
-        sub.orgCode.toLowerCase().includes(q) ||
-        sub.plan.toLowerCase().includes(q) ||
-        sub.id.toLowerCase().includes(q) ||
-        sub.contactPerson.toLowerCase().includes(q) ||
-        sub.email.toLowerCase().includes(q) ||
-        sub.industry.toLowerCase().includes(q);
-
-      const matchesPlan = appliedOrgPlan === 'ALL' || sub.plan.toLowerCase() === appliedOrgPlan.toLowerCase();
-      const matchesStatus = appliedSubStatus === 'ALL' || sub.status === appliedSubStatus;
-
-      return matchesSearch && matchesPlan && matchesStatus;
-    });
-  }, [orgSubscriptions, appliedSubSearch, appliedOrgPlan, appliedSubStatus, isSuperAdmin]);
-
-  const totalOrgSubsPages = Math.max(1, Math.ceil(filteredOrgSubs.length / orgSubsPageSize));
+  const totalOrgSubsPages = Math.max(1, Math.ceil(apiOrgSubsTotal / orgSubsPageSize));
   const safeOrgSubsPage = Math.min(orgSubsPage, totalOrgSubsPages);
-  const pagedOrgSubs = useMemo(() => {
-    return filteredOrgSubs.slice((safeOrgSubsPage - 1) * orgSubsPageSize, safeOrgSubsPage * orgSubsPageSize);
-  }, [filteredOrgSubs, safeOrgSubsPage, orgSubsPageSize]);
 
   // -------------------------------------------------------------
   // NORMALIZERS & BADGES (Matching reference image)
@@ -1002,10 +1114,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const formatDisplayDate = (dateStr?: string): string => {
     if (!dateStr) return '-';
     try {
-      const parts = dateStr.split('-');
-      if (parts.length === 3) {
-        return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      }
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return dateStr;
       const day = String(d.getDate()).padStart(2, '0');
@@ -1099,41 +1207,49 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     });
   }, [allPlansWithProduct, appliedPlanSearch, appliedPlanStatus]);
 
-  const totalPlansPages = Math.max(1, Math.ceil(filteredPlansList.length / plansPageSize));
+  const totalPlansPages = isSuperAdmin
+    ? Math.max(1, Math.ceil(apiPlansTotal / plansPageSize))
+    : Math.max(1, Math.ceil(filteredPlansList.length / plansPageSize));
   const safePlansPage = Math.min(plansPage, totalPlansPages);
   const pagedPlans = useMemo(() => {
+    if (isSuperAdmin) {
+      return allPlansWithProduct;
+    }
     return filteredPlansList.slice((safePlansPage - 1) * plansPageSize, safePlansPage * plansPageSize);
-  }, [filteredPlansList, safePlansPage, plansPageSize]);
+  }, [isSuperAdmin, allPlansWithProduct, filteredPlansList, safePlansPage, plansPageSize]);
 
-  // Filtered Subscriptions
-  const filteredSubs = useMemo(() => {
-    return subscriptions.filter((s) => {
-      const q = appliedSubSearch.toLowerCase().trim();
-      const matchesSearch =
-        q === '' ||
-        s.customerName.toLowerCase().includes(q) ||
-        (s.productOrService && s.productOrService.toLowerCase().includes(q)) ||
-        (s.productName && s.productName.toLowerCase().includes(q)) ||
-        s.plan.toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q);
+  // Map API client subscriptions to SubscriptionItem model
+  const mappedClientSubs = useMemo<SubscriptionItem[]>(() => {
+    return apiClientSubs.map((item) => {
+      const custName = item.customer?.company || item.customer?.name || 'Client';
+      const prodName = item.product?.name || 'CRM Product';
+      const planName = item.plan?.name || item.billingCycle || 'Standard';
 
-      const prodName = s.productOrService || s.productName || '';
-      const matchedProd = products.find((p) => p.name === prodName);
-      const matchesProduct =
-        appliedSubProduct === 'ALL' ||
-        prodName === appliedSubProduct ||
-        matchedProd?.id === appliedSubProduct;
-      const matchesStatus = appliedSubStatus === 'ALL' || s.status === appliedSubStatus;
-
-      return matchesSearch && matchesProduct && matchesStatus;
+      return {
+        id: item.id,
+        customerId: item.customerId,
+        customerName: custName,
+        productOrService: prodName,
+        productName: prodName,
+        plan: planName,
+        billingCycle: (item.billingCycle as BillingCycle) || 'Monthly',
+        amount: item.amount || 0,
+        startDate: item.startDate || '',
+        endDate: item.endDate || '',
+        status: (item.status as SubscriptionStatus) || 'Active',
+        autoRenew: item.autoRenew ?? true,
+        notes: item.notes || '',
+        daysRemaining: item.daysRemaining,
+        subscriptionNumber: item.subscriptionNumber,
+        customer: item.customer,
+        product: item.product,
+      } as any;
     });
-  }, [subscriptions, appliedSubSearch, appliedSubProduct, appliedSubStatus, products]);
+  }, [apiClientSubs]);
 
-  const totalSubsPages = Math.max(1, Math.ceil(filteredSubs.length / subsPageSize));
+  const totalSubsPages = Math.max(1, Math.ceil(apiClientSubsTotal / subsPageSize));
   const safeSubsPage = Math.min(subsPage, totalSubsPages);
-  const pagedSubs = useMemo(() => {
-    return filteredSubs.slice((safeSubsPage - 1) * subsPageSize, safeSubsPage * subsPageSize);
-  }, [filteredSubs, safeSubsPage, subsPageSize]);
+  const pagedSubs = mappedClientSubs;
 
   const totalPlansCount = products.reduce((acc, p) => acc + (p.plans?.length || 0), 0);
 
@@ -1163,11 +1279,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             {isSuperAdmin
               ? (viewMode === 'subscriptions'
-                  ? 'Manage recurring organization subscriptions, assigned platform plans, and renewal cycles.'
-                  : 'Streamline product plans, flexible pricing tiers, and manage recurring client subscriptions.')
+                ? 'Manage recurring organization subscriptions, assigned platform plans, and renewal cycles.'
+                : 'Streamline product plans, flexible pricing tiers, and manage recurring client subscriptions.')
               : (viewMode === 'plans'
-                  ? 'Filter by product suite to view and manage its subscription plan tiers.'
-                  : 'Manage recurring client subscriptions, assigned product plans, and renewal cycles.')}
+                ? 'Filter by product suite to view and manage its subscription plan tiers.'
+                : 'Manage recurring client subscriptions, assigned product plans, and renewal cycles.')}
           </p>
         </div>
 
@@ -1277,11 +1393,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     <FilterDropdown
                       options={[
                         { label: 'Plan : All', value: 'ALL' },
-                        { label: 'Yaa Diamond', value: 'Yaa Diamond' },
-                        { label: 'Yaa Platinum', value: 'Yaa Platinum' },
-                        { label: 'Yaa Gold', value: 'Yaa Gold' },
-                        { label: 'Yaa Silver', value: 'Yaa Silver' },
-                        { label: 'Yaa Bronze', value: 'Yaa Bronze' },
+                        ...orgPlans.map((p) => ({
+                          label: p.name,
+                          value: p.name,
+                        })),
                       ]}
                       value={pendingOrgPlan}
                       onChange={(val) => setPendingOrgPlan(val)}
@@ -1306,7 +1421,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 rightSlot={
                   <span className="text-xs font-semibold text-slate-500 pr-2">
                     Total Subscriptions :{' '}
-                    <span className="text-[#33077C] font-bold">{filteredOrgSubs.length}</span>
+                    <span className="text-[#33077C] font-bold">{apiOrgSubsTotal}</span>
                   </span>
                 }
               />
@@ -1327,21 +1442,30 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="text-sm">
-                      {pagedOrgSubs.length === 0 ? (
+                      {isOrgSubsLoading ? (
+                        <tr>
+                          <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                            <div className="flex flex-col items-center justify-center gap-2">
+                              <div className="w-7 h-7 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
+                              <span className="text-xs text-slate-500 font-medium">Loading organization subscriptions...</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : mappedOrgSubs.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                             No organization subscriptions found matching your criteria.
                           </td>
                         </tr>
                       ) : (
-                        pagedOrgSubs.map((sub) => {
+                        mappedOrgSubs.map((sub) => {
                           return (
                             <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
                               {/* 1. Organization */}
                               <td className="py-4 px-5 border border-slate-200">
                                 <div className="flex items-center gap-3">
                                   <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0">
-                                    {sub.orgName.replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase()}
+                                    {(sub.orgName || 'OR').replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase() || 'OR'}
                                   </div>
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -1495,7 +1619,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         >
                                           <Trash2 style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
                                         </span>
-                                        <span>Delete</span>
+                                        <span>Cancel Subscription</span>
                                       </button>
                                     </div>
                                   )}
@@ -1511,10 +1635,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Pagination Card */}
-              {filteredOrgSubs.length > 0 && (
+              {apiOrgSubsTotal > 0 && (
                 <Pagination
                   currentPage={safeOrgSubsPage}
-                  total={filteredOrgSubs.length}
+                  total={apiOrgSubsTotal}
                   pageSize={orgSubsPageSize}
                   onPageChange={(page) => setOrgSubsPage(page)}
                   onPageSizeChange={(size) => {
@@ -1584,7 +1708,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   <div className="flex items-center gap-3 pr-1">
                     <span className="text-xs font-semibold text-slate-500">
                       Total Subscriptions :{' '}
-                      <span className="text-[#33077C] font-bold">{filteredSubs.length}</span>
+                      <span className="text-[#33077C] font-bold">{apiClientSubsTotal}</span>
                     </span>
                   </div>
                 }
@@ -1606,22 +1730,32 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="text-sm">
-                      {pagedSubs.length === 0 ? (
+                      {isClientSubsLoading ? (
+                        <tr>
+                          <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                            <div className="flex flex-col items-center justify-center gap-2">
+                              <div className="w-7 h-7 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
+                              <span className="text-xs text-slate-500 font-medium">Loading client subscriptions...</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : pagedSubs.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                             No subscriptions found matching your criteria.
                           </td>
                         </tr>
                       ) : (
-                        pagedSubs.map((sub, idx) => {
-                          const prodName = sub.productOrService || sub.productName || 'OmniFlow ERP';
+                        pagedSubs.map((sub: any, idx) => {
+                          const prodName = sub.product?.name || sub.productOrService || sub.productName || 'CRM Product';
                           const matchedCust = customers.find(
-                            (c) => c.company.toLowerCase() === sub.customerName.toLowerCase() || c.id === sub.customerId
+                            (c) => c.id === sub.customerId || (sub.customer?.id && c.id === sub.customer.id)
                           );
-                          const displayId = formatDisplaySubId(sub.id, (safeSubsPage - 1) * subsPageSize + 101 + idx);
-                          const phone = matchedCust?.phone || '+1 (555) 234-5678';
-                          const whatsapp = matchedCust?.whatsapp || phone;
-                          const email = matchedCust?.email || 'contact@client.com';
+                          const displayId = sub.subscriptionNumber || formatDisplaySubId(sub.id, (safeSubsPage - 1) * subsPageSize + 101 + idx);
+                          const contactName = sub.customer?.name || matchedCust?.contactPerson || 'Primary Account Holder';
+                          const phone = sub.customer?.phone || matchedCust?.phone || '+1 (555) 234-5678';
+                          const whatsapp = (matchedCust as any)?.whatsapp || phone;
+                          const email = sub.customer?.email || matchedCust?.email || 'contact@client.com';
 
                           return (
                             <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1632,7 +1766,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                   <span className="text-xs font-semibold text-[#4309A2]">({displayId})</span>
                                 </div>
                                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                                  {matchedCust?.contactPerson || 'Primary Account Holder'}
+                                  {contactName}
                                 </p>
                               </td>
 
@@ -1708,7 +1842,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                               <td className="py-4 px-5 border border-slate-200">
                                 <p className="font-bold text-[#33077C] text-xs sm:text-[13px]">{sub.plan}</p>
                                 <p className="text-xs font-bold text-slate-900 mt-0.5">
-                                  ₹{sub.amount.toLocaleString()} <span className="text-[11px] text-slate-500 font-normal">/ {sub.billingCycle}</span>
+                                  ₹{Number(sub.amount || 0).toLocaleString()} <span className="text-[11px] text-slate-500 font-normal">/ {sub.billingCycle}</span>
                                 </p>
                               </td>
 
@@ -1729,7 +1863,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                   <span>{sub.endDate}</span>
                                 </div>
                                 <span className="text-[11px] text-slate-400 block mt-0.5 pl-6">
-                                  Since: {sub.startDate}
+                                  Since: {formatDisplayDate(sub.startDate)}
                                 </span>
                               </td>
 
@@ -1845,10 +1979,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Pagination Card */}
-              {filteredSubs.length > 0 && (
+              {apiClientSubsTotal > 0 && (
                 <Pagination
                   currentPage={safeSubsPage}
-                  total={filteredSubs.length}
+                  total={apiClientSubsTotal}
                   pageSize={subsPageSize}
                   onPageChange={(page) => setSubsPage(page)}
                   onPageSizeChange={(size) => {
@@ -1904,7 +2038,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 rightSlot={
                   <span className="text-xs font-semibold text-slate-500 pr-2">
                     Total Plans :{' '}
-                    <span className="text-[#33077C] font-bold">{filteredPlansList.length}</span>
+                    <span className="text-[#33077C] font-bold">{isSuperAdmin ? apiPlansTotal : filteredPlansList.length}</span>
                   </span>
                 }
               />
@@ -1925,7 +2059,16 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="text-sm">
-                      {pagedPlans.length === 0 ? (
+                      {isPlansLoading ? (
+                        <tr>
+                          <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                            <div className="flex flex-col items-center justify-center gap-2">
+                              <div className="w-7 h-7 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
+                              <span className="text-xs text-slate-500 font-medium">Loading subscription plans...</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : pagedPlans.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                             No subscription plans found matching your filter criteria.
@@ -2124,10 +2267,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Standalone Pagination Card */}
-              {filteredPlansList.length > 0 && (
+              {(isSuperAdmin ? apiPlansTotal : filteredPlansList.length) > 0 && (
                 <Pagination
                   currentPage={safePlansPage}
-                  total={filteredPlansList.length}
+                  total={isSuperAdmin ? apiPlansTotal : filteredPlansList.length}
                   pageSize={plansPageSize}
                   onPageChange={(page) => setPlansPage(page)}
                   onPageSizeChange={(size) => {
@@ -2205,21 +2348,34 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                           {/* Plans Grid */}
                           <div className="p-5 sm:p-6">
-                            {(!product.plans || product.plans.length === 0) ? (
-                              <div className="text-center py-10 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
-                                <Zap className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                <p className="text-sm font-semibold text-slate-700">No subscription plans created for {product.name} yet.</p>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenCreatePlan(product.id)}
-                                  className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl cursor-pointer mt-3 inline-flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                                >
-                                  + Create First Plan
-                                </button>
+                            {isProductPlansLoading ? (
+                              <div className="text-center py-16 bg-slate-50/50 rounded-xl border border-slate-200">
+                                <div className="flex flex-col items-center justify-center gap-2.5">
+                                  <div className="w-8 h-8 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
+                                  <span className="text-xs sm:text-sm text-slate-500 font-semibold">Loading plans for {product.name}...</span>
+                                </div>
                               </div>
-                            ) : (
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {product.plans.map((plan) => (
+                            ) : (() => {
+                              const currentPlans = productPlansByProductId[product.id] || [];
+                              if (currentPlans.length === 0) {
+                                return (
+                                  <div className="text-center py-10 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
+                                    <Zap className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                                    <p className="text-sm font-semibold text-slate-700">No subscription plans created for {product.name} yet.</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenCreatePlan(product.id)}
+                                      className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl cursor-pointer mt-3 inline-flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                                    >
+                                      + Create First Plan
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                  {currentPlans.map((plan) => (
                                   <div
                                     key={plan.id}
                                     className="bg-white rounded-[26px] border border-slate-200/80 shadow-md shadow-slate-200/40 overflow-hidden flex flex-col justify-between hover:shadow-xl hover:border-[#33077C]/20 transition-all duration-300 relative group"
@@ -2261,7 +2417,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                           <span className="text-3xl sm:text-4xl font-extrabold text-[#0B1E33] tracking-tight">
                                             {plan.customizablePrice
                                               ? 'Flexible'
-                                              : `${plan.currency || '\u20B9'}${plan.price.toLocaleString()}`}
+                                              : `${plan.currency || '₹'}${plan.price.toLocaleString()}`}
                                           </span>
                                           <span className="text-xs sm:text-sm font-semibold text-slate-400 ml-1">
                                             / {plan.billingCycle ? plan.billingCycle.toLowerCase() : 'month'}
@@ -2271,7 +2427,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         {/* Deliverables & Limits Badges */}
                                         {(() => {
                                           const specs = plan.specs || {};
-                                          // Check specs or fallback extraction from features
                                           let posts = specs.monthlyPostLimit;
                                           let videos = specs.monthlyVideoLimit;
 
@@ -2382,7 +2537,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                   </div>
                                 ))}
                               </div>
-                            )}
+                            );
+                          })()}
                           </div>
                         </div>
                       );
@@ -2416,10 +2572,30 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         showBackIcon={true}
         hideCloseButton={true}
       >
-        <form onSubmit={handleSaveSubscription} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+        <form noValidate onSubmit={handleSaveSubscription} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
           <div className="space-y-4">
-            {/* Row 1: Target Product, Select Plan Tier, Billing Cycle */}
+            {/* Row 1: Select Customer, Target Product, Select Plan Tier */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Select Customer <span className="text-slate-500">*</span>
+                </label>
+                <CustomSelect
+                  value={subCustomerId}
+                  onChange={(val) => {
+                    setSubCustomerId(val);
+                    const found = customers.find((c) => c.id === val);
+                    setSubCustomerName(found?.company || found?.name || '');
+                  }}
+                  options={customers.map((c) => ({
+                    value: c.id,
+                    label: c.company ? `${c.company} (${c.name})` : c.name,
+                  }))}
+                  placeholder="Select Customer"
+                  activeColor="brand"
+                />
+              </div>
+
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Target Product <span className="text-slate-500">*</span>
@@ -2445,26 +2621,35 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   onChange={(val) => handlePlanChangeInSubModal(val)}
                   options={
                     subProductId
-                      ? products
-                          .find((p) => p.id === subProductId)
-                          ?.plans?.map((pl) => ({
-                            value: pl.name,
-                            label: pl.name,
-                          })) || []
+                      ? ((productPlansByProductId[subProductId] && productPlansByProductId[subProductId].length > 0)
+                          ? productPlansByProductId[subProductId]
+                          : products.find((p) => p.id === subProductId)?.plans || []
+                        ).map((pl) => ({
+                          value: pl.name,
+                          label: `${pl.name} (₹${pl.price.toLocaleString()} / ${pl.billingCycle})`,
+                        }))
                       : []
                   }
                   placeholder="Select Plan Tier"
                   activeColor="brand"
                 />
               </div>
+            </div>
 
+            {/* Row 2: Billing Cycle, Agreed Fee Amount, Start Date */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Billing Cycle <span className="text-slate-500">*</span>
                 </label>
                 <CustomSelect
                   value={subBillingCycle}
-                  onChange={(val) => setSubBillingCycle(val as any)}
+                  onChange={(val) => {
+                    setSubBillingCycle(val as any);
+                    if (subStartDate) {
+                      setSubEndDate(computeEndDate(subStartDate, val));
+                    }
+                  }}
                   options={[
                     { value: 'Monthly', label: 'Monthly' },
                     { value: 'Quarterly', label: 'Quarterly' },
@@ -2476,10 +2661,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   activeColor="brand"
                 />
               </div>
-            </div>
 
-            {/* Row 2: Agreed Fee Amount, Start Date, Renewal Date */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Agreed Fee Amount (₹) <span className="text-slate-500">*</span>
@@ -2508,11 +2690,19 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="dd/mm/yyyy"
                   required
                   value={subStartDate}
-                  onChange={(e) => setSubStartDate(e.target.value)}
+                  onChange={(e) => {
+                    setSubStartDate(e.target.value);
+                    if (subBillingCycle) {
+                      setSubEndDate(computeEndDate(e.target.value, subBillingCycle));
+                    }
+                  }}
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
                 />
               </div>
+            </div>
 
+            {/* Row 3: Renewal Date, Status, Notes */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Renewal Date <span className="text-slate-500">*</span>
@@ -2546,6 +2736,19 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   ]}
                   placeholder="Select Status"
                   activeColor="brand"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Notes / Contract Info
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Annual maintenance contract included"
+                  value={subNotes}
+                  onChange={(e) => setSubNotes(e.target.value)}
+                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
                 />
               </div>
             </div>
@@ -2582,7 +2785,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         showBackIcon={true}
         hideCloseButton={true}
       >
-        <form onSubmit={handleSaveOrgSubscription} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+        <form noValidate onSubmit={handleSaveOrgSubscription} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
           <div className="space-y-4">
             {/* Row 1: Select Organization, Subscription Plan, Billing Cycle (3 columns) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -2707,7 +2910,12 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="dd/mm/yyyy"
                   required
                   value={orgSubStartDate}
-                  onChange={(e) => setOrgSubStartDate(e.target.value)}
+                  onChange={(e) => {
+                    setOrgSubStartDate(e.target.value);
+                    if (orgSubBillingCycle) {
+                      setOrgSubEndDate(computeEndDate(e.target.value, orgSubBillingCycle));
+                    }
+                  }}
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
                 />
               </div>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   FileText,
   FileSpreadsheet,
@@ -41,6 +41,10 @@ import {
   AlignLeft,
   Paperclip,
   PlusCircle,
+  Loader2,
+  Wifi,
+  WifiOff,
+  Database,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -48,6 +52,7 @@ import {
   SaleProductItem,
   QuotationStatus,
   SalesCustomer,
+  InventoryStockItem,
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -57,6 +62,16 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import {
+  quotationApi,
+  mapApiQuotationToSaleQuotation,
+  mapSaleQuotationToPayload,
+  QuotationFilterParams,
+  customerApi,
+  mapApiCustomerToSalesCustomer,
+  stockApi,
+  mapApiStockToInventoryStockItem,
+} from '../../../api';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -122,18 +137,19 @@ const TAX_RATE_OPTIONS = [
 ];
 
 const PERIOD_FILTER_OPTIONS = [
-  { label: 'This Month', value: 'This Month' },
-  { label: 'Last 30 Days', value: 'Last 30 Days' },
-  { label: 'This Quarter', value: 'This Quarter' },
-  { label: 'This Financial Year', value: 'This Financial Year' },
-  { label: 'All Time', value: 'All Time' },
+  { label: 'All Time', value: 'all' },
+  { label: 'Today', value: 'today' },
+  { label: 'This Week', value: 'this_week' },
+  { label: 'This Month', value: 'this_month' },
+  { label: 'Last Month', value: 'last_month' },
+  { label: 'This Quarter', value: 'this_quarter' },
+  { label: 'This Year', value: 'this_year' },
 ];
 
 const STATUS_FILTER_OPTIONS = [
   { label: 'All Statuses', value: 'ALL' },
   { label: 'Open', value: 'Open', dotColor: '#f59e0b' },
   { label: 'Converted', value: 'Converted', dotColor: '#10b981' },
-  { label: 'Expired', value: 'Expired', dotColor: '#64748b' },
   { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
 ];
 
@@ -188,10 +204,13 @@ export const EstimateQuotationView: React.FC = () => {
     customers,
     stocks,
     saveQuotation,
+    setQuotationsList,
     deleteQuotation,
     updateQuotationStatus,
     convertQuotationToSale,
     saveCustomer,
+    setCustomersList,
+    setStocksList,
   } = useSalesManagementStore();
 
   // View Mode: 'list' (table) vs 'form' (create/edit screen as in reference image)
@@ -200,12 +219,31 @@ export const EstimateQuotationView: React.FC = () => {
   // Search & Filter states (for list view)
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingPeriod, setPendingPeriod] = useState('This Month');
-  const [appliedPeriod, setAppliedPeriod] = useState('This Month');
+  const [pendingPeriod, setPendingPeriod] = useState('all');
+  const [appliedPeriod, setAppliedPeriod] = useState('all');
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Live Commerce API State
+  const [liveQuotations, setLiveQuotations] = useState<SaleQuotation[]>([]);
+  const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
+
+  // Convert Modal State
+  const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
+  const [convertTargetQuotation, setConvertTargetQuotation] = useState<SaleQuotation | null>(null);
+  const [convertType, setConvertType] = useState<'Invoice' | 'Order' | 'Proforma'>('Invoice');
+  const [convertDueDate, setConvertDueDate] = useState<string>(
+    new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]
+  );
 
   // Table Row Dropdowns
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -260,7 +298,7 @@ export const EstimateQuotationView: React.FC = () => {
   const [partySearchQuery, setPartySearchQuery] = useState('');
   const partySelectRef = useRef<HTMLDivElement>(null);
 
-  // Initial Form Data (starts with Ref No. 1)
+  // Initial Form Data (No mock content)
   const [formData, setFormData] = useState({
     customerId: '',
     partyName: '',
@@ -268,12 +306,26 @@ export const EstimateQuotationView: React.FC = () => {
     customerEmail: '',
     customerCompany: '',
     billingAddress: '',
-    quotationNo: 'EST-001',
+    quotationNo: '',
     referenceNo: '1',
     date: new Date().toISOString().split('T')[0],
     validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
     stateOfSupply: '33-Tamil Nadu',
-    items: [] as ExtendedEstimateItem[],
+    items: [
+      {
+        id: `row_${Date.now()}_1`,
+        productId: '',
+        productName: '',
+        quantity: 1,
+        unit: 'NONE',
+        unitPrice: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        taxPercent: 0,
+        taxAmount: 0,
+        total: 0,
+      },
+    ] as ExtendedEstimateItem[],
     notes: 'Thank you for your business inquiry. Prices valid for 30 days.',
     terms: '1. Prices are valid for 30 days from issue date.\n2. Goods once confirmed will be dispatched within 48 hours.\n3. 100% payment on delivery / Net 15 days for verified accounts.',
   });
@@ -292,12 +344,26 @@ export const EstimateQuotationView: React.FC = () => {
         customerEmail: '',
         customerCompany: '',
         billingAddress: '',
-        quotationNo: 'EST-001',
+        quotationNo: '',
         referenceNo: '1',
         date: new Date().toISOString().split('T')[0],
         validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
         stateOfSupply: '33-Tamil Nadu',
-        items: [] as ExtendedEstimateItem[],
+        items: [
+          {
+            id: `row_${Date.now()}_1`,
+            productId: '',
+            productName: '',
+            quantity: 1,
+            unit: 'NONE',
+            unitPrice: 0,
+            discountPercent: 0,
+            discountAmount: 0,
+            taxPercent: 0,
+            taxAmount: 0,
+            total: 0,
+          },
+        ] as ExtendedEstimateItem[],
         notes: 'Thank you for your business inquiry. Prices valid for 30 days.',
         terms: '1. Prices are valid for 30 days from issue date.\n2. Goods once confirmed will be dispatched within 48 hours.\n3. 100% payment on delivery / Net 15 days for verified accounts.',
       },
@@ -346,8 +412,168 @@ export const EstimateQuotationView: React.FC = () => {
     };
   }, []);
 
-  // Filtered Quotations (List view)
-  const filteredQuotations = useMemo(() => {
+  // Fetch Quotations from Live Commerce API
+  const isFetchingRef = useRef(false);
+  const fetchQuotations = useCallback(
+    async (
+      pageNo: number = page,
+      size: number = pageSize,
+      searchQuery: string = appliedSearch,
+      statusVal: string = appliedStatus,
+      periodVal: string = appliedPeriod
+    ) => {
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+      setIsApiLoading(true);
+      setApiErrorMessage(null);
+
+      const params: QuotationFilterParams = {
+        page_no: pageNo,
+        page_size: size,
+        pagination_required: true,
+        sortOrder: 'desc',
+      };
+
+      if (searchQuery.trim()) {
+        params.search = searchQuery.trim();
+      }
+      if (statusVal && statusVal !== 'ALL') {
+        params.status = statusVal;
+      }
+      if (periodVal && periodVal !== 'all') {
+        params.period = periodVal;
+      }
+
+      try {
+        const response = await quotationApi.getQuotations(params);
+        if (response && (response.success || response.data)) {
+          const list = Array.isArray(response.data) ? response.data : [];
+          const mapped = list.map(mapApiQuotationToSaleQuotation);
+          setLiveQuotations(mapped);
+          setTotalApiRecords(response.pagination?.totalRecords ?? mapped.length);
+          setTotalApiPages(response.pagination?.totalPages ?? 1);
+          setIsApiConnected(true);
+        } else {
+          throw new Error(response?.message || 'Failed to fetch quotations');
+        }
+      } catch (err: any) {
+        console.warn('Commerce Quotations API notice:', err);
+        setIsApiConnected(false);
+        setApiErrorMessage(err.message || 'Commerce API not reachable');
+        setLiveQuotations(quotations);
+        setTotalApiRecords(quotations.length);
+        setTotalApiPages(Math.max(1, Math.ceil(quotations.length / size)));
+      } finally {
+        setIsApiLoading(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize, quotations]
+  );
+
+  // Trigger API fetch on filter/page change
+  useEffect(() => {
+    fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+  }, [fetchQuotations, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  // Auto-purge legacy mock quotations and mock grocery stocks on mount (Runs ONCE)
+  useEffect(() => {
+    try {
+      const rawStocks = localStorage.getItem('yaa_crm_inventory_stocks');
+      if (rawStocks) {
+        const parsed = JSON.parse(rawStocks);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(
+            (s) =>
+              !String(s.productId || s.id).startsWith('PROD_10') &&
+              !String(s.id).startsWith('stk_') &&
+              !String(s.productName || '').includes('Aashirvaad') &&
+              !String(s.productName || '').includes('India Gate') &&
+              !String(s.productName || '').includes('Fortune Sunlite') &&
+              !String(s.productName || '').includes('Tata Salt') &&
+              !String(s.productName || '').includes('Amul Pure Cow Ghee')
+          );
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('yaa_crm_inventory_stocks', JSON.stringify(cleaned));
+          }
+        }
+      }
+
+      const rawQuot = localStorage.getItem('yaa_crm_sale_quotations');
+      if (rawQuot) {
+        const parsedQ = JSON.parse(rawQuot);
+        if (Array.isArray(parsedQ)) {
+          const cleanedQ = parsedQ.filter(
+            (q) =>
+              q.id !== 'quot-1' &&
+              q.quotationNo !== 'EST-001' &&
+              q.partyName !== 'Keerthivasan'
+          );
+          if (cleanedQ.length !== parsedQ.length) {
+            localStorage.setItem('yaa_crm_sale_quotations', JSON.stringify(cleanedQ));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Storage purge error:', e);
+    }
+  }, []);
+
+  // Prefetch live customers and stocks for party selector & item selector (Runs ONCE)
+  useEffect(() => {
+    let isMounted = true;
+
+    customerApi
+      .getCustomers({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiCustomerToSalesCustomer);
+          setCustomersList(mapped);
+        }
+      })
+      .catch((err) => console.warn('Customer prefetch:', err));
+
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          const mapped = res.data.map(mapApiStockToInventoryStockItem);
+          setLiveStocks(mapped);
+        }
+      })
+      .catch((err) => console.warn('Stock prefetch:', err));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [setCustomersList]);
+
+  // Clean products list: only live products from Commerce API or real inventory items (filter out mock data)
+  const availableProducts = useMemo(() => {
+    const list = liveStocks.length > 0 ? liveStocks : stocks;
+    return list.filter((s) => {
+      const pid = String(s.productId || s.id || '');
+      const name = String(s.productName || '').toLowerCase();
+      if (pid.startsWith('PROD_10') || pid.startsWith('stk_')) return false;
+      if (
+        name.includes('aashirvaad') ||
+        name.includes('india gate') ||
+        name.includes('fortune sunlite') ||
+        name.includes('tata salt') ||
+        name.includes('toor dal') ||
+        name.includes('amul pure cow ghee')
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [liveStocks, stocks]);
+
+  // Displayed quotations: Live API data when connected, store fallback otherwise
+  const displayQuotations = useMemo(() => {
+    if (isApiConnected) {
+      return liveQuotations;
+    }
     return quotations.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
@@ -361,19 +587,20 @@ export const EstimateQuotationView: React.FC = () => {
       const matchesStatus = appliedStatus === 'ALL' || item.status === appliedStatus;
       return matchesSearch && matchesStatus;
     });
-  }, [quotations, appliedSearch, appliedStatus]);
+  }, [isApiConnected, liveQuotations, quotations, appliedSearch, appliedStatus]);
 
   // Summary Metrics (List view)
   const metrics = useMemo(() => {
-    const totalAmount = quotations.reduce((sum, q) => sum + (q.amount || 0), 0);
-    const convertedAmount = quotations
+    const list = displayQuotations;
+    const totalAmount = list.reduce((sum, q) => sum + (Number(q.amount) || 0), 0);
+    const convertedAmount = list
       .filter((q) => q.status === 'Converted')
-      .reduce((sum, q) => sum + (q.amount || 0), 0);
-    const openAmount = quotations
+      .reduce((sum, q) => sum + (Number(q.amount) || 0), 0);
+    const openAmount = list
       .filter((q) => q.status === 'Open')
-      .reduce((sum, q) => sum + (q.amount || 0), 0);
-    const openCount = quotations.filter((q) => q.status === 'Open').length;
-    const convertedCount = quotations.filter((q) => q.status === 'Converted').length;
+      .reduce((sum, q) => sum + (Number(q.amount) || 0), 0);
+    const openCount = list.filter((q) => q.status === 'Open').length;
+    const convertedCount = list.filter((q) => q.status === 'Converted').length;
 
     return {
       totalAmount,
@@ -381,84 +608,36 @@ export const EstimateQuotationView: React.FC = () => {
       openAmount,
       openCount,
       convertedCount,
-      totalCount: quotations.length,
+      totalCount: isApiConnected && totalApiRecords !== null ? totalApiRecords : list.length,
     };
-  }, [quotations]);
+  }, [displayQuotations, isApiConnected, totalApiRecords]);
 
   // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredQuotations.length / pageSize));
+  const totalPages = isApiConnected && totalApiPages !== null
+    ? Math.max(1, totalApiPages)
+    : Math.max(1, Math.ceil(displayQuotations.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pagedQuotations = useMemo(() => {
-    return filteredQuotations.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredQuotations, safePage, pageSize]);
+  const pagedQuotations = isApiConnected
+    ? displayQuotations
+    : displayQuotations.slice((safePage - 1) * pageSize, safePage * pageSize);
 
-  // Helper to build fresh estimate formData
+  // Helper to build fresh estimate formData (NO MOCK DATA)
   const createDefaultFormData = (num: number = 1) => {
-    const nextCode = `EST-${String(num).padStart(3, '0')}`;
-    const defaultProd1 = stocks[0];
-    const defaultProd2 = stocks[1];
-
+    const nextCode = `EST-${new Date().getFullYear()}-${String(num).padStart(4, '0')}`;
     const initialRows: ExtendedEstimateItem[] = [
-      defaultProd1
-        ? {
-            id: `row_${Date.now()}_1`,
-            productId: defaultProd1.productId,
-            productName: defaultProd1.productName,
-            sku: defaultProd1.sku,
-            itemCode: defaultProd1.sku,
-            category: (defaultProd1 as any).category || (defaultProd1 as any).categoryName || '',
-            quantity: 1,
-            unit: 'PCS',
-            unitPrice: defaultProd1.unitPrice || 495,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: Math.round(((defaultProd1.unitPrice || 495) * 0.05) * 100) / 100,
-            total: Math.round(((defaultProd1.unitPrice || 495) * 1.05) * 100) / 100,
-          }
-        : {
-            id: `row_${Date.now()}_1`,
-            productId: '',
-            productName: '',
-            quantity: 1,
-            unit: 'NONE',
-            unitPrice: 0,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 0,
-            taxAmount: 0,
-            total: 0,
-          },
-      defaultProd2
-        ? {
-            id: `row_${Date.now()}_2`,
-            productId: defaultProd2.productId,
-            productName: defaultProd2.productName,
-            sku: defaultProd2.sku,
-            itemCode: defaultProd2.sku,
-            category: (defaultProd2 as any).category || (defaultProd2 as any).categoryName || '',
-            quantity: 1,
-            unit: 'KG',
-            unitPrice: defaultProd2.unitPrice || 699,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 5,
-            taxAmount: Math.round(((defaultProd2.unitPrice || 699) * 0.05) * 100) / 100,
-            total: Math.round(((defaultProd2.unitPrice || 699) * 1.05) * 100) / 100,
-          }
-        : {
-            id: `row_${Date.now()}_2`,
-            productId: '',
-            productName: '',
-            quantity: 1,
-            unit: 'NONE',
-            unitPrice: 0,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxPercent: 0,
-            taxAmount: 0,
-            total: 0,
-          },
+      {
+        id: `row_${Date.now()}_1`,
+        productId: '',
+        productName: '',
+        quantity: 1,
+        unit: 'NONE',
+        unitPrice: 0,
+        discountPercent: 0,
+        discountAmount: 0,
+        taxPercent: 0,
+        taxAmount: 0,
+        total: 0,
+      },
     ];
 
     return {
@@ -572,9 +751,18 @@ export const EstimateQuotationView: React.FC = () => {
     }
   };
 
-  const handleOpenEditForm = (quot: SaleQuotation) => {
-    setEditingQuotation(quot);
-    const mappedItems: ExtendedEstimateItem[] = quot.items.map((it, idx) => {
+  const handleOpenEditForm = async (quot: SaleQuotation) => {
+    let targetQuot = quot;
+    try {
+      const res = await quotationApi.getQuotationById(quot.id);
+      if (res && res.data) {
+        targetQuot = mapApiQuotationToSaleQuotation(res.data);
+      }
+    } catch (err) {
+      console.warn('Could not fetch fresh single quotation from API:', err);
+    }
+    setEditingQuotation(targetQuot);
+    const mappedItems: ExtendedEstimateItem[] = targetQuot.items.map((it) => {
       const qty = Number(it.quantity) || 0;
       const rate = Number(it.unitPrice) || 0;
       const discPct = Number(it.discountPercent) || 0;
@@ -593,17 +781,17 @@ export const EstimateQuotationView: React.FC = () => {
     });
 
     const editData = {
-      customerId: quot.customerId || '',
-      partyName: quot.partyName,
-      customerPhone: quot.customerPhone || '',
-      customerEmail: quot.customerEmail || '',
-      customerCompany: quot.customerCompany || '',
-      billingAddress: quot.billingAddress || '',
-      quotationNo: quot.quotationNo,
-      referenceNo: quot.referenceNo || '1',
-      date: quot.date,
-      validUntil: quot.validUntil,
-      stateOfSupply: '33-Tamil Nadu',
+      customerId: targetQuot.customerId || '',
+      partyName: targetQuot.partyName,
+      customerPhone: targetQuot.customerPhone || '',
+      customerEmail: targetQuot.customerEmail || '',
+      customerCompany: targetQuot.customerCompany || '',
+      billingAddress: targetQuot.billingAddress || '',
+      quotationNo: targetQuot.quotationNo,
+      referenceNo: targetQuot.referenceNo || '1',
+      date: targetQuot.date,
+      validUntil: targetQuot.validUntil,
+      stateOfSupply: targetQuot.stateOfSupply || '33-Tamil Nadu',
       items: mappedItems.length > 0 ? mappedItems : [
         {
           id: `row_${Date.now()}`,
@@ -619,18 +807,18 @@ export const EstimateQuotationView: React.FC = () => {
           total: 0,
         }
       ],
-      notes: quot.notes || 'Thank you for your business inquiry.',
-      terms: quot.terms || '1. Prices valid for 30 days.',
+      notes: targetQuot.notes || 'Thank you for your business inquiry.',
+      terms: targetQuot.terms || '1. Prices valid for 30 days.',
     };
 
     setFormData(editData);
     setTabs([
       {
         id: 'tab_1',
-        title: `Estimate #${quot.referenceNo || '1'}`,
-        num: Number(quot.referenceNo) || 1,
+        title: `Estimate #${targetQuot.referenceNo || '1'}`,
+        num: Number(targetQuot.referenceNo) || 1,
         formData: editData,
-        editingQuotation: quot,
+        editingQuotation: targetQuot,
         enableRoundOff: true,
         manualRoundOff: null,
         columnSettings: { ...columnSettings },
@@ -679,7 +867,7 @@ export const EstimateQuotationView: React.FC = () => {
       const item = { ...newItems[index], [field]: value };
 
       if (field === 'productId') {
-        const prod = stocks.find((s) => s.productId === value);
+        const prod = availableProducts.find((s) => s.productId === value);
         if (prod) {
           item.productName = prod.productName;
           item.sku = prod.sku;
@@ -690,8 +878,9 @@ export const EstimateQuotationView: React.FC = () => {
           item.taxPercent = 5;
         }
       } else if (field === 'productName') {
-        const matched = stocks.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
+        const matched = availableProducts.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
         if (matched) {
+          item.productId = matched.productId;
           item.sku = matched.sku;
           item.itemCode = matched.sku;
           item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
@@ -813,11 +1002,39 @@ export const EstimateQuotationView: React.FC = () => {
     setNewCustomerName('');
     setNewCustomerPhone('');
     setNewCustomerCompany('');
+
+    // Attempt live API customer creation
+    customerApi
+      .createCustomer({
+        name: newCust.name,
+        company: newCust.company || undefined,
+        phone: newCust.phone,
+        customerType: 'Business',
+        address: newCust.address,
+      })
+      .then((res) => {
+        if (res.data) {
+          const created = mapApiCustomerToSalesCustomer(res.data);
+          saveCustomer(created);
+          setFormData((prev) => ({
+            ...prev,
+            customerId: created.id,
+            partyName: created.name,
+            customerCompany: created.company || '',
+            customerPhone: created.phone || '',
+            billingAddress: created.billingAddress || created.address || '',
+          }));
+        }
+      })
+      .catch((err) => {
+        console.warn('Live customer create warning:', err);
+      });
+
     toast.success(`Customer "${newCust.name}" added successfully!`);
   };
 
-  // Save Estimate
-  const handleSaveEstimate = (e?: React.FormEvent) => {
+  // Save Estimate via Commerce API
+  const handleSaveEstimate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!formData.partyName.trim()) {
       toast.error('Please select or enter Party / Customer name');
@@ -831,88 +1048,216 @@ export const EstimateQuotationView: React.FC = () => {
 
     const { rawSubtotal, totalTax, totalDiscount, grandTotal } = formCalculations;
 
-    const newQuotation: SaleQuotation = {
-      id: editingQuotation ? editingQuotation.id : `quot_${Date.now()}`,
-      quotationNo: formData.quotationNo || `EST-${Date.now().toString().slice(-4)}`,
-      referenceNo: formData.referenceNo || '1',
+    const payload = mapSaleQuotationToPayload({
+      quotationNo: formData.quotationNo ? formData.quotationNo.trim() : undefined,
+      referenceNo: formData.referenceNo ? formData.referenceNo.trim() : undefined,
       date: formData.date,
       validUntil: formData.validUntil,
-      customerId: formData.customerId || `cust_${Date.now()}`,
+      customerId: formData.customerId || undefined,
       partyName: formData.partyName,
       customerPhone: formData.customerPhone,
       customerEmail: formData.customerEmail,
       customerCompany: formData.customerCompany,
       billingAddress: formData.billingAddress,
-      items: validItems,
-      subtotal: rawSubtotal,
+      items: validItems as any,
       withGst: true,
       gstType: 'intra_state',
-      discount: totalDiscount,
-      taxAmount: totalTax,
-      amount: grandTotal,
-      balance: grandTotal,
-      status: editingQuotation ? editingQuotation.status : 'Open',
       notes: formData.notes,
       terms: formData.terms,
-      createdAt: editingQuotation ? editingQuotation.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+      stateOfSupply: formData.stateOfSupply,
+    });
 
-    saveQuotation(newQuotation);
-    toast.success(
-      editingQuotation
-        ? `Estimate ${newQuotation.quotationNo} (Ref: ${newQuotation.referenceNo}) updated successfully!`
-        : `Estimate ${newQuotation.quotationNo} (Ref: ${newQuotation.referenceNo}) created successfully!`
-    );
+    setIsSubmitting(true);
+    try {
+      if (editingQuotation && editingQuotation.id) {
+        const res = await quotationApi.updateQuotation(editingQuotation.id, payload);
+        const mapped = mapApiQuotationToSaleQuotation(res.data);
+        saveQuotation(mapped);
+        toast.success(`Estimate ${mapped.quotationNo} updated successfully!`);
+      } else {
+        const res = await quotationApi.createQuotation(payload);
+        const mapped = mapApiQuotationToSaleQuotation(res.data);
+        saveQuotation(mapped);
+        toast.success(`Estimate ${mapped.quotationNo} created successfully!`);
+      }
 
-    if (tabs.length > 1) {
-      const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
-      setTabs(remainingTabs);
-      const nextActive = remainingTabs[remainingTabs.length - 1];
-      setActiveTabId(nextActive.id);
-      setFormData(nextActive.formData);
-      setEditingQuotation(nextActive.editingQuotation || null);
-      if (nextActive.enableRoundOff !== undefined) setEnableRoundOff(nextActive.enableRoundOff);
-      if (nextActive.manualRoundOff !== undefined) setManualRoundOff(nextActive.manualRoundOff);
-      if (nextActive.columnSettings !== undefined) setColumnSettings(nextActive.columnSettings);
-    } else {
-      setViewMode('list');
+      await fetchQuotations(1, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+
+      if (tabs.length > 1) {
+        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
+        setTabs(remainingTabs);
+        const nextActive = remainingTabs[remainingTabs.length - 1];
+        setActiveTabId(nextActive.id);
+        setFormData(nextActive.formData);
+        setEditingQuotation(nextActive.editingQuotation || null);
+        if (nextActive.enableRoundOff !== undefined) setEnableRoundOff(nextActive.enableRoundOff);
+        if (nextActive.manualRoundOff !== undefined) setManualRoundOff(nextActive.manualRoundOff);
+        if (nextActive.columnSettings !== undefined) setColumnSettings(nextActive.columnSettings);
+      } else {
+        setViewMode('list');
+      }
+    } catch (err: any) {
+      console.error('Save estimate error:', err);
+      toast.error(err.message || 'Failed to save estimate');
+      // Local fallback
+      const fallbackQuotation: SaleQuotation = {
+        id: editingQuotation ? editingQuotation.id : `quot_${Date.now()}`,
+        quotationNo: formData.quotationNo || `EST-${Date.now().toString().slice(-4)}`,
+        referenceNo: formData.referenceNo || '1',
+        date: formData.date,
+        validUntil: formData.validUntil,
+        customerId: formData.customerId || `cust_${Date.now()}`,
+        partyName: formData.partyName,
+        customerPhone: formData.customerPhone,
+        customerEmail: formData.customerEmail,
+        customerCompany: formData.customerCompany,
+        billingAddress: formData.billingAddress,
+        items: validItems,
+        subtotal: rawSubtotal,
+        withGst: true,
+        gstType: 'intra_state',
+        discount: totalDiscount,
+        taxAmount: totalTax,
+        amount: grandTotal,
+        balance: grandTotal,
+        status: editingQuotation ? editingQuotation.status : 'Open',
+        notes: formData.notes,
+        terms: formData.terms,
+        createdAt: editingQuotation ? editingQuotation.createdAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      saveQuotation(fallbackQuotation);
+      if (tabs.length > 1) {
+        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
+        setTabs(remainingTabs);
+        const nextActive = remainingTabs[remainingTabs.length - 1];
+        setActiveTabId(nextActive.id);
+        setFormData(nextActive.formData);
+      } else {
+        setViewMode('list');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Convert handlers
-  const handleConvertInvoice = (quot: SaleQuotation) => {
-    const sale = convertQuotationToSale(quot.id);
-    if (sale) {
-      toast.success(`Quotation ${quot.quotationNo} converted to Sale Invoice ${sale.invoiceNo}!`);
-      setActiveConvertDropdownId(null);
-      setConvertDropdownPos(null);
-      navigate('/sale-management/sales/sale');
-    }
-  };
-
-  const handleConvertSaleOrder = (quot: SaleQuotation) => {
-    updateQuotationStatus(quot.id, 'Converted');
-    toast.success(`Quotation ${quot.quotationNo} converted to Sale Order!`);
+  // Convert handlers using Live Commerce API Modal
+  const handleOpenConvertModal = (quot: SaleQuotation, type: 'Invoice' | 'Order' | 'Proforma') => {
+    setConvertTargetQuotation(quot);
+    setConvertType(type);
+    setConvertDueDate(new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]);
+    setIsConvertModalOpen(true);
     setActiveConvertDropdownId(null);
     setConvertDropdownPos(null);
   };
 
-  const handleDelete = (id: string, no: string) => {
-    if (confirm(`Are you sure you want to delete estimate / quotation ${no}?`)) {
-      deleteQuotation(id);
-      toast.success(`Quotation ${no} deleted successfully.`);
-      setActiveDropdownId(null);
+  const handleExecuteConvert = async () => {
+    if (!convertTargetQuotation) return;
+    setIsConverting(true);
+    try {
+      const res = await quotationApi.convertQuotation(convertTargetQuotation.id, {
+        targetType: convertType,
+        dueDate: convertDueDate || undefined,
+      });
+
+      const convertedDocNo = res.data?.convertedTo?.documentNo || '';
+      toast.success(
+        res.message ||
+          `Quotation ${convertTargetQuotation.quotationNo} successfully converted to ${convertType} ${convertedDocNo}!`
+      );
+      setIsConvertModalOpen(false);
+      setConvertTargetQuotation(null);
+      await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+
+      if (convertType === 'Invoice') {
+        convertQuotationToSale(convertTargetQuotation.id);
+        navigate('/sale-management/sales/sale');
+      } else {
+        updateQuotationStatus(convertTargetQuotation.id, 'Converted');
+      }
+    } catch (err: any) {
+      console.error('Convert API call error:', err);
+      toast.error(err.message || `Failed to convert quotation to ${convertType}`);
+      // Fallback
+      if (convertType === 'Invoice') {
+        const sale = convertQuotationToSale(convertTargetQuotation.id);
+        if (sale) {
+          toast.success(`Quotation converted to Sale Invoice ${sale.invoiceNo} (Local)!`);
+          navigate('/sale-management/sales/sale');
+        }
+      } else {
+        updateQuotationStatus(convertTargetQuotation.id, 'Converted');
+        toast.success(`Quotation marked Converted to ${convertType}!`);
+      }
+      setIsConvertModalOpen(false);
+      setConvertTargetQuotation(null);
+    } finally {
+      setIsConverting(false);
     }
   };
 
+  // Delete via Live API
+  const handleDelete = async (id: string, no: string) => {
+    if (confirm(`Are you sure you want to delete estimate / quotation ${no}?`)) {
+      try {
+        await quotationApi.deleteQuotation(id);
+        toast.success(`Quotation ${no} deleted successfully.`);
+        deleteQuotation(id);
+        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      } catch (err: any) {
+        toast.error(err.message || 'Failed to delete quotation');
+        deleteQuotation(id);
+      } finally {
+        setActiveDropdownId(null);
+      }
+    }
+  };
+
+  // Duplicate via Live API
+  const handleDuplicate = async (item: SaleQuotation) => {
+    setActiveDropdownId(null);
+    try {
+      const duplicatedPayload = mapSaleQuotationToPayload({
+        ...item,
+        quotationNo: undefined, // Let server auto-generate unique number
+        referenceNo: item.referenceNo ? `${item.referenceNo}-COPY` : 'COPY',
+        date: new Date().toISOString().split('T')[0],
+        validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        status: 'Open',
+      });
+      const res = await quotationApi.createQuotation(duplicatedPayload);
+      const mapped = mapApiQuotationToSaleQuotation(res.data);
+      saveQuotation(mapped);
+      toast.success(`Duplicated as new Estimate ${mapped.quotationNo}!`);
+      await fetchQuotations(1, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to duplicate quotation on server');
+    }
+  };
+
+  // Open Preview with fresh server data
+  const handleOpenPreview = async (item: SaleQuotation) => {
+    setActiveDropdownId(null);
+    try {
+      const res = await quotationApi.getQuotationById(item.id);
+      if (res && res.data) {
+        setPreviewQuotation(mapApiQuotationToSaleQuotation(res.data));
+      } else {
+        setPreviewQuotation(item);
+      }
+    } catch {
+      setPreviewQuotation(item);
+    }
+  };
+
+  // Export to Excel
   const handleExport = () => {
-    if (filteredQuotations.length === 0) {
+    if (displayQuotations.length === 0) {
       toast.error('No quotations to export');
       return;
     }
 
-    const excelRows = filteredQuotations.map((q) => ({
+    const excelRows = displayQuotations.map((q) => ({
       date: isoToDdmmyyyy(q.date),
       referenceNo: q.referenceNo || '1',
       quotationNo: q.quotationNo,
@@ -927,7 +1272,7 @@ export const EstimateQuotationView: React.FC = () => {
       filename: `Estimates_Quotations_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Estimates & Quotations',
       title: 'YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT',
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${filteredQuotations.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
         { header: 'Date', key: 'date', align: 'center', width: 15 },
         { header: 'Ref No.', key: 'referenceNo', align: 'center', width: 14 },
@@ -941,13 +1286,13 @@ export const EstimateQuotationView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         date: 'TOTAL',
-        partyName: `${filteredQuotations.length} Quotations`,
+        partyName: `${displayQuotations.length} Quotations`,
         amount: metrics.totalAmount,
         balance: metrics.openAmount,
       },
     });
 
-    toast.success(`Estimates Excel report downloaded (${filteredQuotations.length} records)!`);
+    toast.success(`Estimates Excel report downloaded (${displayQuotations.length} records)!`);
   };
 
   // Printable Document Generator
@@ -1136,11 +1481,13 @@ export const EstimateQuotationView: React.FC = () => {
     printWindow.document.close();
   };
 
-  // Filtered party list for Party Search Dropdown
+  // Filtered party list for Party Search Dropdown (prioritizes live customers)
   const filteredCustomers = useMemo(() => {
     const q = partySearchQuery.toLowerCase().trim();
-    if (!q) return customers;
-    return customers.filter(
+    const realCustomers = customers.filter((c) => !c.id.startsWith('cust_'));
+    const sourceList = realCustomers.length > 0 ? realCustomers : customers;
+    if (!q) return sourceList;
+    return sourceList.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.company && c.company.toLowerCase().includes(q)) ||
@@ -1213,7 +1560,15 @@ export const EstimateQuotationView: React.FC = () => {
         </div>
 
         {/* 3. MAIN FORM CONTAINER */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6">
+        <form
+          id="quotation-form"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveEstimate();
+          }}
+          className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6"
+        >
           <div>
             {/* Top Meta Details (Party + Ref/Date/State) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
@@ -1567,7 +1922,7 @@ export const EstimateQuotationView: React.FC = () => {
                             className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                           />
                           <datalist id={`product-list-${idx}`}>
-                            {stocks.map((s) => (
+                            {availableProducts.map((s) => (
                               <option key={s.productId} value={s.productName}>
                                 SKU: {s.sku} • ₹{s.unitPrice}
                               </option>
@@ -2038,15 +2393,15 @@ export const EstimateQuotationView: React.FC = () => {
               <Button
                 variant="primary"
                 size="md"
-                type="button"
-                onClick={() => handleSaveEstimate()}
+                type="submit"
+                form="quotation-form"
                 icon={<Check className="w-4 h-4 text-white stroke-[3]" />}
               >
                 Save
               </Button>
             </div>
           </div>
-        </div>
+        </form>
 
         {/* Quick Add Customer Modal */}
         {isQuickCustomerModalOpen && (
@@ -2056,7 +2411,14 @@ export const EstimateQuotationView: React.FC = () => {
             title="Add New Party / Customer"
             maxWidth="md"
           >
-            <div className="p-5 space-y-4 text-xs">
+            <form
+              noValidate
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCreateQuickCustomer();
+              }}
+              className="p-5 space-y-4 text-xs"
+            >
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   Customer / Party Name <span className="text-rose-500">*</span>
@@ -2104,13 +2466,12 @@ export const EstimateQuotationView: React.FC = () => {
                 <Button
                   variant="primary"
                   size="sm"
-                  type="button"
-                  onClick={handleCreateQuickCustomer}
+                  type="submit"
                 >
                   Save Party
                 </Button>
               </div>
-            </div>
+            </form>
           </Modal>
         )}
       </div>
@@ -2134,12 +2495,36 @@ export const EstimateQuotationView: React.FC = () => {
                 Estimate / Quotation
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {quotations.length} total
+                {metrics.totalCount} total
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Create, track, and convert sales quotations & estimates into confirmed invoices.
             </p>
+            <div className="flex items-center gap-2.5 mt-2 flex-wrap">
+              {isApiConnected === true ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live Commerce API
+                </span>
+              ) : isApiConnected === false ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <WifiOff className="w-3 h-3 text-amber-600" />
+                  Offline Cache Mode
+                </span>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod)}
+                disabled={isApiLoading}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-[#33077C] transition-colors px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
+                title="Sync from API"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isApiLoading ? 'animate-spin text-[#33077C]' : ''}`} />
+                <span>Sync</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2231,13 +2616,18 @@ export const EstimateQuotationView: React.FC = () => {
         onChange={(val) => {
           setPendingSearch(val);
           setAppliedSearch(val);
+          setPage(1);
         }}
-        onSubmit={() => setAppliedSearch(pendingSearch)}
+        onSubmit={() => {
+          setAppliedSearch(pendingSearch);
+          setPage(1);
+        }}
         onReset={() => {
           setPendingSearch('');
           setAppliedSearch('');
-          setAppliedPeriod('This Month');
+          setAppliedPeriod('all');
           setAppliedStatus('ALL');
+          setPage(1);
         }}
         placeholder="Search by party name, quotation #, ref no..."
         filterSlot={
@@ -2248,8 +2638,9 @@ export const EstimateQuotationView: React.FC = () => {
               onChange={(val) => {
                 setPendingPeriod(val);
                 setAppliedPeriod(val);
+                setPage(1);
               }}
-              placeholder="Period : This Month"
+              placeholder="Period : All Time"
             />
             <FilterDropdown
               options={STATUS_FILTER_OPTIONS}
@@ -2257,6 +2648,7 @@ export const EstimateQuotationView: React.FC = () => {
               onChange={(val) => {
                 setPendingStatus(val);
                 setAppliedStatus(val);
+                setPage(1);
               }}
               placeholder="Status : All"
             />
@@ -2265,7 +2657,7 @@ export const EstimateQuotationView: React.FC = () => {
         rightSlot={
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
-              Total Quotations : <span className="text-[#33077C] font-bold">{filteredQuotations.length}</span>
+              Total Quotations : <span className="text-[#33077C] font-bold">{metrics.totalCount}</span>
             </span>
           </div>
         }
@@ -2305,7 +2697,16 @@ export const EstimateQuotationView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
-              {pagedQuotations.length === 0 ? (
+              {isApiLoading ? (
+                <tr>
+                  <td colSpan={7} className="py-16 text-center text-slate-500 font-medium">
+                    <div className="inline-flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#33077C]" />
+                      <span className="text-xs">Fetching quotations from Commerce API...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : pagedQuotations.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
                     No estimate / quotation transactions found. Click "+ Add Estimate" to create one.
@@ -2413,7 +2814,7 @@ export const EstimateQuotationView: React.FC = () => {
                               >
                                 <button
                                   type="button"
-                                  onClick={() => handleConvertInvoice(item)}
+                                  onClick={() => handleOpenConvertModal(item, 'Invoice')}
                                   className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
                                 >
                                   <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
@@ -2421,7 +2822,7 @@ export const EstimateQuotationView: React.FC = () => {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => handleConvertSaleOrder(item)}
+                                  onClick={() => handleOpenConvertModal(item, 'Order')}
                                   className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
                                 >
                                   <FileCheck className="w-3.5 h-3.5 text-slate-500" />
@@ -2429,12 +2830,7 @@ export const EstimateQuotationView: React.FC = () => {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setActiveConvertDropdownId(null);
-                                    setConvertDropdownPos(null);
-                                    navigate('/sale-management/sales/proforma');
-                                    toast.info(`Converting quotation ${item.quotationNo} to Proforma Invoice`);
-                                  }}
+                                  onClick={() => handleOpenConvertModal(item, 'Proforma')}
                                   className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer flex items-center gap-2.5"
                                 >
                                   <FileSpreadsheet className="w-3.5 h-3.5 text-slate-500" />
@@ -2478,7 +2874,7 @@ export const EstimateQuotationView: React.FC = () => {
                               <MoreVertical className="w-4 h-4 text-slate-600" />
                             </button>
 
-                            {/* 3-Dots Floating Dropdown Menu with 6 items in exact order from screenshot */}
+                            {/* 3-Dots Floating Dropdown Menu */}
                             {isActionOpen && dropdownPos && (
                               <div
                                 style={{
@@ -2518,23 +2914,7 @@ export const EstimateQuotationView: React.FC = () => {
                                 {/* 3. Duplicate */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    const nextNum = quotations.length + 1;
-                                    const newQuotationNo = `EST-${String(nextNum).padStart(3, '0')}`;
-                                    const duplicated: SaleQuotation = {
-                                      ...item,
-                                      id: `quot_${Date.now()}`,
-                                      quotationNo: newQuotationNo,
-                                      referenceNo: String(nextNum),
-                                      date: new Date().toISOString().split('T')[0],
-                                      status: 'Open',
-                                      createdAt: new Date().toISOString(),
-                                      updatedAt: new Date().toISOString(),
-                                    };
-                                    saveQuotation(duplicated);
-                                    toast.success(`Duplicated ${item.quotationNo} as new Estimate ${newQuotationNo}!`);
-                                  }}
+                                  onClick={() => handleDuplicate(item)}
                                   className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
                                 >
                                   Duplicate
@@ -2543,11 +2923,7 @@ export const EstimateQuotationView: React.FC = () => {
                                 {/* 4. Open PDF */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewQuotation(item);
-                                    toast.info(`Opening PDF preview for ${item.quotationNo}`);
-                                  }}
+                                  onClick={() => handleOpenPreview(item)}
                                   className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
                                 >
                                   Open PDF
@@ -2556,10 +2932,7 @@ export const EstimateQuotationView: React.FC = () => {
                                 {/* 5. Preview */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewQuotation(item);
-                                  }}
+                                  onClick={() => handleOpenPreview(item)}
                                   className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
                                 >
                                   Preview
@@ -2576,6 +2949,47 @@ export const EstimateQuotationView: React.FC = () => {
                                 >
                                   Print
                                 </button>
+
+                                {/* 7. Status Actions via Live API */}
+                                {item.status === 'Open' && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setActiveDropdownId(null);
+                                      try {
+                                        await quotationApi.updateStatus(item.id, { status: 'Cancelled' });
+                                        toast.success(`Quotation ${item.quotationNo} marked as Cancelled`);
+                                        updateQuotationStatus(item.id, 'Cancelled');
+                                        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+                                      } catch (err: any) {
+                                        toast.error(err.message || 'Failed to cancel quotation');
+                                      }
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block border-t border-slate-100"
+                                  >
+                                    Cancel Quotation
+                                  </button>
+                                )}
+
+                                {item.status === 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setActiveDropdownId(null);
+                                      try {
+                                        await quotationApi.updateStatus(item.id, { status: 'Open' });
+                                        toast.success(`Quotation ${item.quotationNo} reopened as Open`);
+                                        updateQuotationStatus(item.id, 'Open');
+                                        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+                                      } catch (err: any) {
+                                        toast.error(err.message || 'Failed to reopen quotation');
+                                      }
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer block border-t border-slate-100"
+                                  >
+                                    Reopen (Mark Open)
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -2592,7 +3006,7 @@ export const EstimateQuotationView: React.FC = () => {
         {/* 5. Pagination */}
         <Pagination
           currentPage={safePage}
-          total={filteredQuotations.length}
+          total={metrics.totalCount}
           pageSize={pageSize}
           onPageChange={(p) => setPage(p)}
           onPageSizeChange={(sz) => {
@@ -2689,6 +3103,137 @@ export const EstimateQuotationView: React.FC = () => {
               </Button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* 7. Convert Quotation Live API Modal */}
+      {isConvertModalOpen && convertTargetQuotation && (
+        <Modal
+          isOpen={isConvertModalOpen}
+          onClose={() => {
+            if (!isConverting) {
+              setIsConvertModalOpen(false);
+              setConvertTargetQuotation(null);
+            }
+          }}
+          title={`Convert Quotation ${convertTargetQuotation.quotationNo}`}
+          maxWidth="md"
+        >
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleExecuteConvert();
+            }}
+            className="p-6 space-y-5 text-xs text-slate-700"
+          >
+            {/* Summary Banner */}
+            <div className="p-4 bg-purple-50/60 rounded-xl border border-purple-200/80 flex items-start justify-between">
+              <div>
+                <div className="font-bold text-slate-800 text-sm">{convertTargetQuotation.partyName}</div>
+                <div className="text-slate-500 text-[11px] mt-0.5">
+                  Quotation: <span className="font-semibold text-slate-700">{convertTargetQuotation.quotationNo}</span> | Date: {isoToDdmmyyyy(convertTargetQuotation.date)}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Total Amount</div>
+                <div className="text-base font-extrabold text-[#33077C]">
+                  ₹ {convertTargetQuotation.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+
+            {/* Target Type Selector */}
+            <div>
+              <label className="block text-xs font-bold text-slate-800 mb-2">
+                Convert To Document Type <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-3 gap-2.5">
+                {[
+                  { type: 'Invoice' as const, label: 'Sale Invoice', icon: ShoppingCart, desc: 'Deducts stock' },
+                  { type: 'Order' as const, label: 'Sale Order', icon: FileCheck, desc: 'Order workflow' },
+                  { type: 'Proforma' as const, label: 'Proforma', icon: FileSpreadsheet, desc: 'Draft / Quote' },
+                ].map((opt) => {
+                  const Icon = opt.icon;
+                  const isSelected = convertType === opt.type;
+                  return (
+                    <button
+                      key={opt.type}
+                      type="button"
+                      onClick={() => setConvertType(opt.type)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        isSelected
+                          ? 'border-[#33077C] bg-purple-50/50 text-[#33077C] shadow-xs'
+                          : 'border-slate-200 bg-white hover:border-slate-300 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Icon className={`w-4 h-4 ${isSelected ? 'text-[#33077C]' : 'text-slate-500'}`} />
+                        <span className="font-bold text-xs">{opt.label}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500">{opt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Due Date Picker */}
+            <div>
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                Payment / Document Due Date
+              </label>
+              <input
+                type="date"
+                value={convertDueDate}
+                onChange={(e) => setConvertDueDate(e.target.value)}
+                className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C] transition-colors"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Specifies the settlement due date for the generated {convertType}.
+              </p>
+            </div>
+
+            {/* Information Notice */}
+            <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200/80 text-[11px] text-amber-800 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                Converting will mark this quotation as <strong>Converted</strong>.
+                {convertType === 'Invoice' && ' Inventory stock will be automatically updated.'} Once converted, this quotation cannot be converted again.
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-200">
+              <Button
+                variant="secondary"
+                size="md"
+                type="button"
+                disabled={isConverting}
+                onClick={() => {
+                  setIsConvertModalOpen(false);
+                  setConvertTargetQuotation(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                type="submit"
+                disabled={isConverting}
+                icon={
+                  isConverting ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <Check className="w-4 h-4 text-white" />
+                  )
+                }
+              >
+                {isConverting ? `Converting to ${convertType}...` : `Confirm & Convert to ${convertType}`}
+              </Button>
+            </div>
+          </form>
         </Modal>
       )}
     </div>

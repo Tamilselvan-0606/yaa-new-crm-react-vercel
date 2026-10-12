@@ -85,41 +85,40 @@ html, body, #root {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* High-contrast text selection specifically for dark, purple, and gradient containers (Modal Headers, Sidebar, Dark Badges) */
-.text-white *::selection,
-.text-white::selection,
-[style*="background: linear-gradient"] *::selection,
-[style*="background: linear-gradient"]::selection,
-[style*="linear-gradient"] *::selection,
-[style*="linear-gradient"]::selection,
-.bg-\[\#33077C\] *::selection,
-.bg-\[\#33077C\]::selection,
-.bg-\[\#4309A2\] *::selection,
-.bg-\[\#4309A2\]::selection,
-.sidebar-container *::selection,
-aside *::selection,
-aside::selection {
-  background-color: rgba(255, 255, 255, 0.35) !important;
+/* Clear, high-contrast text selection for the entire website */
+::selection {
+  background-color: #33077C !important;
   color: #ffffff !important;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
 }
 
-.text-white *::-moz-selection,
-.text-white::-moz-selection,
-[style*="background: linear-gradient"] *::-moz-selection,
-[style*="background: linear-gradient"]::-moz-selection,
-[style*="linear-gradient"] *::-moz-selection,
-[style*="linear-gradient"]::-moz-selection,
-.bg-\[\#33077C\] *::-moz-selection,
-.bg-\[\#33077C\]::-moz-selection,
-.bg-\[\#4309A2\] *::-moz-selection,
-.bg-\[\#4309A2\]::-moz-selection,
-.sidebar-container *::-moz-selection,
-aside *::-moz-selection,
-aside::-moz-selection {
-  background-color: rgba(255, 255, 255, 0.35) !important;
+::-moz-selection {
+  background-color: #33077C !important;
   color: #ffffff !important;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* For dark or purple headers (like the table thead, modal header, etc.) selection displays crystal clear with inverted colors */
+.bg-\[\#33077C\] ::selection,
+.bg-\[\#33077C\]::selection,
+.bg-\[\#4309A2\] ::selection,
+.bg-\[\#4309A2\]::selection,
+thead ::selection,
+thead::selection,
+header ::selection,
+header::selection {
+  background-color: #ffffff !important;
+  color: #33077C !important;
+}
+
+.bg-\[\#33077C\] ::-moz-selection,
+.bg-\[\#33077C\]::-moz-selection,
+.bg-\[\#4309A2\] ::-moz-selection,
+.bg-\[\#4309A2\]::-moz-selection,
+thead ::-moz-selection,
+thead::-moz-selection,
+header ::-moz-selection,
+header::-moz-selection {
+  background-color: #ffffff !important;
+  color: #33077C !important;
 }
 
 .tabular-nums,

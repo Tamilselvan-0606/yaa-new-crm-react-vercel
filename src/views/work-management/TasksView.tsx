@@ -1,9 +1,15 @@
 import React, { useState, useMemo } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { ColumnDef } from '@tanstack/react-table';
 import { useAuth } from '../../context/AuthContext';
 import { useTasks, useTodayWork, useUpdateTask, useLeads } from '../../hooks/useQueries';
+import { useAppDispatch } from '../../hooks/redux';
+import { baseApi } from '../../api/baseApi';
 import { api } from '../../services/api';
 import { TaskItem, TaskPriority, TaskStatus, Lead } from '../../types';
+import { LeadFeedbackSchema, LeadFeedbackFormData } from '../../validations';
+import { FormError } from '../../components/common/FormError';
 import {
   CheckSquare,
   Calendar,
@@ -34,8 +40,6 @@ import { TaskFormModal } from '../../components/forms/TaskFormModal';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import Tooltip from '@mui/material/Tooltip';
-import { useQueryClient } from '@tanstack/react-query';
-import { QUERY_KEYS } from '../../hooks/useQueries';
 
 interface TasksViewProps {
   initialCreateOpen?: boolean;
@@ -46,7 +50,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   initialCreateOpen = false,
   onCloseInitialCreate,
 }) => {
-  const queryClient = useQueryClient();
+  const dispatch = useAppDispatch();
   const { currentUser, users, isAdmin, showToast } = useAuth();
   const { data: tasks = [], isLoading: loading, refetch: loadTasks } = useTasks();
   const { data: todayWork, refetch: loadTodayWork } = useTodayWork();
@@ -70,13 +74,23 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   // Quick Log Feedback Modal State
   const [selectedLeadForFeedback, setSelectedLeadForFeedback] = useState<Lead | null>(null);
-  const [callNotes, setCallNotes] = useState('');
-  const [leadFeedback, setLeadFeedback] = useState('');
-  const [newStatus, setNewStatus] = useState<string>('Follow-up');
-  const [nextDate, setNextDate] = useState('');
-  const [nextAction, setNextAction] = useState('');
-  const [isSavingFeedback, setIsSavingFeedback] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const {
+    register: registerFeedback,
+    handleSubmit: handleSubmitFeedback,
+    reset: resetFeedback,
+    formState: { errors: feedbackErrors, isSubmitting: isSavingFeedback },
+  } = useForm<LeadFeedbackFormData>({
+    resolver: zodResolver(LeadFeedbackSchema),
+    defaultValues: {
+      leadFeedback: '',
+      newStatus: 'Follow-up',
+      nextDate: '',
+      nextAction: '',
+      callNotes: '',
+    },
+  });
 
   const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
     e.stopPropagation();
@@ -118,43 +132,40 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   const openFeedbackModal = (lead: Lead) => {
     setSelectedLeadForFeedback(lead);
-    setLeadFeedback(lead.feedback || '');
-    setCallNotes('');
-    setNewStatus(lead.status || 'Follow-up');
-    setNextDate(lead.nextFollowUpDate ? lead.nextFollowUpDate.split('T')[0] : '');
-    setNextAction(lead.nextAction || '');
+    resetFeedback({
+      leadFeedback: lead.feedback || '',
+      callNotes: '',
+      newStatus: lead.status || 'Follow-up',
+      nextDate: lead.nextFollowUpDate ? lead.nextFollowUpDate.split('T')[0] : '',
+      nextAction: lead.nextAction || '',
+    });
   };
 
-  const handleSaveFeedback = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveFeedback = async (data: LeadFeedbackFormData) => {
     if (!selectedLeadForFeedback) return;
-    setIsSavingFeedback(true);
     try {
       await api.updateLead(selectedLeadForFeedback.id, {
-        feedback: leadFeedback,
-        status: newStatus as any,
-        nextFollowUpDate: nextDate ? `${nextDate}T10:00` : undefined,
-        nextAction: nextAction,
+        feedback: data.leadFeedback,
+        status: data.newStatus as any,
+        nextFollowUpDate: data.nextDate ? `${data.nextDate}T10:00` : undefined,
+        nextAction: data.nextAction,
         contactedBy: currentUser?.name || 'Staff',
       });
 
-      if (callNotes) {
+      if (data.callNotes) {
         await api.addLeadFollowUp(selectedLeadForFeedback.id, {
           type: 'Call',
-          notes: callNotes,
-          outcome: leadFeedback || 'Follow-up call completed',
-          nextActionDate: nextDate,
+          notes: data.callNotes,
+          outcome: data.leadFeedback || 'Follow-up call completed',
+          nextActionDate: data.nextDate,
         });
       }
 
       showToast('success', 'Feedback Recorded', `Updated status & notes for ${selectedLeadForFeedback.company || selectedLeadForFeedback.name}`);
       setSelectedLeadForFeedback(null);
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.leads });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.todayWork });
+      dispatch(baseApi.util.invalidateTags([{ type: 'Lead', id: 'LIST' }, 'Task']));
     } catch (err: any) {
       showToast('error', 'Save Failed', err.message || 'Could not save feedback');
-    } finally {
-      setIsSavingFeedback(false);
     }
   };
 
@@ -766,7 +777,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
           title={`Log Call Feedback: ${selectedLeadForFeedback.company || selectedLeadForFeedback.name}`}
           maxWidth="md"
         >
-          <form onSubmit={handleSaveFeedback} className="space-y-4">
+          <form noValidate onSubmit={handleSubmitFeedback(handleSaveFeedback)} className="space-y-4">
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs space-y-1">
               <div>Prospect: <strong>{selectedLeadForFeedback.name}</strong> ({selectedLeadForFeedback.company})</div>
               <div>Staff Handler: <strong>{selectedLeadForFeedback.assignedStaffName || currentUser?.name}</strong></div>
@@ -779,13 +790,14 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 What the Lead Said (Feedback & Conversation Notes) *
               </label>
               <textarea
-                required
                 rows={3}
-                value={leadFeedback}
-                onChange={(e) => setLeadFeedback(e.target.value)}
+                {...registerFeedback('leadFeedback')}
                 placeholder="e.g. Client loved the demo, requested pricing discount for 20 seats and contract review..."
-                className="w-full p-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-orange-500/10 resize-none font-medium"
+                className={`w-full p-3 bg-white border rounded-xl text-xs text-slate-800 outline-none resize-none font-medium ${
+                  feedbackErrors.leadFeedback ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-2 focus:ring-orange-500/10'
+                }`}
               />
+              <FormError message={feedbackErrors.leadFeedback?.message} />
             </div>
 
             {/* Current Status Update */}
@@ -795,8 +807,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   Updated Lead Status
                 </label>
                 <select
-                  value={newStatus}
-                  onChange={(e) => setNewStatus(e.target.value)}
+                  {...registerFeedback('newStatus')}
                   className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2]"
                 >
                   <option value="New">New</option>
@@ -808,6 +819,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                   <option value="Not Interested">Not Interested</option>
                   <option value="Lost">Lost</option>
                 </select>
+                <FormError message={feedbackErrors.newStatus?.message} />
               </div>
 
               <div>
@@ -816,10 +828,10 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 </label>
                 <input
                   type="date"
-                  value={nextDate}
-                  onChange={(e) => setNextDate(e.target.value)}
+                  {...registerFeedback('nextDate')}
                   className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2]"
                 />
+                <FormError message={feedbackErrors.nextDate?.message} />
               </div>
             </div>
 
@@ -830,11 +842,11 @@ export const TasksView: React.FC<TasksViewProps> = ({
               </label>
               <input
                 type="text"
-                value={nextAction}
-                onChange={(e) => setNextAction(e.target.value)}
+                {...registerFeedback('nextAction')}
                 placeholder="e.g. Send revised contract with 10% annual billing discount"
                 className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2]"
               />
+              <FormError message={feedbackErrors.nextAction?.message} />
             </div>
 
             <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">

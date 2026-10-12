@@ -1,7 +1,34 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../services/api';
-import { Lead, Customer, TaskItem, ContentItem, PaymentItem, SubscriptionItem, Product, DigitalMarketingPlan } from '../types';
 import { toast } from 'sonner';
+import { Lead, Customer, TaskItem, ContentItem, PaymentItem } from '../types';
+import {
+  useGetDashboardStatsQuery,
+  useGetLeadsQuery,
+  useGetTasksQuery,
+  useGetTodayWorkQuery,
+  useGetContentQuery,
+  useGetPaymentsQuery,
+  useGetSubscriptionsQuery,
+  useGetRemindersQuery,
+  useGetEmployeesQuery,
+  useGetActivitiesQuery,
+  useGetReportsQuery,
+  useGetSettingsQuery,
+  useGetMarketingOverviewQuery,
+  useGetCrmProductsQuery,
+  useGetCrmProductByIdQuery,
+  useGetCrmCustomersQuery,
+  useGetCrmCustomerByIdQuery,
+  useCreateLeadMutation,
+  useUpdateLeadMutation,
+  useConvertLeadMutation,
+  useDeleteLeadMutation,
+  useCreateTaskMutation,
+  useUpdateTaskMutation,
+  useCreateContentMutation,
+  useCreatePaymentMutation,
+  useUpdateCrmCustomerMutation,
+  useDeleteCrmCustomerMutation,
+} from '../api/crm/crmApi';
 
 export const QUERY_KEYS = {
   dashboardStats: ['dashboard-stats'] as const,
@@ -25,286 +52,164 @@ export const QUERY_KEYS = {
 };
 
 // ==========================================
-// QUERIES
+// QUERIES (RTK Query backed)
 // ==========================================
 
 export function useDashboardStats() {
-  return useQuery({
-    queryKey: QUERY_KEYS.dashboardStats,
-    queryFn: () => api.getDashboardStats(),
-    staleTime: 30000,
-  });
+  return useGetDashboardStatsQuery();
 }
 
 export function useLeads() {
-  return useQuery({
-    queryKey: QUERY_KEYS.leads,
-    queryFn: () => api.getLeads(),
-  });
+  return useGetLeadsQuery();
 }
 
 export function useCustomers() {
-  return useQuery({
-    queryKey: QUERY_KEYS.customers,
-    queryFn: () => api.getCustomers(),
-  });
+  return useGetCrmCustomersQuery();
 }
 
 export function useCustomerDetail(id: string) {
-  return useQuery({
-    queryKey: QUERY_KEYS.customerDetail(id),
-    queryFn: () => api.getCustomer(id),
-    enabled: !!id,
-  });
+  return useGetCrmCustomerByIdQuery(id, { skip: !id });
 }
 
 export function useProducts() {
-  return useQuery({
-    queryKey: QUERY_KEYS.products,
-    queryFn: () => api.getProducts(),
-  });
+  return useGetCrmProductsQuery();
 }
 
 export function useProductDetail(id: string) {
-  return useQuery({
-    queryKey: QUERY_KEYS.productDetail(id),
-    queryFn: () => api.getProduct(id),
-    enabled: !!id,
-  });
+  return useGetCrmProductByIdQuery(id, { skip: !id });
 }
 
 export function useMarketingOverview() {
-  return useQuery({
-    queryKey: QUERY_KEYS.marketingOverview,
-    queryFn: () => api.getMarketingOverview(),
-  });
+  return useGetMarketingOverviewQuery();
 }
 
 export function useTasks() {
-  return useQuery({
-    queryKey: QUERY_KEYS.tasks,
-    queryFn: () => api.getTasks(),
-  });
+  return useGetTasksQuery();
 }
 
 export function useTodayWork() {
-  return useQuery({
-    queryKey: QUERY_KEYS.todayWork,
-    queryFn: () => api.getTodayWork(),
-  });
+  return useGetTodayWorkQuery();
 }
 
 export function useContent() {
-  return useQuery({
-    queryKey: QUERY_KEYS.content,
-    queryFn: () => api.getContent(),
-  });
+  return useGetContentQuery();
 }
 
 export function usePayments() {
-  return useQuery({
-    queryKey: QUERY_KEYS.payments,
-    queryFn: () => api.getPayments(),
-  });
+  return useGetPaymentsQuery();
 }
 
 export function useSubscriptions() {
-  return useQuery({
-    queryKey: QUERY_KEYS.subscriptions,
-    queryFn: () => api.getSubscriptions(),
-  });
+  return useGetSubscriptionsQuery();
 }
 
 export function useReminders() {
-  return useQuery({
-    queryKey: QUERY_KEYS.reminders,
-    queryFn: () => api.getReminders(),
-  });
+  return useGetRemindersQuery();
 }
 
 export function useEmployees() {
-  return useQuery({
-    queryKey: QUERY_KEYS.employees,
-    queryFn: () => api.getEmployees(),
-  });
+  return useGetEmployeesQuery();
 }
 
 export function useActivities() {
-  return useQuery({
-    queryKey: QUERY_KEYS.activities,
-    queryFn: () => api.getActivities(),
-  });
+  return useGetActivitiesQuery();
 }
 
 export function useReports() {
-  return useQuery({
-    queryKey: QUERY_KEYS.reports,
-    queryFn: () => api.getReports(),
-  });
+  return useGetReportsQuery();
 }
 
 export function useSettings() {
-  return useQuery({
-    queryKey: QUERY_KEYS.settings,
-    queryFn: () => api.getSettings(),
-  });
+  return useGetSettingsQuery();
 }
 
 // ==========================================
-// MUTATIONS
+// MUTATIONS (RTK Query backed with TanStack-compatible interface)
 // ==========================================
 
+function wrapMutation<TData, TVariables>(
+  trigger: (arg: TVariables) => { unwrap: () => Promise<TData> },
+  result: any,
+  successMessage?: string,
+  errorMessage: string = 'Operation failed'
+) {
+  return {
+    ...result,
+    isPending: result.isLoading,
+    mutate: (data: TVariables) => {
+      trigger(data)
+        .unwrap()
+        .then(() => {
+          if (successMessage) toast.success(successMessage);
+        })
+        .catch((error: any) =>
+          toast.error(errorMessage, {
+            description: error?.data?.message || error?.message || 'Error occurred',
+          })
+        );
+    },
+    mutateAsync: async (data: TVariables) => {
+      try {
+        const res = await trigger(data).unwrap();
+        if (successMessage) toast.success(successMessage);
+        return res;
+      } catch (error: any) {
+        toast.error(errorMessage, {
+          description: error?.data?.message || error?.message || 'Error occurred',
+        });
+        throw error;
+      }
+    },
+  };
+}
+
 export function useCreateLead() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<Lead>) => api.createLead(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.leads });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.reminders });
-      toast.success('Lead created successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to create lead', { description: error.message });
-    },
-  });
+  const [trigger, result] = useCreateLeadMutation();
+  return wrapMutation(trigger, result, 'Lead created successfully', 'Failed to create lead');
 }
 
 export function useUpdateLead() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Lead> }) => api.updateLead(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.leads });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Lead updated successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to update lead', { description: error.message });
-    },
-  });
+  const [trigger, result] = useUpdateLeadMutation();
+  return wrapMutation(trigger, result, 'Lead updated successfully', 'Failed to update lead');
 }
 
 export function useConvertLead() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => api.convertLead(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.leads });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.customers });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Lead converted to Customer successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Lead conversion failed', { description: error.message });
-    },
-  });
+  const [trigger, result] = useConvertLeadMutation();
+  return wrapMutation(trigger, result, 'Lead converted to Customer successfully', 'Lead conversion failed');
 }
 
 export function useCreateTask() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<TaskItem>) => api.createTask(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tasks });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.todayWork });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Task created successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to create task', { description: error.message });
-    },
-  });
+  const [trigger, result] = useCreateTaskMutation();
+  return wrapMutation(trigger, result, 'Task created successfully', 'Failed to create task');
 }
 
 export function useUpdateTask() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<TaskItem> }) => api.updateTask(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tasks });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.todayWork });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-    },
-    onError: (error: any) => {
-      toast.error('Failed to update task', { description: error.message });
-    },
-  });
+  const [trigger, result] = useUpdateTaskMutation();
+  return wrapMutation(trigger, result, undefined, 'Failed to update task');
 }
 
 export function useCreateContent() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<ContentItem>) => api.createContent(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.content });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.marketingOverview });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Content item created');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to create content', { description: error.message });
-    },
-  });
+  const [trigger, result] = useCreateContentMutation();
+  return wrapMutation(trigger, result, 'Content item created', 'Failed to create content');
 }
 
 export function useCreatePayment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<PaymentItem>) => api.createPayment(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.payments });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Invoice & Payment record created');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to record payment', { description: error.message });
-    },
-  });
+  const [trigger, result] = useCreatePaymentMutation();
+  return wrapMutation(trigger, result, 'Invoice & Payment record created', 'Failed to record payment');
 }
 
 export function useUpdateCustomer() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Customer> }) => api.updateCustomer(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.customers });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Client updated successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to update client', { description: error.message });
-    },
-  });
+  const [trigger, result] = useUpdateCrmCustomerMutation();
+  return wrapMutation(trigger, result, 'Client updated successfully', 'Failed to update client');
 }
 
 export function useDeleteCustomer() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.deleteCustomer(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.customers });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Client removed successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to delete client', { description: error.message });
-    },
-  });
+  const [trigger, result] = useDeleteCrmCustomerMutation();
+  return wrapMutation(trigger, result, 'Client removed successfully', 'Failed to delete client');
 }
 
 export function useDeleteLead() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.deleteLead(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.leads });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
-      toast.success('Lead deleted successfully');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to delete lead', { description: error.message });
-    },
-  });
+  const [trigger, result] = useDeleteLeadMutation();
+  return wrapMutation(trigger, result, 'Lead deleted successfully', 'Failed to delete lead');
 }
 

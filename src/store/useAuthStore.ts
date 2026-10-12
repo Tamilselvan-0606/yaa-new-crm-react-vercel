@@ -27,10 +27,18 @@ interface AuthState {
 }
 
 const getRoleFlags = (role: Role | string | undefined) => {
-  const isPlatformSuper = role === 'SUPER_ADMIN' || role === 'SuperAdmin';
-  const isOrgSuper = role === 'ADMIN' || role === 'Admin';
+  const normalized = (role || '').toString().toUpperCase();
+  const isPlatformSuper = normalized === 'SUPER_ADMIN' || normalized === 'SUPERADMIN';
+  const isOrgSuper =
+    normalized === 'ORG_ADMIN' ||
+    normalized === 'ORGADMIN' ||
+    normalized === 'ADMIN' ||
+    normalized === 'ORGSUPERADMIN';
+  const isSubOrg = normalized === 'SUB_ORG_ADMIN' || normalized === 'SUBORGADMIN';
+  const isBranch = normalized === 'BRANCH_ADMIN' || normalized === 'BRANCHADMIN';
+
   return {
-    isAdmin: isPlatformSuper || isOrgSuper,
+    isAdmin: isPlatformSuper || isOrgSuper || isSubOrg || isBranch,
     isSuperAdmin: isPlatformSuper,
     isOrgSuperAdmin: isOrgSuper,
   };

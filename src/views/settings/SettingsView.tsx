@@ -128,7 +128,7 @@ export const SettingsView: React.FC = () => {
   const [systemName, setSystemName] = useState('Nexus CRM & ERP Platform');
   const [supportEmail, setSupportEmail] = useState('superadmin@gmail.com');
   const [billingEmail, setBillingEmail] = useState('billing@yaacreations.com');
-  const [supportPhone, setSupportPhone] = useState('+91 98200 12345');
+  const [supportPhone, setSupportPhone] = useState('+91 98765 43210');
   const [timezone, setTimezone] = useState('UTC+05:30 (India Standard Time)');
   const [dateFormat, setDateFormat] = useState('DD/MM/YYYY');
   const [currency, setCurrency] = useState('INR (₹)');
@@ -1191,7 +1191,7 @@ export const SettingsView: React.FC = () => {
                 </div>
 
                 {/* Password & Security Form */}
-                <form onSubmit={handlePasswordUpdate} className="pt-6 border-t border-slate-100 space-y-6">
+                <form noValidate onSubmit={handlePasswordUpdate} className="pt-6 border-t border-slate-100 space-y-6">
                   <div>
                     <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                       <Lock className="w-4 h-4 text-[#33077C]" />
@@ -1897,7 +1897,7 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
 
-              <form onSubmit={handleAddStaff} className="space-y-4">
+              <form noValidate onSubmit={handleAddStaff} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Full Name</label>
                   <input
@@ -2083,7 +2083,7 @@ export const SettingsView: React.FC = () => {
           </div>
 
           {/* Password & Security Form */}
-          <form onSubmit={handlePasswordUpdate} className="pt-6 border-t border-slate-100 space-y-6">
+          <form noValidate onSubmit={handlePasswordUpdate} className="pt-6 border-t border-slate-100 space-y-6">
             <div>
               <h3 className="text-sm font-bold text-brand flex items-center gap-2">
                 <Lock className="w-4 h-4 text-brand" />

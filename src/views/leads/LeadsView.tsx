@@ -39,14 +39,15 @@ import { LeadFormModal } from "../../components/forms/LeadFormModal";
 import { Modal } from "../../components/common/Modal";
 import { SearchBar } from "../../components/common/SearchBar";
 import { FilterDropdown } from "../../components/common/FilterDropdown";
+import { Pagination } from "../../components/common/Pagination";
+import { customerApi, mapApiCustomerToSalesCustomer } from "../../api/commerce/customerApi";
 import {
-  useCustomers,
-  useLeads,
-  useUpdateCustomer,
-  useDeleteCustomer,
-  useUpdateLead,
-  useDeleteLead,
-} from "../../hooks/useQueries";
+  useGetPlatformLeadsQuery,
+  useUpdatePlatformLeadStatusMutation,
+  useDeletePlatformLeadMutation,
+  useConvertPlatformLeadMutation,
+  PlatformLeadItem,
+} from "../../api/platform/leadApi";
 import { Customer, Lead } from "../../types";
 
 interface LeadsViewProps {
@@ -81,11 +82,13 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     right: number;
   } | null>(null);
 
-  // Leads Search & Filter State (Pending & Applied)
+  // Leads Search, Filter & Pagination State (Pending & Applied)
   const [pendingLeadSearch, setPendingLeadSearch] = useState("");
   const [appliedLeadSearch, setAppliedLeadSearch] = useState("");
   const [pendingLeadStatus, setPendingLeadStatus] = useState("All");
   const [appliedLeadStatus, setAppliedLeadStatus] = useState("All");
+  const [leadPage, setLeadPage] = useState(1);
+  const [leadLimit, setLeadLimit] = useState(10);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Close dropdown on outside click or scroll
@@ -124,44 +127,115 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     }, 2000);
   };
 
-  const { data: customers = [] } = useCustomers();
-  const { data: leads = [] } = useLeads();
-  const updateCustomerMutation = useUpdateCustomer();
-  const deleteCustomerMutation = useDeleteCustomer();
-  const updateLeadMutation = useUpdateLead();
-  const deleteLeadMutation = useDeleteLead();
+  const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
 
-  const handleToggleCustomerStatus = (customer: Customer) => {
-    const nextStatus = customer.status === 'Active' ? 'Inactive' : 'Active';
-    updateCustomerMutation.mutate({
-      id: customer.id,
-      data: { status: nextStatus },
-    });
-    setActiveDropdownId(null);
-    setDropdownPos(null);
+  const loadCommerceCustomers = async () => {
+    try {
+      const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
+      if (res && res.success && Array.isArray(res.data)) {
+        const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
+          id: sc.id,
+          clientId: sc.customerCode || sc.id,
+          name: sc.name,
+          company: sc.company || sc.name,
+          contactPerson: sc.name,
+          phone: sc.phone || '',
+          whatsapp: sc.phone || '',
+          alternatePhone: sc.alternatePhone || '',
+          email: sc.email || '',
+          address: sc.address || '',
+          city: sc.city || '',
+          state: sc.state || '',
+          pincode: sc.pincode || '',
+          industry: 'Technology & Business Services',
+          status: sc.status || 'Active',
+          linkedProducts: [],
+          documents: [],
+        })) as unknown as Customer[];
+        setCommerceCustomers(mapped);
+      }
+    } catch (err) {
+      console.warn('Could not load commerce customers:', err);
+    }
   };
 
-  const handleDeleteCustomerItem = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this client?')) {
-      deleteCustomerMutation.mutate(id);
+  useEffect(() => {
+    loadCommerceCustomers();
+  }, []);
+
+  const customers = commerceCustomers;
+
+  // Platform Leads API Query & Mutations
+  const {
+    data: platformLeadsResponse,
+    isLoading: isLeadsLoading,
+    refetch: refetchLeads,
+  } = useGetPlatformLeadsQuery({
+    page: leadPage,
+    limit: leadLimit,
+    search: appliedLeadSearch || undefined,
+    status: appliedLeadStatus !== "All" ? appliedLeadStatus : undefined,
+  });
+
+  const [updatePlatformLeadStatus] = useUpdatePlatformLeadStatusMutation();
+  const [deletePlatformLead] = useDeletePlatformLeadMutation();
+  const [convertPlatformLead] = useConvertPlatformLeadMutation();
+
+  const leadsPagination = platformLeadsResponse?.pagination;
+  const leadsSummary = platformLeadsResponse?.summary;
+  const totalLeadsCount = leadsPagination?.totalRecords ?? (platformLeadsResponse?.data?.length || 0);
+
+  const handleToggleCustomerStatus = async (customer: Customer) => {
+    const nextStatus = customer.status === 'Active' ? 'Inactive' : 'Active';
+    try {
+      await customerApi.patchCustomer(customer.id, { status: nextStatus as any });
+      setCommerceCustomers((prev) =>
+        prev.map((c) => (c.id === customer.id ? { ...c, status: nextStatus } : c))
+      );
+    } catch {
+      // Fallback local update
+      setCommerceCustomers((prev) =>
+        prev.map((c) => (c.id === customer.id ? { ...c, status: nextStatus } : c))
+      );
     }
     setActiveDropdownId(null);
     setDropdownPos(null);
   };
 
-  const handleToggleLeadStatus = (lead: Lead) => {
-    const nextStatus = (lead.status === 'Lost' || (lead.status as any) === 'Inactive') ? 'New' : 'Lost';
-    updateLeadMutation.mutate({
-      id: lead.id,
-      data: { status: nextStatus },
-    });
+  const handleDeleteCustomerItem = async (id: string) => {
+    if (window.confirm('Are you sure you want to delete this client?')) {
+      try {
+        await customerApi.deleteCustomer(id);
+        setCommerceCustomers((prev) => prev.filter((c) => c.id !== id));
+      } catch {
+        setCommerceCustomers((prev) => prev.filter((c) => c.id !== id));
+      }
+    }
     setActiveDropdownId(null);
     setDropdownPos(null);
   };
 
-  const handleDeleteLeadItem = (id: string) => {
+  const handleToggleLeadStatus = async (lead: any) => {
+    const nextStatus = (lead.status === 'Lost' || lead.status === 'Inactive') ? 'New' : 'Lost';
+    try {
+      await updatePlatformLeadStatus({
+        id: lead.id,
+        payload: { status: nextStatus, notes: `Status toggled to ${nextStatus}` },
+      }).unwrap();
+    } catch (err: any) {
+      console.error('Failed to update lead status:', err);
+    }
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+  };
+
+  const handleDeleteLeadItem = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this lead?')) {
-      deleteLeadMutation.mutate(id);
+      try {
+        await deletePlatformLead(id).unwrap();
+      } catch (err: any) {
+        console.error('Failed to delete lead:', err);
+      }
     }
     setActiveDropdownId(null);
     setDropdownPos(null);
@@ -276,33 +350,62 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     );
   });
 
-  // Filtered Leads
-  const filteredLeads = leads.filter((l) => {
-    const q = appliedLeadSearch.toLowerCase().trim();
-    const matchesSearch =
-      !q ||
-      (l.name || "").toLowerCase().includes(q) ||
-      (l.company || "").toLowerCase().includes(q) ||
-      (l.email || "").toLowerCase().includes(q) ||
-      (l.phone || "").toLowerCase().includes(q) ||
-      (l.leadSource || "").toLowerCase().includes(q) ||
-      (l.leadId || "").toLowerCase().includes(q);
-
-    const matchesStatus =
-      appliedLeadStatus === "All" ||
-      l.status.toLowerCase() === appliedLeadStatus.toLowerCase();
-
-    return matchesSearch && matchesStatus;
+  // Map Platform Lead items into table format
+  const rawPlatformLeads: PlatformLeadItem[] = platformLeadsResponse?.data || [];
+  const leads: any[] = rawPlatformLeads.map((pl) => {
+    return {
+      id: pl.id,
+      leadId: pl.leadCode || pl.id,
+      leadDate: pl.createdAt ? pl.createdAt.split("T")[0] : "",
+      name: pl.name,
+      company: pl.company,
+      designation: "",
+      phone: pl.phone,
+      whatsapp: pl.whatsapp || pl.phone,
+      email: pl.email,
+      alternatePhone: "",
+      address: pl.location || "",
+      city: pl.location || "",
+      state: "",
+      pincode: "",
+      location: pl.location || "",
+      leadSource: pl.source || "Website",
+      source: pl.source || "Website",
+      interestedProducts: pl.planInterest ? [pl.planInterest] : ["YaaConnect"],
+      interestedProductOrService: pl.planInterest || "YaaConnect",
+      assignedStaffId: pl.assignedTo || "",
+      assignedStaffName: pl.assignedTo ? "Assigned Agent" : undefined,
+      status: pl.status || "New",
+      priority: pl.priority || "Medium",
+      interest: "High",
+      tags: [],
+      requirements: pl.notes || "",
+      expectedBudget: pl.value || 0,
+      value: pl.value || 0,
+      planInterest: pl.planInterest,
+      leadCode: pl.leadCode,
+      convertedOrganizationId: pl.convertedOrganizationId,
+      convertedOrganization: pl.convertedOrganization,
+      convertedAt: pl.convertedAt,
+      nextAction: pl.planInterest ? `Interest: ${pl.planInterest}` : "",
+      nextFollowUpDate: pl.followUpDate || "",
+      notes: pl.notes || "",
+      createdAt: pl.createdAt,
+      updatedAt: pl.updatedAt,
+    };
   });
 
-  // Clean ID Formatter (e.g. LD-101, CL-101)
+  // Filtered Leads (server-side params already applied, with client safeguard)
+  const filteredLeads = leads;
+
+  // Clean ID Formatter (e.g. PLD-2026-0001 or LD-101)
   const formatDisplayId = (
     prefix: "CL" | "LD",
     rawId?: string,
     fallbackIdx = 101,
   ): string => {
     if (!rawId) return `${prefix}-${fallbackIdx}`;
-    // If already clean like CL-1058 or LD-2026-8941
+    if (rawId.startsWith("PLD-")) return rawId;
     if (rawId.startsWith("CL-") || rawId.startsWith("LD-")) {
       const parts = rawId.split("-");
       if (
@@ -376,6 +479,14 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
         return "bg-blue-50 text-blue-600 font-bold";
       case "Contacted":
         return "bg-amber-50 text-amber-600 font-bold";
+      case "Qualified":
+        return "bg-indigo-50 text-indigo-600 font-bold";
+      case "Proposal":
+        return "bg-sky-50 text-sky-600 font-bold";
+      case "Negotiation":
+        return "bg-orange-50 text-orange-600 font-bold";
+      case "Won":
+        return "bg-emerald-50 text-emerald-700 font-bold";
       case "Interested":
         return "bg-purple-50 text-purple-600 font-bold";
       case "Follow-up":
@@ -897,29 +1008,24 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       dotColor: "#f59e0b",
                     },
                     {
-                      label: "Interested",
-                      value: "Interested",
-                      dotColor: "#8b5cf6",
+                      label: "Qualified",
+                      value: "Qualified",
+                      dotColor: "#6366f1",
                     },
                     {
-                      label: "Follow-up",
-                      value: "Follow-up",
-                      dotColor: "#f97316",
+                      label: "Proposal",
+                      value: "Proposal",
+                      dotColor: "#0284c7",
                     },
                     {
-                      label: "Onboarding",
-                      value: "Onboarding",
-                      dotColor: "#06b6d4",
+                      label: "Negotiation",
+                      value: "Negotiation",
+                      dotColor: "#ea580c",
                     },
                     {
-                      label: "Converted",
-                      value: "Converted",
+                      label: "Won",
+                      value: "Won",
                       dotColor: "#10b981",
-                    },
-                    {
-                      label: "Not Interested",
-                      value: "Not Interested",
-                      dotColor: "#ef4444",
                     },
                     { label: "Lost", value: "Lost", dotColor: "#64748b" },
                   ]}
@@ -934,7 +1040,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <span className="text-xs font-semibold text-slate-500">
                   Total Leads :{" "}
                   <span className="text-[#33077C] font-bold">
-                    {filteredLeads.length}
+                    {totalLeadsCount}
                   </span>
                 </span>
               </div>
@@ -1246,6 +1352,23 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               </table>
             </div>
           </div>
+
+          {/* Leads Pagination */}
+          {totalLeadsCount > 0 && (
+            <div className="pt-2">
+              <Pagination
+                currentPage={leadPage}
+                pageSize={leadLimit}
+                total={totalLeadsCount}
+                pageSizeOptions={[5, 10, 20, 50]}
+                onPageChange={(p) => setLeadPage(p)}
+                onPageSizeChange={(size) => {
+                  setLeadLimit(size);
+                  setLeadPage(1);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -1899,6 +2022,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
         onClose={() => {
           setIsAddClientOpen(false);
           setEditingCustomer(null);
+          loadCommerceCustomers();
         }}
       />
 

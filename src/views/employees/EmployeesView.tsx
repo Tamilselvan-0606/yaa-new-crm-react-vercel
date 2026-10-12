@@ -1,7 +1,11 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { User, Product, Role } from '../../types';
+import { EmployeeSchema, EmployeeFormData } from '../../validations';
+import { FormError } from '../../components/common/FormError';
 import {
   UsersRound,
   Plus,
@@ -23,7 +27,6 @@ import { Modal } from '../../components/common/Modal';
 export const EmployeesView: React.FC = () => {
   const { isAdmin, showToast } = useAuth();
   const [employees, setEmployees] = useState<User[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -34,13 +37,23 @@ export const EmployeesView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<User | null>(null);
 
-  // Form
-  const [formName, setFormName] = useState('');
-  const [formEmail, setFormEmail] = useState('');
-  const [formTitle, setFormTitle] = useState('');
-  const [formRole, setFormRole] = useState<Role>('Staff');
-  const [formStatus, setFormStatus] = useState<'Active' | 'Inactive' | undefined>('Active');
-  const [formAvatar, setFormAvatar] = useState('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120');
+  const {
+    register,
+    handleSubmit,
+    reset,
+    control,
+    formState: { errors, isSubmitting },
+  } = useForm<EmployeeFormData>({
+    resolver: zodResolver(EmployeeSchema),
+    defaultValues: {
+      name: '',
+      email: '',
+      title: 'Product Specialist',
+      role: 'Staff',
+      status: 'Active',
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120',
+    },
+  });
 
   useEffect(() => {
     loadData();
@@ -49,12 +62,8 @@ export const EmployeesView: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [staffList, prodList] = await Promise.all([
-        api.getEmployees(),
-        api.getProducts(),
-      ]);
+      const staffList = await api.getEmployees();
       setEmployees(staffList);
-      setProducts(prodList);
     } catch (e) {
       console.error(e);
     } finally {
@@ -62,8 +71,7 @@ export const EmployeesView: React.FC = () => {
     }
   };
 
-  const handleSaveEmployee = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onSubmitEmployee = async (data: EmployeeFormData) => {
     if (!isAdmin) {
       showToast('error', 'Unauthorized', 'Only Admins can add or modify company staff.');
       return;
@@ -71,25 +79,25 @@ export const EmployeesView: React.FC = () => {
     try {
       if (editingEmployee) {
         await api.updateEmployee(editingEmployee.id, {
-          name: formName,
-          email: formEmail,
-          title: formTitle,
-          role: formRole,
-          status: formStatus,
-          avatar: formAvatar,
+          name: data.name,
+          email: data.email,
+          title: data.title,
+          role: data.role as Role,
+          status: data.status,
+          avatar: data.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120',
         });
         showToast('success', 'Employee Updated', 'Staff record updated successfully.');
       } else {
         await api.createEmployee({
-          name: formName,
-          email: formEmail,
-          title: formTitle,
-          role: formRole,
-          status: formStatus,
-          avatar: formAvatar,
+          name: data.name,
+          email: data.email,
+          title: data.title,
+          role: data.role as Role,
+          status: data.status,
+          avatar: data.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120',
           assignedProducts: ['prod_1'],
         });
-        showToast('success', 'Staff Member Added', `${formName} added to roster.`);
+        showToast('success', 'Staff Member Added', `${data.name} added to roster.`);
       }
       setIsModalOpen(false);
       setEditingEmployee(null);
@@ -99,14 +107,29 @@ export const EmployeesView: React.FC = () => {
     }
   };
 
+  const openAdd = () => {
+    setEditingEmployee(null);
+    reset({
+      name: '',
+      email: '',
+      title: 'Product Specialist',
+      role: 'Staff',
+      status: 'Active',
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120',
+    });
+    setIsModalOpen(true);
+  };
+
   const openEdit = (emp: User) => {
     setEditingEmployee(emp);
-    setFormName(emp.name);
-    setFormEmail(emp.email);
-    setFormTitle(emp.title);
-    setFormRole(emp.role);
-    setFormStatus(emp.status);
-    setFormAvatar(emp.avatar);
+    reset({
+      name: emp.name,
+      email: emp.email,
+      title: emp.title,
+      role: emp.role,
+      status: emp.status || 'Active',
+      avatar: emp.avatar,
+    });
     setIsModalOpen(true);
   };
 
@@ -137,15 +160,7 @@ export const EmployeesView: React.FC = () => {
 
         {isAdmin && (
           <button
-            onClick={() => {
-              setEditingEmployee(null);
-              setFormName('');
-              setFormEmail('');
-              setFormTitle('Product Specialist');
-              setFormRole('Staff');
-              setFormStatus('Active');
-              setIsModalOpen(true);
-            }}
+            onClick={openAdd}
             className="h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white text-sm font-bold rounded-xl shadow-md shadow-[#4309A2]/30 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
           >
             <Plus className="w-4 h-4" />
@@ -252,27 +267,29 @@ export const EmployeesView: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         title={editingEmployee ? `Edit ${editingEmployee.name}` : 'Add Staff Member'}
       >
-        <form onSubmit={handleSaveEmployee} className="space-y-4">
+        <form noValidate onSubmit={handleSubmit(onSubmitEmployee)} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Full Name *</label>
               <input
                 type="text"
-                required
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
+                {...register('name')}
+                className={`w-full px-3 py-2 text-xs border rounded-xl outline-none ${
+                  errors.name ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-300 focus:ring-2 focus:ring-[#4309A2]'
+                }`}
               />
+              <FormError message={errors.name?.message} />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Email *</label>
               <input
                 type="email"
-                required
-                value={formEmail}
-                onChange={(e) => setFormEmail(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
+                {...register('email')}
+                className={`w-full px-3 py-2 text-xs border rounded-xl outline-none ${
+                  errors.email ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-300 focus:ring-2 focus:ring-[#4309A2]'
+                }`}
               />
+              <FormError message={errors.email?.message} />
             </div>
           </div>
 
@@ -281,22 +298,23 @@ export const EmployeesView: React.FC = () => {
               <label className="block text-xs font-bold text-slate-700 mb-1">Position / Job Title</label>
               <input
                 type="text"
-                required
-                value={formTitle}
-                onChange={(e) => setFormTitle(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
+                {...register('title')}
+                className={`w-full px-3 py-2 text-xs border rounded-xl outline-none ${
+                  errors.title ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-300 focus:ring-2 focus:ring-[#4309A2]'
+                }`}
               />
+              <FormError message={errors.title?.message} />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Role Type</label>
               <select
-                value={formRole}
-                onChange={(e) => setFormRole(e.target.value as any)}
+                {...register('role')}
                 className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none"
               >
                 <option value="Staff">Staff (Restricted Access)</option>
                 <option value="Admin">Admin (Full System Access)</option>
               </select>
+              <FormError message={errors.role?.message} />
             </div>
           </div>
 
@@ -304,10 +322,10 @@ export const EmployeesView: React.FC = () => {
             <label className="block text-xs font-bold text-slate-700 mb-1">Avatar Image URL</label>
             <input
               type="text"
-              value={formAvatar}
-              onChange={(e) => setFormAvatar(e.target.value)}
+              {...register('avatar')}
               className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl outline-none font-mono text-[11px]"
             />
+            <FormError message={errors.avatar?.message} />
           </div>
 
           <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
@@ -320,9 +338,10 @@ export const EmployeesView: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl transition-all shadow-sm hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl transition-all shadow-sm hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <span>Save Staff Member</span>
+              <span>{isSubmitting ? 'Saving...' : 'Save Staff Member'}</span>
             </button>
           </div>
         </form>
@@ -330,3 +349,4 @@ export const EmployeesView: React.FC = () => {
     </div>
   );
 };
+

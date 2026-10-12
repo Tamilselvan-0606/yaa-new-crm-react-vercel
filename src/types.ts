@@ -1,10 +1,23 @@
-export type Role = 'ADMIN' | 'STAFF' | 'SUPER_ADMIN' | 'Admin' | 'Staff' | 'SuperAdmin';
+export type Role =
+  | 'SUPER_ADMIN'
+  | 'ORG_ADMIN'
+  | 'SUB_ORG_ADMIN'
+  | 'BRANCH_ADMIN'
+  | 'STAFF'
+  | 'ADMIN'
+  | 'Admin'
+  | 'SuperAdmin'
+  | 'Staff'
+  | 'OrgAdmin'
+  | 'SubOrgAdmin'
+  | 'BranchAdmin';
 
 export interface User {
   id: string;
   name: string;
   email: string;
   role: Role;
+  organizationId?: string;
   department?: string;
   avatar: string;
   phone?: string;
@@ -18,6 +31,15 @@ export interface User {
     tasksCompleted: number;
     contentCreated: number;
   };
+  organization?: {
+    id: string;
+    name: string;
+    organizationType?: number | string;
+    organizationTypeName?: string;
+  };
+  organizationType?: number | string;
+  organizationTypeName?: string;
+  memberships?: any[];
 }
 
 export interface DocumentItem {
@@ -53,6 +75,7 @@ export interface ProductPlan {
   minDurationMonths?: number;
   maxBranchLimit?: number | string;
   specs?: Record<string, any>;
+  permissions?: Record<string, 'all' | 'none'>;
 }
 
 export interface Product {
@@ -89,8 +112,11 @@ export type BranchStatus = 'Active' | 'Inactive' | 'Suspended';
 
 export interface Branch {
   id: string;
+  organizationId?: string;
+  subOrganizationId?: string;
   productId?: string;
   productName?: string;
+  organizationType?: 'Client Management' | 'Sales Management' | string;
   name: string;
   code: string;
   contactPerson?: string;
@@ -121,25 +147,34 @@ export interface DigitalMarketingPlan {
 export type LeadStatus =
   | 'New'
   | 'Contacted'
+  | 'Qualified'
+  | 'Proposal'
+  | 'Negotiation'
+  | 'Won'
+  | 'Lost'
   | 'Follow-up'
   | 'Interested'
   | 'Onboarding'
   | 'Converted'
   | 'Not Interested'
-  | 'Lost';
+  | string;
 
 export type LeadSource =
   | 'Website'
+  | 'Referral'
+  | 'LinkedIn'
+  | 'Cold Call'
+  | 'Campaign'
+  | 'Event'
   | 'Google'
   | 'Instagram'
   | 'Facebook'
   | 'WhatsApp'
-  | 'Referral'
   | 'Direct'
   | 'Other'
   | 'Google Ads'
-  | 'LinkedIn'
-  | 'Cold Outreach';
+  | 'Cold Outreach'
+  | string;
 
 export interface LeadFollowUp {
   id: string;
@@ -246,6 +281,9 @@ export interface Customer {
   pincode?: string;
   location?: string;
   industry?: string;
+  gstin?: string;
+  taxId?: string;
+  pan?: string;
   status: 'Active' | 'Inactive' | 'Onboarding' | string;
   linkedProducts: ClientProductLink[];
   usesDigitalMarketing?: boolean;

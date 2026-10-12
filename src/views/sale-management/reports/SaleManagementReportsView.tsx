@@ -52,7 +52,7 @@ import { useSalesManagementStore } from '../../../store/useSalesManagementStore'
 import { Modal } from '../../../components/common/Modal';
 import { toast } from 'sonner';
 
-type ReportCategory = 'transaction' | 'sales' | 'inventory' | 'purchase' | 'tax';
+type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'tax';
 
 type ReportId =
   // Transaction reports
@@ -66,6 +66,10 @@ type ReportId =
   | 'customer_statement'
   | 'sales_by_customer'
   | 'sales_return_report'
+  // Collection & Dues reports
+  | 'collection_summary'
+  | 'sales_rep_collections'
+  | 'customer_aging_report'
   // Inventory reports
   | 'stock_summary'
   | 'low_stock_summary'
@@ -112,6 +116,16 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
     ],
   },
   {
+    category: 'collections',
+    label: 'Collection & Dues Reports',
+    icon: IndianRupee,
+    items: [
+      { id: 'collection_summary', label: 'Collection Report', category: 'collections', description: 'Total outstanding, collections, overdue amounts, due today, and collection rate' },
+      { id: 'sales_rep_collections', label: 'Sales Representative Collection Report', category: 'collections', description: 'Representative performance, assigned customers, dues, and recovery rates' },
+      { id: 'customer_aging_report', label: 'Customer Aging Report', category: 'collections', description: 'Receivables aging analysis across 0–30, 31–60, 61–90, and 90+ day buckets' },
+    ],
+  },
+  {
     category: 'inventory',
     label: 'Inventory & Stock Reports',
     icon: Package,
@@ -153,6 +167,7 @@ export const SaleManagementReportsView: React.FC = () => {
     customers = [],
     suppliers = [],
     stocks = [],
+    salesRepresentatives = [],
   } = useSalesManagementStore();
 
   const [activeReport, setActiveReport] = useState<ReportId>('bill_wise_profit');
@@ -774,6 +789,263 @@ export const SaleManagementReportsView: React.FC = () => {
         };
       }
 
+      // 9A. COLLECTION REPORT
+      case 'collection_summary': {
+        const todayStr = '2026-10-08';
+        const rows = filteredSales.map((s) => {
+          const paid = s.paidAmount || 0;
+          const outstanding = s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - paid);
+          const rep = salesRepresentatives.find(
+            (r) =>
+              r.id ===
+              (s.salesRepresentativeId ||
+                customers.find((c) => c.id === s.customerId)?.salesRepresentativeId)
+          );
+          let status = 'Paid';
+          if (outstanding > 0) {
+            if (s.dueDate && s.dueDate < todayStr) status = 'Overdue';
+            else if (s.dueDate && s.dueDate === todayStr) status = 'Due Today';
+            else status = 'Upcoming';
+          }
+          return {
+            id: s.id,
+            cells: [
+              s.customerName || 'Customer',
+              s.invoiceNo,
+              formatToDDMMYYYY(s.saleDate),
+              formatToDDMMYYYY(s.dueDate || s.saleDate),
+              formatCurrency(s.grandTotal),
+              formatCurrency(paid),
+              formatCurrency(outstanding),
+              rep?.name || 'Unassigned',
+              status,
+            ],
+          };
+        });
+
+        const totalInvoiced = filteredSales.reduce((acc, s) => acc + s.grandTotal, 0);
+        const totalCollected = filteredSales.reduce((acc, s) => acc + (s.paidAmount || 0), 0);
+        const totalOutstanding = filteredSales.reduce(
+          (acc, s) =>
+            acc + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+          0
+        );
+        const overdueAmount = filteredSales
+          .filter((s) => {
+            const bal =
+              s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0));
+            return bal > 0 && s.dueDate && s.dueDate < todayStr;
+          })
+          .reduce(
+            (acc, s) =>
+              acc + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+            0
+          );
+        const dueTodayAmount = filteredSales
+          .filter((s) => {
+            const bal =
+              s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0));
+            return bal > 0 && s.dueDate && s.dueDate === todayStr;
+          })
+          .reduce(
+            (acc, s) =>
+              acc + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+            0
+          );
+        const collectionRate =
+          totalInvoiced > 0 ? Math.min(100, (totalCollected / totalInvoiced) * 100) : 0;
+
+        return {
+          title: 'Customer Collections & Dues Summary Report',
+          columns: [
+            { label: 'Customer Name', align: 'left', isBold: true },
+            { label: 'Invoice No', align: 'left', isMono: true },
+            { label: 'Invoice Date', align: 'left', isMono: true },
+            { label: 'Due Date', align: 'left', isMono: true },
+            { label: 'Invoice Total', align: 'right' },
+            { label: 'Collected Amount', align: 'right' },
+            { label: 'Outstanding Balance', align: 'right', isBold: true },
+            { label: 'Sales Representative', align: 'left' },
+            { label: 'Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Outstanding', value: formatCurrency(totalOutstanding) },
+            { label: 'Total Collected', value: formatCurrency(totalCollected) },
+            { label: 'Overdue Amount', value: formatCurrency(overdueAmount) },
+            { label: 'Due Today', value: formatCurrency(dueTodayAmount) },
+            { label: 'Collection Rate', value: `${collectionRate.toFixed(1)}%` },
+          ],
+        };
+      }
+
+      // 9B. SALES REPRESENTATIVE COLLECTION REPORT
+      case 'sales_rep_collections': {
+        const todayStr = '2026-10-08';
+        const rows = salesRepresentatives.map((rep) => {
+          const assignedCustomers = customers.filter((c) => c.salesRepresentativeId === rep.id);
+          const repInvoices = filteredSales.filter(
+            (s) =>
+              s.salesRepresentativeId === rep.id ||
+              assignedCustomers.some((c) => c.id === s.customerId)
+          );
+          const totalOut = repInvoices.reduce(
+            (acc, s) =>
+              acc + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+            0
+          );
+          const totalOverdue = repInvoices
+            .filter((s) => {
+              const bal =
+                s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0));
+              return bal > 0 && s.dueDate && s.dueDate < todayStr;
+            })
+            .reduce(
+              (acc, s) =>
+                acc + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+              0
+            );
+          const totalCollected = repInvoices.reduce((acc, s) => acc + (s.paidAmount || 0), 0);
+          const totalBilled = totalCollected + totalOut;
+          const rate = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : 0;
+
+          return {
+            id: rep.id,
+            cells: [
+              rep.name,
+              `${assignedCustomers.length}`,
+              formatCurrency(totalOut),
+              formatCurrency(totalOverdue),
+              formatCurrency(totalCollected),
+              `${rate.toFixed(1)}%`,
+            ],
+          };
+        });
+
+        const totalRepsOut = salesRepresentatives.reduce((acc, rep) => {
+          const assigned = customers.filter((c) => c.salesRepresentativeId === rep.id);
+          const invs = filteredSales.filter(
+            (s) => s.salesRepresentativeId === rep.id || assigned.some((c) => c.id === s.customerId)
+          );
+          return (
+            acc +
+            invs.reduce(
+              (sub, s) =>
+                sub + (s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0))),
+              0
+            )
+          );
+        }, 0);
+
+        const totalRepsCol = salesRepresentatives.reduce((acc, rep) => {
+          const assigned = customers.filter((c) => c.salesRepresentativeId === rep.id);
+          const invs = filteredSales.filter(
+            (s) => s.salesRepresentativeId === rep.id || assigned.some((c) => c.id === s.customerId)
+          );
+          return acc + invs.reduce((sub, s) => sub + (s.paidAmount || 0), 0);
+        }, 0);
+
+        const overallRepRate =
+          totalRepsOut + totalRepsCol > 0 ? (totalRepsCol / (totalRepsOut + totalRepsCol)) * 100 : 0;
+
+        return {
+          title: 'Sales Representative Collection Performance Report',
+          columns: [
+            { label: 'Representative', align: 'left', isBold: true },
+            { label: 'Customers', align: 'center' },
+            { label: 'Outstanding', align: 'right', isBold: true },
+            { label: 'Overdue', align: 'right' },
+            { label: 'Collected', align: 'right' },
+            { label: 'Collection Rate', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Active Representatives', value: `${salesRepresentatives.length}` },
+            { label: 'Total Assigned Outstanding', value: formatCurrency(totalRepsOut) },
+            { label: 'Total Collected by Reps', value: formatCurrency(totalRepsCol) },
+            { label: 'Overall Recovery Rate', value: `${overallRepRate.toFixed(1)}%` },
+          ],
+        };
+      }
+
+      // 9C. CUSTOMER AGING REPORT
+      case 'customer_aging_report': {
+        const todayTime = new Date('2026-10-08').getTime();
+        let totalBucket0_30 = 0;
+        let totalBucket31_60 = 0;
+        let totalBucket61_90 = 0;
+        let totalBucket90Plus = 0;
+
+        const customerRows = customers.map((c) => {
+          const custInvoices = filteredSales.filter(
+            (s) => s.customerId === c.id || s.customerName?.toLowerCase() === c.name.toLowerCase()
+          );
+
+          let b0_30 = 0;
+          let b31_60 = 0;
+          let b61_90 = 0;
+          let b90Plus = 0;
+
+          custInvoices.forEach((s) => {
+            const bal =
+              s.balance !== undefined ? s.balance : Math.max(0, s.grandTotal - (s.paidAmount || 0));
+            if (bal > 0) {
+              const invDate = new Date(s.dueDate || s.saleDate).getTime();
+              const diffDays = Math.max(0, Math.floor((todayTime - invDate) / (1000 * 3600 * 24)));
+
+              if (diffDays <= 30) b0_30 += bal;
+              else if (diffDays <= 60) b31_60 += bal;
+              else if (diffDays <= 90) b61_90 += bal;
+              else b90Plus += bal;
+            }
+          });
+
+          const custTotal = b0_30 + b31_60 + b61_90 + b90Plus;
+          totalBucket0_30 += b0_30;
+          totalBucket31_60 += b31_60;
+          totalBucket61_90 += b61_90;
+          totalBucket90Plus += b90Plus;
+
+          const rep = salesRepresentatives.find((r) => r.id === c.salesRepresentativeId);
+
+          return {
+            id: c.id,
+            cells: [
+              c.name,
+              rep?.name || 'Unassigned',
+              formatCurrency(b0_30),
+              formatCurrency(b31_60),
+              formatCurrency(b61_90),
+              formatCurrency(b90Plus),
+              formatCurrency(custTotal),
+            ],
+          };
+        });
+
+        const grandTotal = totalBucket0_30 + totalBucket31_60 + totalBucket61_90 + totalBucket90Plus;
+
+        return {
+          title: 'Customer Receivables Aging Analysis Report',
+          columns: [
+            { label: 'Customer', align: 'left', isBold: true },
+            { label: 'Representative', align: 'left' },
+            { label: '0–30 Days', align: 'right' },
+            { label: '31–60 Days', align: 'right' },
+            { label: '61–90 Days', align: 'right' },
+            { label: '90+ Days', align: 'right' },
+            { label: 'Total Outstanding', align: 'right', isBold: true },
+          ],
+          rows: customerRows,
+          summary: [
+            { label: '0–30 Days Total', value: formatCurrency(totalBucket0_30) },
+            { label: '31–60 Days Total', value: formatCurrency(totalBucket31_60) },
+            { label: '61–90 Days Total', value: formatCurrency(totalBucket61_90) },
+            { label: '90+ Days Total', value: formatCurrency(totalBucket90Plus) },
+            { label: 'Grand Total Outstanding', value: formatCurrency(grandTotal) },
+          ],
+        };
+      }
+
       // 10. STOCK SUMMARY & VALUATION
       case 'stock_summary': {
         const rows = stocks.map((st) => ({
@@ -1223,6 +1495,8 @@ export const SaleManagementReportsView: React.FC = () => {
     filteredPurchaseReturns,
     stocks,
     allTransactions,
+    salesRepresentatives,
+    customers,
     currentReportMeta,
     formattedDateRange,
   ]);
@@ -1356,7 +1630,7 @@ export const SaleManagementReportsView: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                Sale Management Reports
+                Sale Report
               </h1>
               <p className="text-xs sm:text-sm text-slate-500 font-medium">
                 Unified analytics & transaction reports for Sales, Purchase, Inventory & GST

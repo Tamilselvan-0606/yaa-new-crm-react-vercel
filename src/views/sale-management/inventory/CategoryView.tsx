@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Tag,
   Plus,
@@ -6,16 +6,20 @@ import {
   Trash2,
   Eye,
   CheckCircle2,
-  XCircle,
   MoreVertical,
   X,
   Check,
   Ban,
-  PauseCircle,
   Printer,
   Forward,
   FileSpreadsheet,
+  Loader2,
+  Database,
+  Layers,
+  Sparkles,
+  AlertCircle,
 } from 'lucide-react';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
@@ -24,24 +28,35 @@ import { Pagination } from '../../../components/common/Pagination';
 import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatCategoryShare } from '../../../utils/shareUtils';
+import {
+  categoryApi,
+  mapApiCategoryToCategoryItem,
+  CategoryItemModel,
+  ApiCategory,
+} from '../../../api/commerce/categoryApi';
 
-interface CategoryItem {
-  id: string;
-  sNo: number;
+export type CategoryItem = CategoryItemModel;
+
+export interface CategoryFormValues {
   categoryName: string;
   status: 'Active' | 'Inactive';
 }
 
 export const CategoryView: React.FC = () => {
-  // 1 record default as requested
-  const [categories, setCategories] = useState<CategoryItem[]>([
-    {
-      id: 'cat-1',
-      sNo: 1,
-      categoryName: 'Electronics & Hardware',
-      status: 'Active',
-    },
-  ]);
+  // Categories State (loaded dynamically from Commerce API)
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+
+  // Loading & API State
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+
+  // Request Deduplication Refs
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef<string | null>(null);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -55,10 +70,44 @@ export const CategoryView: React.FC = () => {
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
+
+  // Add / Edit Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
+
+  // React Hook Form instance for Category Add/Edit Modal
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    formState: { errors },
+  } = useForm<CategoryFormValues>({
+    mode: 'onChange',
+    defaultValues: {
+      categoryName: '',
+      status: 'Active',
+    },
+  });
+
+  const watchStatus = watch('status');
+
+  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
+  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key >= '0' && e.key <= '9') {
+      e.preventDefault();
+    }
+  };
+
+  // Detail Modal State (GET /commerce/categories/:id)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<ApiCategory | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   // Close dropdown on outside click or scroll
-  React.useEffect(() => {
+  useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest('.category-action-dropdown-container') && !target.closest('.category-action-dropdown-menu')) {
@@ -88,20 +137,68 @@ export const CategoryView: React.FC = () => {
     };
   }, [activeDropdownId, activeShareId]);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
-  const [formData, setFormData] = useState({
-    categoryName: '',
-    status: '' as '' | 'Active' | 'Inactive',
-  });
+  /**
+   * Master API Loader with strict deduplication guards to ensure zero redundant calls
+   * Query parameters are only requested when applied
+   */
+  const loadCategories = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
 
-  // Filter categories
+      // Prevent concurrent calls or redundant re-fetching of identical parameters
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsLoading(true);
+
+      try {
+        const res = await categoryApi.getCategories({
+          page_no: page,
+          page_size: pageSize,
+          pagination_required: true,
+          search: appliedSearch.trim() || undefined,
+          sortOrder: 'desc',
+          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+        });
+
+        if (res && res.success && Array.isArray(res.data)) {
+          const mapped = res.data.map((item, idx) =>
+            mapApiCategoryToCategoryItem(item, (page - 1) * pageSize + idx)
+          );
+          setCategories(mapped);
+          setIsApiConnected(true);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords);
+            setTotalApiPages(res.pagination.totalPages);
+          }
+        } else {
+          setIsApiConnected(false);
+        }
+      } catch (err: any) {
+        console.warn('Commerce Category API call failed, falling back to local state:', err?.message || err);
+        setIsApiConnected(false);
+      } finally {
+        setIsLoading(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [page, pageSize, appliedSearch, appliedStatus]
+  );
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
+  // Filter categories in local fallback mode
   const filteredCategories = useMemo(() => {
     return categories.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
-        q === '' || item.categoryName.toLowerCase().includes(q);
+        q === '' ||
+        item.categoryName.toLowerCase().includes(q) ||
+        (item.code && item.code.toLowerCase().includes(q));
 
       const matchesStatus =
         appliedStatus === 'ALL' || item.status === appliedStatus;
@@ -110,74 +207,221 @@ export const CategoryView: React.FC = () => {
     });
   }, [categories, appliedSearch, appliedStatus]);
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredCategories.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pagedCategories = useMemo(() => {
-    return filteredCategories.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredCategories, safePage, pageSize]);
+  // Total count calculation
+  const totalCount =
+    isApiConnected && totalApiRecords !== null
+      ? totalApiRecords
+      : filteredCategories.length;
 
+  const totalPages =
+    isApiConnected && totalApiPages !== null
+      ? totalApiPages
+      : Math.max(1, Math.ceil(totalCount / pageSize));
+
+  const safePage = Math.min(page, totalPages);
+
+  // When API is connected, server handles pagination; otherwise slice in memory
+  const pagedCategories = useMemo(() => {
+    if (isApiConnected) {
+      return categories;
+    }
+    return filteredCategories.slice((safePage - 1) * pageSize, safePage * pageSize);
+  }, [isApiConnected, categories, filteredCategories, safePage, pageSize]);
+
+  // Open Create Modal
   const handleOpenAddModal = () => {
     setEditingCategory(null);
-    setFormData({
+    reset({
       categoryName: '',
-      status: '',
+      status: 'Active',
     });
     setIsModalOpen(true);
   };
 
+  // Open Edit Modal
   const handleOpenEditModal = (cat: CategoryItem) => {
     setEditingCategory(cat);
-    setFormData({
+    reset({
       categoryName: cat.categoryName,
       status: cat.status,
     });
     setIsModalOpen(true);
   };
 
-  const handleSaveCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.categoryName.trim()) return;
-
-    const finalStatus = (formData.status || 'Active') as 'Active' | 'Inactive';
-
-    if (editingCategory) {
-      setCategories((prev) =>
-        prev.map((c) =>
-          c.id === editingCategory.id
-            ? {
-                ...c,
-                categoryName: formData.categoryName,
-                status: finalStatus,
-              }
-            : c
-        )
-      );
-    } else {
-      const newCat: CategoryItem = {
-        id: `cat-${Date.now()}`,
-        sNo: categories.length + 1,
-        categoryName: formData.categoryName,
-        status: finalStatus,
-      };
-      setCategories((prev) => [newCat, ...prev]);
-    }
-    setIsModalOpen(false);
-  };
-
-  const handleDeleteCategory = (id: string) => {
-    setCategories((prev) => prev.filter((c) => c.id !== id));
+  // Open Details Modal (Calls GET /commerce/categories/:id)
+  const handleOpenDetailModal = async (cat: CategoryItem) => {
     setActiveDropdownId(null);
+    setDropdownPos(null);
+    setIsDetailModalOpen(true);
+    setIsLoadingDetail(true);
+    setSelectedCategoryDetail(null);
+
+    try {
+      const res = await categoryApi.getCategoryById(cat.id);
+      if (res?.success && res.data) {
+        setSelectedCategoryDetail(res.data);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Category detail API failed, falling back to basic view:', apiErr);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+
+    // Local fallback for details
+    setSelectedCategoryDetail({
+      id: cat.id,
+      organizationId: '',
+      code: cat.code || `CAT-${cat.sNo.toString().padStart(4, '0')}`,
+      categoryName: cat.categoryName,
+      name: cat.categoryName,
+      description: cat.description || null,
+      status: cat.status,
+      createdAt: cat.createdAt || new Date().toISOString(),
+      updatedAt: cat.updatedAt || new Date().toISOString(),
+      subcategories: [],
+      productCount: 0,
+    });
   };
 
+  // Save / Update Category (Calls POST or PUT only once button is clicked)
+  const handleSaveCategory = async (data: CategoryFormValues) => {
+    if (!data.categoryName.trim()) {
+      toast.error('Category name is required.');
+      return;
+    }
+
+    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    setIsSubmitting(true);
+
+    try {
+      if (editingCategory) {
+        // PUT /commerce/categories/:id
+        try {
+          const res = await categoryApi.updateCategory(editingCategory.id, {
+            categoryName: data.categoryName.trim(),
+            status: finalStatus,
+          });
+
+          if (res?.success && res.data) {
+            const updated = mapApiCategoryToCategoryItem(res.data);
+            setCategories((prev) =>
+              prev.map((c) => (c.id === editingCategory.id ? { ...c, ...updated } : c))
+            );
+            toast.success(`Category "${updated.categoryName}" updated successfully.`);
+            setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote update failed, falling back to local store:', apiErr);
+        }
+
+        // Local fallback
+        setCategories((prev) =>
+          prev.map((c) =>
+            c.id === editingCategory.id
+              ? {
+                  ...c,
+                  categoryName: data.categoryName.trim(),
+                  status: finalStatus,
+                }
+              : c
+          )
+        );
+        toast.success(`Category "${data.categoryName}" updated.`);
+      } else {
+        // POST /commerce/categories
+        try {
+          const res = await categoryApi.createCategory({
+            categoryName: data.categoryName.trim(),
+            status: finalStatus,
+          });
+
+          if (res?.success && res.data) {
+            const created = mapApiCategoryToCategoryItem(res.data);
+            setCategories((prev) => [created, ...prev]);
+            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
+            toast.success(`Category "${created.categoryName}" created successfully.`);
+            setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote create failed, falling back to local store:', apiErr);
+        }
+
+        // Local fallback
+        const newCat: CategoryItem = {
+          id: `cat-${Date.now()}`,
+          sNo: (totalApiRecords || categories.length) + 1,
+          categoryName: data.categoryName.trim(),
+          status: finalStatus,
+        };
+        setCategories((prev) => [newCat, ...prev]);
+        toast.success(`Category "${data.categoryName}" added.`);
+      }
+    } finally {
+      setIsSubmitting(false);
+      setIsModalOpen(false);
+    }
+  };
+
+  // Toggle Category Status (PATCH /commerce/categories/:id)
+  const handleToggleStatus = async (item: CategoryItem) => {
+    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+
+    try {
+      const res = await categoryApi.patchCategory(item.id, { status: nextStatus });
+      if (res?.success) {
+        setCategories((prev) =>
+          prev.map((c) => (c.id === item.id ? { ...c, status: nextStatus } : c))
+        );
+        toast.success(`Category "${item.categoryName}" status set to ${nextStatus}.`);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote status patch failed, updating locally:', apiErr);
+    }
+
+    setCategories((prev) =>
+      prev.map((c) => (c.id === item.id ? { ...c, status: nextStatus } : c))
+    );
+    toast.success(`Category "${item.categoryName}" status set to ${nextStatus}.`);
+  };
+
+  // Delete Category (DELETE /commerce/categories/:id)
+  const handleDeleteCategory = async (id: string, name?: string) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+
+    try {
+      const res = await categoryApi.deleteCategory(id);
+      if (res?.success) {
+        setCategories((prev) => prev.filter((c) => c.id !== id));
+        setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
+        toast.success(name ? `Category "${name}" deleted.` : 'Category deleted successfully.');
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote category delete failed, falling back to local:', apiErr);
+    }
+
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    toast.success(name ? `Category "${name}" deleted.` : 'Category deleted.');
+  };
+
+  // Export to Excel
   const handleExport = () => {
-    if (filteredCategories.length === 0) {
+    const dataToExport = isApiConnected ? categories : filteredCategories;
+    if (dataToExport.length === 0) {
       toast.error('No categories available to export.');
       return;
     }
 
-    const excelRows = filteredCategories.map((c, idx) => ({
+    const excelRows = dataToExport.map((c, idx) => ({
       sNo: idx + 1,
+      code: c.code || `CAT-${(idx + 1).toString().padStart(4, '0')}`,
       categoryName: c.categoryName,
       status: c.status,
     }));
@@ -186,34 +430,52 @@ export const CategoryView: React.FC = () => {
       filename: `Categories_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Categories',
       title: 'YAA CREATIONS CRM - PRODUCT CATEGORIES DIRECTORY',
-      subtitle: `Total Categories: ${filteredCategories.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Categories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
+        { header: 'Code', key: 'code', align: 'center', width: 16 },
         { header: 'Category Name', key: 'categoryName', align: 'left', width: 35 },
         { header: 'Status', key: 'status', align: 'center', width: 16 },
       ],
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        categoryName: `${filteredCategories.length} Categories`,
+        categoryName: `${dataToExport.length} Categories`,
       },
     });
 
-    toast.success(`Categories Excel report downloaded (${filteredCategories.length} records)!`);
+    toast.success(`Categories Excel report downloaded (${dataToExport.length} records)!`);
   };
 
   return (
     <div className="space-y-5">
-      {/* 1. Top Header Card (Matching Reference UI) */}
+      {/* 1. Top Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Tag className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Category List
-            </h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                Category List
+              </h1>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
+                {totalCount} total
+              </span>
+              {isApiConnected === true && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live API
+                </span>
+              )}
+              {isApiConnected === false && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200" title="Local storage mode">
+                  <Database className="w-3 h-3 text-amber-500" />
+                  Local Mode
+                </span>
+              )}
+            </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
             Manage product categories, classify inventory, and configure catalog groups.
@@ -244,16 +506,19 @@ export const CategoryView: React.FC = () => {
       </div>
 
       {/* 2. Search Bar & Dropdown Filter Row */}
+      {/* Keystrokes are buffered in pendingSearch; API is invoked only once search/apply button is clicked */}
       <SearchBar
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by category name, code..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          lastFetchKeyRef.current = null;
+          setAppliedSearch(pendingSearch.trim());
           setAppliedStatus(pendingStatus);
           setPage(1);
         }}
         onReset={() => {
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingStatus('ALL');
@@ -269,22 +534,32 @@ export const CategoryView: React.FC = () => {
                 { label: 'Inactive', value: 'Inactive', dotColor: '#64748b' },
               ]}
               value={pendingStatus}
-              onChange={(val) => setPendingStatus(val)}
+              onChange={(val) => {
+                setPendingStatus(val);
+                lastFetchKeyRef.current = null;
+                setAppliedStatus(val);
+                setPage(1);
+              }}
               placeholder="Status : All"
             />
           </div>
         }
         rightSlot={
           <div className="flex items-center gap-3 pr-1">
+            {isLoading && (
+              <span className="flex items-center gap-1.5 text-xs text-[#33077C] font-medium">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Loading...</span>
+              </span>
+            )}
             <span className="text-xs font-semibold text-slate-500">
               Total Categories :{' '}
-              <span className="text-[#33077C] font-bold">{filteredCategories.length}</span>
+              <span className="text-[#33077C] font-bold">{totalCount}</span>
             </span>
           </div>
         }
       />
 
-      {/* 3. Category Table (Matching Reference UI: #33077C header, bordered cells, 3-dots action) */}
       {/* 3. Category Table / Mobile Card View */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/* Desktop Table (sm: and above) */}
@@ -307,7 +582,16 @@ export const CategoryView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {pagedCategories.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={4} className="py-16 text-center text-slate-500 border border-slate-200">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#33077C]" />
+                      <span className="text-xs font-medium">Fetching categories from Commerce API...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : pagedCategories.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No categories found matching your criteria.
@@ -317,13 +601,6 @@ export const CategoryView: React.FC = () => {
                 pagedCategories.map((item, index) => {
                   const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
-                  const initials = item.categoryName
-                    .split(' ')
-                    .filter(Boolean)
-                    .map((w) => w[0])
-                    .join('')
-                    .substring(0, 2)
-                    .toUpperCase() || 'CA';
 
                   return (
                     <tr
@@ -335,14 +612,21 @@ export const CategoryView: React.FC = () => {
                         {sNo}
                       </td>
 
-                      {/* CATEGORY NAME (Clean Category Name without code, avatar or description) */}
+                      {/* CATEGORY NAME */}
                       <td className="py-3.5 sm:py-4 px-3 sm:px-5 border border-slate-200">
-                        <span className="font-bold text-slate-900 text-xs sm:text-sm tracking-tight break-words">
-                          {item.categoryName}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-xs sm:text-sm tracking-tight break-words">
+                            {item.categoryName}
+                          </span>
+                          {item.code && (
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                              {item.code}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
-                      {/* STATUS (Matching pill with dot: Active / Inactive) */}
+                      {/* STATUS */}
                       <td className="py-3.5 sm:py-4 px-2 sm:px-3 border border-slate-200 text-center whitespace-nowrap">
                         {item.status === 'Active' ? (
                           <span className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-[10.5px] sm:text-xs font-bold shadow-2xs">
@@ -374,126 +658,17 @@ export const CategoryView: React.FC = () => {
                           </button>
 
                           {/* Share / Forward Popover */}
-                          <div className="relative inline-block text-left share-popover-container">
-                            <button
-                              type="button"
-                              title="Share Category"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeShareId === item.id) {
-                                  setActiveShareId(null);
-                                  setSharePos(null);
-                                } else {
-                                  setActiveDropdownId(null);
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const popoverHeight = 140;
-                                  if (spaceBelow < popoverHeight) {
-                                    setSharePos({
-                                      bottom: window.innerHeight - btnRect.top + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  } else {
-                                    setSharePos({
-                                      top: btnRect.bottom + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  }
-                                  setActiveShareId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4" />
-                            </button>
+                          <UniversalShareDropdown
+                            id={item.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatCategoryShare(item)}
+                            title="Share Category"
+                          />
 
-                            {activeShareId === item.id && sharePos && (
-                              <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                style={{
-                                  top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                  bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
-                                }}
-                              >
-                                <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                  Share
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Email Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const subject = encodeURIComponent(`Product Category: ${item.categoryName}`);
-                                      const body = encodeURIComponent(
-                                        `Category: ${item.categoryName}\nStatus: ${item.status}`
-                                      );
-                                      window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                        <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                        <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                        <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                        <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                        <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                  </button>
-
-                                  {/* WhatsApp Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `*Product Category:* ${item.categoryName}\n*Status:* ${item.status}`
-                                      );
-                                      window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                  </button>
-
-                                  {/* SMS Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `Product Category: ${item.categoryName}, Status: ${item.status}`
-                                      );
-                                      window.open(`sms:?body=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                        <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 3-dots Actions Dropdown */}
+                          {/* 3-Dots Action Dropdown */}
                           <div className="relative inline-block text-left category-action-dropdown-container">
                             <button
                               type="button"
@@ -507,7 +682,7 @@ export const CategoryView: React.FC = () => {
                                   setActiveShareId(null);
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 160;
+                                  const dropdownHeight = 180;
                                   const rightPos = window.innerWidth - rect.right;
 
                                   if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
@@ -539,7 +714,17 @@ export const CategoryView: React.FC = () => {
                                   right: `${dropdownPos.right}px`,
                                 }}
                               >
-                                {/* 1. Edit */}
+                                {/* 1. View Details */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDetailModal(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-slate-500" />
+                                  <span>View Details</span>
+                                </button>
+
+                                {/* 2. Edit */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -547,43 +732,39 @@ export const CategoryView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  Edit
+                                  <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                                  <span>Edit</span>
                                 </button>
 
-                                {/* 2. Inactive / Active */}
+                                {/* 3. Inactive / Active */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
-                                    setCategories((prev) =>
-                                      prev.map((c) =>
-                                        c.id === item.id
-                                          ? { ...c, status: nextStatus }
-                                          : c
-                                      )
-                                    );
-                                    toast.success(`Category ${item.categoryName} set to ${nextStatus}.`);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  onClick={() => handleToggleStatus(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  {item.status === 'Active' ? 'Inactive' : 'Active'}
+                                  {item.status === 'Active' ? (
+                                    <>
+                                      <Ban className="w-3.5 h-3.5 text-amber-600" />
+                                      <span>Deactivate</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                      <span>Activate</span>
+                                    </>
+                                  )}
                                 </button>
 
-                                {/* 3. Delete */}
+                                {/* 4. Delete */}
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    handleDeleteCategory(item.id);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  onClick={() => handleDeleteCategory(item.id, item.categoryName)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  Delete
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                  <span>Delete</span>
                                 </button>
                               </div>
                             )}
@@ -600,7 +781,12 @@ export const CategoryView: React.FC = () => {
 
         {/* Mobile View: Clean Card List (< sm screens) */}
         <div className="block sm:hidden divide-y divide-slate-100 font-sans">
-          {pagedCategories.length === 0 ? (
+          {isLoading ? (
+            <div className="py-12 text-center text-slate-500 font-medium text-xs flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin text-[#33077C]" />
+              <span>Loading categories...</span>
+            </div>
+          ) : pagedCategories.length === 0 ? (
             <div className="py-12 text-center text-slate-400 font-medium text-xs">
               No categories found.
             </div>
@@ -615,8 +801,15 @@ export const CategoryView: React.FC = () => {
                       <span className="w-6 h-6 rounded-full bg-purple-50 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-100">
                         {sNo}
                       </span>
-                      <div className="font-bold text-slate-900 text-sm truncate">
-                        {item.categoryName}
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 text-sm truncate">
+                          {item.categoryName}
+                        </div>
+                        {item.code && (
+                          <span className="font-mono text-[10px] text-slate-500">
+                            {item.code}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -640,6 +833,16 @@ export const CategoryView: React.FC = () => {
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                     <button
                       type="button"
+                      onClick={() => handleOpenDetailModal(item)}
+                      className="px-2.5 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs font-semibold flex items-center gap-1 transition-colors"
+                      title="View Details"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>View</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => handleOpenEditModal(item)}
                       className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Edit Category"
@@ -650,15 +853,7 @@ export const CategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setCategories((prev) =>
-                          prev.map((c) =>
-                            c.id === item.id
-                              ? { ...c, status: c.status === 'Active' ? 'Inactive' : 'Active' }
-                              : c
-                          )
-                        );
-                      }}
+                      onClick={() => handleToggleStatus(item)}
                       className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Toggle Status"
                     >
@@ -677,7 +872,7 @@ export const CategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => handleDeleteCategory(item.id)}
+                      onClick={() => handleDeleteCategory(item.id, item.categoryName)}
                       className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Delete Category"
                     >
@@ -692,9 +887,9 @@ export const CategoryView: React.FC = () => {
         </div>
       </div>
 
-      {/* 4. Pagination (Bottom row exactly matching reference image) */}
+      {/* 4. Pagination */}
       <Pagination
-        total={filteredCategories.length}
+        total={totalCount}
         currentPage={safePage}
         pageSize={pageSize}
         pageSizeOptions={[5, 10, 20, 50]}
@@ -705,31 +900,51 @@ export const CategoryView: React.FC = () => {
         }}
       />
 
-      {/* 5. Add / Edit Category Modal (Matching Reference Image 2 UI & Organization Form Width) */}
+      {/* 5. Add / Edit Category Modal */}
       {isModalOpen && (
         <Modal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          onClose={() => !isSubmitting && setIsModalOpen(false)}
           title={editingCategory ? 'Edit Category' : 'Add Category'}
           subtitle="Configure category details, status, and classification"
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
           hideCloseButton={true}
+          onBack={() => !isSubmitting && setIsModalOpen(false)}
         >
-          <form onSubmit={handleSaveCategory} className="space-y-4.5 p-2 sm:p-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-h-[140px]">
+          <form noValidate onSubmit={handleSubmit(handleSaveCategory)} className="space-y-4.5 p-2 sm:p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[140px]">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Category Name <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
-                  required
-                  value={formData.categoryName}
-                  onChange={(e) => setFormData({ ...formData, categoryName: e.target.value })}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  disabled={isSubmitting}
+                  {...register('categoryName', {
+                    required: 'Category name is required',
+                    minLength: { value: 2, message: 'Category name must be at least 2 characters' },
+                    validate: (val) =>
+                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                  })}
+                  onKeyDown={handleTextOnlyKeyDown}
+                  onInput={(e) => {
+                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                  }}
+                  placeholder="e.g. Grains & Flours"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.categoryName
+                      ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {errors.categoryName && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{errors.categoryName.message}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -741,8 +956,8 @@ export const CategoryView: React.FC = () => {
                     { label: 'Active', value: 'Active' },
                     { label: 'Inactive', value: 'Inactive' },
                   ]}
-                  value={formData.status}
-                  onChange={(val) => setFormData({ ...formData, status: val as 'Active' | 'Inactive' })}
+                  value={watchStatus || 'Active'}
+                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
                   placeholder="Select status"
                   activeColor="brand"
                 />
@@ -752,21 +967,148 @@ export const CategoryView: React.FC = () => {
             <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-60"
               >
                 <X className="w-4 h-4 text-slate-500" />
                 <span>Cancel</span>
               </button>
               <button
                 type="submit"
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                disabled={isSubmitting}
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-60"
               >
-                <Check className="w-4 h-4 stroke-[2.5]" />
-                <span>{editingCategory ? 'Update' : 'Save'}</span>
+                {isSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                )}
+                <span>{isSubmitting ? 'Saving...' : editingCategory ? 'Update' : 'Save'}</span>
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {/* 6. Category Detail Modal (GET /commerce/categories/:id) */}
+      {isDetailModalOpen && (
+        <Modal
+          isOpen={isDetailModalOpen}
+          onClose={() => setIsDetailModalOpen(false)}
+          title={selectedCategoryDetail ? selectedCategoryDetail.categoryName : 'Category Details'}
+          subtitle={selectedCategoryDetail?.code ? `Category Code: ${selectedCategoryDetail.code}` : 'Category specification & linked subcategories'}
+          maxWidth="2xl"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setIsDetailModalOpen(false)}
+        >
+          <div className="p-4 sm:p-5 space-y-5 text-xs animate-in fade-in duration-150">
+            {isLoadingDetail ? (
+              <div className="py-16 text-center text-slate-500 flex flex-col items-center justify-center gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#4309A2]" />
+                <span className="text-xs font-medium">Fetching details from Commerce service...</span>
+              </div>
+            ) : selectedCategoryDetail ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200/80">
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Code</span>
+                    <span className="font-mono font-bold text-[#33077C] text-xs">
+                      {selectedCategoryDetail.code || 'N/A'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Status</span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold ${
+                        selectedCategoryDetail.status === 'Active'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          selectedCategoryDetail.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'
+                        }`}
+                      />
+                      {selectedCategoryDetail.status}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Products</span>
+                    <span className="font-bold text-slate-800 text-xs">
+                      {selectedCategoryDetail.productCount ?? 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Subcategories</span>
+                    <span className="font-bold text-slate-800 text-xs">
+                      {selectedCategoryDetail.subcategories?.length ?? 0}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Subcategories List */}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-[#4309A2]" />
+                      <span>Linked Subcategories</span>
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-normal">
+                      {selectedCategoryDetail.subcategories?.length || 0} items
+                    </span>
+                  </h4>
+                  {(!selectedCategoryDetail.subcategories || selectedCategoryDetail.subcategories.length === 0) ? (
+                    <div className="py-8 text-center text-slate-400 bg-slate-50/60 rounded-xl border border-dashed border-slate-200 font-medium">
+                      No linked subcategories configured for this category.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {selectedCategoryDetail.subcategories.map((sub, idx) => (
+                        <div
+                          key={sub.id || idx}
+                          className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between text-xs"
+                        >
+                          <span className="font-semibold text-slate-800">{sub.subcategory || sub.name}</span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                              sub.status === 'Active'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}
+                          >
+                            {sub.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                  <span>
+                    Created: {selectedCategoryDetail.createdAt ? new Date(selectedCategoryDetail.createdAt).toLocaleDateString() : 'N/A'}
+                  </span>
+                  <span>
+                    Updated: {selectedCategoryDetail.updatedAt ? new Date(selectedCategoryDetail.updatedAt).toLocaleDateString() : 'N/A'}
+                  </span>
+                </div>
+              </>
+            ) : null}
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

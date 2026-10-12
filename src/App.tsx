@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Provider } from 'react-redux';
+import { store } from './store/store';
 import { Toaster } from 'sonner';
 import { CustomThemeProvider } from './theme/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
+import { AppLoader } from './components/common/AppLoader';
 
 // Views
 import { DashboardView } from './views/dashboard/DashboardView';
@@ -52,21 +54,22 @@ import { PurchaseReturnView } from './views/sale-management/purchase/PurchaseRet
 import { PaymentOutView } from './views/sale-management/purchase/PaymentOutView';
 import { ExpenseView } from './views/sale-management/purchase/ExpenseView';
 import { SaleManagementReportsView } from './views/sale-management/reports/SaleManagementReportsView';
+import { SalesRepresentativeView } from './views/sale-management/sales-hub/SalesRepresentativeView';
+import { CollectionsView } from './views/sale-management/sales-hub/CollectionsView';
 import { PendingDuesView } from './views/pending-dues/PendingDuesView';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      staleTime: 1000 * 30, // 30 seconds
-      retry: 1,
-    },
-  },
-});
 
 const MainLayout: React.FC = () => {
   const { currentUser, isAdmin, isSuperAdmin, isOrgSuperAdmin, isAuthenticated, isLoading } = useAuth();
-  const isBranchAdmin = currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com';
+  const userRole = (currentUser?.role || '').toString().toUpperCase();
+  const isBranchAdmin =
+    (userRole === 'BRANCH_ADMIN' ||
+      userRole === 'BRANCHADMIN' ||
+      currentUser?.email?.toLowerCase() === 'branchadmin@gmail.com') &&
+    userRole !== 'ORG_ADMIN' &&
+    userRole !== 'ORGADMIN' &&
+    userRole !== 'ADMIN' &&
+    userRole !== 'SUPER_ADMIN' &&
+    userRole !== 'SUPERADMIN';
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Quick Action Modal States
@@ -75,14 +78,7 @@ const MainLayout: React.FC = () => {
   const [quickContentOpen, setQuickContentOpen] = useState(false);
 
   if (isLoading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-[#0F142A]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-3 border-[#4309A2] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm font-semibold text-slate-300">Loading Yaa Creations...</p>
-        </div>
-      </div>
-    );
+    return <AppLoader />;
   }
 
   if (!isAuthenticated) {
@@ -210,6 +206,16 @@ const MainLayout: React.FC = () => {
                 element={isAdmin ? <ReportsView /> : <Navigate to="/" replace />}
               />
 
+              {/* Sale Management - Dashboard */}
+              <Route
+                path="/sale-management/dashboard"
+                element={<DashboardView />}
+              />
+              <Route
+                path="/sale-management"
+                element={<DashboardView />}
+              />
+
               {/* Sale Management - Inventory */}
               <Route
                 path="/sale-management/inventory/category"
@@ -236,6 +242,14 @@ const MainLayout: React.FC = () => {
               <Route
                 path="/sale-management/sales/customer"
                 element={<CustomerView />}
+              />
+              <Route
+                path="/sale-management/sales/sales-representative"
+                element={<SalesRepresentativeView />}
+              />
+              <Route
+                path="/sale-management/sales/sales-representatives"
+                element={<SalesRepresentativeView />}
               />
               <Route
                 path="/sale-management/sales/sale"
@@ -270,14 +284,6 @@ const MainLayout: React.FC = () => {
                 element={<SaleOrderView initialMode="form" />}
               />
               <Route
-                path="/sale-management/sales/payment-in"
-                element={<PaymentInView />}
-              />
-              <Route
-                path="/sale-management/sales/payment"
-                element={<PaymentInView />}
-              />
-              <Route
                 path="/sale-management/sales/delivery-challan"
                 element={<DeliveryChallanView />}
               />
@@ -290,8 +296,36 @@ const MainLayout: React.FC = () => {
                 element={<DeliveryChallanView initialMode="form" />}
               />
               <Route
+                path="/sale-management/sales/payment-in"
+                element={<PaymentInView />}
+              />
+              <Route
+                path="/sale-management/sales/payment"
+                element={<PaymentInView />}
+              />
+              <Route
                 path="/sale-management/sales/return"
                 element={<SalesReturnView />}
+              />
+              <Route
+                path="/sale-management/sales/collections"
+                element={<CollectionsView />}
+              />
+              <Route
+                path="/sale-management/sales/collection"
+                element={<CollectionsView />}
+              />
+              <Route
+                path="/sale-management/sales/customer-assignments"
+                element={<Navigate to="/sale-management/sales/collections?subView=customer-assignments" replace />}
+              />
+              <Route
+                path="/sale-management/sales/invoice-assignments"
+                element={<Navigate to="/sale-management/sales/collections?subView=customer-assignments" replace />}
+              />
+              <Route
+                path="/sale-management/sales/follow-ups"
+                element={<Navigate to="/sale-management/sales/collections?subView=follow-ups" replace />}
               />
               <Route
                 path="/sale-management/sales/report"
@@ -330,10 +364,10 @@ const MainLayout: React.FC = () => {
                 element={<SaleManagementReportsView />}
               />
 
-              {/* Pending Dues Module */}
+              {/* Legacy Pending Dues -> Redirect to Native Collections Module */}
               <Route
                 path="/pending-dues"
-                element={<PendingDuesView />}
+                element={<Navigate to="/sale-management/sales/collections" replace />}
               />
 
               <Route
@@ -352,22 +386,28 @@ const MainLayout: React.FC = () => {
 };
 
 const AppRoutes: React.FC = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <AppLoader />;
+  }
 
   return (
-    <Routes>
-      <Route
-        path="/login"
-        element={isAuthenticated ? <Navigate to="/" replace /> : <LoginView />}
-      />
-      <Route path="/*" element={<MainLayout />} />
-    </Routes>
+    <Suspense fallback={<AppLoader />}>
+      <Routes>
+        <Route
+          path="/login"
+          element={isAuthenticated ? <Navigate to="/" replace /> : <LoginView />}
+        />
+        <Route path="/*" element={<MainLayout />} />
+      </Routes>
+    </Suspense>
   );
 };
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <Provider store={store}>
       <CustomThemeProvider>
         <AuthProvider>
           <BrowserRouter>
@@ -376,6 +416,6 @@ export default function App() {
           </BrowserRouter>
         </AuthProvider>
       </CustomThemeProvider>
-    </QueryClientProvider>
+    </Provider>
   );
 }

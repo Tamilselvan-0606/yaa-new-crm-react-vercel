@@ -1,4 +1,8 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { ExpenseSchema, ExpenseFormData } from '../../../validations';
+import { FormError } from '../../../components/common/FormError';
 import {
   Receipt,
   Plus,
@@ -22,6 +26,13 @@ import {
   Printer,
   Forward,
   FileSpreadsheet,
+  Layers,
+  Loader2,
+  AlertCircle,
+  Tag,
+  Search,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
@@ -31,13 +42,30 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatExpenseShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
+import {
+  workExpenseApi,
+  workExpenseCategoryApi,
+  mapApiExpenseToUi,
+  mapUiToCreateExpensePayload,
+  mapUiToUpdateExpensePayload,
+  ApiExpenseCategory,
+  ExpenseSummary,
+  supplierApi,
+  ApiSupplier,
+  isValidUuid,
+} from '../../../api';
 
 export interface ExpenseItem {
   id: string;
   expenseNo: string;
   expenseDate: string;
   category: string;
+  categoryId?: string;
+  supplierId?: string;
+  supplierName?: string;
+  branchId?: string | null;
   title: string;
   payee: string;
   amount: number;
@@ -50,21 +78,8 @@ export interface ExpenseItem {
   notes?: string;
   status: 'Paid' | 'Pending' | 'Approved';
   createdAt: string;
+  updatedAt?: string;
 }
-
-const EXPENSE_CATEGORIES = [
-  'Office Supplies',
-  'Rent & Maintenance',
-  'Electricity & Utilities',
-  'Travel & Transportation',
-  'Salaries & Wages',
-  'Marketing & Advertising',
-  'Software & Subscriptions',
-  'Food & Refreshments',
-  'Courier & Logistics',
-  'Repairs & Service',
-  'Miscellaneous',
-];
 
 const PAYMENT_MODES = ['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Credit Card', 'Debit Card'];
 
@@ -79,128 +94,76 @@ const PERIOD_FILTER_OPTIONS = [
   { label: 'Custom', value: 'Custom' },
 ];
 
-const INITIAL_EXPENSES: ExpenseItem[] = [
-  {
-    id: 'exp-1',
-    expenseNo: 'EXP-2026-001',
-    expenseDate: '2026-03-28',
-    category: 'Rent & Maintenance',
-    title: 'HQ Office Monthly Rent - March',
-    payee: 'Sri Balaji Real Estate Towers',
-    amount: 45000,
-    taxPercent: 18,
-    taxAmount: 8100,
-    totalAmount: 53100,
-    paymentMode: 'Bank Transfer',
-    referenceNo: 'NEFT-8932401',
-    notes: 'Paid for 3rd floor office space',
-    status: 'Paid',
-    createdAt: '2026-03-28 10:30 AM',
-  },
-  {
-    id: 'exp-2',
-    expenseNo: 'EXP-2026-002',
-    expenseDate: '2026-03-29',
-    category: 'Electricity & Utilities',
-    title: 'TNEB Electricity Bill for Factory',
-    payee: 'Tamil Nadu Electricity Board',
-    amount: 14200,
-    taxPercent: 0,
-    taxAmount: 0,
-    totalAmount: 14200,
-    paymentMode: 'UPI',
-    referenceNo: 'UPI-984210982',
-    notes: 'Service connection #04-12-887',
-    status: 'Paid',
-    createdAt: '2026-03-29 02:15 PM',
-  },
-  {
-    id: 'exp-3',
-    expenseNo: 'EXP-2026-003',
-    expenseDate: '2026-04-01',
-    category: 'Software & Subscriptions',
-    title: 'Cloud Server & CRM Database Billing',
-    payee: 'Amazon Web Services India',
-    amount: 8500,
-    taxPercent: 18,
-    taxAmount: 1530,
-    totalAmount: 10030,
-    paymentMode: 'Credit Card',
-    referenceNo: 'CC-AUTH-4412',
-    notes: 'Monthly infrastructure fee',
-    status: 'Paid',
-    createdAt: '2026-04-01 11:00 AM',
-  },
-  {
-    id: 'exp-4',
-    expenseNo: 'EXP-2026-004',
-    expenseDate: '2026-04-02',
-    category: 'Food & Refreshments',
-    title: 'Client Lunch & Team Refreshments',
-    payee: 'Anand Bhavan Sweets & Snacks',
-    amount: 3200,
-    taxPercent: 5,
-    taxAmount: 160,
-    totalAmount: 3360,
-    paymentMode: 'Cash',
-    referenceNo: 'RCP-5521',
-    notes: 'Meeting with VIP buyer delegation',
-    status: 'Paid',
-    createdAt: '2026-04-02 04:45 PM',
-  },
-  {
-    id: 'exp-5',
-    expenseNo: 'EXP-2026-005',
-    expenseDate: '2026-04-03',
-    category: 'Courier & Logistics',
-    title: 'Sample Fabric Parcels Shipping',
-    payee: 'Professional Couriers Express',
-    amount: 1850,
-    taxPercent: 18,
-    taxAmount: 333,
-    totalAmount: 2183,
-    paymentMode: 'UPI',
-    referenceNo: 'UPI-43098522',
-    notes: 'Sent to Mumbai and Delhi distributors',
-    status: 'Paid',
-    createdAt: '2026-04-03 05:20 PM',
-  },
-  {
-    id: 'exp-6',
-    expenseNo: 'EXP-2026-006',
-    expenseDate: '2026-04-04',
-    category: 'Office Supplies',
-    title: 'A4 Paper Rims & Toner Cartridges',
-    payee: 'Classic Stationery Mart',
-    amount: 4600,
-    taxPercent: 12,
-    taxAmount: 552,
-    totalAmount: 5152,
-    paymentMode: 'Bank Transfer',
-    referenceNo: 'IMPS-2026-1188',
-    notes: 'Stock for accounts & design room',
-    status: 'Paid',
-    createdAt: '2026-04-04 11:15 AM',
-  },
-];
+/**
+ * Calculates start and end dates for Work API filtering
+ */
+const getDateRangeForPeriod = (
+  period: string,
+  customStart?: string,
+  customEnd?: string
+): { from?: string; to?: string } => {
+  const now = new Date();
+  const formatYmd = (d: Date) => d.toISOString().split('T')[0];
+
+  if (period === 'Today') {
+    const today = formatYmd(now);
+    return { from: today, to: today };
+  }
+  if (period === 'This Month') {
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { from: formatYmd(firstDay), to: formatYmd(lastDay) };
+  }
+  if (period === 'Last Month') {
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { from: formatYmd(firstDay), to: formatYmd(lastDay) };
+  }
+  if (period === 'This Quarter') {
+    const qMonth = Math.floor(now.getMonth() / 3) * 3;
+    const firstDay = new Date(now.getFullYear(), qMonth, 1);
+    const lastDay = new Date(now.getFullYear(), qMonth + 3, 0);
+    return { from: formatYmd(firstDay), to: formatYmd(lastDay) };
+  }
+  if (period === 'This Year') {
+    return { from: `${now.getFullYear()}-01-01`, to: `${now.getFullYear()}-12-31` };
+  }
+  if (period === 'This Financial Year') {
+    const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return { from: `${fyStart}-04-01`, to: `${fyStart + 1}-03-31` };
+  }
+  if (period.startsWith('Custom') && customStart && customEnd) {
+    return { from: customStart, to: customEnd };
+  }
+  return {};
+};
 
 export const ExpenseView: React.FC = () => {
-  // Local storage synced expenses
-  const [expenses, setExpenses] = useState<ExpenseItem[]>(() => {
-    const saved = localStorage.getItem('crm_expenses_list');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error('Error parsing saved expenses', e);
-      }
-    }
-    return INITIAL_EXPENSES;
-  });
-
+  // Purge any old local mock data from storage on mount
   useEffect(() => {
-    localStorage.setItem('crm_expenses_list', JSON.stringify(expenses));
-  }, [expenses]);
+    try {
+      localStorage.removeItem('crm_expenses_list');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Live Expenses State
+  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
+  const [isApiLoading, setIsApiLoading] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState(false);
+  const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<ExpenseSummary | null>(null);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+
+  // Live Categories State
+  const [categories, setCategories] = useState<ApiExpenseCategory[]>([]);
+  const [isCategoriesLoading, setIsCategoriesLoading] = useState(false);
+
+  // Live Suppliers State (for Payee mapping)
+  const [suppliers, setSuppliers] = useState<ApiSupplier[]>([]);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -220,6 +183,10 @@ export const ExpenseView: React.FC = () => {
 
   const periodDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Deduplication & Sync Refs
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef('');
+
   // Close period dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -231,11 +198,136 @@ export const ExpenseView: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Fetch Live Categories from Work API
+  const fetchCategories = useCallback(async () => {
+    setIsCategoriesLoading(true);
+    try {
+      const res = await workExpenseCategoryApi.getExpenseCategories({
+        pagination_required: false,
+      });
+      if (res && res.success && Array.isArray(res.data)) {
+        setCategories(res.data);
+      }
+    } catch (err: any) {
+      console.warn('Failed to fetch expense categories:', err?.message);
+    } finally {
+      setIsCategoriesLoading(false);
+    }
+  }, []);
+
+  // Fetch Registered Suppliers from Commerce API for Payee selection
+  const fetchSuppliers = useCallback(async () => {
+    try {
+      const res = await supplierApi.getSuppliers({
+        pagination_required: false,
+      });
+      if (res && res.success && Array.isArray(res.data)) {
+        setSuppliers(res.data);
+      }
+    } catch (err: any) {
+      console.warn('Failed to fetch suppliers for expense payee:', err?.message);
+    }
+  }, []);
+
+  // Initial load for categories & suppliers
+  useEffect(() => {
+    fetchCategories();
+    fetchSuppliers();
+  }, [fetchCategories, fetchSuppliers]);
+
+  // Fetch Expenses from Work API with deduplication
+  const fetchExpenses = useCallback(
+    async (forceRefresh = false) => {
+      const dateRange = getDateRangeForPeriod(appliedPeriod, customStartDate, customEndDate);
+      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedPaymentMode}_${dateRange.from || ''}_${dateRange.to || ''}`;
+
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsApiLoading(true);
+
+      try {
+        const response = await workExpenseApi.getExpenses({
+          page: currentPage,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          categoryId: appliedCategory !== 'All' ? appliedCategory : undefined,
+          paymentMethod: appliedPaymentMode !== 'All' ? appliedPaymentMode : undefined,
+          from: dateRange.from,
+          to: dateRange.to,
+          sortBy: 'expenseDate',
+          sortOrder: 'desc',
+          pagination_required: true,
+        });
+
+        if (response && response.success && Array.isArray(response.data)) {
+          const mapped = response.data.map(mapApiExpenseToUi);
+          setExpenses(mapped);
+          setIsApiConnected(true);
+          setApiErrorMessage(null);
+
+          if (response.pagination) {
+            setTotalApiRecords(response.pagination.totalRecords);
+            setTotalApiPages(response.pagination.totalPages);
+          } else {
+            setTotalApiRecords(mapped.length);
+            setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
+          }
+
+          if (response.summary) {
+            setApiSummary(response.summary);
+          } else {
+            setApiSummary(null);
+          }
+        } else {
+          setIsApiConnected(true);
+          setExpenses([]);
+          setTotalApiRecords(0);
+          setTotalApiPages(1);
+          setApiSummary(null);
+        }
+      } catch (err: any) {
+        const errMsg =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          'Work Expense API unavailable';
+        console.warn('Work Expense API unavailable:', errMsg);
+        setIsApiConnected(false);
+        setApiErrorMessage(errMsg);
+        setExpenses([]);
+        setTotalApiRecords(0);
+        setTotalApiPages(1);
+        setApiSummary(null);
+      } finally {
+        isFetchingRef.current = false;
+        setIsApiLoading(false);
+      }
+    },
+    [currentPage, pageSize, appliedSearch, appliedCategory, appliedPaymentMode, appliedPeriod, customStartDate, customEndDate]
+  );
+
+  // Initial and reactive fetch on filter change
+  useEffect(() => {
+    fetchExpenses();
+  }, [fetchExpenses]);
+
+  // Debounced Search (450ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppliedSearch(pendingSearch);
+      setCurrentPage(1);
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [pendingSearch]);
+
   // 3-Dots Action dropdown & Share Popover
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -272,15 +364,136 @@ export const ExpenseView: React.FC = () => {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<ExpenseItem | null>(null);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+  const [receiptImageState, setReceiptImageState] = useState<string>('');
+
+  // Category Manager Modal state
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryDesc, setNewCategoryDesc] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState('');
+  const [editCategoryDesc, setEditCategoryDesc] = useState('');
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    control,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<ExpenseFormData>({
+    resolver: zodResolver(ExpenseSchema),
+    defaultValues: {
+      expenseNo: '',
+      expenseDate: new Date().toISOString().split('T')[0],
+      category: '',
+      categoryId: '',
+      supplierId: '',
+      title: '',
+      payee: '',
+      amount: '',
+      taxPercent: '0',
+      paymentMode: 'Bank Transfer',
+      referenceNo: '',
+      receiptImage: '',
+      notes: '',
+      status: 'Paid',
+    },
+  });
+
+  const watchAmount = watch('amount');
+  const watchTaxPercent = watch('taxPercent');
+  const watchCategoryId = watch('categoryId');
+  const watchSupplierId = watch('supplierId');
+  const watchPayee = watch('payee');
+
+  // Combobox state for Payee Vendor (allows typing manual payee or choosing registered supplier)
+  const [isPayeeDropdownOpen, setIsPayeeDropdownOpen] = useState(false);
+  const payeeContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (payeeContainerRef.current && !payeeContainerRef.current.contains(e.target as Node)) {
+        setIsPayeeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const filteredSuppliersForPayee = useMemo(() => {
+    if (!watchPayee || !watchPayee.trim()) return suppliers;
+    const q = watchPayee.toLowerCase().trim();
+    return suppliers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.supplierCode && s.supplierCode.toLowerCase().includes(q))
+    );
+  }, [suppliers, watchPayee]);
+
+  // Open Create Modal
+  const handleOpenCreateModal = () => {
+    setEditingExpenseId(null);
+    setReceiptImageState('');
+    const defaultCat = categories.length > 0 ? categories[0] : null;
+
+    reset({
+      expenseNo: 'Auto-generated on save',
+      expenseDate: new Date().toISOString().split('T')[0],
+      category: defaultCat ? defaultCat.name : '',
+      categoryId: defaultCat ? defaultCat.id : '',
+      supplierId: '',
+      title: '',
+      payee: '',
+      amount: '',
+      taxPercent: '0',
+      paymentMode: 'Bank Transfer',
+      referenceNo: '',
+      receiptImage: '',
+      notes: '',
+      status: 'Paid',
+    });
+    setIsFormModalOpen(true);
+  };
+
+  // Open Edit Modal
+  const handleOpenEditModal = (exp: ExpenseItem) => {
+    setEditingExpenseId(exp.id);
+    setReceiptImageState(exp.receiptImage || '');
+
+    reset({
+      expenseNo: exp.expenseNo,
+      expenseDate: exp.expenseDate,
+      category: exp.category,
+      categoryId: exp.categoryId || '',
+      supplierId: exp.supplierId || '',
+      title: exp.title,
+      payee: exp.payee,
+      amount: exp.amount,
+      taxPercent: String(exp.taxPercent || 0),
+      paymentMode: exp.paymentMode,
+      referenceNo: exp.referenceNo || '',
+      receiptImage: exp.receiptImage || '',
+      notes: exp.notes || '',
+      status: exp.status,
+    });
+    setIsFormModalOpen(true);
+  };
 
   // Duplicate Expense Handler
   const handleDuplicateExpense = (exp: ExpenseItem) => {
     setEditingExpenseId(null);
-    const nextNo = `EXP-2026-${String(expenses.length + 1).padStart(3, '0')}`;
-    setFormData({
-      expenseNo: nextNo,
+    setReceiptImageState(exp.receiptImage || '');
+
+    reset({
+      expenseNo: 'Auto-generated on save',
       expenseDate: new Date().toISOString().split('T')[0],
       category: exp.category,
+      categoryId: exp.categoryId || '',
+      supplierId: exp.supplierId || '',
       title: `${exp.title} (Copy)`,
       payee: exp.payee,
       amount: exp.amount,
@@ -296,77 +509,24 @@ export const ExpenseView: React.FC = () => {
     toast.info(`Cloned details from ${exp.expenseNo} into expense form.`);
   };
 
-  // Form State
-  const [formData, setFormData] = useState({
-    expenseNo: '',
-    expenseDate: new Date().toISOString().split('T')[0],
-    category: 'Office Supplies',
-    title: '',
-    payee: '',
-    amount: '' as string | number,
-    taxPercent: '0',
-    paymentMode: 'Bank Transfer' as ExpenseItem['paymentMode'],
-    referenceNo: '',
-    receiptImage: '',
-    notes: '',
-    status: 'Paid' as ExpenseItem['status'],
-  });
-
-  const generateNextExpenseNo = () => {
-    const nextNum = expenses.length + 1;
-    return `EXP-2026-${String(nextNum).padStart(3, '0')}`;
-  };
-
-  const handleOpenCreateModal = () => {
-    setEditingExpenseId(null);
-    setFormData({
-      expenseNo: generateNextExpenseNo(),
-      expenseDate: new Date().toISOString().split('T')[0],
-      category: 'Office Supplies',
-      title: '',
-      payee: '',
-      amount: '',
-      taxPercent: '0',
-      paymentMode: 'Bank Transfer',
-      referenceNo: '',
-      receiptImage: '',
-      notes: '',
-      status: 'Paid',
-    });
-    setIsFormModalOpen(true);
-  };
-
-  const handleOpenEditModal = (exp: ExpenseItem) => {
-    setEditingExpenseId(exp.id);
-    setFormData({
-      expenseNo: exp.expenseNo,
-      expenseDate: exp.expenseDate,
-      category: exp.category,
-      title: exp.title,
-      payee: exp.payee,
-      amount: exp.amount,
-      taxPercent: String(exp.taxPercent || 0),
-      paymentMode: exp.paymentMode,
-      referenceNo: exp.referenceNo || '',
-      receiptImage: exp.receiptImage || '',
-      notes: exp.notes || '',
-      status: exp.status,
-    });
-    setIsFormModalOpen(true);
-  };
-
   const handleOpenDetailModal = (exp: ExpenseItem) => {
     setSelectedExpense(exp);
     setIsDetailModalOpen(true);
   };
 
-  const handleDeleteExpense = (id: string, expNo: string) => {
-    if (window.confirm(`Are you sure you want to delete expense record ${expNo}?`)) {
-      setExpenses((prev) => prev.filter((item) => item.id !== id));
-      toast.success(`Expense ${expNo} removed successfully`);
+  // Delete Expense via Work API
+  const handleDeleteExpense = async (id: string, expNo: string) => {
+    try {
+      await workExpenseApi.deleteExpense(id);
+      toast.success(`Expense ${expNo} deleted successfully.`);
+      fetchExpenses(true);
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to delete expense';
+      toast.error(msg);
     }
   };
 
+  // Image Upload Handler
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -376,94 +536,144 @@ export const ExpenseView: React.FC = () => {
       }
       const reader = new FileReader();
       reader.onloadend = () => {
-        setFormData((prev) => ({ ...prev, receiptImage: reader.result as string }));
+        const result = reader.result as string;
+        setReceiptImageState(result);
+        setValue('receiptImage', result);
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleSubmitForm = (e: React.FormEvent) => {
+  // Submit Expense Form (Create or Update)
+  const onSubmitExpense = async (data: ExpenseFormData) => {
+    // Validate Category
+    let targetCatId = data.categoryId;
+    if (!targetCatId || !isValidUuid(targetCatId)) {
+      const match = categories.find((c) => c.name.toLowerCase() === data.category.toLowerCase());
+      if (match) {
+        targetCatId = match.id;
+      } else if (categories.length > 0) {
+        targetCatId = categories[0].id;
+      } else {
+        toast.error('Please create or select an expense category first.');
+        return;
+      }
+    }
+
+    // Determine supplierId
+    let finalSupplierId: string | null = null;
+    if (data.supplierId && isValidUuid(data.supplierId)) {
+      finalSupplierId = data.supplierId;
+    } else if (data.payee) {
+      const matchSup = suppliers.find((s) => s.name.toLowerCase() === data.payee?.toLowerCase());
+      if (matchSup && isValidUuid(matchSup.id)) {
+        finalSupplierId = matchSup.id;
+      }
+    }
+
+    setIsSubmittingForm(true);
+
+    try {
+      if (editingExpenseId) {
+        // Update existing expense via PUT /work/expenses/{id}
+        const payload = mapUiToUpdateExpensePayload({
+          categoryId: targetCatId,
+          supplierId: finalSupplierId,
+          expenseDate: data.expenseDate,
+          title: data.title,
+          amount: data.amount,
+          taxPercent: data.taxPercent,
+          paymentMode: data.paymentMode,
+          referenceNo: data.referenceNo,
+          notes: data.notes,
+        });
+
+        await workExpenseApi.updateExpense(editingExpenseId, payload);
+        toast.success(`Expense ${data.expenseNo || ''} updated successfully.`);
+      } else {
+        // Create new expense via POST /work/expenses
+        const payload = mapUiToCreateExpensePayload({
+          categoryId: targetCatId,
+          supplierId: finalSupplierId,
+          expenseDate: data.expenseDate,
+          title: data.title,
+          amount: data.amount,
+          taxPercent: data.taxPercent,
+          paymentMode: data.paymentMode,
+          referenceNo: data.referenceNo,
+          notes: data.notes,
+        });
+
+        const res = await workExpenseApi.createExpense(payload);
+        const createdNo = res.data?.expenseNo || 'new expense';
+        toast.success(`Expense ${createdNo} created successfully.`);
+      }
+
+      setIsFormModalOpen(false);
+      fetchExpenses(true);
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to save expense';
+      toast.error(msg);
+    } finally {
+      setIsSubmittingForm(false);
+    }
+  };
+
+  // Category Manager Actions
+  const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    const baseAmount = Number(formData.amount);
-    if (!formData.title.trim()) {
-      toast.error('Please enter expense title/description');
-      return;
-    }
-    if (isNaN(baseAmount) || baseAmount <= 0) {
-      toast.error('Please enter a valid expense amount greater than 0');
+    if (!newCategoryName.trim()) {
+      toast.error('Category name is required');
       return;
     }
 
-    const taxP = Number(formData.taxPercent) || 0;
-    const taxAmt = Math.round((baseAmount * taxP) / 100);
-    const totalAmt = baseAmount + taxAmt;
-
-    if (editingExpenseId) {
-      // Edit existing
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === editingExpenseId
-            ? {
-                ...item,
-                expenseDate: formData.expenseDate,
-                category: formData.category,
-                title: formData.title.trim(),
-                payee: formData.payee.trim() || 'General Payee',
-                amount: baseAmount,
-                taxPercent: taxP,
-                taxAmount: taxAmt,
-                totalAmount: totalAmt,
-                paymentMode: formData.paymentMode,
-                referenceNo: formData.referenceNo.trim(),
-                receiptImage: formData.receiptImage,
-                notes: formData.notes.trim(),
-                status: formData.status,
-              }
-            : item
-        )
-      );
-      toast.success(`Expense ${formData.expenseNo} updated successfully`);
-    } else {
-      // Create new
-      const newExpense: ExpenseItem = {
-        id: `exp-${Date.now()}`,
-        expenseNo: formData.expenseNo || generateNextExpenseNo(),
-        expenseDate: formData.expenseDate,
-        category: formData.category,
-        title: formData.title.trim(),
-        payee: formData.payee.trim() || 'General Payee',
-        amount: baseAmount,
-        taxPercent: taxP,
-        taxAmount: taxAmt,
-        totalAmount: totalAmt,
-        paymentMode: formData.paymentMode,
-        referenceNo: formData.referenceNo.trim(),
-        receiptImage: formData.receiptImage,
-        notes: formData.notes.trim(),
-        status: formData.status,
-        createdAt: new Date().toLocaleString(),
-      };
-      setExpenses((prev) => [newExpense, ...prev]);
-      toast.success(`Expense ${newExpense.expenseNo} recorded successfully`);
-    }
-
-    setIsFormModalOpen(false);
-  };
-
-  // Filter application helpers
-  const handleApplyPeriod = (option: string) => {
-    if (option === 'Custom') {
-      setIsCustomDateModalOpen(true);
-      setIsPeriodOpen(false);
-    } else {
-      setPendingPeriod(option);
-      setAppliedPeriod(option);
-      setIsPeriodOpen(false);
-      setCurrentPage(1);
+    setIsSavingCategory(true);
+    try {
+      const res = await workExpenseCategoryApi.createExpenseCategory({
+        name: newCategoryName.trim(),
+        description: newCategoryDesc.trim() || undefined,
+        status: 'Active',
+      });
+      toast.success(`Category "${res.data.name}" added successfully.`);
+      setNewCategoryName('');
+      setNewCategoryDesc('');
+      await fetchCategories();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to create category');
+    } finally {
+      setIsSavingCategory(false);
     }
   };
 
+  const handleUpdateCategory = async (id: string) => {
+    if (!editCategoryName.trim()) {
+      toast.error('Category name cannot be empty');
+      return;
+    }
+    try {
+      await workExpenseCategoryApi.updateExpenseCategory(id, {
+        name: editCategoryName.trim(),
+        description: editCategoryDesc.trim() || undefined,
+      });
+      toast.success('Category updated successfully');
+      setEditingCategoryId(null);
+      await fetchCategories();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update category');
+    }
+  };
+
+  const handleDeleteCategory = async (cat: ApiExpenseCategory) => {
+    try {
+      await workExpenseCategoryApi.deleteExpenseCategory(cat.id);
+      toast.success(`Category "${cat.name}" removed successfully.`);
+      await fetchCategories();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete category');
+    }
+  };
+
+  // Custom Date range application
   const handleApplyCustomDates = () => {
     if (!customStartDate || !customEndDate) {
       toast.error('Please select both start and end dates');
@@ -475,120 +685,60 @@ export const ExpenseView: React.FC = () => {
     setCurrentPage(1);
   };
 
-  // Filter logic
-  const filteredExpenses = useMemo(() => {
-    return expenses.filter((exp) => {
-      // Search
-      if (appliedSearch) {
-        const query = appliedSearch.toLowerCase();
-        const matchesQuery =
-          exp.expenseNo.toLowerCase().includes(query) ||
-          exp.title.toLowerCase().includes(query) ||
-          exp.payee.toLowerCase().includes(query) ||
-          exp.category.toLowerCase().includes(query) ||
-          (exp.referenceNo && exp.referenceNo.toLowerCase().includes(query));
-        if (!matchesQuery) return false;
-      }
+  // Filtered categories for Category Manager Modal
+  const filteredCategoryList = useMemo(() => {
+    if (!categorySearchQuery.trim()) return categories;
+    const q = categorySearchQuery.toLowerCase();
+    return categories.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.description && c.description.toLowerCase().includes(q))
+    );
+  }, [categories, categorySearchQuery]);
 
-      // Category filter
-      if (appliedCategory !== 'All') {
-        if (exp.category !== appliedCategory) return false;
-      }
+  // Overall Metrics Calculations (combines API summary or fallback calculation)
+  const summaryTotalAmount = useMemo(() => {
+    if (apiSummary?.totalAmount !== undefined) return apiSummary.totalAmount;
+    return expenses.reduce((acc, curr) => acc + curr.totalAmount, 0);
+  }, [apiSummary, expenses]);
 
-      // Payment Mode filter
-      if (appliedPaymentMode !== 'All') {
-        if (exp.paymentMode !== appliedPaymentMode) return false;
-      }
+  const summaryTaxAmount = useMemo(() => {
+    if (apiSummary?.taxAmount !== undefined) return apiSummary.taxAmount;
+    return expenses.reduce((acc, curr) => acc + curr.taxAmount, 0);
+  }, [apiSummary, expenses]);
 
-      // Period Filter
-      if (appliedPeriod !== 'All Expenses') {
-        const itemDate = new Date(exp.expenseDate);
-        const now = new Date();
-
-        if (appliedPeriod === 'Today') {
-          const todayStr = now.toISOString().split('T')[0];
-          if (exp.expenseDate !== todayStr) return false;
-        } else if (appliedPeriod === 'This Month') {
-          if (itemDate.getMonth() !== now.getMonth() || itemDate.getFullYear() !== now.getFullYear()) {
-            return false;
-          }
-        } else if (appliedPeriod === 'Last Month') {
-          const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
-          const lastMonthYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
-          if (itemDate.getMonth() !== lastMonth && itemDate.getFullYear() !== lastMonthYear) {
-            return false;
-          }
-        } else if (appliedPeriod === 'This Year') {
-          if (itemDate.getFullYear() !== now.getFullYear()) return false;
-        } else if (appliedPeriod.startsWith('Custom') && customStartDate && customEndDate) {
-          const start = new Date(customStartDate);
-          const end = new Date(customEndDate);
-          end.setHours(23, 59, 59, 999);
-          if (itemDate < start || itemDate > end) return false;
-        }
-      }
-
-      return true;
-    });
-  }, [expenses, appliedSearch, appliedCategory, appliedPaymentMode, appliedPeriod, customStartDate, customEndDate]);
-
-  // Metrics Calculations
-  const metrics = useMemo(() => {
-    const totalExp = filteredExpenses.reduce((acc, curr) => acc + curr.totalAmount, 0);
-    const count = filteredExpenses.length;
-    const bankOnlineTotal = filteredExpenses
-      .filter((e) => ['Bank Transfer', 'UPI', 'Credit Card', 'Debit Card', 'Cheque'].includes(e.paymentMode))
-      .reduce((acc, curr) => acc + curr.totalAmount, 0);
-    const cashTotal = filteredExpenses
-      .filter((e) => e.paymentMode === 'Cash')
-      .reduce((acc, curr) => acc + curr.totalAmount, 0);
-    const totalTax = filteredExpenses.reduce((acc, curr) => acc + curr.taxAmount, 0);
-
-    return { totalExp, count, bankOnlineTotal, cashTotal, totalTax };
-  }, [filteredExpenses]);
-
-  // Pagination slice
-  const paginatedExpenses = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredExpenses.slice(start, start + pageSize);
-  }, [filteredExpenses, currentPage, pageSize]);
+  const summaryBaseAmount = useMemo(() => {
+    if (apiSummary?.amount !== undefined) return apiSummary.amount;
+    return expenses.reduce((acc, curr) => acc + curr.amount, 0);
+  }, [apiSummary, expenses]);
 
   // Category badge colors
   const getCategoryBadgeColor = (cat: string) => {
-    switch (cat) {
-      case 'Rent & Maintenance':
-        return 'bg-purple-100 text-purple-800 border-purple-200';
-      case 'Electricity & Utilities':
-        return 'bg-amber-100 text-amber-800 border-amber-200';
-      case 'Software & Subscriptions':
-        return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'Food & Refreshments':
-        return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-      case 'Courier & Logistics':
-        return 'bg-indigo-100 text-indigo-800 border-indigo-200';
-      case 'Office Supplies':
-        return 'bg-sky-100 text-sky-800 border-sky-200';
-      case 'Salaries & Wages':
-        return 'bg-rose-100 text-rose-800 border-rose-200';
-      default:
-        return 'bg-slate-100 text-slate-800 border-slate-200';
-    }
+    const c = cat.toLowerCase();
+    if (c.includes('rent')) return 'bg-purple-50 text-purple-700 border-purple-200';
+    if (c.includes('util') || c.includes('elect')) return 'bg-amber-50 text-amber-700 border-amber-200';
+    if (c.includes('soft') || c.includes('tech') || c.includes('sub')) return 'bg-blue-50 text-blue-700 border-blue-200';
+    if (c.includes('food') || c.includes('refresh')) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (c.includes('logist') || c.includes('cour') || c.includes('travel')) return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+    if (c.includes('suppl') || c.includes('station')) return 'bg-sky-50 text-sky-700 border-sky-200';
+    if (c.includes('salar') || c.includes('wage')) return 'bg-rose-50 text-rose-700 border-rose-200';
+    return 'bg-slate-50 text-slate-700 border-slate-200';
   };
 
   // Export Expenses to Excel
   const handleExportExcel = () => {
-    if (filteredExpenses.length === 0) {
+    if (expenses.length === 0) {
       toast.error('No expense records available to export.');
       return;
     }
 
-    const excelRows = filteredExpenses.map((exp, idx) => ({
-      sNo: idx + 1,
+    const excelRows = expenses.map((exp, idx) => ({
+      sNo: (currentPage - 1) * pageSize + idx + 1,
       expenseNo: exp.expenseNo,
       expenseDate: exp.expenseDate,
       category: exp.category,
       title: exp.title,
-      payee: exp.payee,
+      payee: exp.payee || '-',
       amount: Number(exp.amount || 0),
       taxAmount: Number(exp.taxAmount || 0),
       totalAmount: Number(exp.totalAmount || 0),
@@ -597,21 +747,18 @@ export const ExpenseView: React.FC = () => {
       status: exp.status,
     }));
 
-    const grandTotalAmt = excelRows.reduce((acc, row) => acc + row.totalAmount, 0);
-    const grandTaxAmt = excelRows.reduce((acc, row) => acc + row.taxAmount, 0);
-
     exportTableToExcel({
-      filename: `Expenses_Report_${new Date().toISOString().split('T')[0]}`,
-      sheetName: 'Expenses Ledger',
-      title: 'YAA CREATIONS CRM - OPERATIONAL EXPENSES DIRECTORY',
-      subtitle: `Total Expenses: ${filteredExpenses.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      filename: `Expenses_Ledger_${new Date().toISOString().split('T')[0]}`,
+      sheetName: 'Expenses',
+      title: 'YAA CREATIONS CRM - OPERATING EXPENSES DIRECTORY',
+      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Expense #', key: 'expenseNo', align: 'center', width: 14 },
+        { header: 'Expense #', key: 'expenseNo', align: 'center', width: 16 },
         { header: 'Date', key: 'expenseDate', align: 'center', width: 14 },
         { header: 'Category', key: 'category', align: 'left', width: 22 },
-        { header: 'Title / Purpose', key: 'title', align: 'left', width: 24 },
-        { header: 'Payee / Vendor', key: 'payee', align: 'left', width: 20 },
+        { header: 'Title / Purpose', key: 'title', align: 'left', width: 26 },
+        { header: 'Payee / Supplier', key: 'payee', align: 'left', width: 22 },
         { header: 'Base Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: 16 },
         { header: 'Tax Amount (₹)', key: 'taxAmount', align: 'right', type: 'currency', width: 16 },
         { header: 'Total (₹)', key: 'totalAmount', align: 'right', type: 'currency', width: 18 },
@@ -622,13 +769,13 @@ export const ExpenseView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        expenseNo: `${filteredExpenses.length} Expenses`,
-        taxAmount: grandTaxAmt,
-        totalAmount: grandTotalAmt,
+        expenseNo: `${totalApiRecords ?? expenses.length} Records`,
+        taxAmount: summaryTaxAmount,
+        totalAmount: summaryTotalAmount,
       },
     });
 
-    toast.success(`Expenses Excel report downloaded (${filteredExpenses.length} records)!`);
+    toast.success(`Expenses Excel report downloaded (${excelRows.length} records in view)!`);
   };
 
   return (
@@ -641,16 +788,45 @@ export const ExpenseView: React.FC = () => {
               <Receipt className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                Expense Management
-              </h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                  Expense Management
+                </h1>
+                {isApiConnected ? (
+                  <Badge variant="success" className="text-[10px] px-2 py-0.5">
+                    Work API Live
+                  </Badge>
+                ) : (
+                  <Badge variant="neutral" className="text-[10px] px-2 py-0.5">
+                    Syncing API
+                  </Badge>
+                )}
+              </div>
               <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-                Track operational costs, company bills, office expenditures & vendor disbursements
+                Track operational costs, tax breakdown, company overheads & vendor disbursements
               </p>
             </div>
           </div>
         </div>
+
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          {/* Categories Master Management Button */}
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={() => setIsCategoryModalOpen(true)}
+            icon={<Layers className="w-4 h-4 text-[#33077C]" />}
+          >
+            <span>Categories</span>
+            {categories.length > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-[#33077C]/10 text-[#33077C]">
+                {categories.length}
+              </span>
+            )}
+          </Button>
+
+          {/* Export to Excel */}
           <Button
             variant="secondary"
             size="md"
@@ -661,11 +837,12 @@ export const ExpenseView: React.FC = () => {
             Excel Report
           </Button>
 
+          {/* Add Expense Button */}
           <Button
             variant="primary"
             size="md"
             onClick={handleOpenCreateModal}
-            className="w-full sm:w-auto justify-center"
+            className="col-span-2 sm:col-span-1 w-full sm:w-auto justify-center"
             icon={<Plus className="w-4 h-4 text-white shrink-0" />}
           >
             <span>Add Expense</span>
@@ -673,13 +850,90 @@ export const ExpenseView: React.FC = () => {
         </div>
       </div>
 
+      {/* Summary Stats Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Total Expenses
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-purple-50 text-[#33077C] flex items-center justify-center">
+              <Receipt className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-bold text-slate-900">
+              ₹{summaryTotalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            {totalApiRecords ?? expenses.length} recorded vouchers
+          </span>
+        </div>
 
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Tax / GST Paid
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-bold text-slate-900">
+              ₹{summaryTaxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Claimable input tax credit
+          </span>
+        </div>
 
-      {/* Search & Filter Bar in a Single Line */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Base Expenditure
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <IndianRupee className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-bold text-slate-900">
+              ₹{summaryBaseAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Net pre-tax operational costs
+          </span>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Categories
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Layers className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-xl sm:text-2xl font-bold text-slate-900">
+              {categories.length}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 mt-1 block">
+            Cost classification heads
+          </span>
+        </div>
+      </div>
+
+      {/* Search & Filter Bar */}
       <SearchBar
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
-        placeholder="Search by expense #, title, payee..."
+        placeholder="Search by expense #, title, payee, reference..."
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
           setAppliedPeriod(pendingPeriod);
@@ -722,6 +976,23 @@ export const ExpenseView: React.FC = () => {
               />
             </div>
 
+            {/* Filter by Live Category */}
+            <div className="shrink-0">
+              <FilterDropdown
+                placeholder="Category : All"
+                value={pendingCategory}
+                onChange={(val) => {
+                  setPendingCategory(val);
+                  setAppliedCategory(val);
+                  setCurrentPage(1);
+                }}
+                options={[
+                  { label: 'Category : All', value: 'All' },
+                  ...categories.map((c) => ({ label: c.name, value: c.id })),
+                ]}
+              />
+            </div>
+
             {/* Filter by Mode */}
             <div className="shrink-0">
               <FilterDropdown
@@ -743,14 +1014,16 @@ export const ExpenseView: React.FC = () => {
         rightSlot={
           <div className="flex items-center gap-3 pr-1 whitespace-nowrap">
             <span className="text-xs font-semibold text-slate-500">
-              Total Expenses :{' '}
-              <span className="text-[#33077C] font-bold">{filteredExpenses.length}</span>
+              Total Records :{' '}
+              <span className="text-[#33077C] font-bold">
+                {totalApiRecords ?? expenses.length}
+              </span>
             </span>
           </div>
         }
       />
 
-      {/* Table matching reference UI */}
+      {/* Expenses Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
@@ -769,23 +1042,45 @@ export const ExpenseView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {filteredExpenses.length === 0 ? (
+              {isApiLoading ? (
+                <tr>
+                  <td colSpan={10} className="py-16 text-center text-slate-500">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
+                    <p className="font-semibold text-sm text-slate-700">Loading operating expenses...</p>
+                    <p className="text-xs text-slate-400 mt-1">Connecting to Work API</p>
+                  </td>
+                </tr>
+              ) : expenses.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <Receipt className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
-                    <p className="font-semibold text-slate-600 text-sm">No expense records found</p>
-                    <p className="text-xs text-slate-400 mt-1">Try adjusting your filters or click "+ Add Expense" to record one.</p>
+                    <p className="font-semibold text-slate-700 text-sm">No expense records found</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {apiErrorMessage
+                        ? `Notice: ${apiErrorMessage}`
+                        : 'Try adjusting your filters or click "+ Add Expense" to record a new operating expense.'}
+                    </p>
+                    <div className="mt-4">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleOpenCreateModal}
+                        icon={<Plus className="w-3.5 h-3.5 mr-1" />}
+                      >
+                        Add First Expense
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ) : (
-                paginatedExpenses.map((exp) => (
+                expenses.map((exp) => (
                   <tr
                     key={exp.id}
                     className="hover:bg-purple-50/20 transition-colors border-b border-slate-200"
                   >
                     {/* Expense No */}
                     <td className="py-3.5 px-5 border border-slate-200">
-                      <span className="font-semibold text-slate-800 text-xs">
+                      <span className="font-semibold text-slate-800 text-xs font-mono">
                         {exp.expenseNo}
                       </span>
                     </td>
@@ -801,7 +1096,11 @@ export const ExpenseView: React.FC = () => {
 
                     {/* Category */}
                     <td className="py-3.5 px-5 border border-slate-200">
-                      <span className="inline-block px-2.5 py-0.5 rounded-md bg-purple-50 text-[#33077C] font-semibold text-[11px] border border-purple-100 whitespace-nowrap">
+                      <span
+                        className={`inline-block px-2.5 py-0.5 rounded-md font-semibold text-[11px] border whitespace-nowrap ${getCategoryBadgeColor(
+                          exp.category
+                        )}`}
+                      >
                         {exp.category}
                       </span>
                     </td>
@@ -813,7 +1112,7 @@ export const ExpenseView: React.FC = () => {
                           {exp.title}
                         </span>
                         <span className="text-[11px] text-slate-500 font-medium">
-                          {exp.payee}
+                          {exp.payee || (exp.supplierName ? exp.supplierName : 'General Payee')}
                         </span>
                       </div>
                     </td>
@@ -837,7 +1136,9 @@ export const ExpenseView: React.FC = () => {
                           <span className="font-semibold text-slate-700 text-xs">
                             ₹{exp.taxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </span>
-                          <span className="text-[10px] text-slate-400 block font-normal">({exp.taxPercent}%)</span>
+                          <span className="text-[10px] text-slate-400 block font-normal">
+                            ({exp.taxPercent}%)
+                          </span>
                         </div>
                       ) : (
                         <span className="text-slate-400 text-xs font-normal">₹0.00</span>
@@ -855,7 +1156,7 @@ export const ExpenseView: React.FC = () => {
                     <td className="py-3 px-5 border border-slate-200 text-center">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                        {exp.status || 'Completed'}
+                        {exp.status || 'Paid'}
                       </span>
                     </td>
 
@@ -865,7 +1166,7 @@ export const ExpenseView: React.FC = () => {
                         {/* Print Action */}
                         <button
                           type="button"
-                          title="Print Expense"
+                          title="Print Expense Voucher"
                           onClick={() => {
                             setSelectedExpense(exp);
                             toast.info(`Preparing print for ${exp.expenseNo}...`);
@@ -876,125 +1177,16 @@ export const ExpenseView: React.FC = () => {
                           <Printer className="w-4 h-4" />
                         </button>
 
-                        {/* Share / Forward Popover */}
-                        <div className="relative inline-block text-left share-popover-container">
-                          <button
-                            type="button"
-                            title="Share Expense"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeShareId === exp.id) {
-                                setActiveShareId(null);
-                                setSharePos(null);
-                              } else {
-                                setActiveDropdownId(null);
-                                const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const popoverHeight = 140;
-                                if (spaceBelow < popoverHeight) {
-                                  setSharePos({
-                                    bottom: window.innerHeight - btnRect.top + 6,
-                                    right: window.innerWidth - btnRect.right - 20,
-                                  });
-                                } else {
-                                  setSharePos({
-                                    top: btnRect.bottom + 6,
-                                    right: window.innerWidth - btnRect.right - 20,
-                                  });
-                                }
-                                setActiveShareId(exp.id);
-                              }
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Forward className="w-4 h-4" />
-                          </button>
-
-                          {activeShareId === exp.id && sharePos && (
-                            <div
-                              className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                              style={{
-                                top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                right: `${Math.max(12, sharePos.right)}px`,
-                              }}
-                            >
-                              <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                Share
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                {/* Email Option */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveShareId(null);
-                                    const subject = encodeURIComponent(`Expense Voucher: ${exp.expenseNo}`);
-                                    const body = encodeURIComponent(
-                                      `Expense Voucher: ${exp.expenseNo}\nCategory: ${exp.category}\nTitle: ${exp.title}\nPayee: ${exp.payee}\nDate: ${exp.expenseDate}\nTotal Amount: ₹${exp.totalAmount.toLocaleString('en-IN')}\nPayment Mode: ${exp.paymentMode}\nStatus: ${exp.status}`
-                                    );
-                                    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                  }}
-                                  className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                >
-                                  <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                      <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                      <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                      <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                      <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                      <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                      <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                    </svg>
-                                  </div>
-                                  <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                </button>
-
-                                {/* WhatsApp Option */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveShareId(null);
-                                    const text = encodeURIComponent(
-                                      `*Expense Voucher: ${exp.expenseNo}*\n*Category:* ${exp.category}\n*Title:* ${exp.title}\n*Payee:* ${exp.payee}\n*Amount:* ₹${exp.totalAmount.toLocaleString('en-IN')}\n*Mode:* ${exp.paymentMode}\n*Status:* ${exp.status}`
-                                    );
-                                    window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                  }}
-                                  className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                >
-                                  <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                    <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                      <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                    </svg>
-                                  </div>
-                                  <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                </button>
-
-                                {/* SMS Option */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveShareId(null);
-                                    const text = encodeURIComponent(
-                                      `Expense Voucher ${exp.expenseNo} for ${exp.payee}, Amount: ₹${exp.totalAmount.toLocaleString('en-IN')}, Category: ${exp.category}, Status: ${exp.status}`
-                                    );
-                                    window.open(`sms:?body=${text}`, '_blank');
-                                  }}
-                                  className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                >
-                                  <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                    <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                      <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                      <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                      <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                    </svg>
-                                  </div>
-                                  <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        {/* Share Popover */}
+                        <UniversalShareDropdown
+                          id={exp.id}
+                          activeShareId={activeShareId}
+                          setActiveShareId={setActiveShareId}
+                          sharePos={sharePos}
+                          setSharePos={setSharePos}
+                          getShareData={() => formatExpenseShare(exp)}
+                          title="Share Expense Voucher"
+                        />
 
                         {/* 3-dots Actions Dropdown */}
                         <div className="relative inline-block text-left action-dropdown-container">
@@ -1010,7 +1202,7 @@ export const ExpenseView: React.FC = () => {
                                 setActiveShareId(null);
                                 const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                 const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const dropdownHeight = 260;
+                                const dropdownHeight = 240;
                                 if (spaceBelow < dropdownHeight) {
                                   setDropdownPos({
                                     bottom: window.innerHeight - btnRect.top + 4,
@@ -1046,62 +1238,39 @@ export const ExpenseView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenEditModal(exp);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
                               >
-                                View/Edit
+                                <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                                <span>View/Edit</span>
                               </button>
 
-                              {/* 2. Duplicate */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDuplicateExpense(exp);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                              >
-                                Duplicate
-                              </button>
-
-                              {/* 3. Delete */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDeleteExpense(exp.id, exp.expenseNo);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                              >
-                                Delete
-                              </button>
-
-                              {/* 4. Open PDF */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedExpense(exp);
-                                  setActiveDropdownId(null);
-                                  toast.info(`Opening PDF for ${exp.expenseNo}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                              >
-                                Open PDF
-                              </button>
-
-                              {/* 5. Preview (next to Open PDF) */}
+                              {/* 2. Preview */}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
                                   handleOpenDetailModal(exp);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
                               >
-                                Preview
+                                <Eye className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Preview</span>
                               </button>
 
-                              {/* 6. Print */}
+                              {/* 3. Duplicate */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveDropdownId(null);
+                                  handleDuplicateExpense(exp);
+                                }}
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                              >
+                                <Layers className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Duplicate</span>
+                              </button>
+
+                              {/* 4. Print */}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1110,21 +1279,23 @@ export const ExpenseView: React.FC = () => {
                                   toast.info(`Preparing print for ${exp.expenseNo}...`);
                                   window.print();
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
                               >
-                                Print
+                                <Printer className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Print</span>
                               </button>
 
-                              {/* 7. View History */}
+                              {/* 5. Delete */}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  toast.info(`Expense ${exp.expenseNo} recorded on ${exp.expenseDate} for ${exp.payee}. Category: ${exp.category}, Amount: ₹${exp.totalAmount.toLocaleString('en-IN')}, Status: ${exp.status}.`);
+                                  handleDeleteExpense(exp.id, exp.expenseNo);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2 border-t border-slate-100"
                               >
-                                View History
+                                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                <span>Delete</span>
                               </button>
                             </div>
                           )}
@@ -1139,10 +1310,10 @@ export const ExpenseView: React.FC = () => {
         </div>
       </div>
 
-      {/* Pagination Matching Reference UI */}
+      {/* Pagination */}
       <Pagination
         currentPage={currentPage}
-        totalItems={filteredExpenses.length}
+        totalItems={totalApiRecords ?? expenses.length}
         pageSize={pageSize}
         onPageChange={(page) => setCurrentPage(page)}
         onPageSizeChange={(size) => {
@@ -1159,38 +1330,64 @@ export const ExpenseView: React.FC = () => {
         subtitle={
           editingExpenseId
             ? 'Configure expense voucher profile, taxation rate, and payment details'
-            : 'Configure expense voucher profile, payee details, and payment settlement'
+            : 'Configure operating expense voucher, classification category, and payment settlement'
         }
         maxWidth="4xl"
         headerGradient={true}
         showBackIcon={true}
         onBack={() => setIsFormModalOpen(false)}
       >
-        <form onSubmit={handleSubmitForm} className="space-y-6 p-2 sm:p-4">
+        <form noValidate onSubmit={handleSubmit(onSubmitExpense)} className="space-y-6 p-2 sm:p-4">
           {/* Row 1: 3 Fields (Expense Voucher No, Expense Category, Expense Date) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Expense Voucher No <span className="text-slate-400 font-normal">*</span>
+                Expense Voucher No
               </label>
               <input
                 type="text"
-                value={formData.expenseNo}
+                {...register('expenseNo')}
                 disabled
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-mono font-bold text-slate-600 bg-slate-50 cursor-not-allowed"
               />
+              <FormError message={errors.expenseNo?.message} />
             </div>
 
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Expense Category <span className="text-rose-500">*</span>
-              </label>
-              <CustomSelect
-                options={EXPENSE_CATEGORIES.map((c) => ({ label: c, value: c }))}
-                value={formData.category}
-                onChange={(val) => setFormData({ ...formData, category: val })}
-                placeholder="Select category"
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-[13px] font-medium text-slate-600">
+                  Expense Category <span className="text-rose-500">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryModalOpen(true)}
+                  className="text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Manage</span>
+                </button>
+              </div>
+              <Controller
+                control={control}
+                name="categoryId"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={categories.map((c) => ({ label: c.name, value: c.id }))}
+                    value={field.value || ''}
+                    onChange={(val) => {
+                      field.onChange(val);
+                      const found = categories.find((c) => c.id === val);
+                      if (found) {
+                        setValue('category', found.name);
+                      }
+                    }}
+                    placeholder={
+                      isCategoriesLoading ? 'Loading categories...' : 'Select expense category'
+                    }
+                  />
+                )}
               />
+              <FormError message={errors.category?.message || errors.categoryId?.message} />
             </div>
 
             <div>
@@ -1199,26 +1396,141 @@ export const ExpenseView: React.FC = () => {
               </label>
               <input
                 type="date"
-                required
-                value={formData.expenseDate}
-                onChange={(e) => setFormData({ ...formData, expenseDate: e.target.value })}
+                {...register('expenseDate')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white cursor-pointer"
               />
+              <FormError message={errors.expenseDate?.message} />
             </div>
           </div>
 
           {/* Row 2: 3 Fields (Paid To / Payee Vendor, Expense Title / Description, Payment Mode) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Paid To / Payee Vendor
-              </label>
-              <input
-                type="text"
-                value={formData.payee}
-                onChange={(e) => setFormData({ ...formData, payee: e.target.value })}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-[13px] font-medium text-slate-600">
+                  Paid To / Payee Vendor
+                </label>
+                {watchSupplierId && (
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                    <Check className="w-2.5 h-2.5" />
+                    <span>Linked Supplier</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="relative" ref={payeeContainerRef}>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={watchPayee || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setValue('payee', val);
+                      setValue('supplierId', '');
+                      setIsPayeeDropdownOpen(true);
+                    }}
+                    onFocus={() => setIsPayeeDropdownOpen(true)}
+                    placeholder="Type manual vendor or select supplier..."
+                    className="w-full h-11 pl-4 pr-16 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
+                  />
+                  <div className="absolute right-2 flex items-center gap-0.5">
+                    {watchPayee && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setValue('payee', '');
+                          setValue('supplierId', '');
+                        }}
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                        title="Clear"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsPayeeDropdownOpen((prev) => !prev)}
+                      className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                      title="Show suppliers"
+                    >
+                      <ChevronDown
+                        className={`w-4 h-4 transition-transform ${
+                          isPayeeDropdownOpen ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dropdown Suggestions */}
+                {isPayeeDropdownOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 max-h-56 overflow-y-auto font-sans animate-in fade-in zoom-in-95 duration-100">
+                    {/* Option to use manual typed text */}
+                    {watchPayee && watchPayee.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setValue('supplierId', '');
+                          setIsPayeeDropdownOpen(false);
+                        }}
+                        className="w-full px-3.5 py-2 text-left hover:bg-purple-50 flex items-center justify-between border-b border-slate-100 text-xs transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
+                          <span className="font-semibold text-slate-700">Use manual payee:</span>
+                          <span className="font-bold text-[#33077C] truncate">"{watchPayee}"</span>
+                        </div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
+                          Manual
+                        </span>
+                      </button>
+                    )}
+
+                    {/* Registered Suppliers Header */}
+                    <div className="px-3.5 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                      <span>Registered Suppliers</span>
+                      <span>({suppliers.length})</span>
+                    </div>
+
+                    {filteredSuppliersForPayee.length === 0 ? (
+                      <div className="px-3.5 py-2 text-xs text-slate-400 italic">
+                        No matching registered suppliers found. You can keep your manual text above.
+                      </div>
+                    ) : (
+                      filteredSuppliersForPayee.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            setValue('payee', s.name);
+                            setValue('supplierId', s.id);
+                            setIsPayeeDropdownOpen(false);
+                          }}
+                          className={`w-full px-3.5 py-2 text-left hover:bg-purple-50 flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                            watchSupplierId === s.id
+                              ? 'bg-purple-50/70 font-bold text-[#33077C]'
+                              : 'text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Building2 className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                            <span className="truncate font-semibold">{s.name}</span>
+                            {s.supplierCode && (
+                              <span className="text-[11px] text-slate-400 shrink-0">
+                                ({s.supplierCode})
+                              </span>
+                            )}
+                          </div>
+                          {watchSupplierId === s.id && (
+                            <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <FormError message={errors.payee?.message} />
             </div>
 
             <div>
@@ -1227,23 +1539,30 @@ export const ExpenseView: React.FC = () => {
               </label>
               <input
                 type="text"
-                required
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                {...register('title')}
+                placeholder="e.g. Office rent for October"
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
               />
+              <FormError message={errors.title?.message} />
             </div>
 
             <div>
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Payment Mode <span className="text-rose-500">*</span>
               </label>
-              <CustomSelect
-                options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
-                value={formData.paymentMode}
-                onChange={(val) => setFormData({ ...formData, paymentMode: val as ExpenseItem['paymentMode'] })}
-                placeholder="Select payment mode"
+              <Controller
+                control={control}
+                name="paymentMode"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Select payment mode"
+                  />
+                )}
               />
+              <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
 
@@ -1257,32 +1576,38 @@ export const ExpenseView: React.FC = () => {
                 <span className="absolute left-4 top-3 text-slate-400 font-medium text-sm">₹</span>
                 <input
                   type="number"
-                  required
-                  min="0.01"
                   step="any"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  placeholder="0.00"
+                  {...register('amount')}
                   className="w-full h-11 pl-9 pr-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-bold text-slate-900 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
                 />
               </div>
+              <FormError message={errors.amount?.message} />
             </div>
 
             <div>
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Tax / GST Rate
               </label>
-              <CustomSelect
-                options={[
-                  { label: '0% (No Tax)', value: '0' },
-                  { label: '5% GST', value: '5' },
-                  { label: '12% GST', value: '12' },
-                  { label: '18% GST', value: '18' },
-                  { label: '28% GST', value: '28' },
-                ]}
-                value={formData.taxPercent}
-                onChange={(val) => setFormData({ ...formData, taxPercent: val })}
-                placeholder="Select GST Rate"
+              <Controller
+                control={control}
+                name="taxPercent"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={[
+                      { label: '0% (No Tax)', value: '0' },
+                      { label: '5% GST', value: '5' },
+                      { label: '12% GST', value: '12' },
+                      { label: '18% GST', value: '18' },
+                      { label: '28% GST', value: '28' },
+                    ]}
+                    value={field.value ? String(field.value) : '0'}
+                    onChange={field.onChange}
+                    placeholder="Select GST Rate"
+                  />
+                )}
               />
+              <FormError message={errors.taxPercent?.message} />
             </div>
 
             <div>
@@ -1291,40 +1616,55 @@ export const ExpenseView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.referenceNo}
-                onChange={(e) => setFormData({ ...formData, referenceNo: e.target.value })}
+                placeholder="e.g. TXN-RENT-1008 or Cheque #"
+                {...register('referenceNo')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
               />
+              <FormError message={errors.referenceNo?.message} />
             </div>
           </div>
 
           {/* Calculated Total summary bar */}
-          {Number(formData.amount) > 0 && (
+          {Number(watchAmount) > 0 && (
             <div className="bg-purple-50/70 border border-purple-100 rounded-xl p-3.5 flex items-center justify-between text-xs sm:text-[13px]">
               <div className="text-slate-600 font-medium">
-                <span>Base: <strong className="text-slate-800">₹{Number(formData.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></span>
-                {Number(formData.taxPercent) > 0 && (
+                <span>
+                  Base:{' '}
+                  <strong className="text-slate-800">
+                    ₹{Number(watchAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </strong>
+                </span>
+                {Number(watchTaxPercent) > 0 && (
                   <span className="ml-4">
-                    Tax ({formData.taxPercent}%): <strong className="text-slate-800">₹{Math.round((Number(formData.amount) * Number(formData.taxPercent)) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+                    Tax ({watchTaxPercent}%):{' '}
+                    <strong className="text-slate-800">
+                      ₹{Math.round((Number(watchAmount) * Number(watchTaxPercent)) / 100).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2,
+                      })}
+                    </strong>
                   </span>
                 )}
               </div>
               <div className="text-[#33077C] font-black text-sm sm:text-base">
-                Total: ₹{(Number(formData.amount) + Math.round((Number(formData.amount) * Number(formData.taxPercent)) / 100)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                Total: ₹
+                {(
+                  Number(watchAmount) +
+                  Math.round((Number(watchAmount) * Number(watchTaxPercent || 0)) / 100)
+                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
               </div>
             </div>
           )}
 
-          {/* Row 4: 3 Fields (Upload Receipt in 1 column, Notes spanning 2 columns) */}
+          {/* Row 4: Upload Receipt in 1 column, Notes spanning 2 columns */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
               <label className="block text-[13px] font-medium text-slate-600 mb-2">
                 Upload Receipt / Proof
               </label>
-              {formData.receiptImage ? (
+              {receiptImageState ? (
                 <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
                   <img
-                    src={formData.receiptImage}
+                    src={receiptImageState}
                     alt="Receipt"
                     className="w-7 h-7 rounded-lg object-cover border border-slate-300"
                   />
@@ -1333,8 +1673,11 @@ export const ExpenseView: React.FC = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, receiptImage: '' })}
-                    className="text-slate-400 hover:text-rose-500 transition-colors p-1"
+                    onClick={() => {
+                      setReceiptImageState('');
+                      setValue('receiptImage', '');
+                    }}
+                    className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
                     title="Remove Receipt"
                   >
                     <X className="w-4 h-4 stroke-[2.5]" />
@@ -1360,14 +1703,15 @@ export const ExpenseView: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                placeholder="Optional notes or disbursement comments"
+                {...register('notes')}
                 className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
               />
+              <FormError message={errors.notes?.message} />
             </div>
           </div>
 
-          {/* Form Actions Matching Reference Image 2 */}
+          {/* Form Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
             <Button
               type="button"
@@ -1381,10 +1725,21 @@ export const ExpenseView: React.FC = () => {
             <Button
               type="submit"
               variant="primary"
+              disabled={isSubmittingForm}
               className="h-11 px-7 rounded-xl text-xs sm:text-[13px] font-semibold bg-[#33077C] hover:bg-[#25055b] text-white shadow-sm cursor-pointer flex items-center gap-2"
-              icon={<Check className="w-4 h-4 text-white" />}
+              icon={
+                isSubmittingForm ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Check className="w-4 h-4 text-white" />
+                )
+              }
             >
-              {editingExpenseId ? 'Save Changes' : 'Save Expense'}
+              {isSubmittingForm
+                ? 'Saving to Work API...'
+                : editingExpenseId
+                ? 'Save Changes'
+                : 'Record Expense'}
             </Button>
           </div>
         </form>
@@ -1409,7 +1764,9 @@ export const ExpenseView: React.FC = () => {
                   {selectedExpense.category}
                 </span>
                 <h3 className="text-base font-bold text-slate-900">{selectedExpense.title}</h3>
-                <p className="text-xs text-slate-500 font-medium mt-0.5">Payee: {selectedExpense.payee}</p>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Payee: {selectedExpense.payee || 'General Payee'}
+                </p>
               </div>
               <div className="text-right">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">Total Amount</span>
@@ -1465,7 +1822,7 @@ export const ExpenseView: React.FC = () => {
             )}
 
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-400">
-              <span>Created: {selectedExpense.createdAt}</span>
+              <span>Created: {new Date(selectedExpense.createdAt).toLocaleDateString('en-IN')}</span>
               <div className="flex items-center gap-2">
                 <Button
                   variant="secondary"
@@ -1488,6 +1845,199 @@ export const ExpenseView: React.FC = () => {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* CATEGORY MASTER MANAGEMENT MODAL */}
+      <Modal
+        isOpen={isCategoryModalOpen}
+        onClose={() => setIsCategoryModalOpen(false)}
+        title="Expense Categories Master"
+        subtitle="Manage cost classifications, budget heads & active tax-tracking categories"
+        maxWidth="2xl"
+        headerGradient={true}
+      >
+        <div className="space-y-6 p-2 sm:p-4">
+          {/* Quick Create Category Form */}
+          <form onSubmit={handleCreateCategory} className="bg-purple-50/50 border border-purple-100 rounded-2xl p-4 space-y-3">
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Plus className="w-3.5 h-3.5 text-[#33077C]" />
+              <span>Add New Category</span>
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Category Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Courier & Logistics"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Description
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Courier and shipping costs"
+                  value={newCategoryDesc}
+                  onChange={(e) => setNewCategoryDesc(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] bg-white"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end pt-1">
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                disabled={isSavingCategory}
+                icon={
+                  isSavingCategory ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="w-3.5 h-3.5" />
+                  )
+                }
+              >
+                {isSavingCategory ? 'Adding...' : 'Save Category'}
+              </Button>
+            </div>
+          </form>
+
+          {/* Categories Search & List */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search categories..."
+                  value={categorySearchQuery}
+                  onChange={(e) => setCategorySearchQuery(e.target.value)}
+                  className="w-full h-9 pl-9 pr-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] bg-white"
+                />
+              </div>
+              <span className="text-xs font-semibold text-slate-500 whitespace-nowrap">
+                {filteredCategoryList.length} Categories
+              </span>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+              {filteredCategoryList.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-xs font-medium">
+                  No expense categories found.
+                </div>
+              ) : (
+                filteredCategoryList.map((cat) => (
+                  <div
+                    key={cat.id}
+                    className="p-3 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors"
+                  >
+                    {editingCategoryId === cat.id ? (
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={editCategoryName}
+                          onChange={(e) => setEditCategoryName(e.target.value)}
+                          className="h-8 px-2.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-900 bg-white"
+                        />
+                        <input
+                          type="text"
+                          value={editCategoryDesc}
+                          onChange={(e) => setEditCategoryDesc(e.target.value)}
+                          placeholder="Description"
+                          className="h-8 px-2.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-900 bg-white"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-800 truncate">
+                            {cat.name}
+                          </span>
+                          <span
+                            className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-semibold border ${
+                              cat.status === 'Active'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {cat.status}
+                          </span>
+                        </div>
+                        {cat.description && (
+                          <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                            {cat.description}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {editingCategoryId === cat.id ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => handleUpdateCategory(cat.id)}
+                            className="h-7 px-2.5 text-xs"
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setEditingCategoryId(null)}
+                            className="h-7 px-2.5 text-xs"
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingCategoryId(cat.id);
+                              setEditCategoryName(cat.name);
+                              setEditCategoryDesc(cat.description || '');
+                            }}
+                            title="Edit Category"
+                            className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-colors"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCategory(cat)}
+                            title="Deactivate / Delete Category"
+                            className="w-7 h-7 rounded-lg hover:bg-rose-50 flex items-center justify-center text-slate-400 hover:text-rose-600 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2 border-t border-slate-100">
+            <Button
+              variant="secondary"
+              onClick={() => setIsCategoryModalOpen(false)}
+              className="text-xs"
+            >
+              Done
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* CUSTOM DATE RANGE MODAL */}

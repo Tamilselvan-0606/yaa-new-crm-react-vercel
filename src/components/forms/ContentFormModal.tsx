@@ -60,7 +60,7 @@ export const ContentFormModal: React.FC<ContentFormModalProps> = ({
       title="Create Social Content / Post"
       maxWidth="lg"
     >
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         {/* Row 1: Title */}
         <div>
           <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">

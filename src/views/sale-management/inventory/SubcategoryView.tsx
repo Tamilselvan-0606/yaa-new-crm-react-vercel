@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Layers,
   Plus,
@@ -12,7 +12,14 @@ import {
   Printer,
   Forward,
   FileSpreadsheet,
+  Loader2,
+  Eye,
+  Database,
+  AlertTriangle,
+  FolderTree,
+  AlertCircle,
 } from 'lucide-react';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
@@ -21,6 +28,19 @@ import { Pagination } from '../../../components/common/Pagination';
 import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { UniversalShareDropdown, formatSubcategoryShare } from '../../../utils/shareUtils';
+import {
+  subcategoryApi,
+  mapApiSubcategoryToSubcategoryItem,
+  ApiSubcategory,
+  categoryApi,
+} from '../../../api';
+
+export interface SubcategoryFormValues {
+  category: string;
+  subcategory: string;
+  status: 'Active' | 'Inactive';
+}
 
 interface SubcategoryItem {
   id: string;
@@ -28,9 +48,14 @@ interface SubcategoryItem {
   category: string;
   subcategory: string;
   status: 'Active' | 'Inactive';
+  categoryId?: string;
+  description?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  productCount?: number;
 }
 
-const CATEGORY_OPTIONS = [
+const DEFAULT_CATEGORY_OPTIONS = [
   { label: 'Electronics & Hardware', value: 'Electronics & Hardware' },
   { label: 'Apparel & Fashion', value: 'Apparel & Fashion' },
   { label: 'Home & Office Supplies', value: 'Home & Office Supplies' },
@@ -38,22 +63,31 @@ const CATEGORY_OPTIONS = [
 ];
 
 export const SubcategoryView: React.FC = () => {
-  // 1 initial record
-  const [subcategories, setSubcategories] = useState<SubcategoryItem[]>([
-    {
-      id: 'subcat-1',
-      sNo: 1,
-      category: 'Electronics & Hardware',
-      subcategory: 'Mobile Phones & Accessories',
-      status: 'Active',
-    },
-  ]);
+  // Subcategories collection - initialized empty (zero mock data)
+  const [subcategories, setSubcategories] = useState<SubcategoryItem[]>([]);
+
+  // Loading & API State
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
+  const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
+
+  // Dynamic Category Options from live category master
+  const [categoryOptions, setCategoryOptions] = useState<{ label: string; value: string }[]>(DEFAULT_CATEGORY_OPTIONS);
+
+  // Request Deduplication Refs
+  const isFetchingRef = useRef(false);
+  const lastFetchKeyRef = useRef<string | null>(null);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
+  const [pendingCategory, setPendingCategory] = useState('ALL');
+  const [appliedCategory, setAppliedCategory] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -61,10 +95,49 @@ export const SubcategoryView: React.FC = () => {
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
+
+  // Add / Edit Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingSubcategory, setEditingSubcategory] = useState<SubcategoryItem | null>(null);
+
+  // React Hook Form instance for Subcategory Add/Edit Modal
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    formState: { errors },
+  } = useForm<SubcategoryFormValues>({
+    mode: 'onChange',
+    defaultValues: {
+      category: '',
+      subcategory: '',
+      status: 'Active',
+    },
+  });
+
+  const watchCategory = watch('category');
+  const watchStatus = watch('status');
+
+  // Keystroke sanitizer: disallow typing numeric characters in text-only fields
+  const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key >= '0' && e.key <= '9') {
+      e.preventDefault();
+    }
+  };
+
+  // Detail Modal State (GET /commerce/subcategories/:id)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedSubcategoryDetail, setSelectedSubcategoryDetail] = useState<ApiSubcategory | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  // Delete Confirmation Modal State
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState<SubcategoryItem | null>(null);
 
   // Close dropdown on outside click or scroll
-  React.useEffect(() => {
+  useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest('.subcategory-action-dropdown-container') && !target.closest('.subcategory-action-dropdown-menu')) {
@@ -94,16 +167,95 @@ export const SubcategoryView: React.FC = () => {
     };
   }, [activeDropdownId, activeShareId]);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingSubcategory, setEditingSubcategory] = useState<SubcategoryItem | null>(null);
-  const [formData, setFormData] = useState({
-    category: '',
-    subcategory: '',
-    status: '' as '' | 'Active' | 'Inactive',
-  });
+  /**
+   * Fetch live categories to populate dropdowns in Add/Edit modal and filter
+   */
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCategories = async () => {
+      try {
+        const res = await categoryApi.getCategories({
+          pagination_required: false,
+          sortOrder: 'asc',
+        });
+        if (isMounted && res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+          const opts = res.data
+            .map((c) => ({
+              label: c.categoryName || c.name || '',
+              value: c.categoryName || c.name || '',
+            }))
+            .filter((o) => o.label.trim() !== '');
 
-  // Filter subcategories
+          if (opts.length > 0) {
+            setCategoryOptions(opts);
+          }
+        }
+      } catch (err) {
+        // Fallback to defaults already set
+      }
+    };
+    fetchCategories();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  /**
+   * Master API Loader with strict deduplication guards to ensure zero redundant calls
+   * Query parameters are only requested when applied
+   */
+  const loadSubcategories = useCallback(
+    async (forceRefresh = false) => {
+      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedCategory}`;
+
+      // Prevent concurrent calls or redundant re-fetching of identical parameters
+      if (isFetchingRef.current) return;
+      if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
+
+      isFetchingRef.current = true;
+      lastFetchKeyRef.current = fetchKey;
+      setIsLoading(true);
+
+      try {
+        const res = await subcategoryApi.getSubcategories({
+          page_no: page,
+          page_size: pageSize,
+          pagination_required: true,
+          search: appliedSearch.trim() || undefined,
+          sortOrder: 'desc',
+          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+          category: appliedCategory !== 'ALL' ? appliedCategory : undefined,
+        });
+
+        if (res && res.success && Array.isArray(res.data)) {
+          const mapped = res.data.map((item, idx) =>
+            mapApiSubcategoryToSubcategoryItem(item, (page - 1) * pageSize + idx)
+          );
+          setSubcategories(mapped);
+          setIsApiConnected(true);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords);
+            setTotalApiPages(res.pagination.totalPages);
+          }
+        } else {
+          setIsApiConnected(false);
+        }
+      } catch (err: any) {
+        console.warn('Commerce Subcategory API call failed, falling back to local state:', err?.message || err);
+        setIsApiConnected(false);
+      } finally {
+        setIsLoading(false);
+        isFetchingRef.current = false;
+      }
+    },
+    [page, pageSize, appliedSearch, appliedStatus, appliedCategory]
+  );
+
+  useEffect(() => {
+    loadSubcategories();
+  }, [loadSubcategories]);
+
+  // Filter subcategories in local fallback mode
   const filteredSubcategories = useMemo(() => {
     return subcategories.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -115,30 +267,60 @@ export const SubcategoryView: React.FC = () => {
       const matchesStatus =
         appliedStatus === 'ALL' || item.status === appliedStatus;
 
-      return matchesSearch && matchesStatus;
+      const matchesCategory =
+        appliedCategory === 'ALL' || item.category === appliedCategory;
+
+      return matchesSearch && matchesStatus && matchesCategory;
     });
-  }, [subcategories, appliedSearch, appliedStatus]);
+  }, [subcategories, appliedSearch, appliedStatus, appliedCategory]);
 
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredSubcategories.length / pageSize));
+  // Total count calculation
+  const totalCount =
+    isApiConnected && totalApiRecords !== null
+      ? totalApiRecords
+      : filteredSubcategories.length;
+
+  const totalPages =
+    isApiConnected && totalApiPages !== null
+      ? totalApiPages
+      : Math.max(1, Math.ceil(totalCount / pageSize));
+
   const safePage = Math.min(page, totalPages);
-  const pagedSubcategories = useMemo(() => {
-    return filteredSubcategories.slice((safePage - 1) * pageSize, safePage * pageSize);
-  }, [filteredSubcategories, safePage, pageSize]);
 
+  // When API is connected, server handles pagination; otherwise slice in memory
+  const pagedSubcategories = useMemo(() => {
+    if (isApiConnected) {
+      return subcategories;
+    }
+    return filteredSubcategories.slice((safePage - 1) * pageSize, safePage * pageSize);
+  }, [isApiConnected, subcategories, filteredSubcategories, safePage, pageSize]);
+
+  // Category filter options for SearchBar dropdown
+  const categoryFilterOptions = useMemo(() => {
+    return [
+      { label: 'Category : All', value: 'ALL' },
+      ...categoryOptions.map((opt) => ({
+        label: opt.label,
+        value: opt.value,
+      })),
+    ];
+  }, [categoryOptions]);
+
+  // Open Create Modal
   const handleOpenAddModal = () => {
     setEditingSubcategory(null);
-    setFormData({
-      category: '',
+    reset({
+      category: categoryOptions[0]?.value || '',
       subcategory: '',
-      status: '',
+      status: 'Active',
     });
     setIsModalOpen(true);
   };
 
+  // Open Edit Modal
   const handleOpenEditModal = (subcat: SubcategoryItem) => {
     setEditingSubcategory(subcat);
-    setFormData({
+    reset({
       category: subcat.category,
       subcategory: subcat.subcategory,
       status: subcat.status,
@@ -146,50 +328,189 @@ export const SubcategoryView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSaveSubcategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.subcategory.trim() || !formData.category) return;
-
-    const finalStatus = (formData.status || 'Active') as 'Active' | 'Inactive';
-
-    if (editingSubcategory) {
-      setSubcategories((prev) =>
-        prev.map((s) =>
-          s.id === editingSubcategory.id
-            ? {
-                ...s,
-                category: formData.category,
-                subcategory: formData.subcategory,
-                status: finalStatus,
-              }
-            : s
-        )
-      );
-    } else {
-      const newSubcat: SubcategoryItem = {
-        id: `subcat-${Date.now()}`,
-        sNo: subcategories.length + 1,
-        category: formData.category,
-        subcategory: formData.subcategory,
-        status: finalStatus,
-      };
-      setSubcategories((prev) => [newSubcat, ...prev]);
-    }
-    setIsModalOpen(false);
-  };
-
-  const handleDeleteSubcategory = (id: string) => {
-    setSubcategories((prev) => prev.filter((s) => s.id !== id));
+  // Open Details Modal (GET /commerce/subcategories/:id)
+  const handleOpenDetailModal = async (subcat: SubcategoryItem) => {
     setActiveDropdownId(null);
+    setDropdownPos(null);
+    setIsDetailModalOpen(true);
+    setIsLoadingDetail(true);
+    setSelectedSubcategoryDetail(null);
+
+    try {
+      const res = await subcategoryApi.getSubcategoryById(subcat.id);
+      if (res?.success && res.data) {
+        setSelectedSubcategoryDetail(res.data);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Subcategory detail API failed, falling back to basic view:', apiErr);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+
+    // Local fallback for details
+    setSelectedSubcategoryDetail({
+      id: subcat.id,
+      organizationId: '',
+      sNo: subcat.sNo,
+      categoryId: subcat.categoryId,
+      category: subcat.category,
+      categoryName: subcat.category,
+      subcategory: subcat.subcategory,
+      name: subcat.subcategory,
+      description: subcat.description || null,
+      status: subcat.status,
+      createdAt: subcat.createdAt || new Date().toISOString(),
+      updatedAt: subcat.updatedAt || new Date().toISOString(),
+      productCount: subcat.productCount ?? 0,
+    });
   };
 
+  // Save / Update Subcategory (Calls POST or PUT only once user submits)
+  const handleSaveSubcategory = async (data: SubcategoryFormValues) => {
+    if (!data.subcategory.trim() || !data.category.trim()) {
+      toast.error('Both Category and Subcategory Name are required.');
+      return;
+    }
+
+    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    setIsSubmitting(true);
+
+    try {
+      if (editingSubcategory) {
+        // PUT /commerce/subcategories/:id
+        try {
+          const res = await subcategoryApi.updateSubcategory(editingSubcategory.id, {
+            category: data.category.trim(),
+            subcategory: data.subcategory.trim(),
+            status: finalStatus,
+          });
+
+          if (res?.success && res.data) {
+            const updated = mapApiSubcategoryToSubcategoryItem(res.data);
+            setSubcategories((prev) =>
+              prev.map((s) => (s.id === editingSubcategory.id ? { ...s, ...updated } : s))
+            );
+            toast.success(`Subcategory "${updated.subcategory}" updated successfully.`);
+            setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote subcategory update failed, falling back to local store:', apiErr);
+        }
+
+        // Local fallback
+        setSubcategories((prev) =>
+          prev.map((s) =>
+            s.id === editingSubcategory.id
+              ? {
+                  ...s,
+                  category: data.category.trim(),
+                  subcategory: data.subcategory.trim(),
+                  status: finalStatus,
+                }
+              : s
+          )
+        );
+        toast.success(`Subcategory "${data.subcategory}" updated.`);
+      } else {
+        // POST /commerce/subcategories
+        try {
+          const res = await subcategoryApi.createSubcategory({
+            category: data.category.trim(),
+            subcategory: data.subcategory.trim(),
+            status: finalStatus,
+          });
+
+          if (res?.success && res.data) {
+            const created = mapApiSubcategoryToSubcategoryItem(res.data);
+            setSubcategories((prev) => [created, ...prev]);
+            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
+            toast.success(`Subcategory "${created.subcategory}" created successfully.`);
+            setIsModalOpen(false);
+            return;
+          }
+        } catch (apiErr: any) {
+          console.warn('Remote subcategory create failed, falling back to local store:', apiErr);
+        }
+
+        // Local fallback
+        const newSubcat: SubcategoryItem = {
+          id: `subcat-${Date.now()}`,
+          sNo: (totalApiRecords || subcategories.length) + 1,
+          category: data.category.trim(),
+          subcategory: data.subcategory.trim(),
+          status: finalStatus,
+        };
+        setSubcategories((prev) => [newSubcat, ...prev]);
+        toast.success(`Subcategory "${data.subcategory}" added.`);
+      }
+    } finally {
+      setIsSubmitting(false);
+      setIsModalOpen(false);
+    }
+  };
+
+  // Toggle Subcategory Status (PATCH /commerce/subcategories/:id)
+  const handleToggleStatus = async (item: SubcategoryItem) => {
+    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+
+    try {
+      const res = await subcategoryApi.patchSubcategory(item.id, { status: nextStatus });
+      if (res?.success) {
+        setSubcategories((prev) =>
+          prev.map((s) => (s.id === item.id ? { ...s, status: nextStatus } : s))
+        );
+        toast.success(`Subcategory "${item.subcategory}" set to ${nextStatus}.`);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote subcategory status patch failed, updating locally:', apiErr);
+    }
+
+    setSubcategories((prev) =>
+      prev.map((s) => (s.id === item.id ? { ...s, status: nextStatus } : s))
+    );
+    toast.success(`Subcategory "${item.subcategory}" set to ${nextStatus}.`);
+  };
+
+  // Confirm and Execute Delete (DELETE /commerce/subcategories/:id)
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmItem) return;
+    const { id, subcategory } = deleteConfirmItem;
+    setIsDeleting(true);
+
+    try {
+      const res = await subcategoryApi.deleteSubcategory(id);
+      if (res?.success) {
+        setSubcategories((prev) => prev.filter((s) => s.id !== id));
+        setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
+        toast.success(`Subcategory "${subcategory}" deleted successfully.`);
+        setDeleteConfirmItem(null);
+        return;
+      }
+    } catch (apiErr: any) {
+      console.warn('Remote subcategory delete failed, falling back to local:', apiErr);
+    } finally {
+      setIsDeleting(false);
+    }
+
+    setSubcategories((prev) => prev.filter((s) => s.id !== id));
+    toast.success(`Subcategory "${subcategory}" deleted.`);
+    setDeleteConfirmItem(null);
+  };
+
+  // Export to Excel
   const handleExport = () => {
-    if (filteredSubcategories.length === 0) {
+    const dataToExport = isApiConnected ? subcategories : filteredSubcategories;
+    if (dataToExport.length === 0) {
       toast.error('No subcategories available to export.');
       return;
     }
 
-    const excelRows = filteredSubcategories.map((s, idx) => ({
+    const excelRows = dataToExport.map((s, idx) => ({
       sNo: idx + 1,
       category: s.category,
       subcategory: s.subcategory,
@@ -200,7 +521,7 @@ export const SubcategoryView: React.FC = () => {
       filename: `Subcategories_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Subcategories',
       title: 'YAA CREATIONS CRM - PRODUCT SUBCATEGORIES DIRECTORY',
-      subtitle: `Total Subcategories: ${filteredSubcategories.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Subcategories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Category Name', key: 'category', align: 'left', width: 30 },
@@ -210,11 +531,11 @@ export const SubcategoryView: React.FC = () => {
       data: excelRows,
       summaryRow: {
         sNo: 'TOTAL',
-        category: `${filteredSubcategories.length} Subcategories`,
+        category: `${dataToExport.length} Subcategories`,
       },
     });
 
-    toast.success(`Subcategories Excel report downloaded (${filteredSubcategories.length} records)!`);
+    toast.success(`Subcategories Excel report downloaded (${dataToExport.length} records)!`);
   };
 
   return (
@@ -222,13 +543,33 @@ export const SubcategoryView: React.FC = () => {
       {/* 1. Top Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Layers className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Subcategory List
-            </h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                Subcategory List
+              </h1>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
+                {totalCount} total
+              </span>
+              {isApiConnected === true && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live API
+                </span>
+              )}
+              {isApiConnected === false && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                  title="Local storage mode"
+                >
+                  <Database className="w-3 h-3 text-amber-500" />
+                  Local Mode
+                </span>
+              )}
+            </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
             Manage product subcategories, link to categories, and configure classification.
@@ -266,6 +607,7 @@ export const SubcategoryView: React.FC = () => {
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
           setAppliedStatus(pendingStatus);
+          setAppliedCategory(pendingCategory);
           setPage(1);
         }}
         onReset={() => {
@@ -273,10 +615,18 @@ export const SubcategoryView: React.FC = () => {
           setAppliedSearch('');
           setPendingStatus('ALL');
           setAppliedStatus('ALL');
+          setPendingCategory('ALL');
+          setAppliedCategory('ALL');
           setPage(1);
         }}
         filterSlot={
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <FilterDropdown
+              options={categoryFilterOptions}
+              value={pendingCategory}
+              onChange={(val) => setPendingCategory(val)}
+              placeholder="Category : All"
+            />
             <FilterDropdown
               options={[
                 { label: 'Status : All', value: 'ALL' },
@@ -293,7 +643,7 @@ export const SubcategoryView: React.FC = () => {
           <div className="flex items-center gap-3 pr-1">
             <span className="text-xs font-semibold text-slate-500">
               Total Subcategories :{' '}
-              <span className="text-[#33077C] font-bold">{filteredSubcategories.length}</span>
+              <span className="text-[#33077C] font-bold">{totalCount}</span>
             </span>
           </div>
         }
@@ -318,16 +668,33 @@ export const SubcategoryView: React.FC = () => {
                 <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24 sm:w-32">
                   STATUS
                 </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-16 sm:w-24">
+                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-20 sm:w-28">
                   ACTIONS
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
-              {pagedSubcategories.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={5} className="py-16 text-center text-slate-400 font-medium">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
+                      <span className="text-xs text-slate-500 font-semibold">Loading subcategories...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : pagedSubcategories.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-slate-400 font-medium">
-                    No subcategories found.
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      <Layers className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                      <span className="text-sm font-semibold text-slate-600">No subcategories found</span>
+                      <p className="text-xs text-slate-400">
+                        {appliedSearch || appliedStatus !== 'ALL' || appliedCategory !== 'ALL'
+                          ? 'Try resetting the search or filter query.'
+                          : 'Get started by clicking "+ Add Subcategory" above.'}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -347,12 +714,15 @@ export const SubcategoryView: React.FC = () => {
 
                       {/* 2. CATEGORY */}
                       <td className="py-3 sm:py-4 px-3 sm:px-4 font-semibold text-slate-800 border-r border-slate-200 break-words">
-                        {item.category}
+                        <div className="flex items-center gap-2">
+                          <FolderTree className="w-3.5 h-3.5 text-[#33077C]/60 shrink-0" />
+                          <span>{item.category}</span>
+                        </div>
                       </td>
 
                       {/* 3. SUBCATEGORY */}
                       <td className="py-3 sm:py-4 px-3 sm:px-4 font-medium text-slate-700 border-r border-slate-200 break-words">
-                        {item.subcategory}
+                        <span className="font-semibold text-slate-800">{item.subcategory}</span>
                       </td>
 
                       {/* 4. STATUS */}
@@ -374,7 +744,7 @@ export const SubcategoryView: React.FC = () => {
                       </td>
 
                       {/* 5. ACTIONS: Print, Share, 3-dots dropdown */}
-                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                      <td className="py-4 px-3 sm:px-4 border border-slate-200 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
                           {/* Print Action */}
                           <button
@@ -390,124 +760,15 @@ export const SubcategoryView: React.FC = () => {
                           </button>
 
                           {/* Share / Forward Popover */}
-                          <div className="relative inline-block text-left share-popover-container">
-                            <button
-                              type="button"
-                              title="Share Subcategory"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeShareId === item.id) {
-                                  setActiveShareId(null);
-                                  setSharePos(null);
-                                } else {
-                                  setActiveDropdownId(null);
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const popoverHeight = 140;
-                                  if (spaceBelow < popoverHeight) {
-                                    setSharePos({
-                                      bottom: window.innerHeight - btnRect.top + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  } else {
-                                    setSharePos({
-                                      top: btnRect.bottom + 6,
-                                      right: window.innerWidth - btnRect.right - 20,
-                                    });
-                                  }
-                                  setActiveShareId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <Forward className="w-4 h-4" />
-                            </button>
-
-                            {activeShareId === item.id && sharePos && (
-                              <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
-                                style={{
-                                  top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
-                                  bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
-                                }}
-                              >
-                                <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
-                                  Share
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                  {/* Email Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const subject = encodeURIComponent(`Product Subcategory: ${item.subcategory}`);
-                                      const body = encodeURIComponent(
-                                        `Category: ${item.category}\nSubcategory: ${item.subcategory}\nStatus: ${item.status}`
-                                      );
-                                      window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-white border border-slate-100 shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 6C22 4.9 21.1 4 20 4H4C2.9 4 2 4.9 2 6V18C2 19.1 2.9 20 4 20H20C21.1 20 22 19.1 22 18V6Z" fill="#EA4335" fillOpacity="0.1"/>
-                                        <path d="M20 4H4C2.9 4 2 4.9 2 6V6.5L12 13L22 6.5V6C22 4.9 21.1 4 20 4Z" fill="#EA4335"/>
-                                        <path d="M2 6.5V18C2 19.1 2.9 20 4 20H5V8.5L2 6.5Z" fill="#4285F4"/>
-                                        <path d="M22 6.5V18C22 19.1 21.1 20 20 20H19V8.5L22 6.5Z" fill="#34A853"/>
-                                        <path d="M19 20H5V8.5L12 13L19 8.5V20Z" fill="#FBBC04" fillOpacity="0.2"/>
-                                        <path d="M20 6L12 11.5L4 6H20Z" fill="#C5221F"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">Email</span>
-                                  </button>
-
-                                  {/* WhatsApp Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `*Product Subcategory:* ${item.subcategory}\n*Category:* ${item.category}\n*Status:* ${item.status}`
-                                      );
-                                      window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">WhatsApp</span>
-                                  </button>
-
-                                  {/* SMS Option */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveShareId(null);
-                                      const text = encodeURIComponent(
-                                        `Product Subcategory: ${item.subcategory} (Category: ${item.category}), Status: ${item.status}`
-                                      );
-                                      window.open(`sms:?body=${text}`, '_blank');
-                                    }}
-                                    className="flex flex-col items-center gap-1.5 p-1.5 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1"
-                                  >
-                                    <div className="w-10 h-10 rounded-full bg-[#FF9800] shadow-xs flex items-center justify-center group-hover:scale-110 transition-transform">
-                                      <svg className="w-5 h-5 fill-white text-white" viewBox="0 0 24 24">
-                                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 10H6v-2h12v2zm0-3H6V7h12v2z"/>
-                                        <circle cx="8" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="12" cy="11" r="1.2" fill="white"/>
-                                        <circle cx="16" cy="11" r="1.2" fill="white"/>
-                                      </svg>
-                                    </div>
-                                    <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900">SMS</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <UniversalShareDropdown
+                            id={item.id}
+                            activeShareId={activeShareId}
+                            setActiveShareId={setActiveShareId}
+                            sharePos={sharePos}
+                            setSharePos={setSharePos}
+                            getShareData={() => formatSubcategoryShare(item)}
+                            title="Share Subcategory"
+                          />
 
                           {/* 3-dots Actions Dropdown */}
                           <div className="relative inline-block text-left subcategory-action-dropdown-container">
@@ -523,7 +784,7 @@ export const SubcategoryView: React.FC = () => {
                                   setActiveShareId(null);
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 160;
+                                  const dropdownHeight = 180;
                                   const rightPos = window.innerWidth - rect.right;
 
                                   if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
@@ -555,7 +816,17 @@ export const SubcategoryView: React.FC = () => {
                                   right: `${dropdownPos.right}px`,
                                 }}
                               >
-                                {/* 1. Edit */}
+                                {/* 1. View Details */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDetailModal(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                >
+                                  <Eye className="w-4 h-4 text-slate-400" />
+                                  <span>View Details</span>
+                                </button>
+
+                                {/* 2. Edit */}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -563,43 +834,45 @@ export const SubcategoryView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  Edit
+                                  <Pencil className="w-4 h-4 text-slate-400" />
+                                  <span>Edit</span>
                                 </button>
 
-                                {/* 2. Inactive / Active */}
+                                {/* 3. Inactive / Active */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleStatus(item)}
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                >
+                                  {item.status === 'Active' ? (
+                                    <>
+                                      <Ban className="w-4 h-4 text-slate-400" />
+                                      <span>Deactivate</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                                      <span>Activate</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                <div className="my-1 border-t border-slate-100" />
+
+                                {/* 4. Delete */}
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
-                                    setSubcategories((prev) =>
-                                      prev.map((s) =>
-                                        s.id === item.id
-                                          ? { ...s, status: nextStatus }
-                                          : s
-                                      )
-                                    );
-                                    toast.success(`Subcategory ${item.subcategory} set to ${nextStatus}.`);
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
+                                    setDeleteConfirmItem(item);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2"
                                 >
-                                  {item.status === 'Active' ? 'Inactive' : 'Active'}
-                                </button>
-
-                                {/* 3. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleDeleteSubcategory(item.id);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                >
-                                  Delete
+                                  <Trash2 className="w-4 h-4 text-rose-500" />
+                                  <span>Delete</span>
                                 </button>
                               </div>
                             )}
@@ -616,9 +889,24 @@ export const SubcategoryView: React.FC = () => {
 
         {/* Mobile View: Clean Card List (< sm screens, e.g. Mobile Phones) */}
         <div className="block sm:hidden divide-y divide-slate-100 font-sans">
-          {pagedSubcategories.length === 0 ? (
+          {isLoading ? (
+            <div className="py-16 text-center text-slate-400 font-medium">
+              <div className="flex flex-col items-center justify-center gap-2">
+                <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
+                <span className="text-xs text-slate-500 font-semibold">Loading subcategories...</span>
+              </div>
+            </div>
+          ) : pagedSubcategories.length === 0 ? (
             <div className="py-12 text-center text-slate-400 font-medium text-xs">
-              No subcategories found.
+              <div className="flex flex-col items-center justify-center gap-1.5 p-4">
+                <Layers className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                <span className="text-sm font-semibold text-slate-600">No subcategories found</span>
+                <p className="text-xs text-slate-400">
+                  {appliedSearch || appliedStatus !== 'ALL' || appliedCategory !== 'ALL'
+                    ? 'Try resetting the search or filter query.'
+                    : 'Get started by clicking "+ Add Subcategory" above.'}
+                </p>
+              </div>
             </div>
           ) : (
             pagedSubcategories.map((item, index) => {
@@ -657,8 +945,18 @@ export const SubcategoryView: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Actions Row */}
-                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  {/* Mobile Actions Row */}
+                  <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-slate-100 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDetailModal(item)}
+                      className="px-2.5 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs font-semibold flex items-center gap-1 transition-colors"
+                      title="View Details"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Details</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => handleOpenEditModal(item)}
@@ -671,15 +969,7 @@ export const SubcategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setSubcategories((prev) =>
-                          prev.map((s) =>
-                            s.id === item.id
-                              ? { ...s, status: s.status === 'Active' ? 'Inactive' : 'Active' }
-                              : s
-                          )
-                        );
-                      }}
+                      onClick={() => handleToggleStatus(item)}
                       className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Toggle Status"
                     >
@@ -698,7 +988,7 @@ export const SubcategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => handleDeleteSubcategory(item.id)}
+                      onClick={() => setDeleteConfirmItem(item)}
                       className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Delete Subcategory"
                     >
@@ -715,11 +1005,13 @@ export const SubcategoryView: React.FC = () => {
 
       {/* 4. Pagination */}
       <Pagination
-        total={filteredSubcategories.length}
+        total={totalCount}
         currentPage={safePage}
         pageSize={pageSize}
         pageSizeOptions={[5, 10, 20, 50]}
-        onPageChange={(newPage) => setPage(newPage)}
+        onPageChange={(newPage) => {
+          setPage(newPage);
+        }}
         onPageSizeChange={(newSize) => {
           setPageSize(newSize);
           setPage(1);
@@ -730,7 +1022,7 @@ export const SubcategoryView: React.FC = () => {
       {isModalOpen && (
         <Modal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          onClose={() => !isSubmitting && setIsModalOpen(false)}
           title={editingSubcategory ? 'Edit Subcategory' : 'Add Subcategory'}
           subtitle="Configure subcategory details, category linkage, and status"
           maxWidth="4xl"
@@ -738,16 +1030,16 @@ export const SubcategoryView: React.FC = () => {
           showBackIcon={true}
           hideCloseButton={true}
         >
-          <form onSubmit={handleSaveSubcategory} className="space-y-4.5 p-2 sm:p-4">
+          <form noValidate onSubmit={handleSubmit(handleSaveSubcategory)} className="space-y-4.5 p-2 sm:p-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-h-[140px]">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Category <span className="text-rose-500">*</span>
                 </label>
                 <CustomSelect
-                  options={CATEGORY_OPTIONS}
-                  value={formData.category}
-                  onChange={(val) => setFormData({ ...formData, category: val })}
+                  options={categoryOptions}
+                  value={watchCategory}
+                  onChange={(val) => setValue('category', val, { shouldValidate: true })}
                   placeholder="Select category"
                   activeColor="brand"
                 />
@@ -759,11 +1051,30 @@ export const SubcategoryView: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  required
-                  value={formData.subcategory}
-                  onChange={(e) => setFormData({ ...formData, subcategory: e.target.value })}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  disabled={isSubmitting}
+                  placeholder="e.g. Mobile Phones, Flours, Cables"
+                  {...register('subcategory', {
+                    required: 'Subcategory name is required',
+                    minLength: { value: 2, message: 'Subcategory name must be at least 2 characters' },
+                    validate: (val) =>
+                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                  })}
+                  onKeyDown={handleTextOnlyKeyDown}
+                  onInput={(e) => {
+                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.subcategory
+                      ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {errors.subcategory && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{errors.subcategory.message}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -775,8 +1086,8 @@ export const SubcategoryView: React.FC = () => {
                     { label: 'Active', value: 'Active' },
                     { label: 'Inactive', value: 'Inactive' },
                   ]}
-                  value={formData.status}
-                  onChange={(val) => setFormData({ ...formData, status: val as 'Active' | 'Inactive' })}
+                  value={watchStatus}
+                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
                   placeholder="Select status"
                   activeColor="brand"
                 />
@@ -786,21 +1097,192 @@ export const SubcategoryView: React.FC = () => {
             <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-50"
               >
                 <X className="w-4 h-4 text-slate-500" />
                 <span>Cancel</span>
               </button>
               <button
                 type="submit"
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                disabled={isSubmitting}
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
               >
-                <Check className="w-4 h-4 stroke-[2.5]" />
-                <span>{editingSubcategory ? 'Update' : 'Save'}</span>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    <span>{editingSubcategory ? 'Update' : 'Save'}</span>
+                  </>
+                )}
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {/* 6. Subcategory Details Modal (GET /commerce/subcategories/:id) */}
+      {isDetailModalOpen && (
+        <Modal
+          isOpen={isDetailModalOpen}
+          onClose={() => setIsDetailModalOpen(false)}
+          title="Subcategory Details"
+          subtitle="Detailed information from Commerce Subcategory Registry"
+          maxWidth="lg"
+          headerGradient={true}
+          showBackIcon={false}
+          hideCloseButton={false}
+        >
+          <div className="p-4 sm:p-5 space-y-4 font-sans">
+            {isLoadingDetail ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2">
+                <Loader2 className="w-8 h-8 text-[#4309A2] animate-spin" />
+                <span className="text-xs font-semibold text-slate-500">
+                  Fetching subcategory details...
+                </span>
+              </div>
+            ) : selectedSubcategoryDetail ? (
+              <>
+                {/* Header Information Card */}
+                <div className="p-4 rounded-xl bg-purple-50/50 border border-purple-100 flex items-start justify-between gap-3">
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#4309A2] block mb-0.5">
+                      {selectedSubcategoryDetail.category || selectedSubcategoryDetail.categoryName || 'Subcategory'}
+                    </span>
+                    <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">
+                      {selectedSubcategoryDetail.subcategory || selectedSubcategoryDetail.name}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {selectedSubcategoryDetail.description || 'No description provided.'}
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold shrink-0 ${
+                      selectedSubcategoryDetail.status === 'Active'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        selectedSubcategoryDetail.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'
+                      }`}
+                    />
+                    {selectedSubcategoryDetail.status}
+                  </span>
+                </div>
+
+                {/* Key Statistics / Attributes Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/80 text-xs">
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Category</span>
+                    <span className="font-bold text-slate-800 text-xs">
+                      {selectedSubcategoryDetail.category || selectedSubcategoryDetail.categoryName || 'N/A'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Linked Products</span>
+                    <span className="font-bold text-slate-800 text-xs">
+                      {selectedSubcategoryDetail.productCount ?? 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Record ID</span>
+                    <span className="font-mono text-[11px] text-slate-700 font-semibold truncate block" title={selectedSubcategoryDetail.id}>
+                      {selectedSubcategoryDetail.id.slice(0, 8)}...
+                    </span>
+                  </div>
+                </div>
+
+                {/* Timestamps */}
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                  <span>
+                    Created: {selectedSubcategoryDetail.createdAt ? new Date(selectedSubcategoryDetail.createdAt).toLocaleDateString() : 'N/A'}
+                  </span>
+                  <span>
+                    Updated: {selectedSubcategoryDetail.updatedAt ? new Date(selectedSubcategoryDetail.updatedAt).toLocaleDateString() : 'N/A'}
+                  </span>
+                </div>
+              </>
+            ) : null}
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 7. Delete Confirmation Modal */}
+      {deleteConfirmItem && (
+        <Modal
+          isOpen={!!deleteConfirmItem}
+          onClose={() => !isDeleting && setDeleteConfirmItem(null)}
+          title="Delete Subcategory"
+          subtitle="Confirm subcategory removal or deactivation"
+          maxWidth="md"
+          headerGradient={false}
+          showBackIcon={false}
+          hideCloseButton={true}
+        >
+          <div className="p-4 sm:p-5 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+              </div>
+              <div className="text-xs sm:text-[13px] text-slate-600 leading-relaxed">
+                <p className="font-semibold text-slate-800 text-sm mb-1">
+                  Are you sure you want to delete this subcategory?
+                </p>
+                <p>
+                  Subcategory: <strong className="text-slate-900">{deleteConfirmItem.subcategory}</strong>
+                </p>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  Unused subcategories are permanently removed. If this subcategory is linked to active inventory products, it will be safely deactivated instead.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmItem(null)}
+                className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-all active:scale-[0.98] cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5 text-white" />
+                    <span>Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
