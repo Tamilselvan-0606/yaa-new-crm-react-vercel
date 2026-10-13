@@ -3,6 +3,8 @@ import { ProductPlanApiItem } from './productPlanTypes';
 export interface ClientProductApiItem {
   id: string;
   organizationId: string;
+  subOrganizationId?: string;
+  branchId?: string;
   name: string;
   code: string;
   contactPerson?: string;
@@ -39,10 +41,17 @@ export interface ClientProductListParams {
   sortOrder?: 'asc' | 'desc';
   organizationId?: string;
   xOrganizationId?: string;
+  subOrganizationId?: string;
+  sub_organization_id?: string;
+  branchId?: string;
+  branch_id?: string;
 }
 
 export interface CreateClientProductRequest {
   name: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
   code?: string;
   contactPerson?: string;
   mobileNumber?: string;
@@ -64,6 +73,9 @@ export interface CreateClientProductRequest {
 
 export interface UpdateClientProductRequest {
   name?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
   code?: string;
   contactPerson?: string;
   mobileNumber?: string;
@@ -85,6 +97,9 @@ export interface UpdateClientProductRequest {
 
 export interface PatchClientProductRequest {
   name?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
   code?: string;
   contactPerson?: string;
   mobileNumber?: string;

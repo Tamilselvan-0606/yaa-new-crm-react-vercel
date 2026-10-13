@@ -82,10 +82,15 @@ const TAX_RATE_OPTIONS = [
   { label: 'Select Tax', rate: 0 },
   { label: 'Exempted (0%)', rate: 0 },
   { label: 'GST @ 0%', rate: 0 },
+  { label: 'GST @ 0.1%', rate: 0.1 },
+  { label: 'GST @ 0.25%', rate: 0.25 },
+  { label: 'GST @ 1.5%', rate: 1.5 },
+  { label: 'GST @ 3%', rate: 3 },
   { label: 'GST @ 5%', rate: 5 },
   { label: 'GST @ 12%', rate: 12 },
   { label: 'GST @ 18%', rate: 18 },
   { label: 'GST @ 28%', rate: 28 },
+  { label: 'GST @ 40%', rate: 40 },
 ];
 
 export const PurchaseOrderView: React.FC = () => {
@@ -1313,6 +1318,7 @@ export const PurchaseOrderView: React.FC = () => {
                       <tr className="bg-slate-50/90 text-slate-700 font-bold uppercase text-[11px] border-b border-slate-200 tracking-wider select-none">
                         <th className="py-2.5 px-2.5 text-center border-r border-slate-200 w-10 text-slate-400 font-extrabold">#</th>
                         <th className="py-2.5 px-3 text-left border-r border-slate-200 min-w-[220px]">ITEM</th>
+                        <th className="py-2.5 px-2 text-center border-r border-slate-200 min-w-[130px] text-[11px]">BATCH NO</th>
                         <th className="py-2.5 px-2 text-center border-r border-slate-200 w-20">QTY</th>
                         <th className="py-2.5 px-2 text-center border-r border-slate-200 w-24">UNIT</th>
                         <th className="py-2.5 px-3 text-right border-r border-slate-200 w-36">
@@ -1373,6 +1379,17 @@ export const PurchaseOrderView: React.FC = () => {
                                 placeholder="Select Product item..."
                                 searchPlaceholder="Search product by name or SKU..."
                                 size="sm"
+                              />
+                            </td>
+
+                            {/* 2b. BATCH NO */}
+                            <td className="p-1.5 border-r border-slate-200">
+                              <input
+                                type="text"
+                                placeholder="e.g. BAT-2026-001"
+                                value={it.batch || ''}
+                                onChange={(e) => handleItemFieldChange(idx, 'batch', e.target.value)}
+                                className="w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold font-mono text-purple-900 outline-none transition-colors"
                               />
                             </td>
 
@@ -1490,7 +1507,7 @@ export const PurchaseOrderView: React.FC = () => {
                     {/* Table Footer: ADD ROW + Column totals */}
                     <tfoot>
                       <tr className="bg-slate-50/90 border-t border-slate-200 font-bold text-slate-800 text-xs">
-                        <td colSpan={2} className="py-2.5 px-3 border-r border-slate-200">
+                        <td colSpan={3} className="py-2.5 px-3 border-r border-slate-200">
                           <button
                             type="button"
                             onClick={handleAddItemRow}
@@ -1673,26 +1690,8 @@ export const PurchaseOrderView: React.FC = () => {
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <ShoppingBag className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
-              <span>Purchase Orders &amp; Bills</span>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-normal ${
-                  isApiConnected
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border border-amber-200'
-                }`}
-              >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isApiConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                  }`}
-                />
-                {isApiLoading
-                  ? 'Syncing API...'
-                  : isApiConnected
-                  ? 'Work API Live'
-                  : 'Local Cache'}
-              </span>
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+              Purchase Orders &amp; Bills
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
@@ -2495,48 +2494,54 @@ export const PurchaseOrderView: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Disbursed Amount (₹) <span className="text-slate-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max={selectedPurchase.balance}
-                  value={recordAmount}
-                  onChange={(e) => setRecordAmount(Number(e.target.value))}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-bold text-emerald-600 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Disbursed Amount (₹) <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={selectedPurchase.balance}
+                    value={recordAmount}
+                    onChange={(e) => setRecordAmount(Number(e.target.value))}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-bold text-emerald-600 outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Payment Mode <span className="text-slate-500">*</span>
-                </label>
-                <select
-                  value={recordMethod}
-                  onChange={(e) => setRecordMethod(e.target.value as any)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                >
-                  <option value="Bank Transfer">Bank Transfer / NEFT / RTGS</option>
-                  <option value="UPI">UPI</option>
-                  <option value="Card">Corporate Card</option>
-                  <option value="Cash">Cash</option>
-                </select>
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Payment Mode <span className="text-rose-500">*</span>
+                  </span>
+                  <select
+                    value={recordMethod}
+                    onChange={(e) => setRecordMethod(e.target.value as any)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none cursor-pointer"
+                  >
+                    <option value="Bank Transfer">Bank Transfer / NEFT / RTGS</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Card">Corporate Card</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Remarks / Transaction Ref
-                </label>
-                <input
-                  type="text"
-                  value={recordNotes}
-                  onChange={(e) => setRecordNotes(e.target.value)}
-                  placeholder="Bank UTR, Cheque..."
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Remarks / Transaction Ref
+                  </span>
+                  <input
+                    type="text"
+                    value={recordNotes}
+                    onChange={(e) => setRecordNotes(e.target.value)}
+                    placeholder="Bank UTR, Cheque..."
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
+                  />
+                </div>
               </div>
             </div>
 

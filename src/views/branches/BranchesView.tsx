@@ -62,9 +62,13 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
     gstNumber: item.gstNumber || '',
     status: normalizedStatus,
     createdAt: item.createdAt || new Date().toISOString(),
-    organizationId: item.organizationId,
-    subOrganizationId: item.subOrganizationId,
-    organizationType: (item as any).organizationType,
+    organizationId: item.organizationId || (item as any).organization_id,
+    subOrganizationId:
+      item.subOrganizationId ||
+      (item as any).sub_organization_id ||
+      (item as any).subOrganization?.id ||
+      '',
+    organizationType: (item as any).organizationType || (item as any).organization_type,
     productId: item.productId,
     productName: item.productName,
   };
@@ -187,41 +191,52 @@ export const BranchesView: React.FC = () => {
         }
       };
 
+      const loadedSubsFromApi = apiSubs.filter((s) => isSubForSuite(s.name, (s as any).organizationType));
       const subMap = new Map<string, SubOrganizationApiItem>();
-
-      // Merge API sub-orgs for this suite
-      apiSubs.filter((s) => isSubForSuite(s.name, (s as any).organizationType)).forEach((s) => {
+      loadedSubsFromApi.forEach((s) => {
         subMap.set(s.name.toLowerCase(), s);
       });
 
-      // Merge locally created sub-orgs (user-created items)
-      const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
-      if (savedOrgs) {
-        try {
-          const parsed = JSON.parse(savedOrgs);
-          if (Array.isArray(parsed)) {
-            const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
-            const filtered = parsed.filter((so: any) => !mockNames.includes((so.name || '').toLowerCase()));
-            if (filtered.length !== parsed.length) {
-              localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filtered));
-            }
-            filtered.forEach((so: any) => {
-              if (isSubForSuite(so.name || '', so.organizationType)) {
-                subMap.set((so.name || '').toLowerCase(), {
-                  id: so.id || `sub_${Date.now()}`,
-                  organizationId: activeOrgId || 'org_main',
-                  name: so.name,
-                  code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
-                  status: so.status || 'Active',
-                  createdAt: so.createdAt || new Date().toISOString(),
-                });
+      // Only fallback to locally created sub-orgs if API returned nothing
+      if (loadedSubsFromApi.length === 0) {
+        const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
+        if (savedOrgs) {
+          try {
+            const parsed = JSON.parse(savedOrgs);
+            if (Array.isArray(parsed)) {
+              const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
+              const filtered = parsed.filter((so: any) => !mockNames.includes((so.name || '').toLowerCase()));
+              if (filtered.length !== parsed.length) {
+                localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filtered));
               }
-            });
-          }
-        } catch {}
+              filtered.forEach((so: any) => {
+                if (isSubForSuite(so.name || '', so.organizationType)) {
+                  subMap.set((so.name || '').toLowerCase(), {
+                    id: so.id || `sub_${Date.now()}`,
+                    organizationId: activeOrgId || 'org_main',
+                    name: so.name,
+                    code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
+                    status: so.status || 'Active',
+                    createdAt: so.createdAt || new Date().toISOString(),
+                  });
+                }
+              });
+            }
+          } catch {}
+        }
       }
 
-      setSubOrganizations(Array.from(subMap.values()));
+      const loadedSubs = Array.from(subMap.values());
+      setSubOrganizations(loadedSubs);
+
+      // Immediately trigger loadData with loaded sub-orgs so refresh never encounters an empty sub-org list
+      const activeSubOrgName = localStorage.getItem('active_sub_organization');
+      const matched =
+        activeSubOrgName && activeSubOrgName !== 'All'
+          ? loadedSubs.find((s) => s.name.toLowerCase() === activeSubOrgName.toLowerCase())
+          : undefined;
+      const effectiveSubId = matched?.id || localStorage.getItem('active_sub_organization_id') || undefined;
+      loadData(page, pageSize, appliedSearch, appliedStatus, effectiveSubId, loadedSubs);
     } catch (err) {
       console.error('Failed to load sub-organizations:', err);
       setSubOrganizations([]);
@@ -233,6 +248,16 @@ export const BranchesView: React.FC = () => {
   useEffect(() => {
     loadOrganizationAndSubOrgs();
   }, [currentUser?.organizationId, isSaleManagement]);
+
+  // Listen to subOrgChanged event to reload branches based on header sub-org
+  useEffect(() => {
+    const handleSubOrgChanged = (e: any) => {
+      const subId = e?.detail?.subOrganizationId || e?.detail?.id;
+      loadData(1, pageSize, appliedSearch, appliedStatus, subId);
+    };
+    window.addEventListener('subOrgChanged', handleSubOrgChanged);
+    return () => window.removeEventListener('subOrgChanged', handleSubOrgChanged);
+  }, [subOrganizations, pageSize, appliedSearch, appliedStatus]);
 
   const isBranchForSuite = (b: Branch) => {
     const typeStr = (b.organizationType || '').toLowerCase();
@@ -247,11 +272,42 @@ export const BranchesView: React.FC = () => {
     targetPage = page,
     targetPageSize = pageSize,
     searchTerm = appliedSearch,
-    statusTerm = appliedStatus
+    statusTerm = appliedStatus,
+    targetSubOrgId?: string,
+    providedSubs?: SubOrganizationApiItem[]
   ) => {
     try {
       setLoading(true);
       const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+
+      const activeSubOrgName = localStorage.getItem('active_sub_organization');
+      const storedSubOrgId = localStorage.getItem('active_sub_organization_id');
+
+      let currentSubs = providedSubs && providedSubs.length > 0 ? providedSubs : subOrganizations;
+      if (currentSubs.length === 0 && activeOrgId) {
+        try {
+          const subRes = await subOrganizationApi.getSubOrganizations(
+            { page_no: 1, page_size: 100, pagination_required: 'false' },
+            activeOrgId || undefined
+          );
+          if (subRes && Array.isArray(subRes.data)) {
+            currentSubs = subRes.data;
+            setSubOrganizations(currentSubs);
+          }
+        } catch {}
+      }
+
+      const matchedSub =
+        activeSubOrgName && activeSubOrgName !== 'All'
+          ? currentSubs.find(
+              (s) => s.name.toLowerCase() === activeSubOrgName.toLowerCase()
+            )
+          : undefined;
+
+      const subIdToFilter =
+        targetSubOrgId !== undefined
+          ? targetSubOrgId
+          : (matchedSub?.id || (activeSubOrgName && activeSubOrgName !== 'All' && storedSubOrgId ? storedSubOrgId : undefined));
 
       let apiBranches: Branch[] = [];
       try {
@@ -260,6 +316,7 @@ export const BranchesView: React.FC = () => {
             page_no: 1,
             page_size: 100,
             pagination_required: 'false',
+            sub_organization_id: subIdToFilter,
           },
           activeOrgId || undefined
         );
@@ -269,50 +326,30 @@ export const BranchesView: React.FC = () => {
           apiBranches = list.map(mapApiBranchToBranch);
         }
       } catch (err) {
-        console.warn('API getBranches fallback to local catalog:', err);
+        console.warn('API getBranches notice:', err);
       }
 
       const branchMap = new Map<string, Branch>();
 
-      // 1. Add API branches strictly matching this suite
-      apiBranches.filter(isBranchForSuite).forEach((br) => {
-        branchMap.set(br.name.toLowerCase(), {
-          ...br,
-          organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
-        });
-      });
-
-      // 2. Add locally created branches strictly matching this suite (user-created items)
-      const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
-      if (savedCatalog) {
-        try {
-          const parsed = JSON.parse(savedCatalog);
-          if (Array.isArray(parsed)) {
-            // Sanitize legacy mock branches from catalog
-            const mockBranchNames = [
-              'chennai hq branch', 'bangalore tech center', 'mumbai central clinic hub',
-              'hyderabad health city', 'coimbatore smile center', 'coimbatore dental studio',
-              'chennai central retail mart', 'madurai wholesale depot', 'trichy distribution hub',
-              'salem supply center', 'coimbatore mega warehouse'
-            ];
-            const filteredCatalog = parsed.filter((savedBr: any) => !mockBranchNames.includes((savedBr.name || '').toLowerCase()));
-            if (filteredCatalog.length !== parsed.length) {
-              localStorage.setItem('branches_catalog_orgsuperadmin', JSON.stringify(filteredCatalog));
-            }
-
-            filteredCatalog.forEach((savedBr: any) => {
-              if (isBranchForSuite(savedBr)) {
-                branchMap.set(savedBr.name.toLowerCase(), {
-                  ...savedBr,
-                  organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
-                });
-              }
-            });
+      // 1. Add API branches strictly matching this suite and selected sub-organization
+      apiBranches
+        .filter(isBranchForSuite)
+        .filter((br) => {
+          if (subIdToFilter) {
+            return br.subOrganizationId === subIdToFilter;
           }
-        } catch (e) {
-          console.error(e);
-        }
-      }
+          if (activeSubOrgName && activeSubOrgName !== 'All') {
+            const brSub = currentSubs.find((s) => s.id === br.subOrganizationId);
+            return brSub ? brSub.name.toLowerCase() === activeSubOrgName.toLowerCase() : true;
+          }
+          return true;
+        })
+        .forEach((br) => {
+          branchMap.set(br.name.toLowerCase(), {
+            ...br,
+            organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+          });
+        });
 
       let allItems = Array.from(branchMap.values());
 
@@ -349,7 +386,8 @@ export const BranchesView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData(page, pageSize, appliedSearch, appliedStatus);
+    const storedSubId = localStorage.getItem('active_sub_organization_id') || undefined;
+    loadData(page, pageSize, appliedSearch, appliedStatus, storedSubId);
   }, [page, pageSize, appliedSearch, appliedStatus, isSaleManagement]);
 
   // Listen for cross-component branch changes
@@ -715,57 +753,14 @@ export const BranchesView: React.FC = () => {
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
               Branches
             </h1>
-            <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                isSaleManagement
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-[#33077C]/10 text-[#33077C] border-[#33077C]/20'
-              }`}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isSaleManagement ? 'bg-emerald-500' : 'bg-[#33077C]'
-                }`}
-              />
-              {isSaleManagement ? 'Sale Management Suite' : 'Client Management Suite'}
-            </span>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            {isSaleManagement
-              ? 'List and manage retail stores, wholesale depots, and distribution hubs across Sale Management'
-              : 'List and manage regional branches and client tech centers across Client Management'}
+            List and manage regional branches and office locations
           </p>
         </div>
 
-        {/* Top Right Action Buttons: Suite Switcher + Add Branch */}
-        <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto flex-wrap">
-          {canSwitch && (
-            <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200/80">
-              <button
-                type="button"
-                onClick={() => setOrgType('Client Management')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  isClientManagement
-                    ? 'bg-[#33077C] text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Client Mgmt
-              </button>
-              <button
-                type="button"
-                onClick={() => setOrgType('Sales Management')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  isSaleManagement
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Sale Mgmt
-              </button>
-            </div>
-          )}
-
+        {/* Top Right Action Button: Add Branch */}
+        <div className="flex items-center gap-3 shrink-0 w-full sm:w-auto">
           <Button
             variant="primary"
             size="md"
@@ -824,10 +819,11 @@ export const BranchesView: React.FC = () => {
       {/* 3. Branches Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
+          <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BRANCH & CODE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION & TYPE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
@@ -839,7 +835,7 @@ export const BranchesView: React.FC = () => {
             <tbody className="text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <div className="w-7 h-7 border-2 border-purple-200 border-t-[#33077C] rounded-full animate-spin" />
                       <span className="text-xs text-slate-500">Loading branches...</span>
@@ -848,7 +844,7 @@ export const BranchesView: React.FC = () => {
                 </tr>
               ) : branches.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     No branches found matching your criteria.
                   </td>
                 </tr>
@@ -871,26 +867,22 @@ export const BranchesView: React.FC = () => {
                             <span className="font-bold text-slate-900 text-xs sm:text-[14px]">
                               {branch.name}
                             </span>
-                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                              <span className="text-[11px] font-bold text-[#33077C] tracking-wide">
-                                {branch.code}
-                              </span>
-                              <span
-                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
-                                  branch.organizationType?.toLowerCase().includes('sale') || isSaleManagement
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-[#33077C]/10 text-[#33077C] border-[#33077C]/20'
-                                }`}
-                              >
-                                {branch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
-                              </span>
-                              {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name && (
-                                <span className="text-[10px] text-slate-400 font-medium">
-                                  • {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name}
-                                </span>
-                              )}
-                            </div>
+                            <span className="text-[11px] font-bold text-[#33077C] tracking-wide mt-0.5">
+                              {branch.code}
+                            </span>
                           </div>
+                        </div>
+                      </td>
+
+                      {/* 2. SUB-ORGANIZATION & TYPE */}
+                      <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
+                            {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name || 'Direct Organization'}
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-medium mt-0.5">
+                            {branch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
+                          </span>
                         </div>
                       </td>
 
@@ -1224,27 +1216,9 @@ export const BranchesView: React.FC = () => {
         onBack={() => setIsModalOpen(false)}
       >
         <form onSubmit={handleSaveBranch} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
-          {/* Suite Tag Indicator */}
-          <div
-            className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
-              formData.organizationType?.toLowerCase().includes('sale') || isSaleManagement
-                ? 'bg-emerald-50/80 border-emerald-200 text-emerald-800'
-                : 'bg-purple-50/80 border-purple-200 text-[#33077C]'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <GitBranch className="w-4 h-4 shrink-0" />
-              <span className="font-semibold">
-                Suite: <strong>{formData.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}</strong>
-              </span>
-            </div>
-            <span className="text-[11px] font-medium opacity-80">
-              {isSaleManagement ? 'Branch for Wholesale/Retail Operations' : 'Branch for Client CRM Operations'}
-            </span>
-          </div>
 
-          {/* Row 0: Organization (Read-Only) & Sub-Organization (Dropdown) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Row 1: Organization (Read-Only) | Sub-Organization | Branch Name */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Select Organization
@@ -1280,10 +1254,7 @@ export const BranchesView: React.FC = () => {
                 placeholder="Select Sub-Organization"
               />
             </div>
-          </div>
 
-          {/* Row 1: Branch Name | Branch Code | Contact Person Name */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Branch Name <span className="text-rose-500">*</span>
@@ -1296,6 +1267,10 @@ export const BranchesView: React.FC = () => {
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
             </div>
+          </div>
+
+          {/* Row 2: Branch Code | Contact Person Name | Mobile Number */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Branch Code
@@ -1318,10 +1293,6 @@ export const BranchesView: React.FC = () => {
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
             </div>
-          </div>
-
-          {/* Row 2: Mobile Number | WhatsApp Number | Email */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Mobile Number
@@ -1333,6 +1304,10 @@ export const BranchesView: React.FC = () => {
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
             </div>
+          </div>
+
+          {/* Row 3: WhatsApp Number | Email | Location */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 WhatsApp Number
@@ -1355,10 +1330,6 @@ export const BranchesView: React.FC = () => {
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
             </div>
-          </div>
-
-          {/* Row 3: Location | Status | Password */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Location
@@ -1370,6 +1341,10 @@ export const BranchesView: React.FC = () => {
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
             </div>
+          </div>
+
+          {/* Row 4: Status | Password */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Status <span className="text-rose-500">*</span>

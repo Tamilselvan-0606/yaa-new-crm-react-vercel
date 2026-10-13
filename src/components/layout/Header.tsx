@@ -26,9 +26,73 @@ import {
 
 import { api } from '../../services/api';
 import { Branch } from '../../types';
-import { INITIAL_BRANCHES } from '../../data/initialData';
-import { subOrganizationApi, branchApi } from '../../api';
+import { subOrganizationApi, branchApi, clientProductApi, getStoredOrganizationId } from '../../api';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+
+// Helper to extract the branch location only (e.g., Chennai, Rasipuram, Coimbatore)
+const getBranchLocationName = (name: string, location?: string, city?: string) => {
+  if (!name || name === 'All' || name === 'All Branches') return 'All';
+
+  // 1. Prioritize explicit location or city field from the branch record
+  const rawLoc = (location || city || '').trim();
+  if (rawLoc && !['all', 'n/a', 'na', 'none', '-', 'direct organization'].includes(rawLoc.toLowerCase())) {
+    // If comma-separated (e.g. "Rasipuram, Namakkal"), take primary location
+    const firstPart = rawLoc.split(/[,/\\-]/)[0].trim();
+    const cleanWord = firstPart.replace(/\b(Branch|City|Office|Campus)\b/gi, '').trim();
+    const candidate = cleanWord || firstPart;
+    if (candidate && candidate.length > 1) {
+      return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+    }
+  }
+
+  // 2. Comprehensive check for known locations/cities across Tamil Nadu & Indian hubs
+  const knownPlaces = [
+    'Chennai', 'Rasipuram', 'Bangalore', 'Coimbatore', 'Mumbai', 'Hyderabad',
+    'Kochi', 'Delhi', 'Pune', 'Kolkata', 'Madurai', 'Trichy', 'Salem',
+    'Namakkal', 'Erode', 'Tirupur', 'Tirunelveli', 'Vellore', 'Thanjavur',
+    'Karur', 'Dindigul', 'Nagercoil', 'Kanchipuram', 'Hosur', 'Pondicherry',
+    'Cuddalore', 'Villupuram', 'Kumbakonam', 'Tuticorin', 'Thoothukudi',
+    'Tirupati', 'Noida', 'Gurgaon', 'Ahmedabad', 'Mysore'
+  ];
+  for (const place of knownPlaces) {
+    if (
+      name.toLowerCase().includes(place.toLowerCase()) ||
+      (rawLoc && rawLoc.toLowerCase().includes(place.toLowerCase()))
+    ) {
+      return place;
+    }
+  }
+
+  // 3. If location is embedded in name after hyphen, slash, comma, or in parentheses
+  // e.g. "NextGen - Rasipuram", "NextGen (Rasipuram)"
+  if (name.includes('-')) {
+    const parts = name.split('-');
+    const afterDash = parts[parts.length - 1].trim();
+    const clean = afterDash.replace(/\b(Branch|Office|Campus|HQ)\b/gi, '').trim();
+    if (clean && clean.length > 1) {
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+  }
+
+  const parenMatch = name.match(/\(([^)]+)\)/);
+  if (parenMatch && parenMatch[1]) {
+    const inParen = parenMatch[1].trim();
+    const clean = inParen.replace(/\b(Branch|Office|Campus)\b/gi, '').trim();
+    if (clean && clean.length > 1) {
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    }
+  }
+
+  // 4. Strip generic branch/org suffix words if any
+  const stripped = name
+    .replace(/\b(Branch|Main Branch|Regional Office|Office|Campus|Center|Centre)\b/gi, '')
+    .trim();
+  if (stripped && stripped.length > 1) {
+    return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+  }
+
+  return name;
+};
 
 interface HeaderProps {
   currentTab?: string;
@@ -119,23 +183,7 @@ export const Header: React.FC<HeaderProps> = ({
     isClientOnly,
   };
 
-  // Organization / Product suites under Yaa Creations
-  const [productsList, setProductsList] = useState<any[]>([
-    { id: 'all', name: 'All' },
-    { id: 'prod_1', name: 'Yaa connect' },
-    { id: 'prod_2', name: 'Doc motez' },
-    { id: 'prod_3', name: 'Doc DentQ' },
-    { id: 'prod_4', name: 'Aarudam AI' },
-    { id: 'prod_5', name: 'Turfylock' },
-    { id: 'prod_6', name: 'Digital Marketing' },
-  ]);
-
-  const [selectedProduct, setSelectedProduct] = useState<string>(() => {
-    const saved = localStorage.getItem('active_product');
-    if (saved) return saved;
-    return 'All';
-  });
-
+  // 1. Organization selector state
   const [selectedOrg, setSelectedOrg] = useState<string>(() => {
     if (isOrgSuperAdmin || isOrgAdmin) {
       const savedOrgSuper = localStorage.getItem('active_organization_orgsuperadmin');
@@ -149,116 +197,498 @@ export const Header: React.FC<HeaderProps> = ({
     return currentUser?.name || 'All';
   });
 
-  // Track branch changes across components
+  const isSalesMode = isSaleManagement;
+
+  // Track trigger events
+  const [subOrgChangeTrigger, setSubOrgChangeTrigger] = useState(0);
   const [branchChangeTrigger, setBranchChangeTrigger] = useState(0);
 
   useEffect(() => {
-    const handleBranchesChanged = () => {
-      setBranchChangeTrigger((prev) => prev + 1);
-    };
+    const handleSubOrgChanged = () => setSubOrgChangeTrigger((prev) => prev + 1);
+    const handleBranchesChanged = () => setBranchChangeTrigger((prev) => prev + 1);
+
+    window.addEventListener('orgChanged', handleSubOrgChanged);
+    window.addEventListener('organizationsChanged', handleSubOrgChanged);
+    window.addEventListener('subOrganizationsChanged', handleSubOrgChanged);
     window.addEventListener('branchesChanged', handleBranchesChanged);
-    return () => window.removeEventListener('branchesChanged', handleBranchesChanged);
+    window.addEventListener('storage', handleSubOrgChanged);
+
+    return () => {
+      window.removeEventListener('orgChanged', handleSubOrgChanged);
+      window.removeEventListener('organizationsChanged', handleSubOrgChanged);
+      window.removeEventListener('subOrganizationsChanged', handleSubOrgChanged);
+      window.removeEventListener('branchesChanged', handleBranchesChanged);
+      window.removeEventListener('storage', handleSubOrgChanged);
+    };
   }, []);
 
-  const isSalesMode = isSaleManagement;
+  // 2. Fetch API Sub-Organizations (Real API only)
+  const [apiSubOrgs, setApiSubOrgs] = useState<{ id: string; name: string; organizationType?: string }[]>([]);
 
+  useEffect(() => {
+    if (isSuperAdmin) return;
+    let isMounted = true;
+    const fetchApiSubOrgs = async () => {
+      try {
+        const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        const res = await subOrganizationApi.getSubOrganizations(
+          {
+            page_no: 1,
+            page_size: 100,
+            pagination_required: 'false',
+          },
+          activeOrgId || undefined
+        );
+        if (isMounted && res && Array.isArray(res.data)) {
+          const mapped = res.data.map((item: any) => ({
+            id: item.id,
+            name: item.name,
+            organizationType: item.organizationType || item.organizationTypeName,
+          }));
+          setApiSubOrgs(mapped);
+        }
+      } catch (err) {
+        // Fallback gracefully
+      }
+    };
+    fetchApiSubOrgs();
+    return () => {
+      isMounted = false;
+    };
+  }, [subOrgChangeTrigger, currentUser, isSuperAdmin]);
+
+  // Clean sub-organization options strictly from API
+  const subOrgOptions = useMemo(() => {
+    const list: { id: string; name: string; organizationType?: string }[] = [
+      { id: 'all', name: 'All' },
+    ];
+    const isSales = isSalesMode;
+    const seenNames = new Set<string>(['all']);
+
+    const isMatch = (typeStr?: string) => {
+      const t = (typeStr || '').toLowerCase();
+      if (isSales) {
+        return t.includes('sale');
+      } else {
+        return t.includes('client') || !t.includes('sale');
+      }
+    };
+
+    apiSubOrgs.forEach((s) => {
+      const lower = (s.name || '').toLowerCase().trim();
+      if (isMatch(s.organizationType) && lower && !seenNames.has(lower)) {
+        seenNames.add(lower);
+        list.push({
+          id: s.id,
+          name: s.name.trim(),
+          organizationType: isSales ? 'Sales Management' : 'Client Management',
+        });
+      }
+    });
+
+    return list;
+  }, [isSalesMode, apiSubOrgs]);
+
+  const [selectedSubOrg, setSelectedSubOrg] = useState<string>(() => {
+    const isSales = selectedOrgType.toLowerCase().includes('sale');
+    const savedKey = isSales ? 'active_sub_organization_sales' : 'active_sub_organization_client';
+    return localStorage.getItem(savedKey) || localStorage.getItem('active_sub_organization') || 'All';
+  });
+
+  useEffect(() => {
+    const savedKey = isSalesMode ? 'active_sub_organization_sales' : 'active_sub_organization_client';
+    const saved = localStorage.getItem(savedKey) || 'All';
+    setSelectedSubOrg(saved);
+    localStorage.setItem('active_sub_organization', saved);
+  }, [isSalesMode]);
+
+  // Resolve active sub-organization ID
+  const currentSubOrgId = useMemo(() => {
+    if (!selectedSubOrg || selectedSubOrg === 'All') return undefined;
+    const match = subOrgOptions.find((s) => s.name.toLowerCase() === selectedSubOrg.toLowerCase());
+    return match && match.id !== 'all' ? match.id : undefined;
+  }, [selectedSubOrg, subOrgOptions]);
+
+  const lastBroadcastRef = useRef<{ id?: string; name?: string; isSales?: boolean }>({});
+
+  // Keep active_sub_organization_id persisted and broadcast when resolved on mount/refresh
+  useEffect(() => {
+    if (isSuperAdmin) return;
+    const last = lastBroadcastRef.current;
+    if (last.id === currentSubOrgId && last.name === selectedSubOrg && last.isSales === isSalesMode) {
+      return;
+    }
+    lastBroadcastRef.current = { id: currentSubOrgId, name: selectedSubOrg, isSales: isSalesMode };
+
+    if (currentSubOrgId) {
+      localStorage.setItem('active_sub_organization_id', currentSubOrgId);
+      window.dispatchEvent(
+        new CustomEvent('subOrgChanged', {
+          detail: {
+            name: selectedSubOrg,
+            id: currentSubOrgId,
+            subOrganizationId: currentSubOrgId,
+            organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
+          },
+        })
+      );
+    } else if (selectedSubOrg === 'All') {
+      localStorage.removeItem('active_sub_organization_id');
+    }
+  }, [currentSubOrgId, selectedSubOrg, isSalesMode, isSuperAdmin]);
+  useEffect(() => {
+    if (currentSubOrgId) {
+      localStorage.setItem('active_sub_organization_id', currentSubOrgId);
+      if (isSalesMode) {
+        localStorage.setItem('active_sub_organization_id_sales', currentSubOrgId);
+      }
+    } else {
+      localStorage.removeItem('active_sub_organization_id');
+      if (isSalesMode) {
+        localStorage.removeItem('active_sub_organization_id_sales');
+      }
+    }
+  }, [currentSubOrgId, isSalesMode]);
+
+  // 3. Fetch API Branches filtered by active sub-organization (Real API only)
   const [apiBranches, setApiBranches] = useState<Branch[]>([]);
 
   useEffect(() => {
+    if (isSuperAdmin) return;
     let isMounted = true;
     const fetchApiBranches = async () => {
       try {
-        const res = await branchApi.getBranches({
-          page_no: 1,
-          page_size: 100,
-          pagination_required: 'false',
-        });
+        const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        const res = await branchApi.getBranches(
+          {
+            page_no: 1,
+            page_size: 100,
+            pagination_required: 'false',
+            sub_organization_id: currentSubOrgId,
+            organization_id: activeOrgId || undefined,
+          },
+          activeOrgId || undefined
+        );
+
         if (isMounted && res && Array.isArray(res.data)) {
           const mapped: Branch[] = res.data.map((item: any) => ({
             id: item.id || '',
             name: item.name || '',
             code: item.code || item.id || '',
             createdAt: item.createdAt || '',
-            location: item.location || item.city || '',
-            city: item.city || item.location || '',
+            location:
+              item.location ||
+              item.city ||
+              item.branch_location ||
+              item.branchLocation ||
+              item.address ||
+              item.location_name ||
+              '',
+            city:
+              item.city ||
+              item.location ||
+              item.branch_location ||
+              '',
             organizationType: item.organizationType || item.organizationTypeName || '',
             status: item.status || 'Active',
+            subOrganizationId:
+              item.subOrganizationId ||
+              item.sub_organization_id ||
+              item.subOrganization?.id ||
+              '',
           }));
           setApiBranches(mapped);
+        } else if (isMounted) {
+          setApiBranches([]);
         }
       } catch (err) {
-        // Fallback gracefully
+        if (isMounted) setApiBranches([]);
       }
     };
     fetchApiBranches();
     return () => {
       isMounted = false;
     };
-  }, [branchChangeTrigger, currentUser]);
+  }, [currentSubOrgId, branchChangeTrigger, currentUser, isSalesMode, isSuperAdmin]);
 
-  // Dynamically compute branches belonging strictly to the active suite (Sales vs Client Management)
   const branches = useMemo<Branch[]>(() => {
-    const bMap = new Map<string, Branch>();
-
     const isMatch = (bTypeStr?: string) => {
       const bType = (bTypeStr || '').toLowerCase();
       return isSalesMode
         ? bType.includes('sale')
         : bType.includes('client') || !bType.includes('sale');
     };
+    return apiBranches.filter((b) => {
+      if (!isMatch(b.organizationType)) return false;
+      if (currentSubOrgId) {
+        return b.subOrganizationId === currentSubOrgId;
+      }
+      return true;
+    });
+  }, [isSalesMode, apiBranches, currentSubOrgId]);
 
-    const mockBranchNames = [
-      'chennai hq branch', 'bangalore tech center', 'mumbai central clinic hub',
-      'hyderabad health city', 'coimbatore smile center', 'coimbatore dental studio',
-      'chennai central retail mart', 'madurai wholesale depot', 'trichy distribution hub',
-      'salem supply center', 'coimbatore mega warehouse'
+  const branchOptions = useMemo(() => {
+    const list: { id: string; name: string; fullBranchName: string; location?: string }[] = [
+      { id: 'all', name: 'All', fullBranchName: 'All' },
     ];
+    const seenNames = new Set<string>(['all']);
 
-    // 1. API branches
-    apiBranches.forEach((b) => {
-      const lower = (b.name || '').toLowerCase().trim();
-      if (isMatch(b.organizationType) && lower && !mockBranchNames.includes(lower)) {
-        bMap.set(lower, b);
+    branches.forEach((b) => {
+      const locName = getBranchLocationName(b.name, b.location, b.city);
+      if (!seenNames.has(locName.toLowerCase())) {
+        seenNames.add(locName.toLowerCase());
+        list.push({
+          id: b.id,
+          name: locName,
+          fullBranchName: b.name,
+          location: b.location || b.city,
+        });
       }
     });
-
-    // 2. Locally created catalog branches
-    const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
-    if (savedCatalog) {
-      try {
-        const parsed = JSON.parse(savedCatalog);
-        if (Array.isArray(parsed)) {
-          const filtered = parsed.filter((b: any) => !mockBranchNames.includes((b.name || '').toLowerCase()));
-          filtered.forEach((b: any) => {
-            const lower = (b.name || '').toLowerCase().trim();
-            if (isMatch(b.organizationType) && lower && !bMap.has(lower)) {
-              bMap.set(lower, b);
-            }
-          });
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    return Array.from(bMap.values());
-  }, [isSalesMode, branchChangeTrigger, apiBranches]);
+    return list;
+  }, [branches]);
 
   const [selectedBranch, setSelectedBranch] = useState<string>(() => {
     const isSales = selectedOrgType.toLowerCase().includes('sale');
     const savedKey = isSales ? 'active_branch_sales' : 'active_branch_client';
-    const saved = localStorage.getItem(savedKey) || localStorage.getItem('active_branch');
-    if (saved) return saved;
-    return 'All';
+    return localStorage.getItem(savedKey) || localStorage.getItem('active_branch') || 'All';
   });
 
-  // Keep selectedBranch in sync when suite mode changes
   useEffect(() => {
     const savedKey = isSalesMode ? 'active_branch_sales' : 'active_branch_client';
     const saved = localStorage.getItem(savedKey) || 'All';
     setSelectedBranch(saved);
     localStorage.setItem('active_branch', saved);
   }, [isSalesMode]);
+
+  // Resolve active branch ID
+  const currentBranchId = useMemo(() => {
+    if (!selectedBranch || selectedBranch === 'All') return undefined;
+    const match = branchOptions.find(
+      (b) =>
+        b.name.toLowerCase() === selectedBranch.toLowerCase() ||
+        b.fullBranchName?.toLowerCase() === selectedBranch.toLowerCase() ||
+        (b.location && b.location.toLowerCase() === selectedBranch.toLowerCase())
+    );
+    return match && match.id !== 'all' ? match.id : undefined;
+  }, [selectedBranch, branchOptions]);
+
+  useEffect(() => {
+    if (currentBranchId) {
+      localStorage.setItem('active_branch_id', currentBranchId);
+      if (isSalesMode) {
+        localStorage.setItem('active_branch_id_sales', currentBranchId);
+      }
+    } else {
+      localStorage.removeItem('active_branch_id');
+      if (isSalesMode) {
+        localStorage.removeItem('active_branch_id_sales');
+      }
+    }
+  }, [currentBranchId, isSalesMode]);
+
+  // 4. Fetch Products filtered by active branch & sub-organization (Real API only)
+  const [productsList, setProductsList] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (isSuperAdmin) return;
+    let isMounted = true;
+    const fetchApiProducts = async () => {
+      try {
+        const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        const res = await clientProductApi.getProducts(
+          {
+            page: 1,
+            limit: 100,
+            organizationId: activeOrgId || undefined,
+            subOrganizationId: currentSubOrgId,
+            branchId: currentBranchId,
+          },
+          activeOrgId || undefined
+        );
+
+        if (isMounted && res && Array.isArray(res.data)) {
+          setProductsList(res.data);
+        } else if (isMounted) {
+          setProductsList([]);
+        }
+      } catch (err) {
+        if (isMounted) setProductsList([]);
+      }
+    };
+    fetchApiProducts();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentBranchId, currentSubOrgId, currentUser, isSuperAdmin]);
+
+  const productOptions = useMemo(() => {
+    const list: { id: string; name: string }[] = [{ id: 'all', name: 'All' }];
+    const seen = new Set<string>(['all']);
+    productsList.forEach((item) => {
+      const itemName = (item.name || '').trim();
+      if (itemName && !seen.has(itemName.toLowerCase())) {
+        seen.add(itemName.toLowerCase());
+        list.push({ id: item.id || itemName, name: itemName });
+      }
+    });
+    return list;
+  }, [productsList]);
+
+  const [selectedProduct, setSelectedProduct] = useState<string>(() => {
+    return localStorage.getItem('active_product') || 'All';
+  });
+
+  // Keep branch & product valid when options change
+  useEffect(() => {
+    if (selectedBranch !== 'All' && branchOptions.length > 0) {
+      const exists = branchOptions.some(
+        (b) =>
+          b.name.toLowerCase() === selectedBranch.toLowerCase() ||
+          b.fullBranchName?.toLowerCase() === selectedBranch.toLowerCase() ||
+          (b.location && b.location.toLowerCase() === selectedBranch.toLowerCase())
+      );
+      if (!exists) {
+        setSelectedBranch('All');
+        localStorage.setItem('active_branch', 'All');
+      }
+    }
+  }, [branchOptions, selectedBranch]);
+
+  useEffect(() => {
+    if (selectedProduct !== 'All' && productOptions.length > 0) {
+      const exists = productOptions.some(
+        (p) => p.name.toLowerCase() === selectedProduct.toLowerCase()
+      );
+      if (!exists) {
+        setSelectedProduct('All');
+        localStorage.setItem('active_product', 'All');
+      }
+    }
+  }, [productOptions, selectedProduct]);
+
+  // Handlers for switching
+  const handleSelectSubOrg = (subOrgName: string) => {
+    setSelectedSubOrg(subOrgName);
+    localStorage.setItem('active_sub_organization', subOrgName);
+    if (isSalesMode) {
+      localStorage.setItem('active_sub_organization_sales', subOrgName);
+    } else {
+      localStorage.setItem('active_sub_organization_client', subOrgName);
+    }
+
+    // Reset branch and product
+    setSelectedBranch('All');
+    localStorage.setItem('active_branch', 'All');
+    if (isSalesMode) {
+      localStorage.setItem('active_branch_sales', 'All');
+    } else {
+      localStorage.setItem('active_branch_client', 'All');
+    }
+    setSelectedProduct('All');
+    localStorage.setItem('active_product', 'All');
+
+    const matchedSub = subOrgOptions.find(
+      (s) => s.name.toLowerCase() === subOrgName.toLowerCase()
+    );
+    const subId = matchedSub && matchedSub.id !== 'all' ? matchedSub.id : undefined;
+
+    if (subId) {
+      localStorage.setItem('active_sub_organization_id', subId);
+    } else {
+      localStorage.removeItem('active_sub_organization_id');
+    }
+
+    setIsSubOrgDropdownOpen(false);
+    showToast?.('success', 'Sub-Organization Switched', `Active sub-organization set to ${subOrgName}`);
+    window.dispatchEvent(
+      new CustomEvent('subOrgChanged', {
+        detail: {
+          name: subOrgName,
+          id: subId,
+          subOrganizationId: subId,
+          organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
+        },
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('branchChanged', {
+        detail: { branch: 'All', name: 'All', id: undefined, branchId: undefined },
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('productChanged', {
+        detail: { product: 'All', name: 'All', id: undefined, productId: undefined },
+      })
+    );
+  };
+
+  const handleSelectBranch = (branchName: string) => {
+    setSelectedBranch(branchName);
+    localStorage.setItem('active_branch', branchName);
+    if (isSalesMode) {
+      localStorage.setItem('active_branch_sales', branchName);
+    } else {
+      localStorage.setItem('active_branch_client', branchName);
+    }
+
+    // Reset product
+    setSelectedProduct('All');
+    localStorage.setItem('active_product', 'All');
+
+    const matchedBranch = branchOptions.find(
+      (b) =>
+        b.name.toLowerCase() === branchName.toLowerCase() ||
+        b.fullBranchName?.toLowerCase() === branchName.toLowerCase() ||
+        (b.location && b.location.toLowerCase() === branchName.toLowerCase())
+    );
+    const branchId = matchedBranch && matchedBranch.id !== 'all' ? matchedBranch.id : undefined;
+
+    if (branchId) {
+      localStorage.setItem('active_branch_id', branchId);
+    } else {
+      localStorage.removeItem('active_branch_id');
+    }
+
+    setIsBranchDropdownOpen(false);
+    showToast?.('success', 'Branch Switched', `Active branch set to ${branchName}`);
+    window.dispatchEvent(
+      new CustomEvent('branchChanged', {
+        detail: {
+          branch: branchName,
+          name: branchName,
+          id: branchId,
+          branchId: branchId,
+        },
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('productChanged', {
+        detail: { product: 'All', name: 'All', id: undefined, productId: undefined },
+      })
+    );
+  };
+
+  const handleSelectProduct = (productName: string) => {
+    setSelectedProduct(productName);
+    localStorage.setItem('active_product', productName);
+    setIsProductDropdownOpen(false);
+    showToast?.('success', 'Product Switched', `Active product set to ${productName}`);
+    const matchedProduct = productOptions.find(
+      (p) => p.name.toLowerCase() === productName.toLowerCase()
+    );
+    const prodId = matchedProduct && matchedProduct.id !== 'all' ? matchedProduct.id : undefined;
+    window.dispatchEvent(
+      new CustomEvent('productChanged', {
+        detail: {
+          product: productName,
+          name: productName,
+          id: prodId,
+          productId: prodId,
+        },
+      })
+    );
+  };
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
@@ -297,43 +727,6 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Helper to extract clean short name (e.g., Chennai, Bangalore, Coimbatore)
-  const getShortBranchName = (name: string, location?: string) => {
-    if (name === 'All' || name === 'All Branches') return 'All';
-    // Check known cities first
-    const knownCities = ['Chennai', 'Bangalore', 'Coimbatore', 'Mumbai', 'Hyderabad', 'Kochi', 'Delhi', 'Pune', 'Kolkata', 'Madurai', 'Trichy', 'Salem'];
-    for (const city of knownCities) {
-      if (name.toLowerCase().includes(city.toLowerCase()) || (location && location.toLowerCase().includes(city.toLowerCase()))) {
-        return city;
-      }
-    }
-    // Fallback: take first word of branch name
-    return name.split(' ')[0] || name;
-  };
-
-  // Build clean branch options: "All" followed by unique city names
-  const branchOptions = useMemo(() => {
-    const list: { id: string; name: string; fullBranchName: string; location?: string }[] = [
-      { id: 'all', name: 'All', fullBranchName: 'All' }
-    ];
-
-    const seenNames = new Set<string>();
-    branches.forEach((b) => {
-      const short = getShortBranchName(b.name, b.location || b.city);
-      if (!seenNames.has(short)) {
-        seenNames.add(short);
-        list.push({
-          id: b.id,
-          name: short,
-          fullBranchName: b.name,
-          location: b.location || b.city,
-        });
-      }
-    });
-
-    return list;
-  }, [branches]);
-
   // Only sync suite mode if user navigates to an exclusive suite-specific sub-route
   useEffect(() => {
     if (location.pathname.startsWith('/sale-management')) {
@@ -362,231 +755,31 @@ export const Header: React.FC<HeaderProps> = ({
     }
   }, [location.pathname, isSaleManagement, isClientOnly, isSaleOnly, setOrgType, navigate]);
 
-  // Track sub-organization changes across components
-  const [subOrgChangeTrigger, setSubOrgChangeTrigger] = useState(0);
-
-  useEffect(() => {
-    const handleSubOrgChanged = () => {
-      setSubOrgChangeTrigger((prev) => prev + 1);
-    };
-    window.addEventListener('subOrgChanged', handleSubOrgChanged);
-    window.addEventListener('orgChanged', handleSubOrgChanged);
-    window.addEventListener('organizationsChanged', handleSubOrgChanged);
-    window.addEventListener('subOrganizationsChanged', handleSubOrgChanged);
-    window.addEventListener('storage', handleSubOrgChanged);
-    return () => {
-      window.removeEventListener('subOrgChanged', handleSubOrgChanged);
-      window.removeEventListener('orgChanged', handleSubOrgChanged);
-      window.removeEventListener('organizationsChanged', handleSubOrgChanged);
-      window.removeEventListener('subOrganizationsChanged', handleSubOrgChanged);
-      window.removeEventListener('storage', handleSubOrgChanged);
-    };
-  }, []);
-
-  const [apiSubOrgs, setApiSubOrgs] = useState<{ id: string; name: string; organizationType?: string }[]>([]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchApiSubOrgs = async () => {
-      try {
-        const res = await subOrganizationApi.getSubOrganizations({
-          page_no: 1,
-          page_size: 100,
-          pagination_required: 'false',
-        });
-        if (isMounted && res && Array.isArray(res.data)) {
-          const mapped = res.data.map((item: any) => ({
-            id: item.id,
-            name: item.name,
-            organizationType: item.organizationType || item.organizationTypeName,
-          }));
-          setApiSubOrgs(mapped);
-        }
-      } catch (err) {
-        // Fallback gracefully
-      }
-    };
-    fetchApiSubOrgs();
-    return () => {
-      isMounted = false;
-    };
-  }, [subOrgChangeTrigger, currentUser]);
-
-  // Build clean sub-organization options strictly differentiated by Client Management vs Sale Management
-  const subOrgOptions = useMemo(() => {
-    const list: { id: string; name: string; organizationType?: string }[] = [
-      { id: 'all', name: 'All' },
-    ];
-
-    const isSales = isSalesMode;
-    const seenNames = new Set<string>(['all']);
-
-    const isMatch = (typeStr?: string) => {
-      const t = (typeStr || '').toLowerCase();
-      if (isSales) {
-        return t.includes('sale');
-      } else {
-        return t.includes('client') || !t.includes('sale');
-      }
-    };
-
-    const mockNames = [
-      'yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions',
-      'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'
-    ];
-
-    // 1. API Sub-Organizations
-    apiSubOrgs.forEach((s) => {
-      const lower = (s.name || '').toLowerCase().trim();
-      if (isMatch(s.organizationType) && lower && !mockNames.includes(lower) && !seenNames.has(lower)) {
-        seenNames.add(lower);
-        list.push({
-          id: s.id,
-          name: s.name.trim(),
-          organizationType: isSales ? 'Sales Management' : 'Client Management',
-        });
-      }
-    });
-
-    // 2. Locally created Sub-Organizations
-    const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
-    if (savedCatalog) {
-      try {
-        const parsed = JSON.parse(savedCatalog);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = parsed.filter((o: any) => !mockNames.includes((o.name || '').toLowerCase()));
-          filtered.forEach((o: any) => {
-            const lower = (o.name || '').toLowerCase().trim();
-            if (isMatch(o.organizationType) && lower && !seenNames.has(lower)) {
-              seenNames.add(lower);
-              list.push({
-                id: o.id || `sub_${lower}`,
-                name: o.name.trim(),
-                organizationType: isSales ? 'Sales Management' : 'Client Management',
-              });
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Error reading sub org catalog:', e);
-      }
-    }
-
-    return list;
-  }, [isSalesMode, subOrgChangeTrigger, apiSubOrgs]);
-
-  const [selectedSubOrg, setSelectedSubOrg] = useState<string>(() => {
-    const isSales = selectedOrgType.toLowerCase().includes('sale');
-    const savedKey = isSales ? 'active_sub_organization_sales' : 'active_sub_organization_client';
-    return localStorage.getItem(savedKey) || localStorage.getItem('active_sub_organization') || 'All';
-  });
-
-  // Keep selectedSubOrg in sync when suite mode changes
-  useEffect(() => {
-    const savedKey = isSalesMode ? 'active_sub_organization_sales' : 'active_sub_organization_client';
-    const saved = localStorage.getItem(savedKey) || 'All';
-    setSelectedSubOrg(saved);
-    localStorage.setItem('active_sub_organization', saved);
-  }, [isSalesMode]);
-
-  // Ensure selectedSubOrg is valid
-  useEffect(() => {
-    if (selectedSubOrg !== 'All') {
-      const exists = subOrgOptions.some((s) => s.name.toLowerCase() === selectedSubOrg.toLowerCase());
-      if (!exists && subOrgOptions.length > 0) {
-        setSelectedSubOrg('All');
-        localStorage.setItem('active_sub_organization', 'All');
-      }
-    }
-  }, [subOrgOptions, selectedSubOrg]);
-
-  const handleSelectSubOrg = (subOrgName: string) => {
-    setSelectedSubOrg(subOrgName);
-    localStorage.setItem('active_sub_organization', subOrgName);
-    if (isSalesMode) {
-      localStorage.setItem('active_sub_organization_sales', subOrgName);
-    } else {
-      localStorage.setItem('active_sub_organization_client', subOrgName);
-    }
-    setIsSubOrgDropdownOpen(false);
-    showToast?.('success', 'Sub-Organization Switched', `Active sub-organization set to ${subOrgName}`);
-    window.dispatchEvent(
-      new CustomEvent('subOrgChanged', {
-        detail: {
-          name: subOrgName,
-          organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
-        },
-      })
-    );
-  };
-
   // Build clean organization options
-  // Build clean organization options strictly differentiated by Client Management vs Sale Management
   const orgOptions = useMemo(() => {
     if (isOrgSuperAdmin || isOrgAdmin) {
       const currentOrgName = currentUser?.name || 'Yaa Creations';
-      const isSalesMode = selectedOrgType.toLowerCase().includes('sale');
+      const isSales = selectedOrgType.toLowerCase().includes('sale');
 
       const targetList: { id: string; name: string; organizationType?: string }[] = [
-        { id: 'org_current', name: currentOrgName, organizationType: isSalesMode ? 'Sales Management' : 'Client Management' },
+        {
+          id: 'org_current',
+          name: currentOrgName,
+          organizationType: isSales ? 'Sales Management' : 'Client Management',
+        },
       ];
-
-      const saved = localStorage.getItem('organizations_catalog_orgsuperadmin');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
-            const filtered = parsed.filter((o: any) => !mockNames.includes((o.name || '').toLowerCase()));
-            filtered.forEach((o: any) => {
-              const oType = (o.organizationType || '').toLowerCase();
-              const isMatch = isSalesMode
-                ? oType.includes('sale')
-                : oType.includes('client') || !oType.includes('sale');
-
-              if (isMatch && !targetList.some((existing) => existing.name.toLowerCase() === (o.name || '').toLowerCase())) {
-                targetList.push({
-                  id: o.id || o.name,
-                  name: o.name,
-                  organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
-                });
-              }
-            });
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      }
-
       return targetList;
     }
 
-    // Default for Admin login
-    const list: { id: string; name: string; organizationType?: string }[] = [];
-    const seen = new Set<string>();
-    productsList.forEach((item) => {
-      const itemName = item.name;
-      if (itemName && !seen.has(itemName.toLowerCase())) {
-        seen.add(itemName.toLowerCase());
-        list.push({ id: item.id || itemName, name: itemName });
-      }
-    });
+    const list: { id: string; name: string; organizationType?: string }[] = [
+      {
+        id: 'org_current',
+        name: currentUser?.name || 'Yaa Creations',
+        organizationType: selectedOrgType,
+      },
+    ];
     return list;
-  }, [productsList, isOrgSuperAdmin, selectedOrgType]);
-
-  // Build product options
-  const productOptions = useMemo(() => {
-    const list: { id: string; name: string }[] = [];
-    const seen = new Set<string>();
-    productsList.forEach((item) => {
-      const itemName = item.name;
-      if (itemName && !seen.has(itemName.toLowerCase())) {
-        seen.add(itemName.toLowerCase());
-        list.push({ id: item.id || itemName, name: itemName });
-      }
-    });
-    return list;
-  }, [productsList]);
+  }, [isOrgSuperAdmin, isOrgAdmin, currentUser, selectedOrgType]);
 
   // Ensure Org Super Admin always has a valid organization from orgOptions (defaulting to 1st organization)
   useEffect(() => {
@@ -608,17 +801,6 @@ export const Header: React.FC<HeaderProps> = ({
     showToast?.('success', 'Organisation Type Switched', `Active organisation type set to ${typeName}`);
   };
 
-  // Ensure selectedBranch remains valid for the active suite
-  useEffect(() => {
-    if (selectedBranch !== 'All') {
-      const exists = branchOptions.some((b) => b.name.toLowerCase() === selectedBranch.toLowerCase());
-      if (!exists && branchOptions.length > 1) {
-        setSelectedBranch('All');
-        localStorage.setItem('active_branch', 'All');
-      }
-    }
-  }, [selectedOrgType, branchOptions, selectedBranch]);
-
   const handleSelectOrg = (orgName: string) => {
     setSelectedOrg(orgName);
     if (isOrgSuperAdmin) {
@@ -628,9 +810,9 @@ export const Header: React.FC<HeaderProps> = ({
     }
 
     const matched = orgOptions.find((o) => o.name.toLowerCase() === orgName.toLowerCase());
-    const orgType = (matched as any)?.organizationType || (
-      orgName.toLowerCase().includes('sale') ? 'Sales Management' : 'Client Management'
-    );
+    const orgType =
+      (matched as any)?.organizationType ||
+      (orgName.toLowerCase().includes('sale') ? 'Sales Management' : 'Client Management');
 
     if (isOrgSuperAdmin && orgType !== selectedOrgType) {
       setOrgType(orgType);
@@ -639,28 +821,10 @@ export const Header: React.FC<HeaderProps> = ({
 
     setIsOrgDropdownOpen(false);
     showToast?.('success', 'Organization Switched', `Active organization set to ${orgName} (${orgType})`);
-    window.dispatchEvent(new CustomEvent('orgChanged', { detail: { name: orgName, organizationType: orgType } }));
+    window.dispatchEvent(
+      new CustomEvent('orgChanged', { detail: { name: orgName, organizationType: orgType } })
+    );
     window.dispatchEvent(new CustomEvent('orgTypeChanged', { detail: orgType }));
-  };
-
-  const handleSelectBranch = (branchName: string) => {
-    setSelectedBranch(branchName);
-    localStorage.setItem('active_branch', branchName);
-    if (isSalesMode) {
-      localStorage.setItem('active_branch_sales', branchName);
-    } else {
-      localStorage.setItem('active_branch_client', branchName);
-    }
-    setIsBranchDropdownOpen(false);
-    showToast?.('success', 'Branch Switched', `Active branch set to ${branchName}`);
-    window.dispatchEvent(new CustomEvent('branchChanged', { detail: { branch: branchName } }));
-  };
-
-  const handleSelectProduct = (productName: string) => {
-    setSelectedProduct(productName);
-    localStorage.setItem('active_product', productName);
-    setIsProductDropdownOpen(false);
-    showToast?.('success', 'Product Switched', `Active product set to ${productName}`);
   };
 
   const getPageTitle = () => {
@@ -762,11 +926,10 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={() => handleSelectOrgType('Client Management')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
-                selectedOrgType === 'Client Management'
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${selectedOrgType === 'Client Management'
                   ? 'bg-white text-[#33077C] shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
-              }`}
+                }`}
             >
               <UsersRound className="w-3.5 h-3.5 text-[#33077C]" />
               <span>Client Management</span>
@@ -774,11 +937,10 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={() => handleSelectOrgType('Sales Management')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
-                selectedOrgType === 'Sales Management'
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${selectedOrgType === 'Sales Management'
                   ? 'bg-white text-[#33077C] shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
-              }`}
+                }`}
             >
               <ShoppingCart className="w-3.5 h-3.5 text-[#33077C]" />
               <span>Sale Management</span>
@@ -820,11 +982,10 @@ export const Header: React.FC<HeaderProps> = ({
                         key={sub.id}
                         type="button"
                         onClick={() => handleSelectSubOrg(sub.name)}
-                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                          isActive
+                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
                             ? 'bg-[#33077C]/10 text-[#33077C]'
                             : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
+                          }`}
                       >
                         <span className="truncate">{sub.name}</span>
                         {isActive && (
@@ -869,11 +1030,10 @@ export const Header: React.FC<HeaderProps> = ({
                         key={b.id}
                         type="button"
                         onClick={() => handleSelectBranch(b.name)}
-                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                          isActive
+                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
                             ? 'bg-[#33077C]/10 text-[#33077C]'
                             : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
+                          }`}
                       >
                         <span className="truncate">{b.name}</span>
                         {isActive && (
@@ -918,11 +1078,10 @@ export const Header: React.FC<HeaderProps> = ({
                           key={prod.id}
                           type="button"
                           onClick={() => handleSelectProduct(prod.name)}
-                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                            isActive
+                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
                               ? 'bg-[#33077C]/10 text-[#33077C]'
                               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                          }`}
+                            }`}
                         >
                           <span className="truncate">{prod.name}</span>
                           {isActive && (
@@ -971,11 +1130,10 @@ export const Header: React.FC<HeaderProps> = ({
                           key={b.id}
                           type="button"
                           onClick={() => handleSelectBranch(b.name)}
-                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${
-                            isActive
+                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-lg ${isActive
                               ? 'bg-[#33077C]/10 text-[#33077C]'
                               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                          }`}
+                            }`}
                         >
                           <span className="truncate">{b.name}</span>
                           {isActive && (
@@ -1021,11 +1179,10 @@ export const Header: React.FC<HeaderProps> = ({
                           key={prod.id}
                           type="button"
                           onClick={() => handleSelectProduct(prod.name)}
-                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-xs ${
-                            isActive
+                          className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold transition-colors text-left cursor-pointer rounded-xs ${isActive
                               ? 'bg-[#33077C]/10 text-[#33077C]'
                               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                          }`}
+                            }`}
                         >
                           <span className="truncate">{prod.name}</span>
                           {isActive && (
@@ -1293,11 +1450,10 @@ export const Header: React.FC<HeaderProps> = ({
                             showToast('info', 'Switched View', `Now viewing as ${roleOption.name}`);
                           }
                         }}
-                        className={`w-full flex items-center justify-between px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-left ${
-                          isCurrent
+                        className={`w-full flex items-center justify-between px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-left ${isCurrent
                             ? 'bg-purple-50 text-[#33077C] font-bold'
                             : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
+                          }`}
                       >
                         <span className="truncate">{roleOption.name}</span>
                         <span className="text-[10px] font-mono opacity-60 text-slate-500">

@@ -1,10 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   clientProductApi,
   ClientProductApiItem,
   CreateClientProductRequest,
   UpdateClientProductRequest,
+  subOrganizationApi,
+  SubOrganizationApiItem,
+  branchApi,
+  BranchApiItem,
+  organizationApi,
+  getStoredOrganizationId,
 } from '../../api';
 import {
   Boxes,
@@ -35,7 +41,21 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 
 export const ProductsView: React.FC = () => {
-  const { showToast } = useAuth();
+  const { showToast, currentUser } = useAuth();
+
+  // Organization, Sub-Organizations, Branches State
+  const [defaultOrgName, setDefaultOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem('active_organization_orgsuperadmin') ||
+      localStorage.getItem('active_organization') ||
+      currentUser?.name ||
+      'Yaa Creations'
+    );
+  });
+  const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
+  const [loadingSubOrgs, setLoadingSubOrgs] = useState<boolean>(false);
+  const [branches, setBranches] = useState<BranchApiItem[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState<boolean>(false);
 
   // Products Data from real API
   const [products, setProducts] = useState<ClientProductApiItem[]>([]);
@@ -60,8 +80,16 @@ export const ProductsView: React.FC = () => {
   // Add / Edit Product Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ClientProductApiItem | null>(null);
+
+  // View Product Modal State
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [viewingProduct, setViewingProduct] = useState<ClientProductApiItem | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
+    organizationId: '',
+    subOrganizationId: '',
+    branchId: '',
     name: '',
     code: '',
     contactPerson: '',
@@ -82,14 +110,40 @@ export const ProductsView: React.FC = () => {
     color: '#33077C',
   });
 
-  const loadProducts = async () => {
+  const lastRequestKeyRef = useRef<string>('');
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const loadProducts = async (subOrgId?: string, branchId?: string, forced = false) => {
+    const activeSubOrgName = localStorage.getItem('active_sub_organization');
+    const storedSubOrgId = localStorage.getItem('active_sub_organization_id');
+    const effectiveSubOrgId =
+      subOrgId !== undefined
+        ? subOrgId
+        : (activeSubOrgName && activeSubOrgName !== 'All' ? storedSubOrgId || undefined : undefined);
+
+    const activeBranch = localStorage.getItem('active_branch');
+    const storedBranchId = localStorage.getItem('active_branch_id');
+    const effectiveBranchId =
+      branchId !== undefined
+        ? branchId
+        : (activeBranch && activeBranch !== 'All' ? storedBranchId || undefined : undefined);
+
+    const requestKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${effectiveSubOrgId || ''}_${effectiveBranchId || ''}`;
+    if (!forced && lastRequestKeyRef.current === requestKey) {
+      return;
+    }
+    lastRequestKeyRef.current = requestKey;
+
     try {
       setLoading(true);
+
       const res = await clientProductApi.getProducts({
         page,
         limit: pageSize,
         search: appliedSearch.trim() || undefined,
         status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+        subOrganizationId: effectiveSubOrgId,
+        branchId: effectiveBranchId,
       });
 
       if (res && res.success) {
@@ -111,8 +165,146 @@ export const ProductsView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadProducts();
+    const handleFilterChange = (e: any) => {
+      setPage(1);
+      loadProducts(e?.detail?.subOrganizationId || e?.detail?.id, e?.detail?.branchId);
+    };
+    window.addEventListener('subOrgChanged', handleFilterChange);
+    window.addEventListener('branchChanged', handleFilterChange);
+    return () => {
+      window.removeEventListener('subOrgChanged', handleFilterChange);
+      window.removeEventListener('branchChanged', handleFilterChange);
+    };
+  }, [pageSize, appliedSearch, appliedStatus]);
+
+  const loadOrganizationSubOrgsAndBranches = async () => {
+    const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+
+    if (activeOrgId) {
+      try {
+        const orgRes = await organizationApi.getOrganizationById(activeOrgId);
+        if (orgRes?.data?.name) {
+          setDefaultOrgName(orgRes.data.name);
+        }
+      } catch {}
+    }
+
+    try {
+      setLoadingSubOrgs(true);
+      let apiSubs: SubOrganizationApiItem[] = [];
+      try {
+        const subRes = await subOrganizationApi.getSubOrganizations(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          activeOrgId || undefined
+        );
+        if (subRes && Array.isArray(subRes.data)) {
+          apiSubs = subRes.data;
+        }
+      } catch (err) {
+        console.warn('API getSubOrganizations notice:', err);
+      }
+
+      const subMap = new Map<string, SubOrganizationApiItem>();
+      apiSubs.forEach((s) => {
+        const key = (s.id || s.code || s.name).trim().toLowerCase();
+        subMap.set(key, s);
+      });
+
+      // Only fallback to localStorage if API returned nothing
+      if (apiSubs.length === 0) {
+        const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
+        if (savedOrgs) {
+          try {
+            const parsed = JSON.parse(savedOrgs);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((so: any) => {
+                const key = (so.id || so.code || so.name || '').trim().toLowerCase();
+                if (key && !subMap.has(key)) {
+                  subMap.set(key, {
+                    id: so.id || `sub_${Date.now()}`,
+                    organizationId: activeOrgId || 'org_main',
+                    name: so.name,
+                    code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
+                    status: so.status || 'Active',
+                    createdAt: so.createdAt || new Date().toISOString(),
+                  });
+                }
+              });
+            }
+          } catch {}
+        }
+      }
+
+      setSubOrganizations(Array.from(subMap.values()));
+    } catch (e) {
+      console.warn('Failed to load sub-organizations:', e);
+    } finally {
+      setLoadingSubOrgs(false);
+    }
+
+    try {
+      setLoadingBranches(true);
+      let apiBranches: BranchApiItem[] = [];
+      try {
+        const branchRes = await branchApi.getBranches(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          activeOrgId || undefined
+        );
+        if (branchRes && Array.isArray(branchRes.data)) {
+          apiBranches = branchRes.data;
+        }
+      } catch (err) {
+        console.warn('API getBranches notice:', err);
+      }
+
+      const branchMap = new Map<string, BranchApiItem>();
+      apiBranches.forEach((b) => {
+        // De-duplicate branches by id or (code / normalized name)
+        const key = (b.id || `${b.code}_${b.name}`).trim().toLowerCase();
+        branchMap.set(key, b);
+      });
+
+      // Only fallback to localStorage if API returned nothing
+      if (apiBranches.length === 0) {
+        const savedBranches = localStorage.getItem('branches_catalog_orgsuperadmin');
+        if (savedBranches) {
+          try {
+            const parsed = JSON.parse(savedBranches);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((br: any) => {
+                const key = (br.id || `${br.code}_${br.name}`).trim().toLowerCase();
+                if (key && !branchMap.has(key)) {
+                  branchMap.set(key, br);
+                }
+              });
+            }
+          } catch {}
+        }
+      }
+
+      setBranches(Array.from(branchMap.values()));
+    } catch (e) {
+      console.warn('Failed to load branches:', e);
+    } finally {
+      setLoadingBranches(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOrganizationSubOrgsAndBranches();
+  }, []);
+
+  useEffect(() => {
+    const storedSubId = localStorage.getItem('active_sub_organization_id') || undefined;
+    const storedBranchId = localStorage.getItem('active_branch_id') || undefined;
+    loadProducts(storedSubId, storedBranchId);
   }, [page, pageSize, appliedSearch, appliedStatus]);
+
+  useEffect(() => {
+    if (isModalOpen || isViewModalOpen) {
+      loadOrganizationSubOrgsAndBranches();
+    }
+  }, [isModalOpen, isViewModalOpen]);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -183,14 +375,16 @@ export const ProductsView: React.FC = () => {
 
   // Helper: Resolve contact person name for product
   const getProductContactPerson = (prod: ClientProductApiItem): string => {
-    if (prod.contactPerson) return prod.contactPerson;
-    return 'Alex Rivera';
+    return prod.contactPerson?.trim() || '';
   };
 
   // Modal Handlers
   const handleOpenAddModal = () => {
     setEditingProduct(null);
     setFormData({
+      organizationId: currentUser?.organizationId || getStoredOrganizationId() || '',
+      subOrganizationId: '',
+      branchId: '',
       name: '',
       code: '',
       contactPerson: '',
@@ -215,7 +409,12 @@ export const ProductsView: React.FC = () => {
 
   const handleOpenEditModal = (prod: ClientProductApiItem) => {
     setEditingProduct(prod);
+    const resolvedSubOrgId = prod.subOrganizationId || (prod as any).sub_organization_id || '';
+    const resolvedBranchId = prod.branchId || (prod as any).branch_id || '';
     setFormData({
+      organizationId: prod.organizationId || currentUser?.organizationId || getStoredOrganizationId() || '',
+      subOrganizationId: resolvedSubOrgId,
+      branchId: resolvedBranchId,
       name: prod.name || '',
       code: prod.code || '',
       contactPerson: prod.contactPerson || '',
@@ -247,8 +446,12 @@ export const ProductsView: React.FC = () => {
 
     try {
       setSubmitting(true);
+      const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
       const payload: CreateClientProductRequest = {
         name: formData.name.trim(),
+        organizationId: activeOrgId || undefined,
+        subOrganizationId: formData.subOrganizationId || undefined,
+        branchId: formData.branchId || undefined,
         code: formData.code.trim() || undefined,
         contactPerson: formData.contactPerson.trim() || undefined,
         mobileNumber: formData.mobileNumber.trim() || undefined,
@@ -276,18 +479,18 @@ export const ProductsView: React.FC = () => {
         showToast?.('success', 'Product Created', `Added "${formData.name}" to products list`);
       }
       setIsModalOpen(false);
-      await loadProducts();
+      await loadProducts(undefined, undefined, true);
     } catch (err: any) {
       console.error('Save product error:', err);
-      showToast?.('error', 'Failed', err?.message || 'Failed to save product');
+      const apiErr = err?.response?.data?.error;
+      const fieldMsg = apiErr?.fields?.map((f: any) => `${f.path?.join('.') || ''}: ${f.message}`).join(', ');
+      const msg = fieldMsg || apiErr?.message || err?.response?.data?.message || err?.message || 'Failed to save product';
+      showToast?.('error', 'Failed', msg);
     } finally {
       setSubmitting(false);
     }
   };
 
-  // View Product Modal State
-  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
-  const [viewingProduct, setViewingProduct] = useState<ClientProductApiItem | null>(null);
 
   const handleViewProduct = (prod: ClientProductApiItem) => {
     setViewingProduct(prod);
@@ -298,7 +501,7 @@ export const ProductsView: React.FC = () => {
     try {
       await clientProductApi.patchProductStatus(prod.id, { status: newStatus });
       showToast?.('success', 'Status Updated', `Product "${prod.name}" status changed to ${newStatus}`);
-      await loadProducts();
+      await loadProducts(undefined, undefined, true);
     } catch (err: any) {
       showToast?.('error', 'Error', err?.message || 'Failed to update product status');
     }
@@ -309,7 +512,7 @@ export const ProductsView: React.FC = () => {
     try {
       await clientProductApi.deleteProduct(prod.id);
       showToast?.('success', 'Product Deleted', `Deleted "${prod.name}" from catalog`);
-      await loadProducts();
+      await loadProducts(undefined, undefined, true);
     } catch (err: any) {
       showToast?.('error', 'Error', err?.message || 'Failed to delete product');
     }
@@ -448,9 +651,11 @@ export const ProductsView: React.FC = () => {
                               <span className="font-bold text-slate-900 text-sm tracking-tight">{prod.name}</span>
                               <span className="text-xs font-semibold text-[#4309A2]">({displayCode})</span>
                             </div>
-                            <p className="text-xs text-slate-500 font-medium mt-0.5 truncate">
-                              {contactPerson}
-                            </p>
+                            {contactPerson && (
+                              <p className="text-xs text-slate-500 font-medium mt-0.5 truncate">
+                                {contactPerson}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -769,6 +974,79 @@ export const ProductsView: React.FC = () => {
       >
         <form onSubmit={handleSaveProduct} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
 
+          {/* Row 0: Organization (Read-Only) | Sub-Organization | Branch */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Organization
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={defaultOrgName}
+                  title="Default organization cannot be modified"
+                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                />
+              </div>
+              <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Sub-Organization <span className="text-rose-500">*</span>
+              </label>
+              <CustomSelect
+                value={formData.subOrganizationId}
+                onChange={(val) => {
+                  setFormData({ ...formData, subOrganizationId: val, branchId: '' });
+                }}
+                options={
+                  subOrganizations.length > 0
+                    ? subOrganizations.map((sub) => ({
+                        value: sub.id,
+                        label: `${sub.name}${sub.code ? ` (${sub.code})` : ''}`,
+                      }))
+                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
+                }
+                placeholder="Select Sub-Organization"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Select Branch <span className="text-rose-500">*</span>
+              </label>
+              <CustomSelect
+                value={formData.branchId}
+                onChange={(val) => {
+                  const selectedBranch = branches.find((b) => b.id === val);
+                  if (selectedBranch?.subOrganizationId && !formData.subOrganizationId) {
+                    setFormData({ ...formData, branchId: val, subOrganizationId: selectedBranch.subOrganizationId });
+                  } else {
+                    setFormData({ ...formData, branchId: val });
+                  }
+                }}
+                options={
+                  (() => {
+                    const filtered = branches.filter((b) => {
+                      if (!formData.subOrganizationId) return true;
+                      return !b.subOrganizationId || b.subOrganizationId === formData.subOrganizationId;
+                    });
+                    return filtered.length > 0
+                      ? filtered.map((br) => ({
+                          value: br.id,
+                          label: `${br.name}${br.code ? ` (${br.code})` : ''}`,
+                        }))
+                      : [{ value: '', label: loadingBranches ? 'Loading Branches...' : 'No Branches found' }];
+                  })()
+                }
+                placeholder="Select Branch"
+              />
+            </div>
+          </div>
+
           {/* Row 1: Product/Org Name | Product/Org Code | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -1014,6 +1292,29 @@ export const ProductsView: React.FC = () => {
                 </div>
                 <div className="divide-y divide-slate-100">
                   {([
+                    { label: 'Organization', value: defaultOrgName },
+                    {
+                      label: 'Sub-Organization',
+                      value:
+                        subOrganizations.find(
+                          (s) =>
+                            s.id === viewingProduct.subOrganizationId ||
+                            s.id === (viewingProduct as any).sub_organization_id
+                        )?.name ||
+                        (viewingProduct as any).subOrganizationName ||
+                        (viewingProduct as any).sub_organization_name,
+                    },
+                    {
+                      label: 'Branch',
+                      value:
+                        branches.find(
+                          (b) =>
+                            b.id === viewingProduct.branchId ||
+                            b.id === (viewingProduct as any).branch_id
+                        )?.name ||
+                        (viewingProduct as any).branchName ||
+                        (viewingProduct as any).branch_name,
+                    },
                     { label: 'Product / Org Code', value: viewingProduct.code },
                     { label: 'GST Number', value: viewingProduct.gstNumber },
                     { label: 'PAN Number', value: viewingProduct.panNumber },

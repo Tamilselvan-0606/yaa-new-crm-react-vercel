@@ -52,22 +52,27 @@ import { useSalesManagementStore } from '../../../store/useSalesManagementStore'
 import { Modal } from '../../../components/common/Modal';
 import { toast } from 'sonner';
 
-type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'tax';
+type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'expense' | 'tax';
 
 type ReportId =
   // Transaction reports
   | 'bill_wise_profit'
   | 'all_transactions'
-  | 'sale_report'
-  | 'purchase_report'
+  | 'sale_invoice_report'
+  | 'purchase_bills_report'
   | 'day_book'
   // Sales Hub reports
   | 'sales_summary'
   | 'customer_statement'
   | 'sales_by_customer'
   | 'sales_return_report'
+  | 'estimate_quotation_report'
+  | 'proforma_invoice_report'
+  | 'sales_order_report'
+  | 'delivery_challan_report'
   // Collection & Dues reports
   | 'collection_summary'
+  | 'payment_receipts_report'
   | 'sales_rep_collections'
   | 'customer_aging_report'
   // Inventory reports
@@ -80,6 +85,10 @@ type ReportId =
   | 'supplier_statement'
   | 'purchase_by_supplier'
   | 'purchase_return_report'
+  | 'purchase_request_report'
+  | 'payment_out_report'
+  // Expense reports
+  | 'expense_summary'
   // Tax reports
   | 'hsn_summary'
   | 'gst_summary';
@@ -99,8 +108,8 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
     items: [
       { id: 'bill_wise_profit', label: 'Bill-Wise Profit', category: 'transaction', description: 'Gross profit margins and cost vs. revenue per invoice' },
       { id: 'all_transactions', label: 'All Transactions', category: 'transaction', description: 'Complete ledger of all Sales, Purchases, Returns & Payments' },
-      { id: 'sale_report', label: 'Sale Report', category: 'transaction', description: 'Itemized sales invoices, receivables, and payment methods' },
-      { id: 'purchase_report', label: 'Purchase Report', category: 'transaction', description: 'Procurement bills, payables, and vendor orders' },
+      { id: 'sale_invoice_report', label: 'Sales Invoice Report', category: 'transaction', description: 'Itemized sales invoices, receivables, and payment methods' },
+      { id: 'purchase_bills_report', label: 'Purchase Bills Report', category: 'transaction', description: 'Procurement bills, payables, and vendor orders' },
       { id: 'day_book', label: 'Day Book', category: 'transaction', description: 'Chronological daily register of all inflows and outflows' },
     ],
   },
@@ -113,6 +122,10 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
       { id: 'customer_statement', label: 'Customer Statement (Ledger)', category: 'sales', description: 'Detailed account statement by customer with outstanding balance' },
       { id: 'sales_by_customer', label: 'Sales by Customer', category: 'sales', description: 'Top revenue-generating clients and sales frequency' },
       { id: 'sales_return_report', label: 'Sales Return Report', category: 'sales', description: 'Refunds, credit notes, and return reasons' },
+      { id: 'estimate_quotation_report', label: 'Estimate & Quotation Report', category: 'sales', description: 'Quotations raised, conversion rate to invoice, pending & expired quotes' },
+      { id: 'proforma_invoice_report', label: 'Proforma Invoice Report', category: 'sales', description: 'Proforma invoices raised, converted vs unconverted, party-wise summary' },
+      { id: 'sales_order_report', label: 'Sales Order Report', category: 'sales', description: 'Orders placed, pending orders, fulfilled orders, customer-wise order analysis' },
+      { id: 'delivery_challan_report', label: 'Delivery Challan Report', category: 'sales', description: 'Challans dispatched, pending deliveries, party-wise dispatch summary' },
     ],
   },
   {
@@ -121,7 +134,8 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
     icon: IndianRupee,
     items: [
       { id: 'collection_summary', label: 'Collection Report', category: 'collections', description: 'Total outstanding, collections, overdue amounts, due today, and collection rate' },
-      { id: 'sales_rep_collections', label: 'Sales Representative Collection Report', category: 'collections', description: 'Representative performance, assigned customers, dues, and recovery rates' },
+      { id: 'payment_receipts_report', label: 'Payment Receipts Report (Payment-In)', category: 'collections', description: 'Cash/bank receipts, payment mode breakdown, party-wise payment received summary' },
+      { id: 'sales_rep_collections', label: 'Sales Rep Collection Report', category: 'collections', description: 'Representative performance, assigned customers, dues, and recovery rates' },
       { id: 'customer_aging_report', label: 'Customer Aging Report', category: 'collections', description: 'Receivables aging analysis across 0–30, 31–60, 61–90, and 90+ day buckets' },
     ],
   },
@@ -144,7 +158,17 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
       { id: 'purchase_summary', label: 'Purchase Summary & Analytics', category: 'purchase', description: 'Procurement volume, vendor expense breakdown, and stats' },
       { id: 'supplier_statement', label: 'Supplier Statement (Ledger)', category: 'purchase', description: 'Supplier accounts, payments released, and pending payables' },
       { id: 'purchase_by_supplier', label: 'Purchase by Supplier', category: 'purchase', description: 'Total purchase expenditure grouped by vendor' },
-      { id: 'purchase_return_report', label: 'Purchase Return (Debit Note)', category: 'purchase', description: 'Returned purchase goods and debit adjustments' },
+      { id: 'purchase_return_report', label: 'Purchase Return / Debit Note Report', category: 'purchase', description: 'Returned purchase goods and debit adjustments' },
+      { id: 'purchase_request_report', label: 'Purchase Request Report', category: 'purchase', description: 'Pending purchase requests, approved vs rejected, department/category-wise breakdown' },
+      { id: 'payment_out_report', label: 'Payment Out Report', category: 'purchase', description: 'Vendor payments made, payment mode breakdown, supplier-wise payment summary' },
+    ],
+  },
+  {
+    category: 'expense',
+    label: 'Expense Reports',
+    icon: DollarSign,
+    items: [
+      { id: 'expense_summary', label: 'Expense Summary Report', category: 'expense', description: 'Expense category-wise summary, expense trend over time, top expense heads' },
     ],
   },
   {
@@ -168,6 +192,10 @@ export const SaleManagementReportsView: React.FC = () => {
     suppliers = [],
     stocks = [],
     salesRepresentatives = [],
+    quotations = [],
+    paymentIns = [],
+    paymentOuts = [],
+    purchaseRequests = [],
   } = useSalesManagementStore();
 
   const [activeReport, setActiveReport] = useState<ReportId>('bill_wise_profit');
@@ -488,8 +516,8 @@ export const SaleManagementReportsView: React.FC = () => {
         };
       }
 
-      // 3. SALE REPORT
-      case 'sale_report': {
+      // 3. SALES INVOICE REPORT (renamed)
+      case 'sale_invoice_report': {
         const rows = filteredSales.map((s) => ({
           id: s.id,
           cells: [
@@ -510,7 +538,7 @@ export const SaleManagementReportsView: React.FC = () => {
         const paidSum = filteredSales.reduce((acc, s) => acc + s.paidAmount, 0);
         const balSum = filteredSales.reduce((acc, s) => acc + s.balance, 0);
         return {
-          title: 'Sale Invoices & Receivables Report',
+          title: 'Sales Invoice & Receivables Report',
           columns: [
             { label: 'Date', align: 'left', isMono: true },
             { label: 'Invoice No', align: 'left', isBold: true },
@@ -534,8 +562,8 @@ export const SaleManagementReportsView: React.FC = () => {
         };
       }
 
-      // 4. PURCHASE REPORT
-      case 'purchase_report': {
+      // 4. PURCHASE BILLS REPORT (renamed)
+      case 'purchase_bills_report': {
         const rows = filteredPurchases.map((p) => ({
           id: p.id,
           cells: [
@@ -1474,6 +1502,350 @@ export const SaleManagementReportsView: React.FC = () => {
         };
       }
 
+      // ---- NEW REPORTS: Sales Hub ----
+
+      // 20. ESTIMATE & QUOTATION REPORT
+      case 'estimate_quotation_report': {
+        const filteredQuotations = quotations.filter((q) => isWithinDateRange(q.date));
+        const rows = filteredQuotations.map((q) => ({
+          id: q.id,
+          cells: [
+            formatToDDMMYYYY(q.date),
+            q.quotationNo,
+            q.partyName,
+            formatToDDMMYYYY(q.validUntil),
+            `${(q.items || []).length} Items`,
+            formatCurrency(q.subtotal || 0),
+            formatCurrency(q.amount || 0),
+            q.convertedToInvoiceNo || q.convertedToType || '—',
+            q.status,
+          ],
+        }));
+        const totalQuotationValue = filteredQuotations.reduce((acc, q) => acc + (q.amount || 0), 0);
+        const convertedCount = filteredQuotations.filter((q) => q.convertedToInvoiceNo || q.convertedToType).length;
+        const conversionRate = filteredQuotations.length > 0 ? ((convertedCount / filteredQuotations.length) * 100).toFixed(1) : '0.0';
+        const pendingCount = filteredQuotations.filter((q) => q.status === 'Open' || q.status === 'Expired').length;
+        return {
+          title: 'Estimate & Quotation Report',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Quotation No.', align: 'left', isBold: true },
+            { label: 'Customer / Party', align: 'left' },
+            { label: 'Valid Until', align: 'left', isMono: true },
+            { label: 'Items', align: 'center' },
+            { label: 'Subtotal (₹)', align: 'right' },
+            { label: 'Quote Value (₹)', align: 'right', isBold: true },
+            { label: 'Converted To', align: 'left' },
+            { label: 'Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Quotations', value: `${filteredQuotations.length}` },
+            { label: 'Total Quotation Value', value: formatCurrency(totalQuotationValue) },
+            { label: 'Converted to Invoice/Order', value: `${convertedCount}` },
+            { label: 'Conversion Rate', value: `${conversionRate}%` },
+            { label: 'Pending / Active Quotes', value: `${pendingCount}` },
+          ],
+        };
+      }
+
+      // 21. PROFORMA INVOICE REPORT
+      case 'proforma_invoice_report': {
+        const proformaQuotations = quotations.filter(
+          (q) => (q.convertedToType === 'Proforma') && isWithinDateRange(q.date)
+        );
+        // Fallback: show all quotations if none tagged as Proforma
+        const proformaRows = (proformaQuotations.length > 0 ? proformaQuotations : filteredSales.slice(0, 0)).map((q) => ({
+          id: q.id,
+          cells: [
+            formatToDDMMYYYY(q.date),
+            q.quotationNo,
+            q.partyName,
+            formatCurrency(q.subtotal || 0),
+            formatCurrency(q.amount || 0),
+            q.convertedToInvoiceNo ? 'Converted' : 'Pending',
+            q.convertedToInvoiceNo || '—',
+            q.status,
+          ],
+        }));
+        const totalPFValue = proformaQuotations.reduce((acc, q) => acc + (q.amount || 0), 0);
+        const convertedPF = proformaQuotations.filter((q) => q.convertedToInvoiceNo).length;
+        return {
+          title: 'Proforma Invoice Report',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Proforma No.', align: 'left', isBold: true },
+            { label: 'Customer / Party', align: 'left' },
+            { label: 'Subtotal (₹)', align: 'right' },
+            { label: 'Proforma Value (₹)', align: 'right', isBold: true },
+            { label: 'Conversion', align: 'center' },
+            { label: 'Invoice No.', align: 'left' },
+            { label: 'Status', align: 'center' },
+          ],
+          rows: proformaRows,
+          summary: [
+            { label: 'Total Proforma Invoices', value: `${proformaQuotations.length}` },
+            { label: 'Total Proforma Value', value: formatCurrency(totalPFValue) },
+            { label: 'Converted to Invoice', value: `${convertedPF}` },
+            { label: 'Unconverted / Pending', value: `${proformaQuotations.length - convertedPF}` },
+          ],
+        };
+      }
+
+      // 22. SALES ORDER REPORT
+      case 'sales_order_report': {
+        const orderSales = filteredSales.filter((s) => s.saleStatus === 'Draft' || s.saleStatus === 'Confirmed');
+        const rows = orderSales.map((s) => ({
+          id: s.id,
+          cells: [
+            formatToDDMMYYYY(s.saleDate),
+            s.invoiceNo,
+            s.customerName,
+            `${(s.items || []).reduce((a, b) => a + b.quantity, 0)} Items`,
+            formatCurrency(s.grandTotal),
+            s.paymentMethod,
+            s.saleStatus,
+          ],
+        }));
+        const pendingOrders = orderSales.filter((s) => s.saleStatus === 'Draft').length;
+        const confirmedOrders = orderSales.filter((s) => s.saleStatus === 'Confirmed').length;
+        const totalOrderValue = orderSales.reduce((acc, s) => acc + s.grandTotal, 0);
+        return {
+          title: 'Sales Order Report',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Order / Invoice No.', align: 'left', isBold: true },
+            { label: 'Customer', align: 'left' },
+            { label: 'Items Qty', align: 'center' },
+            { label: 'Order Value (₹)', align: 'right', isBold: true },
+            { label: 'Payment Mode', align: 'left' },
+            { label: 'Order Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Orders', value: `${orderSales.length}` },
+            { label: 'Total Order Value', value: formatCurrency(totalOrderValue) },
+            { label: 'Pending Orders', value: `${pendingOrders}` },
+            { label: 'Confirmed Orders', value: `${confirmedOrders}` },
+          ],
+        };
+      }
+
+      // 23. DELIVERY CHALLAN REPORT
+      case 'delivery_challan_report': {
+        const dispatchedSales = filteredSales.filter((s) =>
+          s.saleStatus === 'Completed' || s.saleStatus === 'Confirmed' || s.saleStatus === 'Draft'
+        );
+        const rows = dispatchedSales.map((s) => ({
+          id: s.id,
+          cells: [
+            formatToDDMMYYYY(s.saleDate),
+            s.invoiceNo,
+            s.customerName,
+            `${(s.items || []).reduce((a, b) => a + b.quantity, 0)}`,
+            `${(s.items || []).length} Products`,
+            s.customerCompany || '—',
+            s.saleStatus,
+          ],
+        }));
+        const totalDispatched = dispatchedSales.length;
+        const totalItems = dispatchedSales.reduce((acc, s) => acc + (s.items || []).reduce((a, b) => a + b.quantity, 0), 0);
+        return {
+          title: 'Delivery Challan Dispatch Report',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Challan / Invoice No.', align: 'left', isBold: true },
+            { label: 'Customer / Party', align: 'left' },
+            { label: 'Total Qty', align: 'right', isBold: true },
+            { label: 'Products', align: 'center' },
+            { label: 'Company', align: 'left' },
+            { label: 'Dispatch Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Challans Dispatched', value: `${totalDispatched}` },
+            { label: 'Total Items Dispatched', value: `${totalItems} Units` },
+          ],
+        };
+      }
+
+      // ---- NEW REPORTS: Collections ----
+
+      // 24. PAYMENT RECEIPTS REPORT (Payment-In)
+      case 'payment_receipts_report': {
+        const filteredPaymentIns = paymentIns.filter((p) => isWithinDateRange(p.date || p.paymentDate));
+        const rows = filteredPaymentIns.map((p) => ({
+          id: p.id,
+          cells: [
+            formatToDDMMYYYY(p.date || p.paymentDate || ''),
+            p.receiptNo,
+            p.partyName,
+            p.paymentType || p.paymentMethod || 'Cash',
+            p.referenceNo || '—',
+            p.invoiceNo || '—',
+            formatCurrency(p.receivedAmount || p.amount || 0),
+            p.status,
+          ],
+        }));
+        const totalReceived = filteredPaymentIns.reduce((acc, p) => acc + (p.receivedAmount || p.amount || 0), 0);
+        const paymentModeMap: Record<string, number> = {};
+        filteredPaymentIns.forEach((p) => {
+          const mode = p.paymentType || p.paymentMethod || 'Cash';
+          paymentModeMap[mode] = (paymentModeMap[mode] || 0) + (p.receivedAmount || p.amount || 0);
+        });
+        const topMode = Object.entries(paymentModeMap).sort((a, b) => b[1] - a[1])[0];
+        return {
+          title: 'Payment Receipts Report (Payment-In)',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Receipt No.', align: 'left', isBold: true },
+            { label: 'Customer / Party', align: 'left' },
+            { label: 'Payment Mode', align: 'left' },
+            { label: 'Reference No.', align: 'left' },
+            { label: 'Invoice No.', align: 'left' },
+            { label: 'Amount Received (₹)', align: 'right', isBold: true },
+            { label: 'Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Receipts', value: `${filteredPaymentIns.length}` },
+            { label: 'Total Amount Received', value: formatCurrency(totalReceived) },
+            { label: 'Top Payment Mode', value: topMode ? `${topMode[0]} (${formatCurrency(topMode[1])})` : '—' },
+          ],
+        };
+      }
+
+      // ---- NEW REPORTS: Purchase ----
+
+      // 25. PURCHASE REQUEST REPORT
+      case 'purchase_request_report': {
+        const filteredRequests = purchaseRequests.filter((r) => isWithinDateRange(r.requestDate));
+        const rows = filteredRequests.map((r) => ({
+          id: r.id,
+          cells: [
+            formatToDDMMYYYY(r.requestDate),
+            r.requestNo,
+            r.requestedBy,
+            r.department,
+            r.priority,
+            `${(r.items || []).length} Items`,
+            formatCurrency(r.totalEstimatedAmount || 0),
+            r.status,
+          ],
+        }));
+        const totalEstimated = filteredRequests.reduce((acc, r) => acc + (r.totalEstimatedAmount || 0), 0);
+        const pendingReqs = filteredRequests.filter((r) => r.status === 'Submitted' || r.status === 'Pending Approval').length;
+        const approvedReqs = filteredRequests.filter((r) => r.status === 'Approved').length;
+        const rejectedReqs = filteredRequests.filter((r) => r.status === 'Rejected').length;
+        return {
+          title: 'Purchase Request Report',
+          columns: [
+            { label: 'Request Date', align: 'left', isMono: true },
+            { label: 'Request No.', align: 'left', isBold: true },
+            { label: 'Requested By', align: 'left' },
+            { label: 'Department', align: 'left' },
+            { label: 'Priority', align: 'center' },
+            { label: 'Items', align: 'center' },
+            { label: 'Est. Amount (₹)', align: 'right', isBold: true },
+            { label: 'Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Requests', value: `${filteredRequests.length}` },
+            { label: 'Total Est. Value', value: formatCurrency(totalEstimated) },
+            { label: 'Pending', value: `${pendingReqs}` },
+            { label: 'Approved', value: `${approvedReqs}` },
+            { label: 'Rejected', value: `${rejectedReqs}` },
+          ],
+        };
+      }
+
+      // 26. PAYMENT OUT REPORT
+      case 'payment_out_report': {
+        const filteredPaymentOuts = paymentOuts.filter((p) => isWithinDateRange(p.paymentDate));
+        const rows = filteredPaymentOuts.map((p) => ({
+          id: p.id,
+          cells: [
+            formatToDDMMYYYY(p.paymentDate),
+            p.paymentNo,
+            p.supplierName,
+            p.paymentMode,
+            p.referenceNo || '—',
+            p.purchaseNo || '—',
+            formatCurrency(p.amount),
+            p.status,
+          ],
+        }));
+        const totalPaid = filteredPaymentOuts.reduce((acc, p) => acc + p.amount, 0);
+        const modeMap: Record<string, number> = {};
+        filteredPaymentOuts.forEach((p) => {
+          modeMap[p.paymentMode] = (modeMap[p.paymentMode] || 0) + p.amount;
+        });
+        const topPayMode = Object.entries(modeMap).sort((a, b) => b[1] - a[1])[0];
+        return {
+          title: 'Payment Out Report (Vendor Payments)',
+          columns: [
+            { label: 'Date', align: 'left', isMono: true },
+            { label: 'Payment No.', align: 'left', isBold: true },
+            { label: 'Supplier / Vendor', align: 'left' },
+            { label: 'Payment Mode', align: 'left' },
+            { label: 'Reference No.', align: 'left' },
+            { label: 'Purchase No.', align: 'left' },
+            { label: 'Amount Paid (₹)', align: 'right', isBold: true },
+            { label: 'Status', align: 'center' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Payments Made', value: `${filteredPaymentOuts.length}` },
+            { label: 'Total Amount Paid Out', value: formatCurrency(totalPaid) },
+            { label: 'Top Payment Mode', value: topPayMode ? `${topPayMode[0]} (${formatCurrency(topPayMode[1])})` : '—' },
+          ],
+        };
+      }
+
+      // ---- NEW REPORTS: Expense ----
+
+      // 27. EXPENSE SUMMARY REPORT
+      case 'expense_summary': {
+        // Expense data is derived from PaymentOut records categorised as expenses
+        const expensePayments = paymentOuts.filter((p) => isWithinDateRange(p.paymentDate));
+        const categoryMap: Record<string, { count: number; total: number }> = {};
+        expensePayments.forEach((p) => {
+          const cat = p.paymentType || p.paymentMode || 'General Expense';
+          if (!categoryMap[cat]) categoryMap[cat] = { count: 0, total: 0 };
+          categoryMap[cat].count += 1;
+          categoryMap[cat].total += p.amount;
+        });
+        const rows = Object.entries(categoryMap)
+          .sort((a, b) => b[1].total - a[1].total)
+          .map(([cat, val], idx) => ({
+            id: `exp-${idx}`,
+            cells: [
+              cat,
+              `${val.count} Transactions`,
+              formatCurrency(val.total),
+              `${expensePayments.length > 0 ? ((val.total / expensePayments.reduce((a, p) => a + p.amount, 0)) * 100).toFixed(1) : '0.0'}%`,
+            ],
+          }));
+        const totalExpense = expensePayments.reduce((acc, p) => acc + p.amount, 0);
+        const topCategory = Object.entries(categoryMap).sort((a, b) => b[1].total - a[1].total)[0];
+        return {
+          title: 'Expense Summary Report',
+          columns: [
+            { label: 'Expense Category / Mode', align: 'left', isBold: true },
+            { label: 'Transaction Count', align: 'center' },
+            { label: 'Total Amount (₹)', align: 'right', isBold: true },
+            { label: 'Share (%)', align: 'right' },
+          ],
+          rows,
+          summary: [
+            { label: 'Total Expense Transactions', value: `${expensePayments.length}` },
+            { label: 'Total Expenses', value: formatCurrency(totalExpense) },
+            { label: 'Top Expense Category', value: topCategory ? topCategory[0] : '—' },
+          ],
+        };
+      }
+
       default:
         return {
           title: currentReportMeta.label,
@@ -1499,6 +1871,10 @@ export const SaleManagementReportsView: React.FC = () => {
     customers,
     currentReportMeta,
     formattedDateRange,
+    quotations,
+    paymentIns,
+    paymentOuts,
+    purchaseRequests,
   ]);
 
   // Dedicated Print Function for the clean preview document

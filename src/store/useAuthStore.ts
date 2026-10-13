@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { User, Role, ReminderItem } from '../types';
 import { api } from '../services/api';
+import { SESSION_EXPIRED_EVENT } from '../api/tokenRefresh';
 import { toast } from 'sonner';
 
 interface AuthState {
@@ -215,3 +216,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setUsers: (users: User[]) => set({ users }),
 }));
+
+// The refresh cookie is gone or rejected: stored credentials were already cleared, so drop to the login screen.
+if (typeof window !== 'undefined') {
+  window.addEventListener(SESSION_EXPIRED_EVENT, () => {
+    if (!useAuthStore.getState().currentUser) return;
+    useAuthStore.setState({
+      token: null,
+      currentUser: null,
+      role: 'STAFF',
+      isAdmin: false,
+      isSuperAdmin: false,
+      isOrgSuperAdmin: false,
+    });
+    toast.error('Session expired', {
+      description: 'Please sign in again.',
+    });
+  });
+}

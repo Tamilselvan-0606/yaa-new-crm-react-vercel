@@ -1447,49 +1447,55 @@ export const SalesReturnView: React.FC = () => {
         >
           <form noValidate onSubmit={handleSubmitCreateReturn} className="p-4 sm:p-6 space-y-5">
             {/* Row 1: Select Original Invoice & Party */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Original Invoice <span className="text-rose-500">*</span>
-                </label>
-                <select
-                  value={selectedInvoiceId}
-                  onChange={(e) => handleInvoiceChange(e.target.value)}
-                  className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold outline-none focus:border-[#4309A2]"
-                >
-                  <option value="">Manual / Unlinked Return</option>
-                  {sales.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.invoiceNo} - {s.customerName} (₹{s.grandTotal})
-                    </option>
-                  ))}
-                </select>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3">
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Original Invoice <span className="text-rose-500">*</span>
+                  </span>
+                  <select
+                    value={selectedInvoiceId}
+                    onChange={(e) => handleInvoiceChange(e.target.value)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
+                  >
+                    <option value="">Manual / Unlinked Return</option>
+                    {sales.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.invoiceNo} - {s.customerName} (₹{s.grandTotal})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Party Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Customer / Party Name"
-                  value={partyName}
-                  onChange={(e) => setPartyName(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Party Name <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Customer / Party Name"
+                    value={partyName}
+                    onChange={(e) => setPartyName(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Return Date
-                </label>
-                <input
-                  type="date"
-                  value={returnDate}
-                  onChange={(e) => setReturnDate(e.target.value)}
-                  className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold outline-none focus:border-[#4309A2]"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Return Date
+                  </span>
+                  <input
+                    type="date"
+                    value={returnDate}
+                    onChange={(e) => setReturnDate(e.target.value)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1506,6 +1512,7 @@ export const SalesReturnView: React.FC = () => {
                   <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                     <tr>
                       <th className="p-2.5 text-white">Item Name</th>
+                      <th className="p-2.5 text-center text-white">Batch No</th>
                       <th className="p-2.5 text-center text-white">Sold Qty</th>
                       <th className="p-2.5 text-center text-white">Return Qty</th>
                       <th className="p-2.5 text-right text-white">Unit Price</th>
@@ -1516,7 +1523,7 @@ export const SalesReturnView: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {returnItems.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="p-6 text-center text-slate-400">
+                        <td colSpan={7} className="p-6 text-center text-slate-400">
                           {selectedInvoiceId
                             ? "No products found in this invoice."
                             : "Select an original invoice above to populate sold line items."}
@@ -1526,6 +1533,20 @@ export const SalesReturnView: React.FC = () => {
                       returnItems.map((item, idx) => (
                         <tr key={item.id || idx}>
                           <td className="p-2.5 font-bold text-slate-800">{item.productName}</td>
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="text"
+                              value={item.batch || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const updated = [...returnItems];
+                                updated[idx] = { ...updated[idx], batch: val };
+                                setReturnItems(updated);
+                              }}
+                              placeholder="Batch No"
+                              className="w-24 h-8 px-2 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-semibold text-[#33077C] outline-none focus:border-[#4309A2] focus:bg-white"
+                            />
+                          </td>
                           <td className="p-2.5 text-center text-slate-500">{item.soldQuantity}</td>
                           <td className="p-2.5 text-center">
                             <input
@@ -1576,69 +1597,77 @@ export const SalesReturnView: React.FC = () => {
             </div>
 
             {/* Row 3: Refund Method, Refund Status, Return Status */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Refund Method
-                </label>
-                <select
-                  value={refundMethod}
-                  onChange={(e) => setRefundMethod(e.target.value as any)}
-                  className="w-full h-10 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold outline-none focus:border-[#4309A2]"
-                >
-                  <option value="Store Credit">Store Credit (Customer Ledger)</option>
-                  <option value="Cash">Cash</option>
-                  <option value="UPI">UPI</option>
-                  <option value="Bank Transfer">Bank Transfer</option>
-                </select>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3">
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Refund Method
+                  </span>
+                  <select
+                    value={refundMethod}
+                    onChange={(e) => setRefundMethod(e.target.value as any)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
+                  >
+                    <option value="Store Credit">Store Credit (Customer Ledger)</option>
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Refund Status
-                </label>
-                <select
-                  value={refundStatus}
-                  onChange={(e) => setRefundStatus(e.target.value as any)}
-                  className="w-full h-10 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold outline-none focus:border-[#4309A2]"
-                >
-                  <option value="Refunded">Refunded (Settled)</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Store Credit">Store Credit</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Refund Status
+                  </span>
+                  <select
+                    value={refundStatus}
+                    onChange={(e) => setRefundStatus(e.target.value as any)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
+                  >
+                    <option value="Refunded">Refunded (Settled)</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Store Credit">Store Credit</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Return Lifecycle Status
-                </label>
-                <select
-                  value={returnStatus}
-                  onChange={(e) => setReturnStatus(e.target.value as any)}
-                  className="w-full h-10 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold outline-none focus:border-[#4309A2]"
-                >
-                  <option value="Approved">Approved (Restores Stock)</option>
-                  <option value="Received">Received (Restores Stock)</option>
-                  <option value="Refunded">Refunded (Restores Stock)</option>
-                  <option value="Requested">Requested</option>
-                  <option value="Rejected">Rejected</option>
-                </select>
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Return Lifecycle Status
+                  </span>
+                  <select
+                    value={returnStatus}
+                    onChange={(e) => setReturnStatus(e.target.value as any)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
+                  >
+                    <option value="Approved">Approved (Restores Stock)</option>
+                    <option value="Received">Received (Restores Stock)</option>
+                    <option value="Refunded">Refunded (Restores Stock)</option>
+                    <option value="Requested">Requested</option>
+                    <option value="Rejected">Rejected</option>
+                  </select>
+                </div>
               </div>
             </div>
 
             {/* Row 4: Remarks */}
-            <div>
-              <label className="text-xs font-semibold text-slate-600 block mb-1">
-                Remarks / Notes
-              </label>
-              <textarea
-                rows={2}
-                value={generalNotes}
-                onChange={(e) => setGeneralNotes(e.target.value)}
-                placeholder="Reason for return, condition of packaging, inspection notes..."
-                className="w-full p-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm outline-none focus:border-[#4309A2]"
-              />
+            <div className="relative pt-1">
+              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Remarks / Notes
+                </span>
+                <textarea
+                  rows={2}
+                  value={generalNotes}
+                  onChange={(e) => setGeneralNotes(e.target.value)}
+                  placeholder="Reason for return, condition of packaging, inspection notes..."
+                  className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm outline-none resize-none"
+                />
+              </div>
             </div>
 
             {/* Actions */}
@@ -1714,6 +1743,7 @@ export const SalesReturnView: React.FC = () => {
                 <tr>
                   <th className="p-2.5 text-white">#</th>
                   <th className="p-2.5 text-white">Returned Item</th>
+                  <th className="p-2.5 text-center text-white">Batch No</th>
                   <th className="p-2.5 text-center text-white">Return Qty</th>
                   <th className="p-2.5 text-right text-white">Price</th>
                   <th className="p-2.5 text-white">Reason</th>
@@ -1725,6 +1755,7 @@ export const SalesReturnView: React.FC = () => {
                   <tr key={i}>
                     <td className="p-2.5 text-slate-400">{i + 1}</td>
                     <td className="p-2.5 font-bold text-slate-800">{it.productName}</td>
+                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">{it.batch || '—'}</td>
                     <td className="p-2.5 text-center">{it.returnQuantity}</td>
                     <td className="p-2.5 text-right">₹{Number(it.unitPrice || 0).toLocaleString('en-IN')}</td>
                     <td className="p-2.5 text-slate-600">{it.reason}</td>
@@ -1775,36 +1806,40 @@ export const SalesReturnView: React.FC = () => {
           subtitle={`Current Status: ${statusModalReturn.returnStatus}`}
           maxWidth="md"
         >
-          <div className="p-4 space-y-4 text-xs sm:text-sm font-sans">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1.5">
-                New Status
-              </label>
-              <select
-                value={newStatusValue}
-                onChange={(e) => setNewStatusValue(e.target.value as SalesReturnStatus)}
-                className="w-full h-11 px-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-bold outline-none focus:border-[#33077C]"
-              >
-                <option value="Approved">Approved (Restores Stock)</option>
-                <option value="Received">Received (Restores Stock)</option>
-                <option value="Refunded">Refunded (Restores Stock)</option>
-                <option value="Requested">Requested (Removes restored stock)</option>
-                <option value="Rejected">Rejected (Removes restored stock)</option>
-              </select>
+          <div className="p-4 space-y-4 pt-5 text-xs sm:text-sm font-sans">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  New Status
+                </span>
+                <select
+                  value={newStatusValue}
+                  onChange={(e) => setNewStatusValue(e.target.value as SalesReturnStatus)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-bold outline-none cursor-pointer"
+                >
+                  <option value="Approved">Approved (Restores Stock)</option>
+                  <option value="Received">Received (Restores Stock)</option>
+                  <option value="Refunded">Refunded (Restores Stock)</option>
+                  <option value="Requested">Requested (Removes restored stock)</option>
+                  <option value="Rejected">Rejected (Removes restored stock)</option>
+                </select>
+              </div>
             </div>
 
             {newStatusValue === 'Rejected' && (
-              <div>
-                <label className="block font-bold text-slate-700 mb-1.5">
-                  Rejection Reason <span className="text-rose-500">*</span>
-                </label>
-                <textarea
-                  rows={3}
-                  value={rejectionReasonText}
-                  onChange={(e) => setRejectionReasonText(e.target.value)}
-                  placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
-                  className="w-full p-3 bg-white border border-rose-300 rounded-xl text-xs sm:text-sm outline-none focus:border-rose-600"
-                />
+              <div className="relative pt-2">
+                <div className="relative w-full bg-white border border-rose-300 hover:border-rose-400 focus-within:border-rose-600 focus-within:ring-2 focus-within:ring-rose-500/15 rounded-xl transition-all shadow-2xs">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-rose-600 rounded-sm pointer-events-none tracking-tight z-10">
+                    Rejection Reason <span className="text-rose-500">*</span>
+                  </span>
+                  <textarea
+                    rows={3}
+                    value={rejectionReasonText}
+                    onChange={(e) => setRejectionReasonText(e.target.value)}
+                    placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
+                    className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm outline-none resize-none"
+                  />
+                </div>
               </div>
             )}
 

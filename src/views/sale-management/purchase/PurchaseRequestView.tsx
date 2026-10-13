@@ -841,23 +841,6 @@ export const PurchaseRequestView: React.FC = () => {
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
               Purchase Requisitions & Requests
             </h1>
-
-            {/* API Connection Indicator */}
-            {isApiConnected === true && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Live API
-              </span>
-            )}
-            {isApiConnected === false && (
-              <span
-                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 cursor-help"
-                title={apiErrorMessage || 'Using local database'}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                Local Mode
-              </span>
-            )}
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             Submit internal stock purchase requests, route for managerial approval, and convert to Purchase Orders
@@ -1422,79 +1405,89 @@ export const PurchaseRequestView: React.FC = () => {
           className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150"
         >
           {/* Metadata: 3-column Grid Layout */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Request Number <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('requestNo')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                placeholder="REQ-2026-..."
-              />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Request Number <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('requestNo')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  placeholder="REQ-2026-..."
+                />
+              </div>
               <FormError message={errors.requestNo?.message} />
             </div>
 
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Requested By <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('requestedBy')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                placeholder="Enter requester name"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Requested By <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('requestedBy')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  placeholder="Enter requester name"
+                />
+              </div>
               <FormError message={errors.requestedBy?.message} />
             </div>
 
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Department <span className="text-slate-500">*</span>
-              </label>
-              <select
-                {...register('department')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="">Select Department</option>
-                <option value="Warehouse / Production">Warehouse / Production</option>
-                <option value="Operations">Operations</option>
-                <option value="Logistics">Logistics</option>
-                <option value="IT & Infrastructure">IT & Infrastructure</option>
-                <option value="Procurement">Procurement</option>
-                <option value="Marketing">Marketing</option>
-                <option value="Sales">Sales</option>
-              </select>
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Department <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  {...register('department')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none cursor-pointer"
+                >
+                  <option value="">Select Department</option>
+                  <option value="Warehouse / Production">Warehouse / Production</option>
+                  <option value="Operations">Operations</option>
+                  <option value="Logistics">Logistics</option>
+                  <option value="IT & Infrastructure">IT & Infrastructure</option>
+                  <option value="Procurement">Procurement</option>
+                  <option value="Marketing">Marketing</option>
+                  <option value="Sales">Sales</option>
+                </select>
+              </div>
               <FormError message={errors.department?.message} />
             </div>
 
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Priority <span className="text-slate-500">*</span>
-              </label>
-              <select
-                {...register('priority')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="Low">Low</option>
-                <option value="Medium">Medium</option>
-                <option value="High">High</option>
-                <option value="Urgent">Urgent</option>
-              </select>
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Priority <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  {...register('priority')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none cursor-pointer"
+                >
+                  <option value="Low">Low</option>
+                  <option value="Medium">Medium</option>
+                  <option value="High">High</option>
+                  <option value="Urgent">Urgent</option>
+                </select>
+              </div>
               <FormError message={errors.priority?.message} />
             </div>
 
-            <div className="md:col-span-2">
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Business Justification / Notes
-              </label>
-              <input
-                type="text"
-                {...register('notes')}
-                placeholder="Why is this purchase required? Any preferred vendors?"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+            <div className="md:col-span-2 relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Business Justification / Notes
+                </span>
+                <input
+                  type="text"
+                  {...register('notes')}
+                  placeholder="Why is this purchase required? Any preferred vendors?"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                />
+              </div>
               <FormError message={errors.notes?.message} />
             </div>
           </div>
@@ -1814,18 +1807,20 @@ export const PurchaseRequestView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setRejectionModalOpen(false)}
         >
-          <div className="space-y-4 pt-2 text-xs">
-            <div>
-              <label className="block text-xs sm:text-[13px] font-semibold text-slate-700 mb-1.5">
-                Rejection Reason <span className="text-rose-500">*</span>
-              </label>
-              <textarea
-                rows={3}
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                placeholder="e.g. Budget constraints, duplicate request, existing surplus stock..."
-                className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 transition-all"
-              />
+          <div className="space-y-4 pt-4 text-xs">
+            <div className="relative">
+              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Rejection Reason <span className="text-rose-500">*</span>
+                </span>
+                <textarea
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Budget constraints, duplicate request, existing surplus stock..."
+                  className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm font-medium text-slate-700 outline-none resize-none"
+                />
+              </div>
             </div>
             <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button

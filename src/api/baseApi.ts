@@ -9,13 +9,10 @@ import {
 import {
   API_BASE_URL,
   getStoredToken,
-  setStoredToken,
   USER_ID_STORAGE_KEY,
-  USER_CACHE_STORAGE_KEY,
   getStoredOrganizationId,
-  setStoredOrganizationId,
 } from './config';
-import { authApi } from './auth/authApi';
+import { canRefreshAfter, refreshAccessToken, retryWithRefreshedToken } from './tokenRefresh';
 
 /**
  * Base Axios Client for CRM API integration
@@ -49,73 +46,12 @@ baseClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-/**
- * Shared in-flight refresh promise singleton.
- * Prevents multiple parallel /refresh calls and avoids token family replay revocations.
- */
-let refreshPromise: Promise<string | null> | null = null;
-
-export const executeTokenRefresh = async (): Promise<string | null> => {
-  if (refreshPromise) {
-    return refreshPromise;
-  }
-
-  refreshPromise = (async () => {
-    try {
-      const res = await authApi.refreshToken();
-      const token =
-        res?.accessToken ||
-        res?.data?.token ||
-        res?.data?.accessToken ||
-        (res as any)?.token ||
-        null;
-
-      if (token) {
-        setStoredToken(token);
-        const user = res?.user || res?.data?.user;
-        if (user) {
-          localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(user));
-          if (user.id) localStorage.setItem(USER_ID_STORAGE_KEY, user.id);
-          if (user.organizationId) setStoredOrganizationId(user.organizationId);
-        }
-        return token;
-      }
-      return null;
-    } catch (err) {
-      console.warn('Silent session token refresh failed:', err);
-      return null;
-    } finally {
-      refreshPromise = null;
-    }
-  })();
-
-  return refreshPromise;
-};
-
 baseClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-    const is401 = error.response?.status === 401;
-
-    // Silent Token Refresh on 401 (prevent logout when 15-min JWT expires)
-    if (is401 && originalRequest && !originalRequest._retry) {
-      // Do not attempt refresh on auth endpoints themselves (e.g. login/refresh) to prevent infinite loops
-      if (
-        originalRequest.url?.includes('/auth/refresh') ||
-        originalRequest.url?.includes('/auth/login')
-      ) {
-        return Promise.reject(error);
-      }
-
-      originalRequest._retry = true;
-
-      const newToken = await executeTokenRefresh();
-      if (newToken) {
-        originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        return baseClient(originalRequest);
-      }
-    }
+    // Silent token refresh when the short-lived access token has expired
+    const retried = await retryWithRefreshedToken(baseClient, error);
+    if (retried) return retried;
 
     const data = error.response?.data;
     let message = 'An unexpected error occurred';
@@ -178,13 +114,25 @@ const dynamicBaseQuery: BaseQueryFn<
     }
   }
 
+  const sentToken = getStoredToken();
   let result = await rawBaseQuery(adjustedArgs, api, extraOptions);
 
-  // Silent Token Refresh on 401
-  if (result.error && result.error.status === 401) {
-    const newToken = await executeTokenRefresh();
+  // Silent token refresh on 401, then retry the original request once
+  if (result.error && canRefreshAfter(adjustedArgs.url, result.error.status, result.error.data)) {
+    const newToken = await refreshAccessToken(sentToken);
     if (newToken) {
-      result = await rawBaseQuery(adjustedArgs, api, extraOptions);
+      // Force the new token into the retry request headers explicitly
+      const retryArgs: FetchArgs =
+        typeof adjustedArgs === 'string'
+          ? { url: adjustedArgs, headers: { Authorization: `Bearer ${newToken}` } }
+          : {
+              ...adjustedArgs,
+              headers: {
+                ...(adjustedArgs.headers || {}),
+                Authorization: `Bearer ${newToken}`,
+              },
+            };
+      result = await rawBaseQuery(retryArgs, api, extraOptions);
     }
   }
 

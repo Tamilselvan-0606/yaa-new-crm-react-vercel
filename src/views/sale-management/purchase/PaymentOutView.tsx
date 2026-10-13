@@ -862,26 +862,8 @@ export const PaymentOutView: React.FC = () => {
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <CreditCard className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
-              <span>Payment Out (Vendor Disbursements)</span>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-normal ${
-                  isApiConnected
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border border-amber-200'
-                }`}
-              >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    isApiConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                  }`}
-                />
-                {isApiLoading
-                  ? 'Syncing API...'
-                  : isApiConnected
-                  ? 'Work API Live'
-                  : 'Local Cache'}
-              </span>
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+              Payment Out (Vendor Disbursements)
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
@@ -1495,102 +1477,123 @@ export const PaymentOutView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSubmit(onSubmitPayment)} className="space-y-4.5 p-2 sm:p-4">
           {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 1: Supplier / Vendor */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Supplier / Vendor <span className="text-slate-400 font-normal">*</span>
-              </label>
-              <Controller
-                control={control}
-                name="supplierId"
-                render={({ field }) => (
-                  <CustomSelect
-                    value={field.value}
-                    onChange={(val) => {
-                      field.onChange(val);
-                      setValue('purchaseId', '');
-                      setValue('amount', '');
-                    }}
-                    placeholder="Select supplier / vendor"
-                    allowClear={true}
-                    options={mergedSuppliers.map((s) => ({
-                      value: s.id,
-                      label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
-                    }))}
-                  />
-                )}
-              />
+              <div className="relative">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Supplier / Vendor <span className="text-rose-500">*</span>
+                </span>
+                <Controller
+                  control={control}
+                  name="supplierId"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => {
+                        field.onChange(val);
+                        setValue('purchaseId', '');
+                        setValue('amount', '');
+                      }}
+                      placeholder="Select supplier / vendor"
+                      allowClear={true}
+                      options={mergedSuppliers.map((s) => ({
+                        value: s.id,
+                        label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
+                      }))}
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.supplierId?.message} />
             </div>
 
             {/* Field 2: Bill No (Dropdown) */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Bill No
-              </label>
-              <Controller
-                control={control}
-                name="purchaseId"
-                render={({ field }) => (
-                  <CustomSelect
-                    value={field.value || ''}
-                    onChange={(val) => handlePurchaseSelect(val)}
-                    placeholder="Select bill no"
-                    allowClear={true}
-                    options={supplierPurchases.map((p) => ({
-                      value: p.id,
-                      label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
-                    }))}
-                  />
-                )}
-              />
+              <div className="relative">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Bill No
+                </span>
+                <Controller
+                  control={control}
+                  name="purchaseId"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value || ''}
+                      onChange={(val) => handlePurchaseSelect(val)}
+                      placeholder="Select bill no"
+                      allowClear={true}
+                      options={supplierPurchases.map((p) => ({
+                        value: p.id,
+                        label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
+                      }))}
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.purchaseId?.message} />
             </div>
 
             {/* Field 3: Voucher / Payment No */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Voucher / Payment No <span className="text-slate-400 font-normal">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('paymentNo')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-                placeholder="e.g. VPA-2026-001"
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.paymentNo
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Voucher / Payment No <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('paymentNo')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                  placeholder="e.g. VPA-2026-001"
+                />
+              </div>
               <FormError message={errors.paymentNo?.message} />
             </div>
           </div>
 
           {/* Row 2: 3 Fields (Payment Date, Payment Amount, Payment Mode) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 4: Payment Date */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Payment Date <span className="text-slate-400 font-normal">*</span>
-              </label>
-              <input
-                type="date"
-                {...register('paymentDate')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white cursor-pointer"
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.paymentDate
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Date <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="date"
+                  {...register('paymentDate')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                />
+              </div>
               <FormError message={errors.paymentDate?.message} />
             </div>
 
             {/* Field 5: Payment Amount */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Payment Amount (₹) <span className="text-slate-400 font-normal">*</span>
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-3 text-slate-400 font-medium text-sm">₹</span>
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.amount
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Amount (₹) <span className="text-rose-500">*</span>
+                </span>
+                <span className="pl-4 text-slate-400 font-medium text-sm">₹</span>
                 <input
                   type="number"
                   step="0.01"
                   placeholder="0.00"
                   {...register('amount')}
-                  className="w-full h-11 pl-9 pr-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-bold text-slate-900 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
+                  className="w-full h-full pl-2 pr-4 bg-transparent text-xs sm:text-[13px] font-bold text-slate-900 outline-none"
                 />
               </div>
               <FormError message={errors.amount?.message} />
@@ -1598,106 +1601,122 @@ export const PaymentOutView: React.FC = () => {
 
             {/* Field 6: Payment Mode */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Payment Mode <span className="text-slate-400 font-normal">*</span>
-              </label>
-              <Controller
-                control={control}
-                name="paymentMode"
-                render={({ field }) => (
-                  <CustomSelect
-                    value={field.value}
-                    onChange={(val) => field.onChange(val as PaymentOutMode)}
-                    placeholder="Select payment mode"
-                    options={[
-                      { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
-                      { value: 'UPI', label: 'UPI / QR Code' },
-                      { value: 'Cash', label: 'Cash' },
-                      { value: 'Cheque', label: 'Cheque' },
-                      { value: 'Card', label: 'Debit / Credit Card' },
-                      { value: 'Net Banking', label: 'Net Banking' },
-                      { value: 'Other', label: 'Other' },
-                    ]}
-                  />
-                )}
-              />
+              <div className="relative">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Mode <span className="text-rose-500">*</span>
+                </span>
+                <Controller
+                  control={control}
+                  name="paymentMode"
+                  render={({ field }) => (
+                    <CustomSelect
+                      value={field.value}
+                      onChange={(val) => field.onChange(val as PaymentOutMode)}
+                      placeholder="Select payment mode"
+                      options={[
+                        { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
+                        { value: 'UPI', label: 'UPI / QR Code' },
+                        { value: 'Cash', label: 'Cash' },
+                        { value: 'Cheque', label: 'Cheque' },
+                        { value: 'Card', label: 'Debit / Credit Card' },
+                        { value: 'Net Banking', label: 'Net Banking' },
+                        { value: 'Other', label: 'Other' },
+                      ]}
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
 
           {/* Row 3: 3 Fields (Attach Receipt / Image, Reference no, Notes) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Field 7: Attach Receipt / Image (Next to Payment Mode / in Row 3) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+            {/* Field 7: Attach Receipt / Image */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Upload Receipt / Proof
-              </label>
-              {watchReceiptImage ? (
-                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
-                  <img
-                    src={watchReceiptImage}
-                    alt="Receipt"
-                    className="w-7 h-7 rounded-lg object-cover border border-slate-300"
-                  />
-                  <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
-                    Image Attached
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setValue('receiptImage', '')}
-                    className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
-                    title="Remove Image"
-                  >
-                    <X className="w-4 h-4 stroke-[2.5]" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex items-center justify-center gap-2 w-full h-11 px-3.5 rounded-xl border border-dashed border-slate-300 hover:border-[#4309A2] hover:bg-[#4309A2]/5 text-slate-600 hover:text-[#4309A2] text-xs sm:text-[13px] font-medium cursor-pointer transition-all bg-white">
-                  <Upload className="w-4 h-4 text-slate-400" />
-                  <span>Upload Image / Receipt</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setValue('receiptImage', reader.result as string);
-                          toast.success('Receipt image attached successfully!');
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                    }}
-                  />
-                </label>
-              )}
+              <div className="relative">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Upload Receipt / Proof
+                </span>
+                {watchReceiptImage ? (
+                  <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-300 bg-slate-50 shadow-2xs">
+                    <img
+                      src={watchReceiptImage}
+                      alt="Receipt"
+                      className="w-7 h-7 rounded-lg object-cover border border-slate-300"
+                    />
+                    <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
+                      Image Attached
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setValue('receiptImage', '')}
+                      className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                      title="Remove Image"
+                    >
+                      <X className="w-4 h-4 stroke-[2.5]" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex items-center justify-center gap-2 w-full h-11 px-3.5 rounded-xl border border-slate-300 hover:border-[#33077C] hover:bg-[#33077C]/5 text-slate-600 hover:text-[#33077C] text-xs sm:text-[13px] font-medium cursor-pointer transition-all bg-white shadow-2xs">
+                    <Upload className="w-4 h-4 text-slate-400" />
+                    <span>Upload Image / Receipt</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            setValue('receiptImage', reader.result as string);
+                            toast.success('Receipt image attached successfully!');
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
             </div>
 
             {/* Field 8: Reference no */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Reference no
-              </label>
-              <input
-                type="text"
-                {...register('referenceNo')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.referenceNo
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Reference no
+                </span>
+                <input
+                  type="text"
+                  {...register('referenceNo')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.referenceNo?.message} />
             </div>
 
             {/* Field 9: Notes */}
             <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Notes
-              </label>
-              <input
-                type="text"
-                {...register('notes')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.notes
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Notes
+                </span>
+                <input
+                  type="text"
+                  {...register('notes')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.notes?.message} />
             </div>
           </div>

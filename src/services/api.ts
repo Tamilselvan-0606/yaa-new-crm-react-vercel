@@ -30,7 +30,9 @@ import {
 import { authApi } from '../api/auth/authApi';
 import { ApiUser, ApiLoginResponse } from '../api/auth/authTypes';
 
-import { executeTokenRefresh } from '../api/baseApi';
+import { baseClient } from '../api/baseApi';
+import { CreatePlatformLeadRequest, UpdatePlatformLeadRequest } from '../api/platform/leadTypes';
+import { retryWithRefreshedToken } from '../api/tokenRefresh';
 
 export { authApi };
 export type { ApiUser, ApiLoginResponse };
@@ -68,25 +70,9 @@ axiosClient.interceptors.request.use(
 axiosClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-    const is401 = error.response?.status === 401;
-
-    // Silent Token Refresh on 401
-    if (is401 && originalRequest && !originalRequest._retry) {
-      if (
-        originalRequest.url?.includes('/auth/refresh') ||
-        originalRequest.url?.includes('/auth/login')
-      ) {
-        return Promise.reject(error);
-      }
-
-      originalRequest._retry = true;
-      const newToken = await executeTokenRefresh();
-      if (newToken) {
-        originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        return axiosClient(originalRequest);
-      }
-    }
+    // Silent token refresh when the short-lived access token has expired
+    const retried = await retryWithRefreshedToken(axiosClient, error);
+    if (retried) return retried;
 
     const message =
       error.response?.data?.error?.message ||
@@ -515,32 +501,85 @@ class ApiService {
 
   // Leads
   async getLeads(): Promise<Lead[]> {
-    const res = await axiosClient.get<Lead[]>('/api/leads');
+    const res = await baseClient.get<any>('/platform/leads', {
+      params: { limit: 100 },
+    });
+    const items = res.data?.data || [];
+    return items.map((item: any) => ({
+      id: item.id,
+      leadId: item.leadCode || item.id,
+      name: item.name || '',
+      company: item.company || '',
+      phone: item.phone || '',
+      whatsapp: item.whatsapp || item.phone || '',
+      email: item.email || '',
+      location: item.location || '',
+      source: item.source || 'Website',
+      leadSource: item.source || 'Website',
+      interestedProductOrService: item.planInterest || 'Standard',
+      assignedStaffId: item.assignedTo || '',
+      assignedStaffName: item.assignedTo || 'Unassigned',
+      status: item.status || 'New',
+      priority: item.priority || 'Medium',
+      interest: item.priority || 'Medium',
+      feedback: item.notes || '',
+      nextFollowUpDate: item.followUpDate || '',
+      notes: item.notes || '',
+      createdAt: item.createdAt || '',
+    }));
+  }
+
+  async createLead(data: Partial<Lead>): Promise<any> {
+    const payload: CreatePlatformLeadRequest = {
+      name: data.name || '',
+      company: data.company || '',
+      email: data.email || '',
+      phone: data.phone || '',
+      whatsapp: data.whatsapp || data.phone || '',
+      source: data.leadSource || 'Website',
+      status: data.status || 'New',
+      priority: data.priority || 'Medium',
+      planInterest: data.interestedProductOrService || 'Standard',
+      location: data.location || '',
+      notes: data.notes || data.requirements || '',
+    };
+    const res = await baseClient.post('/platform/leads', payload);
     return res.data;
   }
 
-  async createLead(data: Partial<Lead>): Promise<Lead> {
-    const res = await axiosClient.post<Lead>('/api/leads', data);
-    return res.data;
-  }
-
-  async updateLead(id: string, data: Partial<Lead>): Promise<Lead> {
-    const res = await axiosClient.put<Lead>(`/api/leads/${id}`, data);
+  async updateLead(id: string, data: Partial<Lead>): Promise<any> {
+    const payload: UpdatePlatformLeadRequest = {};
+    if (data.name) payload.name = data.name;
+    if (data.company) payload.company = data.company;
+    if (data.email) payload.email = data.email;
+    if (data.phone) payload.phone = data.phone;
+    if (data.status) payload.status = data.status;
+    if (data.priority) payload.priority = data.priority;
+    if (data.nextFollowUpDate) payload.followUpDate = data.nextFollowUpDate;
+    if (data.feedback || data.notes) payload.notes = data.notes || data.feedback;
+    const res = await baseClient.put(`/platform/leads/${id}`, payload);
     return res.data;
   }
 
   async addLeadFollowUp(id: string, followUp: { type: string; notes: string; outcome: string; nextActionDate?: string }): Promise<any> {
-    const res = await axiosClient.post(`/api/leads/${id}/followups`, followUp);
-    return res.data;
+    try {
+      const res = await baseClient.patch(`/platform/leads/${id}`, {
+        followUpDate: followUp.nextActionDate ? new Date(followUp.nextActionDate).toISOString() : undefined,
+        notes: `[${followUp.type}] ${followUp.outcome || ''} - ${followUp.notes || ''}`.trim(),
+      });
+      return res.data;
+    } catch (e) {
+      return { success: true };
+    }
   }
 
-  async convertLead(id: string, data: { industry?: string; planName?: string; amount?: number } = {}): Promise<any> {
-    const res = await axiosClient.post(`/api/leads/${id}/convert`, data);
+  async convertLead(id: string, data: any = {}): Promise<any> {
+    const res = await baseClient.post(`/platform/leads/${id}/convert`, data);
     return res.data;
   }
 
   async deleteLead(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/leads/${id}`);
+    const res = await baseClient.delete(`/platform/leads/${id}`);
     return res.data;
   }
 

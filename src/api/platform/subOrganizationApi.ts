@@ -50,14 +50,13 @@ export const subOrganizationEndpoints = baseApi.injectEndpoints({
     >({
       query: ({ parentOrgId, payload }) => {
         const targetOrgId = parentOrgId || getStoredOrganizationId();
+        const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
         return {
           url: '/platform/sub-organizations',
           method: 'POST',
           headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
           params: targetOrgId ? { organization_id: targetOrgId } : undefined,
-          body: targetOrgId
-            ? { organization_id: targetOrgId, organizationId: targetOrgId, ...payload }
-            : payload,
+          body: cleanPayload,
         };
       },
       invalidatesTags: [
@@ -118,6 +117,8 @@ export const {
   useUpdateSubOrganizationStatusMutation,
 } = subOrganizationEndpoints;
 
+const inFlightSubOrgRequests = new Map<string, Promise<SubOrganizationListResponse>>();
+
 export const subOrganizationApi = {
   /**
    * List sub-organizations
@@ -142,24 +143,36 @@ export const subOrganizationApi = {
       headers['x-organization-id'] = orgId;
     }
 
-    // Call /platform/sub-organizations with query parameters
-    try {
-      const res = await baseClient.get<SubOrganizationListResponse>('/platform/sub-organizations', {
-        params: queryParams,
-        headers,
-      });
-      return res.data;
-    } catch (err: any) {
-      // Fallback to /organizations/{orgId}/sub-organizations if platform endpoint fails
-      if (orgId && (err?.response?.status === 404 || err?.response?.status === 403)) {
-        const fallbackRes = await baseClient.get<SubOrganizationListResponse>(
-          `/organizations/${orgId}/sub-organizations`,
-          { params: queryParams, headers }
-        );
-        return fallbackRes.data;
-      }
-      throw err;
+    const cacheKey = JSON.stringify({ queryParams, headers });
+    if (inFlightSubOrgRequests.has(cacheKey)) {
+      return inFlightSubOrgRequests.get(cacheKey)!;
     }
+
+    const requestPromise = (async () => {
+      // Call /platform/sub-organizations with query parameters
+      try {
+        const res = await baseClient.get<SubOrganizationListResponse>('/platform/sub-organizations', {
+          params: queryParams,
+          headers,
+        });
+        return res.data;
+      } catch (err: any) {
+        // Fallback to /organizations/{orgId}/sub-organizations if platform endpoint fails
+        if (orgId && (err?.response?.status === 404 || err?.response?.status === 403)) {
+          const fallbackRes = await baseClient.get<SubOrganizationListResponse>(
+            `/organizations/${orgId}/sub-organizations`,
+            { params: queryParams, headers }
+          );
+          return fallbackRes.data;
+        }
+        throw err;
+      }
+    })().finally(() => {
+      inFlightSubOrgRequests.delete(cacheKey);
+    });
+
+    inFlightSubOrgRequests.set(cacheKey, requestPromise);
+    return requestPromise;
   },
 
   /**
@@ -176,15 +189,14 @@ export const subOrganizationApi = {
       headers['x-organization-id'] = orgId;
     }
 
-    const payloadWithOrg = orgId
-      ? { organization_id: orgId, organizationId: orgId, ...payload }
-      : payload;
+    // Backend Zod schema validates strictly - organization_id goes in query params/headers, subscriptionPlan is not a sub-org field
+    const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
 
     // First attempt: POST /platform/sub-organizations
     try {
       const res = await baseClient.post<SubOrganizationSingleResponse>(
         '/platform/sub-organizations',
-        payloadWithOrg,
+        cleanPayload,
         {
           headers,
           params: orgId ? { organization_id: orgId } : undefined,
@@ -196,7 +208,7 @@ export const subOrganizationApi = {
       if (orgId && (err?.response?.status === 404 || err?.response?.status === 405)) {
         const fallbackRes = await baseClient.post<SubOrganizationSingleResponse>(
           `/organizations/${orgId}/sub-organizations`,
-          payloadWithOrg,
+          cleanPayload,
           { headers }
         );
         return fallbackRes.data;
@@ -220,6 +232,8 @@ export const subOrganizationApi = {
       headers['x-organization-id'] = orgId;
     }
 
+    const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
+
     const endpoints = [
       { method: 'patch', url: `/platform/sub-organizations/${id}` },
       { method: 'put', url: `/platform/sub-organizations/${id}` },
@@ -237,11 +251,11 @@ export const subOrganizationApi = {
     for (const ep of endpoints) {
       try {
         const res = ep.method === 'patch'
-          ? await baseClient.patch<SubOrganizationSingleResponse>(ep.url, payload, {
+          ? await baseClient.patch<SubOrganizationSingleResponse>(ep.url, cleanPayload, {
               headers,
               params: orgId ? { organization_id: orgId } : undefined,
             })
-          : await baseClient.put<SubOrganizationSingleResponse>(ep.url, payload, {
+          : await baseClient.put<SubOrganizationSingleResponse>(ep.url, cleanPayload, {
               headers,
               params: orgId ? { organization_id: orgId } : undefined,
             });

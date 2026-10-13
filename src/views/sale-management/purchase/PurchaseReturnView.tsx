@@ -1315,120 +1315,138 @@ export const PurchaseReturnView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSubmitReturnForm} className="space-y-5 p-2 sm:p-4 animate-in fade-in duration-150">
           {/* Top Fields: 4-column Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-3">
             {/* Purchase Order Selection */}
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                Purchase Order
-              </label>
-              <select
-                value={selectedPurchaseId}
-                onChange={(e) => handleSelectPurchase(e.target.value)}
-                className="w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="">-- Choose Existing PO (Optional) --</option>
-                {purchases.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.purchaseNo} ({p.supplierName})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* PO Reference (Manual if not selected) */}
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                PO Reference #
-              </label>
-              <input
-                type="text"
-                value={chosenPurchase ? chosenPurchase.purchaseNo : manualPurchaseNo}
-                onChange={(e) => setManualPurchaseNo(e.target.value)}
-                readOnly={!!chosenPurchase}
-                placeholder="e.g. PO-2026-089"
-                className={`w-full h-11 px-3.5 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-medium outline-none transition-all ${
-                  chosenPurchase
-                    ? 'bg-slate-50 text-slate-600 cursor-not-allowed'
-                    : 'bg-white text-slate-800 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-            </div>
-
-            {/* Supplier Name */}
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                Supplier <span className="text-rose-500">*</span>
-              </label>
-              {chosenPurchase ? (
-                <input
-                  type="text"
-                  readOnly
-                  value={chosenPurchase.supplierName}
-                  className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-medium text-slate-600 outline-none cursor-not-allowed"
-                />
-              ) : (
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Purchase Order
+                </span>
                 <select
-                  value={selectedSupplierId}
-                  onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  className="w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
+                  value={selectedPurchaseId}
+                  onChange={(e) => handleSelectPurchase(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium outline-none cursor-pointer"
                 >
-                  <option value="">-- Select Supplier --</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.contactPerson ? `(${s.contactPerson})` : ''}
+                  <option value="">-- Choose Existing PO (Optional) --</option>
+                  {purchases.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.purchaseNo} ({p.supplierName})
                     </option>
                   ))}
                 </select>
-              )}
+              </div>
+            </div>
+
+            {/* PO Reference (Manual if not selected) */}
+            <div className="relative">
+              <div className={`relative w-full h-11 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center ${
+                chosenPurchase
+                  ? 'bg-slate-50'
+                  : 'bg-white hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  PO Reference #
+                </span>
+                <input
+                  type="text"
+                  value={chosenPurchase ? chosenPurchase.purchaseNo : manualPurchaseNo}
+                  onChange={(e) => setManualPurchaseNo(e.target.value)}
+                  readOnly={!!chosenPurchase}
+                  placeholder="e.g. PO-2026-089"
+                  className={`w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none ${
+                    chosenPurchase ? 'text-slate-600 cursor-not-allowed' : 'text-slate-800'
+                  }`}
+                />
+              </div>
+            </div>
+
+            {/* Supplier Name */}
+            <div className="relative">
+              <div className={`relative w-full h-11 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center ${
+                chosenPurchase
+                  ? 'bg-slate-50'
+                  : 'bg-white hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Supplier <span className="text-rose-500">*</span>
+                </span>
+                {chosenPurchase ? (
+                  <input
+                    type="text"
+                    readOnly
+                    value={chosenPurchase.supplierName}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-600 outline-none cursor-not-allowed"
+                  />
+                ) : (
+                  <select
+                    value={selectedSupplierId}
+                    onChange={(e) => setSelectedSupplierId(e.target.value)}
+                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                  >
+                    <option value="">-- Select Supplier --</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} {s.contactPerson ? `(${s.contactPerson})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
             </div>
 
             {/* Return Date */}
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                Return Date <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={returnDate}
-                onChange={(e) => setReturnDate(e.target.value)}
-                className="w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Return Date <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="date"
+                  value={returnDate}
+                  onChange={(e) => setReturnDate(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                />
+              </div>
             </div>
           </div>
 
           {/* Refund Status & Return Status Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                Refund Method / Status
-              </label>
-              <select
-                value={refundStatus}
-                onChange={(e) => setRefundStatus(e.target.value as RefundStatusType)}
-                className="w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="Supplier Credit">Supplier Credit (Debit Note Adjustment)</option>
-                <option value="Refunded">Refunded (Bank / Cash Refund Received)</option>
-                <option value="Pending">Pending Refund</option>
-                <option value="Adjusted">Adjusted in Ledger</option>
-              </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Refund Method / Status
+                </span>
+                <select
+                  value={refundStatus}
+                  onChange={(e) => setRefundStatus(e.target.value as RefundStatusType)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="Supplier Credit">Supplier Credit (Debit Note Adjustment)</option>
+                  <option value="Refunded">Refunded (Bank / Cash Refund Received)</option>
+                  <option value="Pending">Pending Refund</option>
+                  <option value="Adjusted">Adjusted in Ledger</option>
+                </select>
+              </div>
             </div>
 
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-                Return Status
-              </label>
-              <select
-                value={returnStatus}
-                onChange={(e) => setReturnStatus(e.target.value)}
-                className="w-full h-11 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="Requested">Requested (Review Needed)</option>
-                <option value="Approved">Approved (Awaiting Dispatch)</option>
-                <option value="Dispatched">Dispatched to Vendor</option>
-                <option value="Completed">Completed (Debit Note Settled)</option>
-                <option value="Cancelled">Cancelled</option>
-              </select>
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Return Status
+                </span>
+                <select
+                  value={returnStatus}
+                  onChange={(e) => setReturnStatus(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="Requested">Requested (Review Needed)</option>
+                  <option value="Approved">Approved (Awaiting Dispatch)</option>
+                  <option value="Dispatched">Dispatched to Vendor</option>
+                  <option value="Completed">Completed (Debit Note Settled)</option>
+                  <option value="Cancelled">Cancelled</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -1454,6 +1472,7 @@ export const PurchaseReturnView: React.FC = () => {
                 <thead>
                   <tr className="bg-slate-100/80 text-[11px] font-bold text-slate-700 border-b border-slate-200">
                     <th className="py-2.5 px-3">Product Name</th>
+                    <th className="py-2.5 px-3 text-center w-28">Batch No</th>
                     <th className="py-2.5 px-3 text-center w-24">Purchased</th>
                     <th className="py-2.5 px-3 text-center w-28">Return Qty *</th>
                     <th className="py-2.5 px-3 text-right w-28">Unit Price (₹)</th>
@@ -1515,6 +1534,24 @@ export const PurchaseReturnView: React.FC = () => {
                             className="w-full h-8 px-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
                           />
                         )}
+                      </td>
+
+                      {/* Batch No */}
+                      <td className="py-2 px-3 text-center">
+                        <input
+                          type="text"
+                          value={it.batch || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setReturnItems((prev) => {
+                              const c = [...prev];
+                              c[idx] = { ...c[idx], batch: val };
+                              return c;
+                            });
+                          }}
+                          placeholder="Batch No"
+                          className="w-full h-8 px-2 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-semibold text-purple-900 outline-none focus:border-[#4309A2] focus:bg-white"
+                        />
                       </td>
 
                       {/* Purchased Qty */}
@@ -1618,17 +1655,19 @@ export const PurchaseReturnView: React.FC = () => {
           </div>
 
           {/* Notes */}
-          <div>
-            <label className="text-xs sm:text-[13px] font-medium text-slate-700 block mb-1.5">
-              Notes / Debit Adjustment Remarks
-            </label>
-            <textarea
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Adjusted in supplier pending balance ledger..."
-              className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all resize-none"
-            />
+          <div className="relative pt-1">
+            <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                Notes / Debit Adjustment Remarks
+              </span>
+              <textarea
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. Adjusted in supplier pending balance ledger..."
+                className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm font-medium text-slate-700 outline-none resize-none"
+              />
+            </div>
           </div>
 
           {/* Standard Footer */}

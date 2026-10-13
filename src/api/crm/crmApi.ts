@@ -20,7 +20,35 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getLeads: builder.query<Lead[], void>({
-      query: () => '/api/leads',
+      query: () => ({
+        url: '/platform/leads',
+        params: { limit: 100 },
+      }),
+      transformResponse: (response: any) => {
+        const list = Array.isArray(response) ? response : (response?.data || response?.leads || []);
+        return list.map((item: any) => ({
+          id: item.id,
+          leadId: item.leadCode || item.id,
+          name: item.name || '',
+          company: item.company || '',
+          phone: item.phone || '',
+          whatsapp: item.whatsapp || item.phone || '',
+          email: item.email || '',
+          location: item.location || '',
+          source: item.source || 'Website',
+          leadSource: item.source || 'Website',
+          interestedProductOrService: item.planInterest || 'Standard',
+          assignedStaffId: item.assignedTo || '',
+          assignedStaffName: item.assignedTo || 'Unassigned',
+          status: item.status || 'New',
+          priority: item.priority || 'Medium',
+          interest: item.priority || 'Medium',
+          feedback: item.notes || '',
+          nextFollowUpDate: item.followUpDate || '',
+          notes: item.notes || '',
+          createdAt: item.createdAt || '',
+        }));
+      },
       providesTags: (result) =>
         result
           ? [
@@ -31,24 +59,73 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getLeadById: builder.query<Lead, string>({
-      query: (id) => `/api/leads/${id}`,
+      query: (id) => `/platform/leads/${id}`,
+      transformResponse: (response: any) => {
+        const item = response?.data || response;
+        return {
+          id: item.id,
+          leadId: item.leadCode || item.id,
+          name: item.name || '',
+          company: item.company || '',
+          phone: item.phone || '',
+          whatsapp: item.whatsapp || item.phone || '',
+          email: item.email || '',
+          location: item.location || '',
+          source: item.source || 'Website',
+          leadSource: item.source || 'Website',
+          interestedProductOrService: item.planInterest || 'Standard',
+          assignedStaffId: item.assignedTo || '',
+          assignedStaffName: item.assignedTo || 'Unassigned',
+          status: item.status || 'New',
+          priority: item.priority || 'Medium',
+          interest: item.priority || 'Medium',
+          feedback: item.notes || '',
+          nextFollowUpDate: item.followUpDate || '',
+          notes: item.notes || '',
+          createdAt: item.createdAt || '',
+        };
+      },
       providesTags: (_result, _error, id) => [{ type: 'Lead', id }],
     }),
 
     createLead: builder.mutation<Lead, Partial<Lead>>({
       query: (data) => ({
-        url: '/api/leads',
+        url: '/platform/leads',
         method: 'POST',
-        body: data,
+        body: {
+          name: data.name,
+          company: data.company,
+          email: data.email,
+          phone: data.phone,
+          whatsapp: data.whatsapp,
+          source: data.leadSource || data.source || 'Website',
+          status: data.status || 'New',
+          priority: data.priority || 'Medium',
+          planInterest: data.interestedProductOrService,
+          location: data.location,
+          notes: data.notes || data.feedback,
+        },
       }),
       invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard', 'Reminder'],
     }),
 
     updateLead: builder.mutation<Lead, { id: string; data: Partial<Lead> }>({
       query: ({ id, data }) => ({
-        url: `/api/leads/${id}`,
+        url: `/platform/leads/${id}`,
         method: 'PUT',
-        body: data,
+        body: {
+          name: data.name,
+          company: data.company,
+          email: data.email,
+          phone: data.phone,
+          whatsapp: data.whatsapp,
+          status: data.status,
+          priority: data.priority,
+          planInterest: data.interestedProductOrService,
+          location: data.location,
+          notes: data.notes || data.feedback,
+          followUpDate: data.nextFollowUpDate,
+        },
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Lead', id },
@@ -59,7 +136,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     convertLead: builder.mutation<any, { id: string; data: any }>({
       query: ({ id, data }) => ({
-        url: `/api/leads/${id}/convert`,
+        url: `/platform/leads/${id}/convert`,
         method: 'POST',
         body: data,
       }),
@@ -72,7 +149,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     deleteLead: builder.mutation<any, string>({
       query: (id) => ({
-        url: `/api/leads/${id}`,
+        url: `/platform/leads/${id}`,
         method: 'DELETE',
       }),
       invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard'],

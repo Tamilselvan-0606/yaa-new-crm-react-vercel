@@ -727,17 +727,6 @@ export const StocksView: React.FC = () => {
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
               Inventory &amp; Stock Levels
             </h1>
-            {isApiConnected === true ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Live API
-              </span>
-            ) : isApiConnected === false ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                Local Mode
-              </span>
-            ) : null}
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             Monitor real-time warehouse inventory quantities, subcategories, reorder thresholds, valuation, and stock adjustments

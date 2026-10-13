@@ -18,6 +18,7 @@ export interface OrganizationApiItem {
   phone?: string;
   whatsapp?: string;
   logo?: string;
+  logoUrl?: string;
   subOrganizationSupport?: boolean;
   branchesCount?: number;
   membersCount?: number;

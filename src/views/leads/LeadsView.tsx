@@ -40,7 +40,7 @@ import { Modal } from "../../components/common/Modal";
 import { SearchBar } from "../../components/common/SearchBar";
 import { FilterDropdown } from "../../components/common/FilterDropdown";
 import { Pagination } from "../../components/common/Pagination";
-import { customerApi, mapApiCustomerToSalesCustomer } from "../../api/commerce/customerApi";
+import { customerApi } from "../../api/commerce/customerApi";
 import {
   useGetPlatformLeadsQuery,
   useUpdatePlatformLeadStatusMutation,
@@ -128,40 +128,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   };
 
   const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
-
-  const loadCommerceCustomers = async () => {
-    try {
-      const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
-      if (res && res.success && Array.isArray(res.data)) {
-        const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
-          id: sc.id,
-          clientId: sc.customerCode || sc.id,
-          name: sc.name,
-          company: sc.company || sc.name,
-          contactPerson: sc.name,
-          phone: sc.phone || '',
-          whatsapp: sc.phone || '',
-          alternatePhone: sc.alternatePhone || '',
-          email: sc.email || '',
-          address: sc.address || '',
-          city: sc.city || '',
-          state: sc.state || '',
-          pincode: sc.pincode || '',
-          industry: 'Technology & Business Services',
-          status: sc.status || 'Active',
-          linkedProducts: [],
-          documents: [],
-        })) as unknown as Customer[];
-        setCommerceCustomers(mapped);
-      }
-    } catch (err) {
-      console.warn('Could not load commerce customers:', err);
-    }
-  };
-
-  useEffect(() => {
-    loadCommerceCustomers();
-  }, []);
 
   const customers = commerceCustomers;
 
@@ -528,8 +494,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
             }}
             className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
           >
-            <Sparkles className="w-4 h-4 text-white" />
-            <span>Capture New Lead</span>
+            <Plus className="w-4 h-4 text-white stroke-[2.5]" />
+            <span>Add Lead</span>
           </button>
 
           <button
@@ -538,10 +504,10 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               setEditingCustomer(null);
               setIsAddClientOpen(true);
             }}
-            className="h-11 px-6 bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 hover:border-slate-300 font-bold text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+            className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
           >
-            <UserPlus className="w-4 h-4 text-[#33077C]" />
-            <span>Create Client Profile</span>
+            <Plus className="w-4 h-4 text-white stroke-[2.5]" />
+            <span>Add Client</span>
           </button>
         </div>
       </div>
@@ -2022,7 +1988,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
         onClose={() => {
           setIsAddClientOpen(false);
           setEditingCustomer(null);
-          loadCommerceCustomers();
         }}
       />
 

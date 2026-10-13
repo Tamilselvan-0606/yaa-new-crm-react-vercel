@@ -33,6 +33,8 @@ export interface ApiProduct {
   category: string;
   subcategory?: string | null;
   itemImage?: string | null;
+  image?: string | null;
+  imageBase64?: string | null;
 
   // Pricing
   salePrice: number;
@@ -57,6 +59,13 @@ export interface ApiProduct {
   asOfDate?: string;
   minStockAlert?: number;
   location?: string | null;
+
+  // Batch Tracking
+  isBatchTracking?: boolean;
+  is_batch_tracking?: boolean;
+  batchNo?: string | null;
+  mfgDate?: string | null;
+  expDate?: string | null;
 
   status: 'Active' | 'Inactive';
 
@@ -145,7 +154,9 @@ export interface CreateProductPayload {
   secondaryUnitId?: string | null;
   category: string;
   subcategory?: string;
-  itemImage?: string;
+  itemImage?: string | null;
+  image?: string;
+  imageBase64?: string;
   salePrice: number;
   salePriceTaxType?: 'Excluded' | 'Included';
   discountValue?: number;
@@ -162,7 +173,108 @@ export interface CreateProductPayload {
   asOfDate?: string;
   minStockAlert?: number;
   location?: string;
+  isBatchTracking?: boolean;
+  is_batch_tracking?: boolean;
+  batchNo?: string;
+  mfgDate?: string;
+  expDate?: string;
   status?: 'Active' | 'Inactive';
 }
 
 export type UpdateProductPayload = Partial<CreateProductPayload>;
+
+export interface BulkProductStatusPayload {
+  productIds: string[];
+  status: 'Active' | 'Inactive';
+}
+
+export interface BulkProductStatusResponse {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  data?: {
+    updatedCount: number;
+    affectedIds: string[];
+  };
+  errors?: Array<{
+    productId: string;
+    reason: string;
+  }>;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export interface BulkProductCommonRow {
+  id: string;
+  productName?: string;
+  category?: string;
+  hsnCode?: string;
+}
+
+export interface BulkProductPricingRow {
+  id: string;
+  productName?: string;
+  category?: string;
+  purchasePrice?: number;
+  purchasePriceTaxType?: 'Excluded' | 'Included';
+  salePrice?: number;
+  salePriceTaxType?: 'Excluded' | 'Included';
+  discountValue?: number;
+  discountType?: 'Percentage' | 'Amount';
+  taxRate?: string;
+}
+
+export interface BulkProductStockRow {
+  id: string;
+  openingStock?: number;
+  atPrice?: number;
+  asOfDate?: string;
+  minStockAlert?: number;
+  location?: string;
+}
+
+export interface BulkProductItemInfoRow {
+  id: string;
+  productCode?: string;
+  unit?: string;
+  status?: 'Active' | 'Inactive';
+}
+
+export interface BulkUpdateProductsPayload {
+  common?: BulkProductCommonRow[];
+  pricing?: BulkProductPricingRow[];
+  stock?: BulkProductStockRow[];
+  itemInformation?: BulkProductItemInfoRow[];
+  products?: any[];
+}
+
+export interface BulkUpdateProductsResponse {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  data?: {
+    totalSubmitted: number;
+    totalRows: number;
+    totalUpdated: number;
+    updatedIds: string[];
+    products?: any[];
+    failed?: Array<{
+      id: string;
+      productCode?: string;
+      rows: Array<{ group: string; index: number }>;
+      errors: Array<{
+        field: string;
+        code: string;
+        message: string;
+        group?: string;
+        index?: number;
+      }>;
+    }>;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}

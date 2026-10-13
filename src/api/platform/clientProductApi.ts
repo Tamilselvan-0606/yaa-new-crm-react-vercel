@@ -31,6 +31,16 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
         if (p.sortBy) queryParams.sortBy = p.sortBy;
         if (p.sortOrder) queryParams.sortOrder = p.sortOrder;
         if (p.organizationId) queryParams.organizationId = p.organizationId;
+        const subId = p.subOrganizationId || p.sub_organization_id;
+        if (subId) {
+          queryParams.sub_organization_id = subId;
+          queryParams.subOrganizationId = subId;
+        }
+        const bId = p.branchId || p.branch_id;
+        if (bId) {
+          queryParams.branch_id = bId;
+          queryParams.branchId = bId;
+        }
 
         const activeOrgId = p.xOrganizationId || getStoredOrganizationId();
         const headers: Record<string, string> = {};
@@ -226,6 +236,16 @@ export const clientProductApi = {
     if (params?.sortBy) queryParams.sortBy = params.sortBy;
     if (params?.sortOrder) queryParams.sortOrder = params.sortOrder;
     if (params?.organizationId) queryParams.organizationId = params.organizationId;
+    const subId = params?.subOrganizationId || params?.sub_organization_id;
+    if (subId) {
+      queryParams.sub_organization_id = subId;
+      queryParams.subOrganizationId = subId;
+    }
+    const bId = params?.branchId || params?.branch_id;
+    if (bId) {
+      queryParams.branch_id = bId;
+      queryParams.branchId = bId;
+    }
 
     const response = await baseClient.get<ClientProductListResponse>('/products', {
       params: queryParams,
@@ -261,16 +281,26 @@ export const clientProductApi = {
     payload: CreateClientProductRequest,
     orgId?: string
   ): Promise<ClientProductSingleResponse> => {
-    const activeOrgId = orgId || getStoredOrganizationId();
+    const activeOrgId = orgId || payload.organizationId || getStoredOrganizationId();
     const headers: Record<string, string> = {};
     if (activeOrgId) {
       headers['x-organization-id'] = activeOrgId;
     }
 
+    // Backend rejects unrecognized keys in POST body: "organizationId", "subOrganizationId", "branchId"
+    const { organizationId, subOrganizationId, branchId, ...bodyPayload } = payload as any;
+
     const response = await baseClient.post<ClientProductSingleResponse>(
       '/products',
-      payload,
-      { headers }
+      bodyPayload,
+      {
+        headers,
+        params: {
+          ...(organizationId ? { organizationId } : {}),
+          ...(subOrganizationId ? { subOrganizationId, sub_organization_id: subOrganizationId } : {}),
+          ...(branchId ? { branchId, branch_id: branchId } : {}),
+        },
+      }
     );
     return response.data;
   },
@@ -283,16 +313,26 @@ export const clientProductApi = {
     payload: UpdateClientProductRequest,
     orgId?: string
   ): Promise<ClientProductSingleResponse> => {
-    const activeOrgId = orgId || getStoredOrganizationId();
+    const activeOrgId = orgId || payload.organizationId || getStoredOrganizationId();
     const headers: Record<string, string> = {};
     if (activeOrgId) {
       headers['x-organization-id'] = activeOrgId;
     }
 
+    // Backend rejects unrecognized keys in PUT body: "organizationId", "subOrganizationId", "branchId"
+    const { organizationId, subOrganizationId, branchId, ...bodyPayload } = payload as any;
+
     const response = await baseClient.put<ClientProductSingleResponse>(
       `/products/${encodeURIComponent(id)}`,
-      payload,
-      { headers }
+      bodyPayload,
+      {
+        headers,
+        params: {
+          ...(organizationId ? { organizationId } : {}),
+          ...(subOrganizationId ? { subOrganizationId, sub_organization_id: subOrganizationId } : {}),
+          ...(branchId ? { branchId, branch_id: branchId } : {}),
+        },
+      }
     );
     return response.data;
   },

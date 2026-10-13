@@ -593,99 +593,10 @@ export const INITIAL_INVENTORY_STOCKS: InventoryStockItem[] = [];
 
 export const INITIAL_SALES_REPRESENTATIVES: SalesRepresentative[] = [];
 
-export const INITIAL_COLLECTION_FOLLOW_UPS: CollectionFollowUp[] = [
-  {
-    id: 'fup_1',
-    customerId: 'cust_2',
-    customerName: 'Priya Sundaram',
-    invoiceId: 'sale_2',
-    invoiceNo: 'INV-2026-1002',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    contactMethod: 'Phone',
-    followUpDate: '2026-10-06',
-    followUpTime: '11:30 AM',
-    notes: 'Contacted customer regarding overdue balance of ₹7,097.63. Promised payment by 12th Oct.',
-    outcome: 'Promise to Pay',
-    hasPromiseToPay: true,
-    promisedAmount: 7097.63,
-    promiseDate: '2026-10-12',
-    nextFollowUpDate: '2026-10-12',
-    createdBy: 'Kumar',
-    createdAt: '2026-10-06T11:30:00Z',
-  },
-  {
-    id: 'fup_2',
-    customerId: 'cust_3',
-    customerName: 'Anand Verma',
-    invoiceId: 'sale_3',
-    invoiceNo: 'INV-2026-1003',
-    salesRepresentativeId: 'rep_1',
-    salesRepresentativeName: 'Arun Kumar',
-    contactMethod: 'WhatsApp',
-    followUpDate: '2026-10-07',
-    followUpTime: '03:15 PM',
-    notes: 'WhatsApp reminder sent regarding upcoming invoice. Customer will clear balance within payment terms.',
-    outcome: 'Customer Contacted',
-    hasPromiseToPay: false,
-    nextFollowUpDate: '2026-10-20',
-    createdBy: 'Arun Kumar',
-    createdAt: '2026-10-07T15:15:00Z',
-  },
-  {
-    id: 'fup_3',
-    customerId: 'cust_1',
-    customerName: 'Ramesh Kumar',
-    invoiceId: 'sale_5',
-    invoiceNo: 'INV-2026-1005',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    contactMethod: 'Phone',
-    followUpDate: '2026-10-08',
-    followUpTime: '10:00 AM',
-    notes: 'Called customer. Customer confirmed payment will be released today via NEFT.',
-    outcome: 'Customer Contacted',
-    hasPromiseToPay: true,
-    promisedAmount: 12000,
-    promiseDate: '2026-10-08',
-    nextFollowUpDate: '2026-10-08',
-    createdBy: 'Kumar',
-    createdAt: '2026-10-08T10:00:00Z',
-  },
-];
+export const INITIAL_COLLECTION_FOLLOW_UPS: CollectionFollowUp[] = [];
 
-export const INITIAL_PROMISES_TO_PAY: PromiseToPay[] = [
-  {
-    id: 'ptp_1',
-    customerId: 'cust_2',
-    customerName: 'Priya Sundaram',
-    invoiceId: 'sale_2',
-    invoiceNo: 'INV-2026-1002',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    promisedAmount: 7097.63,
-    promiseDate: '2026-10-12',
-    notes: 'Customer confirmed payment by bank transfer before noon on 12th Oct.',
-    status: 'Pending',
-    createdAt: '2026-10-06T11:35:00Z',
-    updatedAt: '2026-10-06T11:35:00Z',
-  },
-  {
-    id: 'ptp_2',
-    customerId: 'cust_1',
-    customerName: 'Ramesh Kumar',
-    invoiceId: 'sale_5',
-    invoiceNo: 'INV-2026-1005',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    promisedAmount: 12000,
-    promiseDate: '2026-10-08',
-    notes: 'Full balance payment promised for invoice maturing today.',
-    status: 'Pending',
-    createdAt: '2026-10-08T10:05:00Z',
-    updatedAt: '2026-10-08T10:05:00Z',
-  },
-];
+export const INITIAL_PROMISES_TO_PAY: PromiseToPay[] = [];
+
 
 export const INITIAL_CUSTOMERS: SalesCustomer[] = [
   {
@@ -1069,6 +980,28 @@ function getStorage<T>(key: string, initial: T): T {
       );
       if (cleaned.length !== parsed.length) {
         localStorage.setItem(KEYS.PAYMENTS_OUT, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock collection follow-ups
+    if (key === KEYS.COLLECTION_FOLLOW_UPS && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (fup) => fup.id !== 'fup_1' && fup.id !== 'fup_2' && fup.id !== 'fup_3'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.COLLECTION_FOLLOW_UPS, JSON.stringify(cleaned));
+        return cleaned as unknown as T;
+      }
+    }
+
+    // Auto-purge mock promises to pay
+    if (key === KEYS.PROMISES_TO_PAY && Array.isArray(parsed)) {
+      const cleaned = parsed.filter(
+        (ptp) => ptp.id !== 'ptp_1' && ptp.id !== 'ptp_2'
+      );
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(KEYS.PROMISES_TO_PAY, JSON.stringify(cleaned));
         return cleaned as unknown as T;
       }
     }

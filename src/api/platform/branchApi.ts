@@ -93,6 +93,8 @@ export const {
   useUpdatePlatformBranchStatusMutation,
 } = branchEndpoints;
 
+const inFlightBranchRequests = new Map<string, Promise<BranchListResponse>>();
+
 export const branchApi = {
   /**
    * List branches
@@ -114,30 +116,44 @@ export const branchApi = {
     if (params?.organization_id || activeOrgId) {
       queryParams.organization_id = params?.organization_id || activeOrgId;
     }
-    if (params?.sub_organization_id) queryParams.sub_organization_id = params.sub_organization_id;
-    if (params?.branch_id) queryParams.branch_id = params.branch_id;
+    const subId = params?.sub_organization_id || (params as any)?.subOrganizationId;
+    if (subId) queryParams.sub_organization_id = subId;
+    const bId = params?.branch_id || (params as any)?.branchId;
+    if (bId) queryParams.branch_id = bId;
+
+    const cacheKey = JSON.stringify({ queryParams, activeOrgId });
+    if (inFlightBranchRequests.has(cacheKey)) {
+      return inFlightBranchRequests.get(cacheKey)!;
+    }
 
     const urls = [
       '/branches',
       '/platform/branches',
     ];
 
-    let lastError: any = null;
-    for (const url of urls) {
-      try {
-        const res = await baseClient.get<BranchListResponse>(url, {
-          params: queryParams,
-        });
-        return res.data;
-      } catch (err: any) {
-        lastError = err;
-        if (err?.response?.status === 404) {
-          continue;
+    const requestPromise = (async () => {
+      let lastError: any = null;
+      for (const url of urls) {
+        try {
+          const res = await baseClient.get<BranchListResponse>(url, {
+            params: queryParams,
+          });
+          return res.data;
+        } catch (err: any) {
+          lastError = err;
+          if (err?.response?.status === 404) {
+            continue;
+          }
+          throw err;
         }
-        throw err;
       }
-    }
-    throw lastError;
+      throw lastError;
+    })().finally(() => {
+      inFlightBranchRequests.delete(cacheKey);
+    });
+
+    inFlightBranchRequests.set(cacheKey, requestPromise);
+    return requestPromise;
   },
 
   /**

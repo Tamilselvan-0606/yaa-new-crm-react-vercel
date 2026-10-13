@@ -34,7 +34,6 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react';
-import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
 import { Pagination } from '../../../components/common/Pagination';
@@ -792,15 +791,6 @@ export const ExpenseView: React.FC = () => {
                 <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
                   Expense Management
                 </h1>
-                {isApiConnected ? (
-                  <Badge variant="success" className="text-[10px] px-2 py-0.5">
-                    Work API Live
-                  </Badge>
-                ) : (
-                  <Badge variant="neutral" className="text-[10px] px-2 py-0.5">
-                    Syncing API
-                  </Badge>
-                )}
               </div>
               <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
                 Track operational costs, tax breakdown, company overheads & vendor disbursements
@@ -1339,87 +1329,92 @@ export const ExpenseView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSubmit(onSubmitExpense)} className="space-y-6 p-2 sm:p-4">
           {/* Row 1: 3 Fields (Expense Voucher No, Expense Category, Expense Date) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Expense Voucher No
-              </label>
-              <input
-                type="text"
-                {...register('expenseNo')}
-                disabled
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-mono font-bold text-slate-600 bg-slate-50 cursor-not-allowed"
-              />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-slate-50 border border-slate-200 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Expense Voucher No
+                </span>
+                <input
+                  type="text"
+                  {...register('expenseNo')}
+                  disabled
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono font-bold text-slate-600 cursor-not-allowed outline-none"
+                />
+              </div>
               <FormError message={errors.expenseNo?.message} />
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="block text-[13px] font-medium text-slate-600">
-                  Expense Category <span className="text-rose-500">*</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setIsCategoryModalOpen(true)}
-                  className="text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Manage</span>
-                </button>
-              </div>
-              <Controller
-                control={control}
-                name="categoryId"
-                render={({ field }) => (
-                  <CustomSelect
-                    options={categories.map((c) => ({ label: c.name, value: c.id }))}
-                    value={field.value || ''}
-                    onChange={(val) => {
-                      field.onChange(val);
-                      const found = categories.find((c) => c.id === val);
-                      if (found) {
-                        setValue('category', found.name);
+            <div className="relative">
+              <div className="relative w-full">
+                <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                  <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
+                    Expense Category <span className="text-rose-500">*</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCategoryModalOpen(true)}
+                    className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer flex items-center gap-1 pointer-events-auto rounded-sm"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Manage</span>
+                  </button>
+                </div>
+                <Controller
+                  control={control}
+                  name="categoryId"
+                  render={({ field }) => (
+                    <CustomSelect
+                      options={categories.map((c) => ({ label: c.name, value: c.id }))}
+                      value={field.value || ''}
+                      onChange={(val) => {
+                        field.onChange(val);
+                        const found = categories.find((c) => c.id === val);
+                        if (found) {
+                          setValue('category', found.name);
+                        }
+                      }}
+                      placeholder={
+                        isCategoriesLoading ? 'Loading categories...' : 'Select expense category'
                       }
-                    }}
-                    placeholder={
-                      isCategoriesLoading ? 'Loading categories...' : 'Select expense category'
-                    }
-                  />
-                )}
-              />
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.category?.message || errors.categoryId?.message} />
             </div>
 
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Expense Date <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="date"
-                {...register('expenseDate')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white cursor-pointer"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Expense Date <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="date"
+                  {...register('expenseDate')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                />
+              </div>
               <FormError message={errors.expenseDate?.message} />
             </div>
           </div>
 
           {/* Row 2: 3 Fields (Paid To / Payee Vendor, Expense Title / Description, Payment Mode) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="block text-[13px] font-medium text-slate-600">
-                  Paid To / Payee Vendor
-                </label>
-                {watchSupplierId && (
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                    <Check className="w-2.5 h-2.5" />
-                    <span>Linked Supplier</span>
-                  </span>
-                )}
-              </div>
-
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+            <div className="relative">
               <div className="relative" ref={payeeContainerRef}>
-                <div className="relative flex items-center">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                    <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
+                      Paid To / Payee Vendor
+                    </span>
+                    {watchSupplierId && (
+                      <span className="px-1.5 bg-white text-[10px] font-bold text-emerald-700 border border-emerald-200 rounded-full flex items-center gap-1">
+                        <Check className="w-2.5 h-2.5" />
+                        <span>Linked Supplier</span>
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={watchPayee || ''}
@@ -1431,7 +1426,7 @@ export const ExpenseView: React.FC = () => {
                     }}
                     onFocus={() => setIsPayeeDropdownOpen(true)}
                     placeholder="Type manual vendor or select supplier..."
-                    className="w-full h-11 pl-4 pr-16 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
+                    className="w-full h-full pl-4 pr-16 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
                   />
                   <div className="absolute right-2 flex items-center gap-0.5">
                     {watchPayee && (
@@ -1533,93 +1528,101 @@ export const ExpenseView: React.FC = () => {
               <FormError message={errors.payee?.message} />
             </div>
 
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Expense Title / Description <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('title')}
-                placeholder="e.g. Office rent for October"
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Expense Title / Description <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('title')}
+                  placeholder="e.g. Office rent for October"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.title?.message} />
             </div>
 
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Payment Mode <span className="text-rose-500">*</span>
-              </label>
-              <Controller
-                control={control}
-                name="paymentMode"
-                render={({ field }) => (
-                  <CustomSelect
-                    options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
-                    value={field.value}
-                    onChange={field.onChange}
-                    placeholder="Select payment mode"
-                  />
-                )}
-              />
+            <div className="relative">
+              <div className="relative w-full">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Mode <span className="text-rose-500">*</span>
+                </span>
+                <Controller
+                  control={control}
+                  name="paymentMode"
+                  render={({ field }) => (
+                    <CustomSelect
+                      options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Select payment mode"
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
 
           {/* Row 3: 3 Fields (Base Amount, Tax / GST Rate, Reference No / Transaction ID) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Base Amount (₹) <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-3 text-slate-400 font-medium text-sm">₹</span>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Base Amount (₹) <span className="text-rose-500">*</span>
+                </span>
+                <span className="pl-4 text-slate-400 font-medium text-sm">₹</span>
                 <input
                   type="number"
                   step="any"
                   placeholder="0.00"
                   {...register('amount')}
-                  className="w-full h-11 pl-9 pr-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-bold text-slate-900 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
+                  className="w-full h-full pl-2 pr-4 bg-transparent text-xs sm:text-[13px] font-bold text-slate-900 outline-none"
                 />
               </div>
               <FormError message={errors.amount?.message} />
             </div>
 
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Tax / GST Rate
-              </label>
-              <Controller
-                control={control}
-                name="taxPercent"
-                render={({ field }) => (
-                  <CustomSelect
-                    options={[
-                      { label: '0% (No Tax)', value: '0' },
-                      { label: '5% GST', value: '5' },
-                      { label: '12% GST', value: '12' },
-                      { label: '18% GST', value: '18' },
-                      { label: '28% GST', value: '28' },
-                    ]}
-                    value={field.value ? String(field.value) : '0'}
-                    onChange={field.onChange}
-                    placeholder="Select GST Rate"
-                  />
-                )}
-              />
+            <div className="relative">
+              <div className="relative w-full">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Tax / GST Rate
+                </span>
+                <Controller
+                  control={control}
+                  name="taxPercent"
+                  render={({ field }) => (
+                    <CustomSelect
+                      options={[
+                        { label: '0% (No Tax)', value: '0' },
+                        { label: '5% GST', value: '5' },
+                        { label: '12% GST', value: '12' },
+                        { label: '18% GST', value: '18' },
+                        { label: '28% GST', value: '28' },
+                      ]}
+                      value={field.value ? String(field.value) : '0'}
+                      onChange={field.onChange}
+                      placeholder="Select GST Rate"
+                    />
+                  )}
+                />
+              </div>
               <FormError message={errors.taxPercent?.message} />
             </div>
 
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Reference No / Transaction ID
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. TXN-RENT-1008 or Cheque #"
-                {...register('referenceNo')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Reference No / Transaction ID
+                </span>
+                <input
+                  type="text"
+                  placeholder="e.g. TXN-RENT-1008 or Cheque #"
+                  {...register('referenceNo')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.referenceNo?.message} />
             </div>
           </div>
@@ -1656,13 +1659,13 @@ export const ExpenseView: React.FC = () => {
           )}
 
           {/* Row 4: Upload Receipt in 1 column, Notes spanning 2 columns */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+            <div className="relative">
+              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
                 Upload Receipt / Proof
-              </label>
+              </span>
               {receiptImageState ? (
-                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-300 bg-slate-50">
                   <img
                     src={receiptImageState}
                     alt="Receipt"
@@ -1697,16 +1700,18 @@ export const ExpenseView: React.FC = () => {
               )}
             </div>
 
-            <div className="md:col-span-2">
-              <label className="block text-[13px] font-medium text-slate-600 mb-2">
-                Notes / Remarks
-              </label>
-              <input
-                type="text"
-                placeholder="Optional notes or disbursement comments"
-                {...register('notes')}
-                className="w-full h-11 px-4 rounded-xl border border-slate-200 text-xs sm:text-[13px] font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all bg-white"
-              />
+            <div className="md:col-span-2 relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Notes / Remarks
+                </span>
+                <input
+                  type="text"
+                  placeholder="Optional notes or disbursement comments"
+                  {...register('notes')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.notes?.message} />
             </div>
           </div>
@@ -1863,30 +1868,34 @@ export const ExpenseView: React.FC = () => {
               <Plus className="w-3.5 h-3.5 text-[#33077C]" />
               <span>Add New Category</span>
             </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Category Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Courier & Logistics"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] bg-white"
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="relative">
+                <div className="relative w-full h-10 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Category Name <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Courier & Logistics"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    className="w-full h-full px-3 bg-transparent text-xs font-medium text-slate-800 outline-none"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Description
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Courier and shipping costs"
-                  value={newCategoryDesc}
-                  onChange={(e) => setNewCategoryDesc(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-[#4309A2] bg-white"
-                />
+              <div className="relative">
+                <div className="relative w-full h-10 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Description
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Courier and shipping costs"
+                    value={newCategoryDesc}
+                    onChange={(e) => setNewCategoryDesc(e.target.value)}
+                    className="w-full h-full px-3 bg-transparent text-xs font-medium text-slate-800 outline-none"
+                  />
+                </div>
               </div>
             </div>
             <div className="flex justify-end pt-1">

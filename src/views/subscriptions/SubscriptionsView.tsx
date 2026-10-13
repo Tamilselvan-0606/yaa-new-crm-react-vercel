@@ -129,8 +129,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     }
   }, [initialViewMode]);
 
-  // Product Plan Selector: Dropdown selection (product.id or null) - default to Digital Marketing (prod_6)
-  const [selectedPlanProductId, setSelectedPlanProductId] = useState<string | null>('prod_6');
+  // Product Plan Selector: Dropdown selection (product.id or null)
+  const [selectedPlanProductId, setSelectedPlanProductId] = useState<string | null>(null);
 
   // Filter States for Plans View
   const [pendingPlanSearch, setPendingPlanSearch] = useState('');
@@ -325,11 +325,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       setProducts(prods);
       setCustomers(custsData || []);
 
-      // Default selected product to Digital Marketing
+      // Default selected product to Digital Marketing or the first loaded product
       setSelectedPlanProductId((prev) => {
         if (prev && prods.some((p) => p.id === prev)) return prev;
-        const dmk = prods.find((p) => p.name?.toLowerCase().includes('digital marketing') || p.id === 'prod_6');
-        return dmk ? dmk.id : (prods[0]?.id || 'prod_6');
+        const dmk = prods.find((p) => p.name?.toLowerCase().includes('digital marketing'));
+        return dmk ? dmk.id : (prods[0]?.id || null);
       });
     } catch (e: any) {
       console.error(e);
@@ -401,6 +401,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   const loadProductPlans = async (productId: string, status?: string) => {
     if (!productId) return;
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(productId);
+    if (!isUuid) return; // Mock / local product ID, don't query remote API
     setIsProductPlansLoading(true);
     try {
       const res = await productPlanApi.getProductPlans(productId, {
@@ -629,27 +631,61 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         return;
       }
 
+      const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(productId);
+
       if (planId) {
-        await productPlanApi.updateProductPlan(productId, planId, {
-          name: planData.name,
-          price: Number(planData.price) || 0,
-          billingCycle: planData.billingCycle || 'Monthly',
-          features: planData.features || [],
-          status: planData.status || 'Active',
+        if (isUuid) {
+          await productPlanApi.updateProductPlan(productId, planId, {
+            name: planData.name,
+            price: Number(planData.price) || 0,
+            billingCycle: planData.billingCycle || 'Monthly',
+            features: planData.features || [],
+            status: planData.status || 'Active',
+          });
+        }
+        setProductPlansByProductId((prev) => {
+          const list = prev[productId] || [];
+          return {
+            ...prev,
+            [productId]: list.map((p) => (p.id === planId ? { ...p, ...planData } as ProductPlan : p)),
+          };
         });
         showToast('success', 'Plan Updated', `Saved flexible pricing for ${planData.name}.`);
       } else {
-        await productPlanApi.createProductPlan(productId, {
+        let newCreatedId = `plan_${Date.now()}`;
+        if (isUuid) {
+          const res = await productPlanApi.createProductPlan(productId, {
+            name: planData.name || 'New Plan',
+            price: Number(planData.price) || 0,
+            billingCycle: planData.billingCycle || 'Monthly',
+            features: planData.features || [],
+            status: planData.status || 'Active',
+          });
+          if (res?.data?.id) newCreatedId = res.data.id;
+        }
+        const createdPlan: ProductPlan = {
+          id: newCreatedId,
           name: planData.name || 'New Plan',
           price: Number(planData.price) || 0,
+          currency: planData.currency || '₹',
           billingCycle: planData.billingCycle || 'Monthly',
-          features: planData.features || [],
+          pricingType: planData.pricingType || 'Fixed',
           status: planData.status || 'Active',
-        });
+          features: planData.features || [],
+          description: planData.description || '',
+          specs: planData.specs || {},
+          isPopular: !!planData.isPopular,
+        };
+        setProductPlansByProductId((prev) => ({
+          ...prev,
+          [productId]: [...(prev[productId] || []), createdPlan],
+        }));
         showToast('success', 'Plan Created', `New plan "${planData.name}" added to product.`);
       }
       setIsPlanModalOpen(false);
-      await loadProductPlans(productId);
+      if (isUuid) {
+        await loadProductPlans(productId);
+      }
     } catch (e: any) {
       console.error('Plan Save Failed:', e);
       const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Error occurred while saving plan.';
@@ -2342,7 +2378,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                               onClick={() => handleOpenCreatePlan(product.id)}
                               icon={<Plus className="w-4 h-4 text-white" strokeWidth={2.5} />}
                             >
-                              Add Plan to {product.name}
+                              Add Plan
                             </Button>
                           </div>
 
@@ -2361,14 +2397,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                 return (
                                   <div className="text-center py-10 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
                                     <Zap className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                    <p className="text-sm font-semibold text-slate-700">No subscription plans created for {product.name} yet.</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenCreatePlan(product.id)}
-                                      className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl cursor-pointer mt-3 inline-flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                                    >
-                                      + Create First Plan
-                                    </button>
+                                    <p className="text-sm font-semibold text-slate-700">No plans created yet</p>
                                   </div>
                                 );
                               }

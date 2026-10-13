@@ -224,6 +224,10 @@ export const mapSaleOrderRecordToPayload = (
       if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
         itemPayload.taxPercent = it.taxPercent;
       }
+      if (it.batch && String(it.batch).trim()) {
+        itemPayload.batch = String(it.batch).trim();
+        itemPayload.batchNo = String(it.batch).trim();
+      }
       return itemPayload;
     }),
   };

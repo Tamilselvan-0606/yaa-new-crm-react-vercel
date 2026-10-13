@@ -7,6 +7,10 @@ import {
   ProductDeleteResponse,
   CreateProductPayload,
   UpdateProductPayload,
+  BulkProductStatusPayload,
+  BulkProductStatusResponse,
+  BulkUpdateProductsPayload,
+  BulkUpdateProductsResponse,
 } from './productTypes';
 
 export * from './productTypes';
@@ -22,6 +26,8 @@ export interface ProductItemModel {
   category: string;
   subcategory?: string;
   itemImage?: string;
+  image?: string;
+  imageBase64?: string;
 
   // Pricing
   salePrice: number;
@@ -47,6 +53,12 @@ export interface ProductItemModel {
   minStockAlert: number;
   location?: string;
 
+  // Batch Tracking
+  isBatchTracking?: boolean;
+  batchNo?: string;
+  mfgDate?: string;
+  expDate?: string;
+
   status: 'Active' | 'Inactive';
 
   // Units
@@ -67,6 +79,7 @@ export const mapApiProductToProductItem = (
   apiProd: ApiProduct,
   index?: number
 ): ProductItemModel => {
+  const effectiveImage = (apiProd.itemImage !== undefined && apiProd.itemImage !== null) ? (apiProd.itemImage.trim() || undefined) : (apiProd.image?.trim() || apiProd.imageBase64?.trim() || undefined);
   return {
     id: apiProd.id,
     sNo: apiProd.sNo ?? (index !== undefined ? index + 1 : 1),
@@ -79,7 +92,9 @@ export const mapApiProductToProductItem = (
     secondaryUnitId: apiProd.secondaryUnitId || undefined,
     category: apiProd.category || 'General',
     subcategory: apiProd.subcategory || undefined,
-    itemImage: apiProd.itemImage || undefined,
+    itemImage: effectiveImage,
+    image: effectiveImage,
+    imageBase64: effectiveImage,
 
     // Pricing
     salePrice: apiProd.salePrice ?? apiProd.sellingPrice ?? 0,
@@ -107,6 +122,12 @@ export const mapApiProductToProductItem = (
     minStockAlert: apiProd.minStockAlert ?? apiProd.reorderLevel ?? 0,
     location: apiProd.location || undefined,
 
+    // Batch Tracking
+    isBatchTracking: Boolean(apiProd.isBatchTracking ?? apiProd.is_batch_tracking ?? false),
+    batchNo: apiProd.batchNo || undefined,
+    mfgDate: apiProd.mfgDate || undefined,
+    expDate: apiProd.expDate || undefined,
+
     status: (apiProd.status === 'Inactive' ? 'Inactive' : 'Active') as 'Active' | 'Inactive',
     createdAt: apiProd.createdAt,
     updatedAt: apiProd.updatedAt,
@@ -119,6 +140,7 @@ export const mapApiProductToProductItem = (
  * Maps form data from InventoryProductsView into API creation/update payload
  */
 export const mapProductItemToPayload = (item: Partial<ProductItemModel>): CreateProductPayload => {
+  const base64Img = item.itemImage || item.image || item.imageBase64 || undefined;
   return {
     itemType: item.itemType || 'Product',
     productCode: item.productCode,
@@ -127,7 +149,9 @@ export const mapProductItemToPayload = (item: Partial<ProductItemModel>): Create
     unit: item.unit || 'PCS',
     category: item.category || 'General',
     subcategory: item.subcategory || undefined,
-    itemImage: item.itemImage || undefined,
+    itemImage: base64Img,
+    image: base64Img,
+    imageBase64: base64Img,
 
     salePrice: Number(item.salePrice) || 0,
     salePriceTaxType: item.salePriceTaxType || 'Excluded',
@@ -148,6 +172,14 @@ export const mapProductItemToPayload = (item: Partial<ProductItemModel>): Create
     asOfDate: item.asOfDate || new Date().toISOString().split('T')[0],
     minStockAlert: Number(item.minStockAlert) || 0,
     location: item.location || undefined,
+
+    // Batch Tracking
+    isBatchTracking: Boolean(item.isBatchTracking),
+    is_batch_tracking: Boolean(item.isBatchTracking),
+    batchNo: item.batchNo || undefined,
+    mfgDate: item.mfgDate || undefined,
+    expDate: item.expDate || undefined,
+
     status: (item.status === 'Inactive' ? 'Inactive' : 'Active') as 'Active' | 'Inactive',
   };
 };
@@ -244,6 +276,24 @@ export const productEndpoints = baseApi.injectEndpoints({
       }),
       invalidatesTags: [{ type: 'Product', id: 'LIST' }, { type: 'Stock', id: 'LIST' }],
     }),
+
+    bulkUpdateProductStatus: builder.mutation<BulkProductStatusResponse, BulkProductStatusPayload>({
+      query: (payload) => ({
+        url: '/commerce/products/bulk-status',
+        method: 'PATCH',
+        body: payload,
+      }),
+      invalidatesTags: [{ type: 'Product', id: 'LIST' }],
+    }),
+
+    bulkUpdateProducts: builder.mutation<BulkUpdateProductsResponse, BulkUpdateProductsPayload>({
+      query: (payload) => ({
+        url: '/commerce/products/bulk',
+        method: 'PUT',
+        body: payload,
+      }),
+      invalidatesTags: [{ type: 'Product', id: 'LIST' }, { type: 'Stock', id: 'LIST' }],
+    }),
   }),
   overrideExisting: false,
 });
@@ -255,6 +305,8 @@ export const {
   useUpdateCommerceProductMutation,
   usePatchCommerceProductMutation,
   useDeleteCommerceProductMutation,
+  useBulkUpdateProductStatusMutation,
+  useBulkUpdateProductsMutation,
 } = productEndpoints;
 
 /**
@@ -356,6 +408,34 @@ export const productApi = {
   deleteProduct: async (id: string): Promise<ProductDeleteResponse> => {
     const response = await baseClient.delete<ProductDeleteResponse>(
       `/commerce/products/${encodeURIComponent(id)}`
+    );
+    return response.data;
+  },
+
+  /**
+   * Bulk update status of multiple products
+   * PATCH /commerce/products/bulk-status
+   */
+  bulkUpdateProductStatus: async (
+    payload: BulkProductStatusPayload
+  ): Promise<BulkProductStatusResponse> => {
+    const response = await baseClient.patch<BulkProductStatusResponse>(
+      '/commerce/products/bulk-status',
+      payload
+    );
+    return response.data;
+  },
+
+  /**
+   * Bulk update items (grid editor)
+   * PUT /commerce/products/bulk
+   */
+  bulkUpdateProducts: async (
+    payload: BulkUpdateProductsPayload
+  ): Promise<BulkUpdateProductsResponse> => {
+    const response = await baseClient.put<BulkUpdateProductsResponse>(
+      '/commerce/products/bulk',
+      payload
     );
     return response.data;
   },

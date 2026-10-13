@@ -22,8 +22,6 @@ import {
   Paperclip,
   ArrowLeft,
   Loader2,
-  Wifi,
-  WifiOff,
   Ban,
 } from 'lucide-react';
 import {
@@ -133,10 +131,15 @@ const TAX_RATE_OPTIONS = [
   { label: 'Select Tax', rate: 0 },
   { label: 'Exempted (0%)', rate: 0 },
   { label: 'GST @ 0%', rate: 0 },
+  { label: 'GST @ 0.1%', rate: 0.1 },
+  { label: 'GST @ 0.25%', rate: 0.25 },
+  { label: 'GST @ 1.5%', rate: 1.5 },
+  { label: 'GST @ 3%', rate: 3 },
   { label: 'GST @ 5%', rate: 5 },
   { label: 'GST @ 12%', rate: 12 },
   { label: 'GST @ 18%', rate: 18 },
   { label: 'GST @ 28%', rate: 28 },
+  { label: 'GST @ 40%', rate: 40 },
 ];
 
 const PAYMENT_TYPES = [
@@ -422,6 +425,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
           unit: p.unit || 'PCS',
           taxPercent: tax,
           category: p.category || '',
+          batches: (p as any).batches || (p as any).stockBatches || [],
         };
       });
     }
@@ -434,6 +438,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
       unit: s.unit || 'PCS',
       taxPercent: 5,
       category: s.category || '',
+      batches: s.batches || [],
     }));
   }, [liveProducts, localStocks]);
 
@@ -1214,6 +1219,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
               <tr>
                 <th class="text-center" style="width: 40px;">#</th>
                 <th>Item Description</th>
+                <th class="text-center" style="width: 100px;">Batch No</th>
                 <th class="text-center" style="width: 70px;">Qty</th>
                 <th class="text-right" style="width: 100px;">Rate (₹)</th>
                 <th class="text-right" style="width: 80px;">GST %</th>
@@ -1230,6 +1236,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                     <strong>${item.productName}</strong>
                     ${item.sku ? `<div style="font-size: 10.5px; color: #64748b;">SKU: ${item.sku}</div>` : ''}
                   </td>
+                  <td class="text-center" style="font-family: monospace; font-weight: 700; color: #33077C;">${item.batch || '—'}</td>
                   <td class="text-center">${item.quantity} ${item.unit || ''}</td>
                   <td class="text-right">₹${Number(item.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                   <td class="text-right">${item.taxPercent || 0}%</td>
@@ -1480,19 +1487,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                {isApiConnected ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    <Wifi className="w-3 h-3 text-emerald-600" />
-                    Live API
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                    <WifiOff className="w-3 h-3 text-amber-600" />
-                    Offline Sync
-                  </span>
-                )}
-              </div>
             </div>
 
             {/* Row 1: Party Selection + Phone No & Right Side Meta */}
@@ -1658,7 +1652,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                   <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                     <tr>
                       <th className="py-3 px-3 w-10 text-center text-white/80">#</th>
-                      <th className="py-3 px-4 min-w-[220px] text-white">Item</th>
+                      <th className="py-3 px-4 min-w-[200px] text-white">Item</th>
+                      <th className="py-3 px-3 min-w-[130px] text-center text-white">Batch No</th>
                       <th className="py-3 px-3 w-20 text-center text-white">Qty</th>
                       <th className="py-3 px-3 w-28 text-white">Unit</th>
                       <th className="py-3 px-3 min-w-[130px] text-white">
@@ -1710,6 +1705,40 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                               <option key={stk.id || `stk-${sIdx}`} value={stk.productName} />
                             ))}
                           </datalist>
+                        </td>
+                        {/* Batch No */}
+                        <td className="py-2.5 px-2">
+                          {(() => {
+                            const matchedStock = allStockItems.find(
+                              (s: any) => s.productId === rowItem.productId || s.id === rowItem.productId
+                            );
+                            const batches = (matchedStock as any)?.batches || [];
+                            if (batches.length > 0) {
+                              return (
+                                <select
+                                  value={rowItem.batch || ''}
+                                  onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
+                                  className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
+                                >
+                                  <option value="">Select Batch...</option>
+                                  {batches.map((b: any) => (
+                                    <option key={b.batchNo || b.id} value={b.batchNo}>
+                                      {b.batchNo} ({b.quantity} in stock)
+                                    </option>
+                                  ))}
+                                </select>
+                              );
+                            }
+                            return (
+                              <input
+                                type="text"
+                                placeholder="Batch No"
+                                value={rowItem.batch || ''}
+                                onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
+                                className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
+                              />
+                            );
+                          })()}
                         </td>
                         <td className="py-2.5 px-2">
                           <input
@@ -2056,53 +2085,67 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
             showBackIcon={true}
             hideCloseButton={true}
           >
-            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Customer / Business Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Keerthivasan Retail Store"
-                  value={quickCustName}
-                  onChange={(e) => setQuickCustName(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Phone Number</label>
+            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4 pt-5">
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Customer / Business Name <span className="text-rose-500">*</span>
+                  </span>
                   <input
-                    type="tel"
-                    placeholder="7839396753"
-                    value={quickCustPhone}
-                    onChange={(e) => setQuickCustPhone(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Opening Balance</label>
-                  <input
-                    type="number"
-                    placeholder="600"
-                    value={quickCustOpeningBal}
-                    onChange={(e) => setQuickCustOpeningBal(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
+                    type="text"
+                    required
+                    placeholder="e.g. Keerthivasan Retail Store"
+                    value={quickCustName}
+                    onChange={(e) => setQuickCustName(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">Billing Address</label>
-                <input
-                  type="text"
-                  placeholder="Full street address and state"
-                  value={quickCustAddress}
-                  onChange={(e) => setQuickCustAddress(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                />
+              <div className="grid grid-cols-2 gap-4 pt-1">
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Phone Number
+                    </span>
+                    <input
+                      type="tel"
+                      placeholder="7839396753"
+                      value={quickCustPhone}
+                      onChange={(e) => setQuickCustPhone(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Opening Balance
+                    </span>
+                    <input
+                      type="number"
+                      placeholder="600"
+                      value={quickCustOpeningBal}
+                      onChange={(e) => setQuickCustOpeningBal(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="relative pt-1">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Billing Address
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Full street address and state"
+                    value={quickCustAddress}
+                    onChange={(e) => setQuickCustAddress(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
@@ -2192,15 +2235,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
                 {totalApiRecords > 0 ? totalApiRecords : saleOrders.length} total
               </span>
-              {isApiConnected ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                  <Wifi className="w-3 h-3" /> Live
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                  <WifiOff className="w-3 h-3" /> Cached
-                </span>
-              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Track confirmed customer sale orders, due dates, advance payments, and convert to sale invoices.
@@ -2778,6 +2812,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                 <tr>
                   <th className="p-2.5 text-white">#</th>
                   <th className="p-2.5 text-white">Item &amp; Description</th>
+                  <th className="p-2.5 text-center text-white">Batch No</th>
                   <th className="p-2.5 text-center text-white">Qty</th>
                   <th className="p-2.5 text-right text-white">Unit Price</th>
                   <th className="p-2.5 text-right text-white">Tax (%)</th>
@@ -2789,6 +2824,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({ initialMode = 'lis
                   <tr key={i}>
                     <td className="p-2.5 text-slate-400">{i + 1}</td>
                     <td className="p-2.5 font-bold text-slate-800">{it.productName}</td>
+                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">{it.batch || '—'}</td>
                     <td className="p-2.5 text-center">{it.quantity} {it.unit || ''}</td>
                     <td className="p-2.5 text-right">₹{it.unitPrice.toLocaleString('en-IN')}</td>
                     <td className="p-2.5 text-right">{it.taxPercent || 0}%</td>

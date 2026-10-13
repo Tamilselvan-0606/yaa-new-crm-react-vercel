@@ -1085,259 +1085,311 @@ export const SupplierView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSubmit(onSaveSupplier)} className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs">
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Supplier Code <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                readOnly
-                disabled
-                {...register('supplierCode')}
-                className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-700 outline-none cursor-not-allowed select-none"
-              />
+              <div className="relative w-full h-11 bg-slate-100/80 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Supplier Code <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  {...register('supplierCode')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-semibold text-slate-700 outline-none cursor-not-allowed select-none"
+                />
+              </div>
               <FormError message={errors.supplierCode?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Supplier / Company Name <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('name')}
-                placeholder="e.g. Agarwal Components Pvt Ltd"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.name ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.name
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Supplier / Company Name <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('name')}
+                  placeholder="e.g. Agarwal Components Pvt Ltd"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.name?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Contact Person Name <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('contactPerson')}
-                placeholder="e.g. Ramesh Agarwal"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.contactPerson ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.contactPerson
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Contact Person Name <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('contactPerson')}
+                  placeholder="e.g. Ramesh Agarwal"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.contactPerson?.message} />
             </div>
           </div>
 
           {/* Row 2: Phone Number | Email Address | Street Address */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Phone Number <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('phone')}
-                placeholder="e.g. 9988776655"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.phone ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.phone
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Phone Number <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('phone')}
+                  placeholder="e.g. 9988776655"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.phone?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Email Address
-              </label>
-              <input
-                type="email"
-                {...register('email')}
-                placeholder="e.g. procurement@agarwal.in"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.email ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.email
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Email Address
+                </span>
+                <input
+                  type="email"
+                  {...register('email')}
+                  placeholder="e.g. procurement@agarwal.in"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.email?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Street Address <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('address')}
-                placeholder="e.g. 45 Industrial Area, Phase 2"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.address ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.address
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Street Address <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('address')}
+                  placeholder="e.g. 45 Industrial Area, Phase 2"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.address?.message} />
             </div>
           </div>
 
           {/* Row 3: City | State | Pincode */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                City <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('city')}
-                placeholder="e.g. Delhi"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.city ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.city
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  City <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('city')}
+                  placeholder="e.g. Delhi"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.city?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                State <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('state')}
-                placeholder="e.g. Delhi"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.state ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.state
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  State <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('state')}
+                  placeholder="e.g. Delhi"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.state?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Pincode <span className="text-slate-500">*</span>
-              </label>
-              <input
-                type="text"
-                {...register('pincode')}
-                placeholder="e.g. 110041"
-                className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  errors.pincode ? 'border-rose-500 focus:ring-2 focus:ring-rose-500/20' : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
+              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                errors.pincode
+                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+              }`}>
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Pincode <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  {...register('pincode')}
+                  placeholder="e.g. 110041"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.pincode?.message} />
             </div>
           </div>
 
           {/* Row 4: Country | GST/VAT Number | PAN Number */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Country
-              </label>
-              <input
-                type="text"
-                {...register('country')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Country
+                </span>
+                <input
+                  type="text"
+                  {...register('country')}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.country?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                GST Number
-              </label>
-              <input
-                type="text"
-                {...register('gstNumber')}
-                placeholder="e.g. 07AAACA1234A1ZV"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  GST Number
+                </span>
+                <input
+                  type="text"
+                  {...register('gstNumber')}
+                  placeholder="e.g. 07AAACA1234A1ZV"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.gstNumber?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                PAN Number
-              </label>
-              <input
-                type="text"
-                {...register('panNumber')}
-                placeholder="e.g. AAACA1234A"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  PAN Number
+                </span>
+                <input
+                  type="text"
+                  {...register('panNumber')}
+                  placeholder="e.g. AAACA1234A"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.panNumber?.message} />
             </div>
           </div>
 
           {/* Row 5: Payment Terms | Credit Limit | Status */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Payment Terms
-              </label>
-              <input
-                type="text"
-                {...register('paymentTerms')}
-                placeholder="e.g. Net 30"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Terms
+                </span>
+                <input
+                  type="text"
+                  {...register('paymentTerms')}
+                  placeholder="e.g. Net 30"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.paymentTerms?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Credit Limit (₹)
-              </label>
-              <input
-                type="number"
-                min="0"
-                {...register('creditLimit', { valueAsNumber: true })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Credit Limit (₹)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  {...register('creditLimit', { valueAsNumber: true })}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.creditLimit?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Status
-              </label>
-              <select
-                {...register('status')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              >
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-                <option value="Blocked">Blocked</option>
-              </select>
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Status
+                </span>
+                <select
+                  {...register('status')}
+                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                  <option value="Blocked">Blocked</option>
+                </select>
+              </div>
               <FormError message={errors.status?.message} />
             </div>
           </div>
 
           {/* Row 6: Bank Name | Account Number | IFSC Code */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Bank Name
-              </label>
-              <input
-                type="text"
-                {...register('bankName')}
-                placeholder="e.g. HDFC Bank"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Bank Name
+                </span>
+                <input
+                  type="text"
+                  {...register('bankName')}
+                  placeholder="e.g. HDFC Bank"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.bankName?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Account Number
-              </label>
-              <input
-                type="text"
-                {...register('accountNumber')}
-                placeholder="e.g. 50200012345678"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Account Number
+                </span>
+                <input
+                  type="text"
+                  {...register('accountNumber')}
+                  placeholder="e.g. 50200012345678"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.accountNumber?.message} />
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                IFSC Code
-              </label>
-              <input
-                type="text"
-                {...register('ifscCode')}
-                placeholder="e.g. HDFC0000123"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  IFSC Code
+                </span>
+                <input
+                  type="text"
+                  {...register('ifscCode')}
+                  placeholder="e.g. HDFC0000123"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
               <FormError message={errors.ifscCode?.message} />
             </div>
           </div>

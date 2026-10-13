@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -18,10 +18,26 @@ import {
   AlertCircle,
   KeyRound,
   Check,
+  Clock,
+  RotateCw,
+  ArrowLeft,
+  Grid,
 } from 'lucide-react';
 
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phoneRegex = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{6,15}$/;
+
 const LoginValidationSchema = z.object({
-  email: z.string().trim().min(1, 'Please enter your email address').email('Please enter a valid email address'),
+  email: z
+    .string()
+    .trim()
+    .min(1, 'Please enter your mobile number or email address')
+    .refine(
+      (val) => emailRegex.test(val) || phoneRegex.test(val.replace(/[\s-]/g, '')),
+      {
+        message: 'Please enter a valid mobile number or email address',
+      }
+    ),
   password: z.string().min(1, 'Please enter your password'),
   rememberMe: z.boolean().optional(),
 });
@@ -32,15 +48,16 @@ const ForgotEmailValidationSchema = z.object({
 });
 type ForgotEmailFields = z.infer<typeof ForgotEmailValidationSchema>;
 
-const ResetPasswordValidationSchema = z.object({
-  resetToken: z.string().trim().min(1, 'Reset token is required'),
+const SetNewPasswordValidationSchema = z.object({
   newPassword: z.string().min(6, 'Password must be at least 6 characters'),
-  confirmPassword: z.string().min(1, 'Please confirm your password'),
+  confirmPassword: z.string().min(1, 'Please confirm your new password'),
 }).refine((data) => data.newPassword === data.confirmPassword, {
   message: 'Passwords do not match',
   path: ['confirmPassword'],
 });
-type ResetPasswordFields = z.infer<typeof ResetPasswordValidationSchema>;
+type SetNewPasswordFields = z.infer<typeof SetNewPasswordValidationSchema>;
+
+type Screen = 'login' | 'forgot-email' | 'forgot-otp' | 'forgot-password' | 'forgot-success';
 
 export const LoginView: React.FC = () => {
   const { login, isLoading } = useAuth();
@@ -48,10 +65,41 @@ export const LoginView: React.FC = () => {
 
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Screen flow: login -> forgot-email -> forgot-reset -> forgot-success
-  const [currentScreen, setCurrentScreen] = useState<'login' | 'forgot-email' | 'forgot-reset' | 'forgot-success'>('login');
+  // Screen flow: login -> forgot-email -> forgot-otp -> forgot-password -> forgot-success
+  const [currentScreen, setCurrentScreen] = useState<Screen>('login');
+
+  // Forgot password & OTP state
+  const [submittedEmail, setSubmittedEmail] = useState<string>('');
+  const [otpValues, setOtpValues] = useState<string[]>(['', '', '', '', '', '']);
+  const [otpTimer, setOtpTimer] = useState<number>(60);
+  const [canResendOtp, setCanResendOtp] = useState<boolean>(false);
+  const [isResendingOtp, setIsResendingOtp] = useState<boolean>(false);
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // OTP Countdown Timer
+  useEffect(() => {
+    if (currentScreen !== 'forgot-otp') return;
+    if (otpTimer <= 0) {
+      setCanResendOtp(true);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setOtpTimer((prev) => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [currentScreen, otpTimer]);
+
+  // Focus the first OTP box upon opening the OTP screen
+  useEffect(() => {
+    if (currentScreen === 'forgot-otp') {
+      setTimeout(() => {
+        otpInputRefs.current[0]?.focus();
+      }, 100);
+    }
+  }, [currentScreen]);
 
   // React Hook Form for Login
   const {
@@ -83,16 +131,15 @@ export const LoginView: React.FC = () => {
     mode: 'onSubmit',
   });
 
-  // React Hook Form for Reset Password
+  // React Hook Form for Set New Password
   const {
     register: registerReset,
     handleSubmit: handleResetSubmit,
     reset: resetResetForm,
     formState: { errors: resetErrors, isSubmitting: isResetting },
-  } = useForm<ResetPasswordFields>({
-    resolver: zodResolver(ResetPasswordValidationSchema),
+  } = useForm<SetNewPasswordFields>({
+    resolver: zodResolver(SetNewPasswordValidationSchema),
     defaultValues: {
-      resetToken: '',
       newPassword: '',
       confirmPassword: '',
     },
@@ -101,8 +148,13 @@ export const LoginView: React.FC = () => {
 
   const resetToLogin = () => {
     setCurrentScreen('login');
+    setShowPassword(false);
     setShowNewPassword(false);
+    setShowConfirmPassword(false);
     setErrorMsg(null);
+    setOtpValues(['', '', '', '', '', '']);
+    setOtpTimer(60);
+    setCanResendOtp(false);
     resetResetForm();
   };
 
@@ -135,24 +187,127 @@ export const LoginView: React.FC = () => {
   const onForgotSubmit = async (data: ForgotEmailFields) => {
     try {
       const res = await api.forgotPassword(data.forgotEmail);
-      toast.success(res.message || 'If the account is eligible, a reset email will be sent.');
-      setCurrentScreen('forgot-reset');
+      setSubmittedEmail(data.forgotEmail);
+      setOtpValues(['', '', '', '', '', '']);
+      setOtpTimer(60);
+      setCanResendOtp(false);
+      toast.success(res.message || 'A 6-digit verification code has been sent to your email.');
+      setCurrentScreen('forgot-otp');
     } catch (err: any) {
       toast.error(err.message || 'Failed to send password reset request.');
     }
   };
 
-  const onResetSubmit = async (data: ResetPasswordFields) => {
+  const handleOtpChange = (index: number, val: string) => {
+    const cleanVal = val.replace(/\D/g, '');
+    if (!cleanVal) {
+      const newOtp = [...otpValues];
+      newOtp[index] = '';
+      setOtpValues(newOtp);
+      return;
+    }
+
+    if (cleanVal.length > 1) {
+      const digits = cleanVal.slice(0, 6).split('');
+      const newOtp = [...otpValues];
+      digits.forEach((digit, dIdx) => {
+        if (index + dIdx < 6) {
+          newOtp[index + dIdx] = digit;
+        }
+      });
+      setOtpValues(newOtp);
+      const nextIdx = Math.min(index + digits.length, 5);
+      otpInputRefs.current[nextIdx]?.focus();
+      return;
+    }
+
+    const newOtp = [...otpValues];
+    newOtp[index] = cleanVal;
+    setOtpValues(newOtp);
+
+    if (index < 5) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      if (!otpValues[index] && index > 0) {
+        e.preventDefault();
+        const newOtp = [...otpValues];
+        newOtp[index - 1] = '';
+        setOtpValues(newOtp);
+        otpInputRefs.current[index - 1]?.focus();
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      e.preventDefault();
+      otpInputRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      e.preventDefault();
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasteData = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasteData) return;
+    const digits = pasteData.split('');
+    const newOtp = [...otpValues];
+    digits.forEach((digit, dIdx) => {
+      if (dIdx < 6) {
+        newOtp[dIdx] = digit;
+      }
+    });
+    setOtpValues(newOtp);
+    const nextIdx = Math.min(digits.length, 5);
+    otpInputRefs.current[nextIdx]?.focus();
+  };
+
+  const handleResendOtp = async () => {
+    if (!submittedEmail || isResendingOtp || !canResendOtp) return;
+    setIsResendingOtp(true);
     try {
-      await api.resetPassword(data.resetToken, data.newPassword);
+      await api.forgotPassword(submittedEmail);
+      toast.success('A new 6-digit verification code has been sent to your email.');
+      setOtpValues(['', '', '', '', '', '']);
+      setOtpTimer(60);
+      setCanResendOtp(false);
+      otpInputRefs.current[0]?.focus();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to resend OTP. Please try again.');
+    } finally {
+      setIsResendingOtp(false);
+    }
+  };
+
+  const onVerifyOtpSubmit = () => {
+    const fullOtp = otpValues.join('');
+    if (fullOtp.length !== 6) {
+      toast.error('Please enter the complete 6-digit verification code.');
+      return;
+    }
+    setCurrentScreen('forgot-password');
+  };
+
+  const onResetSubmit = async (data: SetNewPasswordFields) => {
+    try {
+      const fullOtp = otpValues.join('');
+      await api.resetPassword(fullOtp, data.newPassword);
       setCurrentScreen('forgot-success');
       toast.success('Password has been reset successfully!');
       setTimeout(() => {
         resetToLogin();
       }, 2500);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to reset password. Please verify your token.');
+      toast.error(err?.message || 'Failed to reset password. Please check your OTP and try again.');
     }
+  };
+
+  const formatTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -214,54 +369,51 @@ export const LoginView: React.FC = () => {
 
       {/* FOREGROUND LAYER: Login Card Placed Dead-Center */}
       <div className="relative z-20 w-full max-w-[460px] my-auto py-6">
-        <div className="bg-[#18052E]/90 backdrop-blur-2xl border border-[#A78BFA]/40 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-black/90 text-white ring-1 ring-white/20">
+        <div className="bg-[#ffffff] border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-purple-950/25 text-slate-900 ring-1 ring-slate-900/5">
 
           {/* SCREEN 1: LOGIN */}
           {currentScreen === 'login' && (
             <div className="animate-in fade-in duration-200">
-              <div className="mb-6 flex items-center justify-between pb-4 border-b border-purple-500/20">
-                <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-[#C084FC]" />
-                    Account Sign In
-                  </h2>
-                  <p className="text-xs text-purple-200/70 mt-0.5">
-                    Sign in with your enterprise credentials
-                  </p>
+              {/* Header */}
+              <div className="mb-6 text-center">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#33077C] flex items-center justify-center text-white mb-3 shadow-md shadow-[#33077C]/25">
+                  <Lock className="w-6 h-6" />
                 </div>
-                <div className="px-2.5 py-1 rounded-full bg-purple-900/60 border border-purple-500/40 text-[11px] font-semibold text-purple-200 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Secure
-                </div>
+                <h2 className="text-2xl font-extrabold text-[#0B1536] tracking-tight">
+                  Account Sign In
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Sign in with your enterprise credentials
+                </p>
               </div>
 
               {/* Error Banner */}
               {errorMsg && (
-                <div className="mb-5 p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs flex items-start gap-2.5 animate-in fade-in zoom-in-95 duration-150">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2.5 animate-in fade-in zoom-in-95 duration-150">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
                   <div className="flex-1 font-medium">{errorMsg}</div>
                 </div>
               )}
 
               {/* Form */}
               <form noValidate onSubmit={handleLoginSubmit(onLoginSubmit)} className="space-y-4">
-                {/* Email Input */}
+                {/* Mobile / Email Input */}
                 <div>
-                  <label htmlFor="email" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Email Address <span className="text-rose-400">*</span>
+                  <label htmlFor="email" className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Mobile Number / Email Address <span className="text-rose-500">*</span>
                   </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <div className="relative flex items-center">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                       <Mail className="w-4 h-4" />
                     </div>
                     <input
                       id="email"
-                      type="email"
+                      type="text"
                       {...registerLogin('email')}
-                      placeholder="e.g. admin@yaa.com"
+                      placeholder="user@login.com"
                       autoComplete="username"
-                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
-                        loginErrors.email ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      className={`w-full pl-10 pr-4 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
+                        loginErrors.email ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
                       }`}
                     />
                   </div>
@@ -271,12 +423,12 @@ export const LoginView: React.FC = () => {
                 {/* Password Input */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label htmlFor="password" className="block text-xs font-semibold text-slate-300">
-                      Password <span className="text-rose-400">*</span>
+                    <label htmlFor="password" className="block text-xs font-bold text-slate-700">
+                      Password <span className="text-rose-500">*</span>
                     </label>
                   </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <div className="relative flex items-center">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                       <Lock className="w-4 h-4" />
                     </div>
                     <input
@@ -285,14 +437,14 @@ export const LoginView: React.FC = () => {
                       {...registerLogin('password')}
                       placeholder="Enter your password"
                       autoComplete="current-password"
-                      className={`w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
-                        loginErrors.password ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      className={`w-full pl-10 pr-10 py-3 bg-[#33077C]/[0.06] hover:bg-[#33077C]/[0.09] border rounded-xl text-slate-900 text-sm font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all ${
+                        loginErrors.password ? 'border-rose-400 focus:ring-rose-500/20' : 'border-[#33077C]/20 focus:border-[#33077C] focus:ring-[#33077C]/20'
                       }`}
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                       tabIndex={-1}
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -308,9 +460,9 @@ export const LoginView: React.FC = () => {
                       id="rememberMe"
                       type="checkbox"
                       {...registerLogin('rememberMe')}
-                      className="w-4 h-4 rounded border-white/20 bg-white/10 text-[#4309A2] focus:ring-[#4309A2] focus:ring-offset-0 cursor-pointer"
+                      className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] focus:ring-offset-0 cursor-pointer"
                     />
-                    <span className="text-xs text-slate-300 font-medium">Keep me signed in</span>
+                    <span className="text-xs text-slate-600 font-medium">Remember me</span>
                   </label>
 
                   <button
@@ -319,9 +471,9 @@ export const LoginView: React.FC = () => {
                       setForgotValue('forgotEmail', getLoginValues('email') || '');
                       setCurrentScreen('forgot-email');
                     }}
-                    className="text-xs font-semibold text-[#D8B4FE] hover:text-white hover:underline transition-colors cursor-pointer"
+                    className="text-xs font-semibold text-[#33077C] hover:text-[#25045B] hover:underline transition-colors cursor-pointer"
                   >
-                    Forgot Password?
+                    Forgot password?
                   </button>
                 </div>
 
@@ -330,7 +482,7 @@ export const LoginView: React.FC = () => {
                   <button
                     type="submit"
                     disabled={isLoginSubmitting || isLoading}
-                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#2B3991] via-[#33077C] to-[#4309A2] hover:opacity-95 active:scale-[0.99] text-white font-bold text-sm shadow-lg shadow-[#33077C]/30 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isLoginSubmitting || isLoading ? (
                       <>
@@ -338,13 +490,15 @@ export const LoginView: React.FC = () => {
                         <span>Signing In...</span>
                       </>
                     ) : (
-                      <>
-                        <LogIn className="w-4 h-4" />
-                        <span>Sign In to Dashboard</span>
-                        <ArrowRight className="w-4 h-4 ml-0.5" />
-                      </>
+                      <span>Sign In to Dashboard</span>
                     )}
                   </button>
+                </div>
+
+                {/* Trust / Encryption Badge */}
+                <div className="pt-2 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#33077C]" />
+                  <span>Secured with enterprise-grade encryption</span>
                 </div>
               </form>
             </div>
@@ -353,20 +507,20 @@ export const LoginView: React.FC = () => {
           {/* SCREEN 2: FORGOT PASSWORD - ENTER EMAIL */}
           {currentScreen === 'forgot-email' && (
             <div className="animate-in fade-in duration-200">
-              <div className="mb-6 pb-4 border-b border-purple-500/20">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#33077C] to-[#4309A2] border border-purple-400/40 flex items-center justify-center text-[#D8B4FE] mb-3 shadow-lg shadow-[#33077C]/40">
+              <div className="mb-6 pb-4 border-b border-slate-100 text-center">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#33077C] flex items-center justify-center text-white mb-3 shadow-md shadow-[#33077C]/25">
                   <KeyRound className="w-6 h-6" />
                 </div>
-                <h2 className="text-xl font-bold text-white tracking-tight">Forgot Password</h2>
-                <p className="text-xs text-purple-200/70 mt-1">
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight">Forgot Password</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
                   Enter your registered email address to receive a secure password reset link.
                 </p>
               </div>
 
               <form noValidate onSubmit={handleForgotSubmit(onForgotSubmit)} className="space-y-4">
                 <div>
-                  <label htmlFor="forgotEmail" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Registered Email Address <span className="text-rose-400">*</span>
+                  <label htmlFor="forgotEmail" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    Registered Email Address <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -377,26 +531,19 @@ export const LoginView: React.FC = () => {
                       type="email"
                       {...registerForgot('forgotEmail')}
                       placeholder="e.g. admin@yaa.com"
-                      className={`w-full pl-10 pr-4 py-3 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
-                        forgotErrors.forgotEmail ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      className={`w-full pl-10 pr-4 py-3 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
+                        forgotErrors.forgotEmail ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
                       }`}
                     />
                   </div>
                   <FormError message={forgotErrors.forgotEmail?.message} />
                 </div>
 
-                <div className="flex items-center gap-3 pt-3">
-                  <button
-                    type="button"
-                    onClick={resetToLogin}
-                    className="w-1/3 py-3 px-4 rounded-xl border border-white/20 text-xs font-bold text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer text-center"
-                  >
-                    Back to Sign In
-                  </button>
+                <div className="space-y-4 pt-3">
                   <button
                     type="submit"
                     disabled={isSendingForgot}
-                    className="w-2/3 py-3 px-4 rounded-xl bg-gradient-to-r from-[#2B3991] via-[#33077C] to-[#4309A2] hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-[#33077C]/40 transition-all active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isSendingForgot ? (
                       <>
@@ -410,49 +557,133 @@ export const LoginView: React.FC = () => {
                       </>
                     )}
                   </button>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={resetToLogin}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-slate-500" />
+                      <span>Back to Sign In</span>
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
           )}
 
-          {/* SCREEN 3: FORGOT PASSWORD - CREATE NEW PASSWORD WITH 64-CHAR TOKEN */}
-          {currentScreen === 'forgot-reset' && (
+          {/* SCREEN 3: FORGOT PASSWORD - 6-DIGIT OTP VERIFICATION WITH TIMER */}
+          {currentScreen === 'forgot-otp' && (
             <div className="animate-in fade-in duration-200">
-              <div className="mb-6 pb-4 border-b border-purple-500/20">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 border border-emerald-400/40 flex items-center justify-center text-emerald-100 mb-3 shadow-lg shadow-emerald-900/40">
+              <div className="mb-6 pb-4 border-b border-slate-100 text-center">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#33077C] flex items-center justify-center text-white mb-3 shadow-md shadow-[#33077C]/25">
+                  <KeyRound className="w-6 h-6" />
+                </div>
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight">Enter Verification Code</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                  We sent a 6-digit verification code to{' '}
+                  <span className="font-semibold text-[#4309A2]">{submittedEmail || 'your email'}</span>.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-3 text-center">
+                    6-Digit Verification Code <span className="text-rose-500">*</span>
+                  </label>
+
+                  {/* 6 Individual Digit Input Boxes */}
+                  <div className="flex items-center justify-center gap-2 sm:gap-3">
+                    {otpValues.map((val, idx) => (
+                      <input
+                        key={idx}
+                        ref={(el) => {
+                          otpInputRefs.current[idx] = el;
+                        }}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={1}
+                        value={val}
+                        onChange={(e) => handleOtpChange(idx, e.target.value)}
+                        onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                        onPaste={handleOtpPaste}
+                        className={`w-11 h-12 sm:w-12 sm:h-14 text-center text-xl sm:text-2xl font-bold rounded-xl bg-slate-50/80 border transition-all outline-none select-text ${
+                          val
+                            ? 'border-[#4309A2] text-slate-900 shadow-md shadow-purple-900/15 ring-2 ring-[#4309A2]/30 bg-purple-50/50'
+                            : 'border-slate-200 text-slate-800 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/20'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Countdown Timer and Resend Link */}
+                <div className="flex items-center justify-center text-xs pt-1">
+                  {canResendOtp ? (
+                    <button
+                      type="button"
+                      onClick={handleResendOtp}
+                      disabled={isResendingOtp}
+                      className="inline-flex items-center gap-1.5 font-bold text-[#33077C] hover:text-[#25045B] transition-all cursor-pointer"
+                    >
+                      <RotateCw className={`w-3.5 h-3.5 ${isResendingOtp ? 'animate-spin' : ''}`} />
+                      <span>{isResendingOtp ? 'Resending...' : 'Resend Code'}</span>
+                    </button>
+                  ) : (
+                    <div className="inline-flex items-center gap-1.5 font-bold text-[#2B3991]">
+                      <span>Resend in {formatTimer(otpTimer)}</span>
+                      <RotateCw className="w-3.5 h-3.5 text-[#2B3991] animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="space-y-4 pt-3">
+                  <button
+                    type="button"
+                    onClick={onVerifyOtpSubmit}
+                    disabled={otpValues.join('').length !== 6}
+                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span>Verify OTP</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentScreen('forgot-email')}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-slate-500" />
+                      <span>Back</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SCREEN 4: FORGOT PASSWORD - CREATE NEW PASSWORD (TWO FIELDS ONLY) */}
+          {currentScreen === 'forgot-password' && (
+            <div className="animate-in fade-in duration-200">
+              <div className="mb-6 pb-4 border-b border-slate-100 text-center">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[#33077C] flex items-center justify-center text-white mb-3 shadow-md shadow-[#33077C]/25">
                   <Lock className="w-6 h-6" />
                 </div>
-                <h2 className="text-xl font-bold text-white tracking-tight">Create New Password</h2>
-                <p className="text-xs text-purple-200/70 mt-1">
-                  Enter the 64-character reset token from your email and your new password.
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight">Set New Password</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                  Enter and confirm your new account password.
                 </p>
               </div>
 
               <form noValidate onSubmit={handleResetSubmit(onResetSubmit)} className="space-y-4">
+                {/* Field 1: New Password */}
                 <div>
-                  <label htmlFor="resetToken" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Reset Token (64 Hex Characters) <span className="text-rose-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <KeyRound className="w-4 h-4" />
-                    </div>
-                    <input
-                      id="resetToken"
-                      type="text"
-                      {...registerReset('resetToken')}
-                      placeholder="e.g. e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-xs font-mono placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all ${
-                        resetErrors.resetToken ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
-                      }`}
-                    />
-                  </div>
-                  <FormError message={resetErrors.resetToken?.message} />
-                </div>
-
-                <div>
-                  <label htmlFor="newPassword" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    New Password <span className="text-rose-400">*</span>
+                  <label htmlFor="newPassword" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    New Password <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -463,14 +694,16 @@ export const LoginView: React.FC = () => {
                       type={showNewPassword ? 'text' : 'password'}
                       {...registerReset('newPassword')}
                       placeholder="At least 6 characters"
-                      className={`w-full pl-10 pr-10 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
-                        resetErrors.newPassword ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      autoComplete="new-password"
+                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
+                        resetErrors.newPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
                       }`}
                     />
                     <button
                       type="button"
                       onClick={() => setShowNewPassword(!showNewPassword)}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-200 cursor-pointer"
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                      tabIndex={-1}
                     >
                       {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -478,9 +711,10 @@ export const LoginView: React.FC = () => {
                   <FormError message={resetErrors.newPassword?.message} />
                 </div>
 
+                {/* Field 2: Confirm Password */}
                 <div>
-                  <label htmlFor="confirmPassword" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Confirm New Password <span className="text-rose-400">*</span>
+                  <label htmlFor="confirmPassword" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    Confirm Password <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -488,29 +722,32 @@ export const LoginView: React.FC = () => {
                     </div>
                     <input
                       id="confirmPassword"
-                      type={showNewPassword ? 'text' : 'password'}
+                      type={showConfirmPassword ? 'text' : 'password'}
                       {...registerReset('confirmPassword')}
-                      placeholder="Re-enter password"
-                      className={`w-full pl-10 pr-4 py-2.5 bg-white/[0.05] border rounded-xl text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 transition-all font-medium ${
-                        resetErrors.confirmPassword ? 'border-rose-500/80 focus:ring-rose-500/20' : 'border-white/[0.14] focus:border-[#4309A2] focus:ring-[#4309A2]/20'
+                      placeholder="Re-enter your new password"
+                      autoComplete="new-password"
+                      className={`w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border rounded-xl text-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:bg-white transition-all font-medium ${
+                        resetErrors.confirmPassword ? 'border-rose-400 focus:ring-rose-500/20' : 'border-slate-200 focus:border-[#4309A2] focus:ring-[#4309A2]/20'
                       }`}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                      tabIndex={-1}
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                   <FormError message={resetErrors.confirmPassword?.message} />
                 </div>
 
-                <div className="flex items-center gap-3 pt-3">
-                  <button
-                    type="button"
-                    onClick={resetToLogin}
-                    className="w-1/3 py-3 px-4 rounded-xl border border-white/20 text-xs font-bold text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer text-center"
-                  >
-                    Cancel
-                  </button>
+                {/* Actions */}
+                <div className="space-y-4 pt-3">
                   <button
                     type="submit"
                     disabled={isResetting}
-                    className="w-2/3 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-emerald-700/40 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                    className="w-full py-3.5 px-4 rounded-xl bg-[#33077C] hover:bg-[#280564] active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-[#33077C]/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isResetting ? (
                       <>
@@ -524,6 +761,17 @@ export const LoginView: React.FC = () => {
                       </>
                     )}
                   </button>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentScreen('forgot-otp')}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-slate-500" />
+                      <span>Back</span>
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
@@ -532,12 +780,12 @@ export const LoginView: React.FC = () => {
           {/* SCREEN 4: FORGOT PASSWORD - SUCCESS SCREEN */}
           {currentScreen === 'forgot-success' && (
             <div className="py-8 text-center space-y-4 animate-in zoom-in-95 duration-200">
-              <div className="w-16 h-16 mx-auto rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
+              <div className="w-16 h-16 mx-auto rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-500 flex items-center justify-center">
                 <Check className="w-8 h-8 stroke-[3]" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">Password Updated!</h2>
-                <p className="text-xs text-purple-200/70 mt-1 max-w-xs mx-auto">
+                <h2 className="text-xl font-bold text-slate-900">Password Updated!</h2>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
                   Your password has been successfully reset. Redirecting back to sign in...
                 </p>
               </div>

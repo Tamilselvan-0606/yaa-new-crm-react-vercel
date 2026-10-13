@@ -31,7 +31,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { customerApi, mapApiCustomerToSalesCustomer } from '../../api/commerce/customerApi';
 import { Customer } from '../../types';
 import { CustomerFormModal } from '../../components/forms/CustomerFormModal';
 import { useInvoiceStore, SavedInvoice } from '../../store/useInvoiceStore';
@@ -84,45 +83,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const { addProformaInvoice } = useProformaInvoiceStore();
   const addInvoice = isProforma ? addProformaInvoice : addStandardInvoice;
 
-  const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
-
-  useEffect(() => {
-    // Platform Administrator invoices work directly with Organizations, not commerce customers
-    if (isSuperAdmin) {
-      return;
-    }
-
-    let isMounted = true;
-    const fetchCustomers = async () => {
-      try {
-        const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
-            id: sc.id,
-            clientId: sc.customerCode || sc.id,
-            name: sc.name,
-            company: sc.company || sc.name,
-            contactPerson: sc.name,
-            phone: sc.phone || '',
-            email: sc.email || '',
-            location: [sc.city, sc.state].filter(Boolean).join(', '),
-            address: sc.address || '',
-            status: sc.status || 'Active',
-            linkedProducts: [],
-            gstin: sc.gstNumber || '',
-            taxId: sc.gstNumber || '',
-          })) as unknown as Customer[];
-          setCommerceCustomers(mapped);
-        }
-      } catch (err) {
-        console.warn('Failed to load commerce customers in NewInvoiceView:', err);
-      }
-    };
-    fetchCustomers();
-    return () => {
-      isMounted = false;
-    };
-  }, [isSuperAdmin]);
+  const [commerceCustomers] = useState<Customer[]>([]);
 
   // Top Action: Active Mode ('new' | 'existing')
   const [saleMode, setSaleMode] = useState<'new' | 'existing'>('new');

@@ -33,14 +33,23 @@ import {
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { useAuth } from '../../context/AuthContext';
-import { useLeads } from '../../hooks/useQueries';
-import { customerApi, mapApiCustomerToSalesCustomer } from '../../api/commerce/customerApi';
-import { EstimatePDFDocument } from '../../components/quotes/EstimatePDFDocument';
+import { EstimatePDFDocument, SellerInfo } from '../../components/quotes/EstimatePDFDocument';
 import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
-import { quoteApi, organizationApi, OrganizationApiItem, QuoteApiItem } from '../../api';
+import {
+  quoteApi,
+  organizationApi,
+  subOrganizationApi,
+  clientProductApi,
+  platformLeadApi,
+  OrganizationApiItem,
+  ClientProductApiItem,
+  QuoteApiItem,
+  CreateQuoteRequest,
+  getStoredOrganizationId,
+} from '../../api';
 
 export interface Quotation {
   id: string;
@@ -69,159 +78,171 @@ export interface Quotation {
   }[];
 }
 
+export interface AvailableClient {
+  id: string;
+  name: string;
+  company: string;
+  email: string;
+  phone: string;
+  location: string;
+  type: 'Sub-Organization' | 'Organization' | 'Lead' | 'Customer';
+}
+
 interface QuotesViewProps {
   initialCreateOpen?: boolean;
 }
 
 export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = false }) => {
-  const { showToast, isSuperAdmin } = useAuth();
+  const { showToast, isSuperAdmin, currentUser } = useAuth();
   const singularTerm = 'Quotation';
   const pluralTerm = 'Quotations';
   const lowerSingularTerm = 'quotation';
   const lowerPluralTerm = 'quotations';
-  const [appCustomers, setAppCustomers] = useState<Array<{ id: string; name: string; company: string; email: string; phone: string; location: string }>>([]);
-  const { data: appLeads = [] } = useLeads();
 
-  useEffect(() => {
-    // Platform Administrator operates across Organizations, not commerce customers
-    if (isSuperAdmin) {
-      return;
-    }
+  // Active Organization Info
+  const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+  const [activeOrgDetails, setActiveOrgDetails] = useState<OrganizationApiItem | null>(null);
 
-    let isMounted = true;
-    const fetchCusts = async () => {
-      try {
-        const res = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          const mapped = res.data.map(mapApiCustomerToSalesCustomer).map((sc) => ({
-            id: sc.id,
-            name: sc.name,
-            company: sc.company || sc.name,
-            email: sc.email || '',
-            phone: sc.phone || '',
-            location: [sc.city, sc.state].filter(Boolean).join(', '),
-          }));
-          setAppCustomers(mapped);
-        }
-      } catch (err) {
-        console.warn('Failed to load customers for quotes:', err);
-      }
-    };
-    fetchCusts();
-    return () => {
-      isMounted = false;
-    };
-  }, [isSuperAdmin]);
+  // Available real clients: Sub-Organizations, Organizations, Leads
+  const [availableClients, setAvailableClients] = useState<AvailableClient[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
 
-  // Combine real app customers and leads for unified client selector
-  const SUPER_ADMIN_ORGS = ['YaaCreations', 'Polihills', 'Enmin Labs'];
-  const SUPER_ADMIN_ORGS_DATA: Record<string, { name: string; email: string; phone: string; location: string }> = {
-    'yaacreations': {
-      name: 'Alex Rivera',
-      email: 'yaaadmin@gmail.com',
-      phone: '+91 98765 43210',
-      location: 'Hyderabad, TG',
-    },
-    'polihills': {
-      name: 'Sarah Jenkins',
-      email: 'info@polihills.com',
-      phone: '+91 98765 43211',
-      location: 'Hyderabad, TG',
-    },
-    'enmin labs': {
-      name: 'Vikram Malhotra',
-      email: 'hello@enminlabs.io',
-      phone: '+91 98765 43212',
-      location: 'Hyderabad, TG',
-    },
-  };
+  // Real Platform Products
+  const [platformProducts, setPlatformProducts] = useState<ClientProductApiItem[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(false);
 
   const getOrgInfo = (companyName: string) => {
-    const name = (companyName || '').trim().toLowerCase();
-    if (name.includes('yaacreation') || name.includes('yaaconnect') || name.includes('yaa')) {
-      return { code: 'YC-HQ', initials: 'YA', name: 'YaaCreations' };
-    }
-    if (name.includes('polihill')) {
-      return { code: 'POLI-01', initials: 'PO', name: 'Polihills' };
-    }
-    if (name.includes('enmin')) {
-      return { code: 'EML-02', initials: 'EN', name: 'Enmin Labs' };
-    }
-    const words = companyName.trim().split(/\s+/);
+    const name = (companyName || '').trim();
+    if (!name) return { code: 'ORG-01', initials: 'OG', name: 'Organization' };
+    const words = name.split(/\s+/);
     const initials = words.map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'OG';
-    return { code: 'ORG-01', initials, name: companyName };
+    const code = `ORG-${name.slice(0, 3).toUpperCase()}`;
+    return { code, initials, name };
   };
-
-  const allClients = [
-    ...appCustomers.map((c) => ({
-      id: c.id,
-      name: c.name,
-      company: c.company,
-      email: c.email,
-      phone: c.phone,
-      location: c.location,
-      type: 'Customer' as const,
-    })),
-    ...appLeads.map((l) => ({
-      id: l.id,
-      name: l.name,
-      company: l.company,
-      email: l.email,
-      phone: l.phone,
-      location: l.location,
-      type: 'Lead' as const,
-    })),
-  ];
-
-  // Live Organizations from Platform API
-  const [platformOrgs, setPlatformOrgs] = useState<OrganizationApiItem[]>([]);
 
   useEffect(() => {
     let isMounted = true;
-    const fetchOrgs = async () => {
-      try {
-        const res = await organizationApi.getOrganizations(1, 100);
-        if (isMounted && res.data) {
-          setPlatformOrgs(res.data);
+
+    const loadClientsAndProducts = async () => {
+      const orgId = currentUser?.organizationId || getStoredOrganizationId();
+
+      // 1. Fetch active organization details for Seller info
+      if (orgId) {
+        try {
+          const orgRes = await organizationApi.getOrganizationById(orgId);
+          if (isMounted && orgRes?.data) {
+            setActiveOrgDetails(orgRes.data);
+            if (orgRes.data.name) setQuotationFromCompany(orgRes.data.name);
+            if (orgRes.data.email) setQuotationFromEmail(orgRes.data.email);
+            if (orgRes.data.phone) setQuotationFromPhone(orgRes.data.phone);
+            if (orgRes.data.address) setQuotationFromAddress(orgRes.data.address);
+            if (orgRes.data.gstNumber) setQuotationFromGst(orgRes.data.gstNumber);
+            if (orgRes.data.panNumber) setQuotationFromPan(orgRes.data.panNumber);
+            const orgLogo = orgRes.data.logo || (orgRes.data as any)?.logoUrl;
+            if (orgLogo) setQuotationFromLogo(orgLogo);
+          }
+        } catch (e) {
+          console.warn('Notice: Could not load organization details:', e);
         }
-      } catch (err) {
-        console.error('Failed to load organizations for quotes:', err);
+      }
+
+      // 2. Fetch real clients: sub-organizations, platform organizations, leads
+      setLoadingClients(true);
+      const clientsMap = new Map<string, AvailableClient>();
+
+      try {
+        const subRes = await subOrganizationApi.getSubOrganizations(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          orgId || undefined
+        );
+        if (subRes && Array.isArray(subRes.data)) {
+          subRes.data.forEach((s) => {
+            if (s.id) {
+              clientsMap.set(s.id, {
+                id: s.id,
+                name: s.name,
+                company: s.name,
+                email: s.email || '',
+                phone: s.phone || '',
+                location: '',
+                type: 'Sub-Organization',
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load sub-organizations:', e);
+      }
+
+      try {
+        const orgsRes = await organizationApi.getOrganizations(1, 100);
+        if (orgsRes && Array.isArray(orgsRes.data)) {
+          orgsRes.data.forEach((o) => {
+            if (o.id && !clientsMap.has(o.id) && o.id !== orgId) {
+              clientsMap.set(o.id, {
+                id: o.id,
+                name: o.name,
+                company: o.name,
+                email: o.email || '',
+                phone: o.phone || '',
+                location: '',
+                type: 'Organization',
+              });
+            }
+          });
+        }
+      } catch {}
+
+      try {
+        const leadsRes = await platformLeadApi.getLeads({ limit: 100 });
+        if (leadsRes && Array.isArray(leadsRes.data)) {
+          leadsRes.data.forEach((l) => {
+            if (l.id && !clientsMap.has(l.id)) {
+              clientsMap.set(l.id, {
+                id: l.id,
+                name: l.name,
+                company: l.company || l.name,
+                email: l.email || '',
+                phone: l.phone || '',
+                location: l.location || '',
+                type: 'Lead',
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to load leads for quotes:', e);
+      }
+
+      if (isMounted) {
+        setAvailableClients(Array.from(clientsMap.values()));
+        setLoadingClients(false);
+      }
+
+      // 3. Fetch real products
+      setLoadingProducts(true);
+      try {
+        const prodRes = await clientProductApi.getProducts({ page: 1, limit: 100 });
+        if (isMounted && prodRes && Array.isArray(prodRes.data)) {
+          setPlatformProducts(prodRes.data);
+          if (prodRes.data.length > 0) {
+            setSelectedProductSuiteName(prodRes.data[0].name);
+            setProjectName((prev) => prev || prodRes.data[0].name);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load products for quotes:', e);
+      } finally {
+        if (isMounted) setLoadingProducts(false);
       }
     };
-    fetchOrgs();
+
+    loadClientsAndProducts();
+
     return () => {
       isMounted = false;
     };
   }, []);
-
-  // Super Admin: Map real platform organizations so IDs are genuine backend UUIDs
-  const superAdminClients = useMemo(() => {
-    if (platformOrgs.length > 0) {
-      return platformOrgs.map((org) => ({
-        id: org.id,
-        name: org.name,
-        company: org.name,
-        email: org.email || '',
-        phone: org.phone || '',
-        location: '',
-        type: 'Customer' as const,
-      }));
-    }
-    return SUPER_ADMIN_ORGS.map((orgName, index) => {
-      const fallback = SUPER_ADMIN_ORGS_DATA[orgName.toLowerCase()];
-      return {
-        id: `super_org_${index + 1}`,
-        name: fallback?.name || orgName,
-        company: orgName,
-        email: fallback?.email || '',
-        phone: fallback?.phone || '',
-        location: fallback?.location || '',
-        type: 'Customer' as const,
-      };
-    });
-  }, [platformOrgs]);
-
-  const availableClients = isSuperAdmin ? superAdminClients : allClients;
 
   // Real backend quotes state
   const [quotes, setQuotes] = useState<Quotation[]>([]);
@@ -279,6 +300,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setQuotes((prev) =>
         prev.map((q) => (q.id === quoteId ? { ...q, status: newStatus } : q))
       );
+      if (selectedQuote && selectedQuote.id === quoteId) {
+        setSelectedQuote((prev) => (prev ? { ...prev, status: newStatus } : null));
+      }
       showToast('success', 'Status Updated', `Quotation status updated to ${newStatus}.`);
     } catch (err: any) {
       console.error('Failed to update status:', err);
@@ -377,7 +401,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const fetchQuotes = async () => {
     try {
       setIsLoadingQuotes(true);
-      const params = {
+      const orgId = currentUser?.organizationId || getStoredOrganizationId();
+      const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+      const activeSubOrgName = localStorage.getItem('active_sub_organization');
+
+      const params: any = {
         page: currentPage,
         limit: pageSize,
         search: appliedSearch.trim() || undefined,
@@ -385,14 +413,27 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         sortBy: 'createdAt' as const,
         sortOrder: 'desc' as const,
       };
+
+      if (orgId) {
+        params.organization_id = orgId;
+      }
+      if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
+        params.customerId = activeSubOrgId;
+      }
+
       const res = await quoteApi.getQuotes(params);
       if (res && res.data) {
         setQuotes(res.data.map(mapApiQuoteToUi));
         setTotalRecords(res.pagination?.totalRecords ?? res.data.length);
+      } else {
+        setQuotes([]);
+        setTotalRecords(0);
       }
     } catch (err: any) {
       console.error('Failed to load quotes:', err);
       showToast('error', 'Failed to Load Quotes', err?.response?.data?.error?.message || 'Could not fetch quotes');
+      setQuotes([]);
+      setTotalRecords(0);
     } finally {
       setIsLoadingQuotes(false);
     }
@@ -401,6 +442,19 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   useEffect(() => {
     fetchQuotes();
   }, [currentPage, pageSize, appliedSearch, appliedStatus]);
+
+  useEffect(() => {
+    const handleFilterChange = () => {
+      setCurrentPage(1);
+      fetchQuotes();
+    };
+    window.addEventListener('subOrgChanged', handleFilterChange);
+    window.addEventListener('branchChanged', handleFilterChange);
+    return () => {
+      window.removeEventListener('subOrgChanged', handleFilterChange);
+      window.removeEventListener('branchChanged', handleFilterChange);
+    };
+  }, []);
 
   const handleSearchChange = (val: string) => {
     setPendingSearch(val);
@@ -430,7 +484,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       showToast('info', 'Generating PDF', `Preparing PDF for ${singularTerm} #${quoteToPrint.estimateNumber}...`);
 
       const docTitle = singularTerm;
-      const blob = await pdf(<EstimatePDFDocument quotation={quoteToPrint} documentTitle={docTitle} />).toBlob();
+      const blob = await pdf(
+        <EstimatePDFDocument
+          quotation={quoteToPrint}
+          documentTitle={docTitle}
+          sellerDetails={getSellerDetails()}
+        />
+      ).toBlob();
       const url = URL.createObjectURL(blob);
 
       const printWindow = window.open(url, '_blank');
@@ -497,6 +557,15 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [quotationFromAddress, setQuotationFromAddress] = useState('Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081');
   const [isEditingFrom, setIsEditingFrom] = useState(false);
   const [quotationFromPan, setQuotationFromPan] = useState('ABCDE1234F');
+
+  const getSellerDetails = (): SellerInfo => ({
+    name: quotationFromCompany || activeOrgDetails?.name || 'Yaa Creations',
+    taxId: quotationFromGst || activeOrgDetails?.gstNumber || undefined,
+    pan: quotationFromPan || activeOrgDetails?.panNumber || undefined,
+    phone: quotationFromPhone || activeOrgDetails?.phone || undefined,
+    email: quotationFromEmail || activeOrgDetails?.email || undefined,
+    address: quotationFromAddress || activeOrgDetails?.address || undefined,
+  });
   const [selectedProductSuiteName, setSelectedProductSuiteName] = useState('Yaa connect');
   const [isProductSuiteDropdownOpen, setIsProductSuiteDropdownOpen] = useState(false);
   const productSuiteDropdownRef = useRef<HTMLDivElement>(null);
@@ -590,12 +659,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setSelectedClientId(clientId);
     const client = availableClients.find((c) => c.id === clientId);
     if (client) {
-      const fallback = SUPER_ADMIN_ORGS_DATA[(client.company || '').trim().toLowerCase()];
-      setCustomerName(client.name || fallback?.name || '');
+      setCustomerName(client.name || '');
       setCustomerCompany(client.company || '');
-      setCustomerLocation(client.location || fallback?.location || '');
-      setCustomerEmail(client.email || fallback?.email || '');
-      setCustomerPhone(client.phone || fallback?.phone || '');
+      setCustomerLocation(client.location || '');
+      setCustomerEmail(client.email || '');
+      setCustomerPhone(client.phone || '');
     } else {
       setCustomerName('');
       setCustomerCompany('');
@@ -605,77 +673,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     }
   };
 
-  // 6 specific products for Admin dropdown
-  const ADMIN_PRODUCTS = useMemo(
-    () => [
-      {
-        id: 'prod_1',
-        name: 'Yaa connect',
-        company: 'Yaa connect',
-        defaultContact: 'Alex Rivera',
-        email: 'connect@yaaconnect.com',
-        phone: '+91 98765 43210',
-        location: 'Hyderabad, TG',
-      },
-      {
-        id: 'prod_2',
-        name: 'Doc motez',
-        company: 'Doc motez',
-        defaultContact: 'Dr. Anita Sharma',
-        email: 'info@docmotez.com',
-        phone: '+91 98765 43211',
-        location: 'Bangalore, KA',
-      },
-      {
-        id: 'prod_3',
-        name: 'Doc DentQ',
-        company: 'Doc DentQ',
-        defaultContact: 'Dr. Ramesh Kumar',
-        email: 'contact@docdentq.com',
-        phone: '+91 98765 43213',
-        location: 'Chennai, TN',
-      },
-      {
-        id: 'prod_4',
-        name: 'Aarudam AI',
-        company: 'Aarudam AI',
-        defaultContact: 'Karthik Raja',
-        email: 'info@aarudamai.com',
-        phone: '+91 98765 43214',
-        location: 'Hyderabad, TG',
-      },
-      {
-        id: 'prod_5',
-        name: 'Turfylock',
-        company: 'Turfylock',
-        defaultContact: 'Rajesh Nair',
-        email: 'booking@turfylock.com',
-        phone: '+91 98765 43215',
-        location: 'Kochi, KL',
-      },
-      {
-        id: 'prod_6',
-        name: 'Digital Marketing',
-        company: 'Digital Marketing',
-        defaultContact: 'Priya Sundaram',
-        email: 'growth@digitalgrowth.agency',
-        phone: '+91 98765 43216',
-        location: 'Mumbai, MH',
-      },
-    ],
-    []
-  );
-
   const handleProductSelect = (prodId: string) => {
-    setSelectedClientId(prodId);
-    const prod = ADMIN_PRODUCTS.find((p) => p.id === prodId || p.name === prodId);
+    const prod = platformProducts.find((p) => p.id === prodId || p.name === prodId);
     if (prod) {
       setProjectName(prod.name);
-      setCustomerCompany(prod.company);
-      setCustomerName(prod.defaultContact);
-      setCustomerEmail(prod.email);
-      setCustomerPhone(prod.phone);
-      setCustomerLocation(prod.location);
+      setSelectedProductSuiteName(prod.name);
     }
   };
 
@@ -689,7 +691,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       quantity: 1,
       unitPrice: 0,
       discount: 0,
-      taxPercent: 0,
+      taxPercent: 18,
       total: 0,
     };
     setItemsList([...itemsList, newItem]);
@@ -723,11 +725,15 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     );
   };
 
-  // Calculations matching reference image
-  const subTotal = itemsList.reduce((sum, it) => sum + (it.total || 0), 0);
-  const sampleTax1 = subTotal * 0.047; // 4.70%
-  const sampleTax2 = subTotal * 0.07; // 7.00%
-  const grandTotal = subTotal + sampleTax1 + sampleTax2;
+  // Real item calculations
+  const subTotal = itemsList.reduce((sum, it) => sum + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
+  const totalDiscount = itemsList.reduce((sum, it) => sum + (Number(it.discount) || 0), 0);
+  const taxableSubtotal = Math.max(0, subTotal - totalDiscount);
+  const totalTax = itemsList.reduce((sum, it) => {
+    const lineTaxable = Math.max(0, (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0) - (Number(it.discount) || 0));
+    return sum + (lineTaxable * (Number(it.taxPercent) || 0)) / 100;
+  }, 0);
+  const grandTotal = taxableSubtotal + totalTax;
 
   const pagedQuotes = quotes;
 
@@ -748,13 +754,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const handleCreateQuote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim() && !customerCompany.trim()) {
-      showToast(
-        'error',
-        isSuperAdmin ? 'Select Organization' : 'Select Company / Product Name',
-        isSuperAdmin
-          ? 'Please select or specify an organization name and company details.'
-          : 'Please select a company/product name or enter details.'
-      );
+      showToast('error', 'Select Client / Customer', 'Please select or enter a client company name.');
       return;
     }
     if (itemsList.length === 0) {
@@ -762,36 +762,41 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       return;
     }
 
-    // Determine target customer / organization UUID for backend
-    let targetOrgId = selectedClientId;
-    if (!targetOrgId || targetOrgId.startsWith('super_org_') || targetOrgId.startsWith('prod_')) {
-      const matchOrg = platformOrgs.find(
-        (o) =>
-          o.name.trim().toLowerCase() === customerCompany.trim().toLowerCase() ||
-          o.name.trim().toLowerCase() === customerName.trim().toLowerCase()
+    // Determine target customerId UUID matching a valid organization or sub-organization in DB
+    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let targetCustomerId = selectedClientId;
+
+    if (!targetCustomerId || !uuidRegex.test(targetCustomerId)) {
+      const matchedClient = availableClients.find(
+        (c) =>
+          uuidRegex.test(c.id) &&
+          (c.company.trim().toLowerCase() === customerCompany.trim().toLowerCase() ||
+            c.name.trim().toLowerCase() === customerName.trim().toLowerCase())
       );
-      if (matchOrg) {
-        targetOrgId = matchOrg.id;
-      } else if (platformOrgs.length > 0) {
-        targetOrgId = platformOrgs[0].id;
+      if (matchedClient) {
+        targetCustomerId = matchedClient.id;
+      } else if (orgId && uuidRegex.test(orgId)) {
+        targetCustomerId = orgId;
       }
     }
 
-    if (!targetOrgId) {
-      showToast('error', 'Organization Required', 'A valid platform organization must be selected.');
+    if (!targetCustomerId || !uuidRegex.test(targetCustomerId)) {
+      showToast('error', 'Select Customer / Organization', 'Please select a valid customer organization from the dropdown.');
       return;
     }
 
-    const payload = {
-      customerId: targetOrgId,
-      organizationId: targetOrgId,
-      referenceNumber: newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+    const payload: CreateQuoteRequest = {
+      referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
       date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
       expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      productName: projectName || (isSuperAdmin ? 'Standard Provision' : 'General Service'),
-      notes: newNotes || undefined,
+      customerId: targetCustomerId,
+      productName: (projectName || selectedProductSuiteName || 'Quotation').trim(),
+      discountAmount: totalDiscount > 0 ? totalDiscount : undefined,
+      notes: newNotes.trim() || undefined,
+      termsAndConditions: 'Valid for 30 days',
       items: itemsList.map((it) => ({
-        description: it.description || 'Service Line',
+        description: it.description.trim() || 'Service Line',
         quantity: Math.max(1, Number(it.quantity) || 1),
         unitPrice: Math.max(0, Number(it.unitPrice) || 0),
         taxRate: Number(it.taxPercent) || 18,
@@ -814,11 +819,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         setCustomerLocation('');
         setCustomerEmail('');
         setCustomerPhone('');
+        setCustomerGstId('');
+        setCustomerPan('');
+        setClientSearchQuery('');
         setUploadedFile(null);
-        setEstimateDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(new Date()));
+        setEstimateDate(formatDateToDDMMYYYY(new Date()));
         const nextMonth = new Date();
         nextMonth.setDate(nextMonth.getDate() + 30);
-        setExpiryDate(isSuperAdmin ? '' : formatDateToDDMMYYYY(nextMonth));
+        setExpiryDate(formatDateToDDMMYYYY(nextMonth));
         setNewNotes('');
         setItemsList([]);
 
@@ -909,6 +917,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           <EstimatePDFDocument
             quotation={activeQuote}
             documentTitle={singularTerm}
+            sellerDetails={getSellerDetails()}
           />
         ).toBlob();
         const url = URL.createObjectURL(blob);
@@ -1004,8 +1013,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             {/* Right: Company Logo */}
             <div className="flex items-center sm:justify-end print:justify-end gap-4 min-w-0 flex-1">
               <img
-                src="/yaa-creations-logo.png"
-                alt="Yaa Creations"
+                src={quotationFromLogo || activeOrgDetails?.logo || "/yaa-creations-logo.png"}
+                alt={quotationFromCompany || activeOrgDetails?.name || "Company Logo"}
                 className="h-16 sm:h-20 object-contain max-w-[280px]"
               />
             </div>
@@ -1027,42 +1036,42 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">Yaa Creations</span>
+                  <span className="text-slate-700 flex-1">{quotationFromCompany || activeOrgDetails?.name || 'Company Name'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>GSTIN / Tax ID</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">GSTIN: 27AABCA1234F1Z8</span>
+                  <span className="text-slate-700 flex-1">{quotationFromGst || activeOrgDetails?.gstNumber || 'N/A'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>PAN Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">ABCDE1234F</span>
+                  <span className="text-slate-700 flex-1">{quotationFromPan || activeOrgDetails?.panNumber || 'N/A'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">+91 98765 43210</span>
+                  <span className="text-slate-700 flex-1">{quotationFromPhone || activeOrgDetails?.phone || 'N/A'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">billing@yaacreations.com</span>
+                  <span className="text-slate-700 flex-1">{quotationFromEmail || activeOrgDetails?.email || 'N/A'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Company Address</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">Plot No. 42, Image Gardens Rd, VIP Hills, Silicon Valley, Madhapur, Hyderabad, Telangana 500081</span>
+                  <span className="text-slate-700 flex-1">{quotationFromAddress || activeOrgDetails?.address || 'N/A'}</span>
                 </div>
               </div>
             </div>
@@ -1078,22 +1087,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeQuote.customerCompany || activeQuote.customerName}</span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerCompany || activeQuote.customerName || 'Client'}</span>
                 </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>GSTIN / Tax ID</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">27AABCT8892K1Z5</span>
-                </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>PAN Number</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">ABCDE9876G</span>
-                </div>
+                {activeQuote.customerName && activeQuote.customerCompany && activeQuote.customerName !== activeQuote.customerCompany && (
+                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                      <span>Contact Person</span>
+                      <span>:</span>
+                    </span>
+                    <span className="text-slate-700 flex-1">{activeQuote.customerName}</span>
+                  </div>
+                )}
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
@@ -1106,21 +1110,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeQuote.customerEmail}</span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerEmail || 'N/A'}</span>
                 </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>Company Address</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">
-                    {activeQuote.customerLocation && (activeQuote.customerLocation.includes('Suite') || activeQuote.customerLocation.includes('Hub') || activeQuote.customerLocation.includes('Building') || activeQuote.customerLocation.includes('Floor'))
-                      ? activeQuote.customerLocation
-                      : activeQuote.customerLocation
-                        ? `Suite 750, Innovation Park, ${activeQuote.customerLocation} 75201`
-                        : 'Suite 750, Innovation Park, Dallas, TX 75201'}
-                  </span>
-                </div>
+                {activeQuote.customerLocation && (
+                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                      <span>Address / Location</span>
+                      <span>:</span>
+                    </span>
+                    <span className="text-slate-700 flex-1">{activeQuote.customerLocation}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1279,7 +1279,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   {/* Stamp & Authorized Label */}
                   <div className="border-t border-slate-200 pt-2 flex flex-col items-end">
                     <span className="font-extrabold text-slate-900 text-sm tracking-tight block">
-                      Yaa Creations
+                      {quotationFromCompany || activeOrgDetails?.name || 'Authorized'}
                     </span>
                     <div className="flex items-center justify-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -1582,37 +1582,37 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         {isProductSuiteDropdownOpen && (
                           <div className="absolute top-full left-0 mt-2 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 p-1.5 z-50 overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
                             <div className="max-h-60 overflow-y-auto space-y-0.5">
-                              {[
-                                { id: 'yaa_connect', label: 'Yaa connect' },
-                                { id: 'doc_motez', label: 'Doc motez' },
-                                { id: 'doc_dentq', label: 'Doc DentQ' },
-                                { id: 'aarudam_ai', label: 'Aarudam AI' },
-                                { id: 'turfylock', label: 'Turfylock' },
-                                { id: 'omniflow_erp', label: 'OmniFlow ERP' },
-                              ].map((suite) => {
-                                const isSelected = selectedProductSuiteName.toLowerCase() === suite.label.toLowerCase();
-                                return (
-                                  <button
-                                    key={suite.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedProductSuiteName(suite.label);
-                                      setIsProductSuiteDropdownOpen(false);
-                                      showToast('success', 'Product Selected', `Selected product: ${suite.label}`);
-                                    }}
-                                    className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
-                                      isSelected
-                                        ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                        : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
-                                    }`}
-                                  >
-                                    <span className="truncate">{suite.label}</span>
-                                    {isSelected && (
-                                      <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
-                                    )}
-                                  </button>
-                                );
-                              })}
+                              {loadingProducts ? (
+                                <div className="py-4 text-center text-xs text-slate-400">Loading products...</div>
+                              ) : platformProducts.length === 0 ? (
+                                <div className="py-4 text-center text-xs text-slate-400">No products available</div>
+                              ) : (
+                                platformProducts.map((prod) => {
+                                  const isSelected = selectedProductSuiteName.toLowerCase() === prod.name.toLowerCase();
+                                  return (
+                                    <button
+                                      key={prod.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedProductSuiteName(prod.name);
+                                        setProjectName(prod.name);
+                                        setIsProductSuiteDropdownOpen(false);
+                                        showToast('success', 'Product Selected', `Selected product: ${prod.name}`);
+                                      }}
+                                      className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                                          : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      <span className="truncate">{prod.name}</span>
+                                      {isSelected && (
+                                        <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
+                                      )}
+                                    </button>
+                                  );
+                                })
+                              )}
                             </div>
                           </div>
                         )}
@@ -2032,12 +2032,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
                               {(() => {
                                 const q = clientSearchQuery.trim().toLowerCase();
-                                const list = ADMIN_PRODUCTS.filter(
-                                  (p) =>
+                                const list = availableClients.filter(
+                                  (c) =>
                                     !q ||
-                                    p.name.toLowerCase().includes(q) ||
-                                    p.company.toLowerCase().includes(q) ||
-                                    p.email.toLowerCase().includes(q)
+                                    c.name.toLowerCase().includes(q) ||
+                                    c.company.toLowerCase().includes(q) ||
+                                    c.email.toLowerCase().includes(q)
                                 );
                                 if (list.length === 0) {
                                   return (
@@ -2046,17 +2046,18 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                     </div>
                                   );
                                 }
-                                return list.map((prod) => {
-                                  const isSelected = selectedClientId === prod.id || selectedClientId === prod.name;
+                                return list.map((client) => {
+                                  const isSelected = selectedClientId === client.id;
+                                  const displayName = client.company || client.name;
                                   return (
                                     <button
-                                      key={prod.id}
+                                      key={client.id}
                                       type="button"
                                       onClick={() => {
-                                        handleProductSelect(prod.id);
-                                        setClientSearchQuery(prod.name);
+                                        handleClientSelect(client.id);
+                                        setClientSearchQuery(displayName);
                                         setIsCompanyProductDropdownOpen(false);
-                                        showToast('success', 'Client Selected', `Selected "${prod.name}".`);
+                                        showToast('success', 'Client Selected', `Selected "${displayName}".`);
                                       }}
                                       className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${
                                         isSelected
@@ -2064,7 +2065,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                           : 'hover:bg-slate-50 text-slate-800 font-medium'
                                       }`}
                                     >
-                                      <span className="truncate">{prod.name}</span>
+                                      <div className="truncate">
+                                        <div className="font-semibold text-slate-900 truncate">{displayName}</div>
+                                        {client.email && <div className="text-[11px] text-slate-400 truncate">{client.email}</div>}
+                                      </div>
                                       {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
                                     </button>
                                   );
@@ -2291,17 +2295,19 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 <div style={{ borderRadius: '4px' }} className="w-full max-w-sm border border-slate-200 !rounded-[4px] overflow-hidden shadow-sm bg-white text-xs sm:text-[13px]">
                   <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
                     <span className="text-slate-600 font-medium">Sub Total</span>
-                    <span className="font-bold text-slate-900">{subTotal.toFixed(2)}</span>
+                    <span className="font-bold text-slate-900">₹{subTotal.toFixed(2)}</span>
                   </div>
 
-                  <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
-                    <span className="text-slate-600 font-medium">Sample Tax1 (4.70%)</span>
-                    <span className="font-semibold text-slate-900">{sampleTax1.toFixed(2)}</span>
-                  </div>
+                  {totalDiscount > 0 && (
+                    <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
+                      <span className="text-slate-600 font-medium">Discount</span>
+                      <span className="font-semibold text-rose-600">-₹{totalDiscount.toFixed(2)}</span>
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center px-5 py-3 border-b border-slate-100">
-                    <span className="text-slate-600 font-medium">Sample Tax2 (7.00%)</span>
-                    <span className="font-semibold text-slate-900">{sampleTax2.toFixed(2)}</span>
+                    <span className="text-slate-600 font-medium">Estimated Tax</span>
+                    <span className="font-semibold text-slate-900">₹{totalTax.toFixed(2)}</span>
                   </div>
 
                   <div className="flex justify-between items-center px-5 py-3.5 bg-[#33077C] text-white font-bold">

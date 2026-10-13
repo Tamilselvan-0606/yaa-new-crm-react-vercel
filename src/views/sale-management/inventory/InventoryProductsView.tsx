@@ -11,7 +11,6 @@ import {
   Ban,
   Download,
   Search,
-  Settings,
   Image as ImageIcon,
   Info,
   MinusCircle,
@@ -33,8 +32,8 @@ import {
   FileSpreadsheet,
   Loader2,
   Eye,
-  Database,
   AlertCircle,
+  Tag,
 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { SearchBar } from '../../../components/common/SearchBar';
@@ -45,39 +44,25 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatProductShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
 import {
+  baseClient,
   productApi,
   mapApiProductToProductItem,
   ApiProduct,
   categoryApi,
+  subcategoryApi,
+  ApiSubcategory,
   unitApi,
   ApiUnit,
   mapApiUnitToUnitItem,
+  BulkProductCommonRow,
+  BulkProductPricingRow,
+  BulkProductStockRow,
+  BulkProductItemInfoRow,
+  BulkUpdateProductsPayload,
 } from '../../../api';
 
-// Standard Industry Master Units available by default
-export const DEFAULT_COMMERCE_UNITS: Array<{ id: string; name: string; shortCode: string; status: number }> = [
-  { id: 'unit-pcs', name: 'Pieces', shortCode: 'Pcs', status: 1 },
-  { id: 'unit-box', name: 'Box', shortCode: 'Box', status: 1 },
-  { id: 'unit-nos', name: 'Numbers', shortCode: 'Nos', status: 1 },
-  { id: 'unit-kg', name: 'Kilogram', shortCode: 'Kg', status: 1 },
-  { id: 'unit-gm', name: 'Gram', shortCode: 'Gm', status: 1 },
-  { id: 'unit-ltr', name: 'Litre', shortCode: 'Ltr', status: 1 },
-  { id: 'unit-ml', name: 'Millilitre', shortCode: 'Ml', status: 1 },
-  { id: 'unit-mtr', name: 'Meter', shortCode: 'Mtr', status: 1 },
-  { id: 'unit-cm', name: 'Centimeter', shortCode: 'Cm', status: 1 },
-  { id: 'unit-ft', name: 'Feet', shortCode: 'Ft', status: 1 },
-  { id: 'unit-dzn', name: 'Dozen', shortCode: 'Dzn', status: 1 },
-  { id: 'unit-pac', name: 'Pack', shortCode: 'Pac', status: 1 },
-  { id: 'unit-pr', name: 'Pair', shortCode: 'Pr', status: 1 },
-  { id: 'unit-set', name: 'Set', shortCode: 'Set', status: 1 },
-  { id: 'unit-rol', name: 'Rolls', shortCode: 'Rol', status: 1 },
-  { id: 'unit-bag', name: 'Bags', shortCode: 'Bag', status: 1 },
-  { id: 'unit-bdl', name: 'Bundle', shortCode: 'Bdl', status: 1 },
-  { id: 'unit-ctn', name: 'Carton', shortCode: 'Ctn', status: 1 },
-  { id: 'unit-drm', name: 'Drum', shortCode: 'Drm', status: 1 },
-  { id: 'unit-sqft', name: 'Square Feet', shortCode: 'Sq.Ft', status: 1 },
-  { id: 'unit-sqm', name: 'Square Meter', shortCode: 'Sq.M', status: 1 },
-];
+// Standard Industry Master Units (empty - units strictly loaded from live API)
+export const DEFAULT_COMMERCE_UNITS: Array<{ id: string; name: string; shortCode: string; status: number }> = [];
 
 export interface ProductFormValues {
   itemType: 'Product' | 'Service';
@@ -89,6 +74,7 @@ export interface ProductFormValues {
   secondaryUnitId?: string | null;
   secondaryUnit?: string;
   category: string;
+  subcategory?: string;
   itemImage: string;
   salePrice: string | number;
   salePriceTaxType: 'Excluded' | 'Included';
@@ -106,6 +92,10 @@ export interface ProductFormValues {
   asOfDate: string;
   minStockAlert: string | number;
   location: string;
+  isBatchTracking: boolean;
+  batchNo?: string;
+  mfgDate?: string;
+  expDate?: string;
 }
 
 export const defaultProductFormValues: ProductFormValues = {
@@ -113,11 +103,12 @@ export const defaultProductFormValues: ProductFormValues = {
   productCode: '',
   productName: '',
   hsnCode: '',
-  unit: 'PCS',
+  unit: '',
   baseUnitId: undefined,
   secondaryUnitId: null,
   secondaryUnit: undefined,
   category: 'General',
+  subcategory: '',
   itemImage: '',
   salePrice: '',
   salePriceTaxType: 'Excluded',
@@ -135,6 +126,10 @@ export const defaultProductFormValues: ProductFormValues = {
   asOfDate: new Date().toISOString().split('T')[0],
   minStockAlert: '',
   location: '',
+  isBatchTracking: false,
+  batchNo: '',
+  mfgDate: '',
+  expDate: '',
 };
 
 
@@ -152,6 +147,8 @@ export interface ProductItem {
   category: string;
   subcategory?: string;
   itemImage?: string;
+  image?: string;
+  imageBase64?: string;
   
   // Pricing
   salePrice: number;
@@ -176,6 +173,12 @@ export interface ProductItem {
   asOfDate: string;
   minStockAlert: number;
   location?: string;
+
+  // Batch Tracking
+  isBatchTracking?: boolean;
+  batchNo?: string;
+  mfgDate?: string;
+  expDate?: string;
   
   status: 'Active' | 'Inactive';
 }
@@ -184,14 +187,18 @@ export interface ProductItem {
 
 const TAX_RATE_OPTIONS = [
   { label: 'None', value: 'None' },
+  { label: 'Exempted', value: 'Exempted' },
   { label: 'GST @ 0%', value: 'GST @ 0%' },
+  { label: 'GST @ 0.1%', value: 'GST @ 0.1%' },
   { label: 'GST @ 0.25%', value: 'GST @ 0.25%' },
+  { label: 'GST @ 1.5%', value: 'GST @ 1.5%' },
   { label: 'GST @ 3%', value: 'GST @ 3%' },
   { label: 'GST @ 5%', value: 'GST @ 5%' },
   { label: 'GST @ 12%', value: 'GST @ 12%' },
   { label: 'GST @ 18%', value: 'GST @ 18%' },
   { label: 'GST @ 28%', value: 'GST @ 28%' },
-  { label: 'Exempted', value: 'Exempted' },
+  { label: 'GST @ 40%', value: 'GST @ 40%' },
+  { label: 'GST @ 28% + Cess', value: 'GST @ 28% + Cess' },
 ];
 
 const COMMON_HSN_CODES = [
@@ -416,9 +423,245 @@ const CategorySelectField: React.FC<CategorySelectProps> = ({
   );
 };
 
+// =========================================================================
+// CUSTOM SUBCATEGORY SELECT COMPONENT
+// =========================================================================
+interface SubcategorySelectProps {
+  value?: string;
+  onChange: (val: string) => void;
+  category: string;
+  subcategories: string[];
+  onAddSubcategory?: (newSubcategory: string) => void;
+}
+
+const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
+  value,
+  onChange,
+  category,
+  subcategories,
+  onAddSubcategory,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isAddingNew, setIsAddingNew] = useState(false);
+  const [newSubName, setNewSubName] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+        setIsAddingNew(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleOutside);
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+    };
+  }, [isOpen]);
+
+  const filteredSubcategories = useMemo(() => {
+    const list = [...subcategories];
+    if (value && !list.includes(value)) {
+      list.unshift(value);
+    }
+    return list.filter((s) =>
+      s.toLowerCase().includes(searchQuery.toLowerCase().trim())
+    );
+  }, [subcategories, value, searchQuery]);
+
+  const handleAddNewSubcategorySubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = newSubName.trim();
+    if (!trimmed) return;
+    if (subcategories.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+      onChange(trimmed);
+      setNewSubName('');
+      setIsAddingNew(false);
+      setIsOpen(false);
+      toast.info(`Subcategory "${trimmed}" selected.`);
+      return;
+    }
+    onAddSubcategory?.(trimmed);
+    onChange(trimmed);
+    setNewSubName('');
+    setIsAddingNew(false);
+    setIsOpen(false);
+    toast.success(`Subcategory "${trimmed}" created and selected!`);
+  };
+
+  return (
+    <div ref={dropdownRef} className="relative w-full">
+      {/* Floating Notch Select Box */}
+      <div
+        onClick={() => setIsOpen(!isOpen)}
+        className={`relative w-full h-11 px-3.5 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all shadow-2xs ${
+          isOpen
+            ? 'border-[#33077C] ring-2 ring-[#33077C]/15'
+            : value
+            ? 'border-[#33077C]/60 hover:border-[#33077C]'
+            : 'border-slate-300 hover:border-slate-400'
+        }`}
+      >
+        {/* Floating notch label */}
+        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
+          Subcategory
+        </span>
+
+        {/* Selected value or placeholder */}
+        <span className={`text-xs sm:text-sm font-medium truncate ${value ? 'text-slate-900 font-semibold' : 'text-slate-400'}`}>
+          {value || 'Select Subcategory'}
+        </span>
+
+        {/* Arrow / Clear */}
+        <div className="flex items-center gap-1 shrink-0 ml-1">
+          {value && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange('');
+              }}
+              className="p-0.5 text-slate-400 hover:text-rose-500 rounded-full cursor-pointer transition-colors"
+              title="Clear Subcategory"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+          <span className="text-[10px] text-slate-500 font-black transition-transform select-none">
+            {isOpen ? '▲' : '▼'}
+          </span>
+        </div>
+      </div>
+
+      {/* Floating Dropdown Menu */}
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-1.5 w-full min-w-[260px] bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+          {/* 1. Search Pill Input */}
+          <div className="relative mb-2">
+            <div className="flex items-center w-full h-9 px-3 bg-white border border-slate-200 rounded-full focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all shadow-2xs">
+              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Search Subcategory"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-slate-400 hover:text-slate-600 p-0.5 ml-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 2. Add New Subcategory Action */}
+          {!isAddingNew ? (
+            <button
+              type="button"
+              onClick={() => setIsAddingNew(true)}
+              className="w-full px-3 py-2 text-left text-xs font-bold text-[#33077C] hover:bg-[#33077C]/10 rounded-xl flex items-center gap-2 transition-colors cursor-pointer mb-1"
+            >
+              <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+              <span>Add New Subcategory</span>
+            </button>
+          ) : (
+            <div className="p-2 mb-2 bg-purple-50/50 rounded-xl border border-[#33077C]/20 space-y-2">
+              <input
+                type="text"
+                autoFocus
+                placeholder={`Enter subcategory for ${category || 'category'}...`}
+                value={newSubName}
+                onChange={(e) => setNewSubName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAddNewSubcategorySubmit();
+                  if (e.key === 'Escape') setIsAddingNew(false);
+                }}
+                className="w-full h-8 px-2.5 text-xs bg-white border border-slate-300 rounded-lg outline-none focus:border-[#33077C]"
+              />
+              <div className="flex items-center justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingNew(false)}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-200 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddNewSubcategorySubmit()}
+                  className="px-3 py-1 text-[11px] font-bold text-white bg-[#33077C] hover:bg-[#4309A2] rounded-md shadow-2xs"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 3. Subcategory Checkbox List */}
+          <div className="max-h-48 overflow-y-auto space-y-1 p-0.5">
+            {filteredSubcategories.length === 0 ? (
+              <div className="py-4 text-center text-xs text-slate-400 font-medium">
+                {subcategories.length === 0
+                  ? `No subcategories in master for "${category || 'selected category'}"`
+                  : 'No subcategories match search'}
+              </div>
+            ) : (
+              filteredSubcategories.map((sub) => {
+                const isSelected = value === sub;
+                return (
+                  <div
+                    key={sub}
+                    onClick={() => {
+                      onChange(isSelected ? '' : sub);
+                      setIsOpen(false);
+                    }}
+                    className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center gap-2.5 cursor-pointer transition-colors ${
+                      isSelected
+                        ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                        : 'text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {/* Checkbox Box */}
+                    <div
+                      className={`w-4 h-4 rounded-[4px] border flex items-center justify-center transition-all shrink-0 ${
+                        isSelected
+                          ? 'border-[#33077C] bg-[#33077C] text-white'
+                          : 'border-slate-400 bg-white hover:border-[#33077C]'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                    </div>
+
+                    <span className="truncate">{sub}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const InventoryProductsView: React.FC = () => {
   // Categories List State (dynamically populated via commerce category API)
   const [categories, setCategories] = useState<string[]>([]);
+
+  // Master Subcategories List State (dynamically populated via commerce subcategory master API)
+  const [masterSubcategories, setMasterSubcategories] = useState<ApiSubcategory[]>([]);
 
   // Products collection - initialized empty (zero mock data)
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -464,6 +707,8 @@ export const InventoryProductsView: React.FC = () => {
   const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [batchTaxSlab, setBatchTaxSlab] = useState('GST @ 18%');
   const [batchTaxDropdownOpen, setBatchTaxDropdownOpen] = useState(false);
+  const [isBulkStatusLoading, setIsBulkStatusLoading] = useState(false);
+  const [isSavingBulkUpdate, setIsSavingBulkUpdate] = useState(false);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -536,31 +781,46 @@ export const InventoryProductsView: React.FC = () => {
   /**
    * Fetch live categories to populate dropdowns in Add/Edit modal and filter
    */
-  useEffect(() => {
-    let isMounted = true;
-    const fetchLiveCategories = async () => {
-      try {
-        const res = await categoryApi.getCategories({
-          pagination_required: false,
-          sortOrder: 'asc',
-        });
-        if (isMounted && res?.success && Array.isArray(res.data) && res.data.length > 0) {
-          const catNames = res.data
-            .map((c) => c.categoryName || c.name || '')
-            .filter((n) => n.trim() !== '');
-          if (catNames.length > 0) {
-            setCategories(Array.from(new Set(catNames)));
-          }
+  const fetchLiveCategories = useCallback(async () => {
+    try {
+      const res = await categoryApi.getCategories({
+        pagination_required: false,
+        sortOrder: 'asc',
+      });
+      if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+        const catNames = res.data
+          .map((c) => c.categoryName || c.name || '')
+          .filter((n) => n.trim() !== '');
+        if (catNames.length > 0) {
+          setCategories(Array.from(new Set(catNames)));
         }
-      } catch (err) {
-        // Fallback to default categories
       }
-    };
-    fetchLiveCategories();
-    return () => {
-      isMounted = false;
-    };
+    } catch (err) {
+      // Fallback to default categories
+    }
   }, []);
+
+  /**
+   * Fetch live subcategories from the separate Subcategory master
+   */
+  const fetchLiveSubcategories = useCallback(async () => {
+    try {
+      const res = await subcategoryApi.getSubcategories({
+        pagination_required: false,
+        sortOrder: 'asc',
+      });
+      if (res?.success && Array.isArray(res.data)) {
+        setMasterSubcategories(res.data);
+      }
+    } catch (err) {
+      // Keep existing subcategories
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLiveCategories();
+    fetchLiveSubcategories();
+  }, [fetchLiveCategories, fetchLiveSubcategories]);
 
   // Open Details Modal (GET /commerce/products/:id)
   const handleOpenDetailModal = async (prod: ProductItem) => {
@@ -680,7 +940,7 @@ export const InventoryProductsView: React.FC = () => {
 
   // Secondary sub-modals for Unit & HSN search
   const [isUnitModalOpen, setIsUnitModalOpen] = useState(false);
-  const [selectedBaseUnit, setSelectedBaseUnit] = useState('PIECES (Pcs)');
+  const [selectedBaseUnit, setSelectedBaseUnit] = useState('');
   const [selectedSecondaryUnit, setSelectedSecondaryUnit] = useState('None');
   const [unitSearchQuery, setUnitSearchQuery] = useState('');
   const [customUnitCode, setCustomUnitCode] = useState('');
@@ -697,30 +957,13 @@ export const InventoryProductsView: React.FC = () => {
   const formatUnitOption = useCallback((u: ApiUnit | { name: string; shortCode?: string; code?: string }) => {
     const short = u.shortCode || (u as any).code || '';
     const name = u.name || (u as any).unitName || '';
-    if (!name) return short ? short.toUpperCase() : 'PCS';
+    if (!name) return short ? short.toUpperCase() : '';
     return short ? `${name.toUpperCase()} (${short})` : name.toUpperCase();
   }, []);
 
-  // Combined master units: Live Commerce API units merged with standard defaults
+  // Master units strictly loaded from live Commerce API
   const allAvailableUnits = useMemo<ApiUnit[]>(() => {
-    const list: ApiUnit[] = [...apiUnits];
-    DEFAULT_COMMERCE_UNITS.forEach((def) => {
-      const exists = list.some(
-        (u) =>
-          u.name?.toLowerCase().trim() === def.name.toLowerCase().trim() ||
-          u.shortCode?.toLowerCase().trim() === def.shortCode.toLowerCase().trim()
-      );
-      if (!exists) {
-        list.push({
-          id: def.id,
-          organizationId: '',
-          name: def.name,
-          shortCode: def.shortCode,
-          status: def.status,
-        });
-      }
-    });
-    return list;
+    return apiUnits;
   }, [apiUnits]);
 
   // Combined Units list string options
@@ -1009,27 +1252,30 @@ export const InventoryProductsView: React.FC = () => {
   };
 
   const handleOpenAddModal = (defaultType?: 'Product' | 'Service' | React.MouseEvent) => {
+    fetchLiveCategories();
+    fetchLiveSubcategories();
     const type = typeof defaultType === 'string' ? defaultType : 'Product';
     setEditingProduct(null);
     setActiveTab('Pricing');
-    const defaultUnit = allAvailableUnits.length > 0 ? allAvailableUnits[0] : null;
-    const defaultUnitFormatted = defaultUnit ? formatUnitOption(defaultUnit) : 'PIECES (Pcs)';
-    setSelectedBaseUnit(defaultUnitFormatted);
+    setSelectedBaseUnit('');
     setSelectedSecondaryUnit('None');
     reset({
       ...defaultProductFormValues,
       itemType: type,
       productCode: generateNewCode(type),
-      unit: defaultUnit ? (defaultUnit.shortCode || defaultUnit.name) : 'PCS',
-      baseUnitId: defaultUnit && !defaultUnit.id.startsWith('unit-') ? defaultUnit.id : undefined,
+      unit: '',
+      baseUnitId: undefined,
       secondaryUnitId: null,
       secondaryUnit: undefined,
       category: categories[0] || 'General',
+      subcategory: '',
     });
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (prod: ProductItem) => {
+    fetchLiveCategories();
+    fetchLiveSubcategories();
     setEditingProduct(prod);
     setActiveTab('Pricing');
     const matchedBase = allAvailableUnits.find(
@@ -1044,7 +1290,7 @@ export const InventoryProductsView: React.FC = () => {
     } else if (prod.unit) {
       setSelectedBaseUnit(prod.unit);
     } else {
-      setSelectedBaseUnit('PIECES (Pcs)');
+      setSelectedBaseUnit('');
     }
 
     const matchedSec = allAvailableUnits.find(
@@ -1066,11 +1312,12 @@ export const InventoryProductsView: React.FC = () => {
       productCode: prod.productCode,
       productName: prod.productName,
       hsnCode: prod.hsnCode || '',
-      unit: prod.unit || (matchedBase ? (matchedBase.shortCode || matchedBase.name) : 'PCS'),
+      unit: prod.unit || (matchedBase ? (matchedBase.shortCode || matchedBase.name) : ''),
       baseUnitId: prod.baseUnitId || (matchedBase && !matchedBase.id.startsWith('unit-') ? matchedBase.id : undefined),
       secondaryUnitId: prod.secondaryUnitId || (matchedSec && !matchedSec.id.startsWith('unit-') ? matchedSec.id : null),
       secondaryUnit: prod.secondaryUnit || (matchedSec ? (matchedSec.shortCode || matchedSec.name) : undefined),
       category: prod.category || '',
+      subcategory: prod.subcategory || '',
       itemImage: prod.itemImage || '',
       salePrice: prod.salePrice || '',
       salePriceTaxType: prod.salePriceTaxType || 'Excluded',
@@ -1088,6 +1335,10 @@ export const InventoryProductsView: React.FC = () => {
       asOfDate: prod.asOfDate || new Date().toISOString().split('T')[0],
       minStockAlert: prod.minStockAlert || '',
       location: prod.location || '',
+      isBatchTracking: Boolean(prod.isBatchTracking),
+      batchNo: prod.batchNo || '',
+      mfgDate: prod.mfgDate || '',
+      expDate: prod.expDate || '',
     });
     setIsModalOpen(true);
   };
@@ -1095,16 +1346,27 @@ export const InventoryProductsView: React.FC = () => {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        toast.error('Image size must be less than 2MB');
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please select a valid image file (PNG, JPG, JPEG, WEBP, etc.)');
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('Image size must be less than 5MB');
         return;
       }
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData((prev) => ({ ...prev, itemImage: reader.result as string }));
-        toast.success('Image attached successfully');
+      reader.onload = () => {
+        const base64String = reader.result as string;
+        setValue('itemImage', base64String, { shouldValidate: true, shouldDirty: true });
+        setFormData((prev) => ({ ...prev, itemImage: base64String }));
+      };
+      reader.onerror = () => {
+        toast.error('Failed to convert image to Base64 format');
       };
       reader.readAsDataURL(file);
+    }
+    if (e.target) {
+      e.target.value = '';
     }
   };
 
@@ -1113,6 +1375,54 @@ export const InventoryProductsView: React.FC = () => {
       setCategories((prev) => [...prev, newCat]);
     }
   };
+
+  const handleAddSubcategory = async (newSubName: string) => {
+    const trimmed = newSubName.trim();
+    if (!trimmed) return;
+    try {
+      const res = await subcategoryApi.createSubcategory({
+        category: formData.category || 'General',
+        subcategory: trimmed,
+        status: 'Active',
+      });
+      if (res?.success && res.data) {
+        setMasterSubcategories((prev) => [res.data, ...prev]);
+        return;
+      }
+    } catch (err) {
+      console.warn('Subcategory creation in master API failed, saving locally:', err);
+    }
+    const localSub: ApiSubcategory = {
+      id: `sub-${Date.now()}`,
+      organizationId: '',
+      category: formData.category || 'General',
+      subcategory: trimmed,
+      status: 'Active',
+    };
+    setMasterSubcategories((prev) => [localSub, ...prev]);
+  };
+
+  const availableSubcategories = useMemo(() => {
+    const selectedCat = (formData.category || '').trim().toLowerCase();
+    const activeSubs = masterSubcategories.filter((s) => s.status !== 'Inactive');
+
+    if (!selectedCat) {
+      const all = activeSubs
+        .map((s) => s.subcategory || s.name || '')
+        .filter((n) => n.trim() !== '');
+      return Array.from(new Set(all));
+    }
+
+    const matching = activeSubs
+      .filter((s) => {
+        const cat = (s.category || s.categoryName || '').trim().toLowerCase();
+        return cat === selectedCat;
+      })
+      .map((s) => s.subcategory || s.name || '')
+      .filter((n) => n.trim() !== '');
+
+    return Array.from(new Set(matching));
+  }, [masterSubcategories, formData.category]);
 
   const handleSaveItem = async (keepOpenAfterSave = false, formValuesParam?: ProductFormValues) => {
     const data = formValuesParam || getValues();
@@ -1132,6 +1442,32 @@ export const InventoryProductsView: React.FC = () => {
     const minStockAlertNum = Number(data.minStockAlert) || 0;
     const finalStatus = (editingProduct ? editingProduct.status : 'Active') as 'Active' | 'Inactive';
 
+    const imageBase64Data = (data.itemImage || formData.itemImage || '').trim();
+    let finalImageUrl: string | null = null;
+    if (imageBase64Data) {
+      if (imageBase64Data.startsWith('data:')) {
+        try {
+          const uploadRes = await baseClient.post('/uploads/base64', {
+            image: imageBase64Data,
+            folder: 'items',
+            fileName: `item_${Date.now()}.png`,
+          });
+          if (uploadRes.data?.data?.url) {
+            finalImageUrl = uploadRes.data.data.url;
+          } else {
+            finalImageUrl = imageBase64Data;
+          }
+        } catch (upErr) {
+          console.warn('Failed to upload base64 to S3, using data directly:', upErr);
+          finalImageUrl = imageBase64Data;
+        }
+      } else {
+        finalImageUrl = imageBase64Data;
+      }
+    } else {
+      finalImageUrl = null;
+    }
+
     const payload = {
       itemType: data.itemType,
       productCode: finalCode,
@@ -1139,9 +1475,10 @@ export const InventoryProductsView: React.FC = () => {
       hsnCode: data.hsnCode.trim() || undefined,
       unit: data.unit || 'PCS',
       baseUnitId: data.baseUnitId || undefined,
-      secondaryUnitId: data.secondaryUnitId || undefined,
+      secondaryUnitId: data.secondaryUnitId !== undefined ? data.secondaryUnitId : null,
       category: data.category || 'General',
-      itemImage: data.itemImage || undefined,
+      subcategory: data.subcategory?.trim() || undefined,
+      itemImage: finalImageUrl,
       salePrice: salePriceNum,
       salePriceTaxType: data.salePriceTaxType,
       discountValue: discountValNum,
@@ -1158,6 +1495,10 @@ export const InventoryProductsView: React.FC = () => {
       asOfDate: data.asOfDate,
       minStockAlert: minStockAlertNum,
       location: data.location || undefined,
+      isBatchTracking: Boolean(data.isBatchTracking),
+      batchNo: data.isBatchTracking ? (data.batchNo?.trim() || undefined) : undefined,
+      mfgDate: data.isBatchTracking ? (data.mfgDate?.trim() || undefined) : undefined,
+      expDate: data.isBatchTracking ? (data.expDate?.trim() || undefined) : undefined,
       status: finalStatus,
     };
 
@@ -1171,7 +1512,17 @@ export const InventoryProductsView: React.FC = () => {
           if (res?.success && res.data) {
             const updated = mapApiProductToProductItem(res.data);
             setProducts((prev) =>
-              prev.map((p) => (p.id === editingProduct.id ? { ...p, ...updated } : p))
+              prev.map((p) =>
+                p.id === editingProduct.id
+                  ? {
+                      ...p,
+                      ...updated,
+                      itemImage: finalImageUrl || undefined,
+                      image: finalImageUrl || undefined,
+                      imageBase64: finalImageUrl || undefined,
+                    }
+                  : p
+              )
             );
             toast.success(`Item "${updated.productName}" updated successfully!`);
             if (!keepOpenAfterSave) setIsModalOpen(false);
@@ -1188,6 +1539,10 @@ export const InventoryProductsView: React.FC = () => {
               ? {
                   ...p,
                   ...payload,
+                  itemImage: finalImageUrl || undefined,
+                  image: finalImageUrl || undefined,
+                  imageBase64: finalImageUrl || undefined,
+                  subcategory: data.subcategory?.trim() || undefined,
                   baseUnitId: data.baseUnitId,
                   secondaryUnitId: data.secondaryUnitId,
                   secondaryUnit: data.secondaryUnit,
@@ -1204,7 +1559,15 @@ export const InventoryProductsView: React.FC = () => {
           const res = await productApi.createProduct(payload);
           if (res?.success && res.data) {
             const created = mapApiProductToProductItem(res.data);
-            setProducts((prev) => [created, ...prev]);
+            setProducts((prev) => [
+              {
+                ...created,
+                itemImage: finalImageUrl || undefined,
+                image: finalImageUrl || undefined,
+                imageBase64: finalImageUrl || undefined,
+              },
+              ...prev,
+            ]);
             setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
             toast.success(`Item "${created.productName}" added successfully!`);
             if (!keepOpenAfterSave) setIsModalOpen(false);
@@ -1219,6 +1582,10 @@ export const InventoryProductsView: React.FC = () => {
           id: `prod-${Date.now()}`,
           sNo: (totalApiRecords || products.length) + 1,
           ...payload,
+          itemImage: finalImageUrl || undefined,
+          image: finalImageUrl || undefined,
+          imageBase64: finalImageUrl || undefined,
+          subcategory: data.subcategory?.trim() || undefined,
           baseUnitId: data.baseUnitId,
           secondaryUnitId: data.secondaryUnitId,
           secondaryUnit: data.secondaryUnit,
@@ -1237,6 +1604,7 @@ export const InventoryProductsView: React.FC = () => {
           itemType: data.itemType,
           productCode: generateNewCode(data.itemType),
           category: data.category || '',
+          subcategory: '',
           unit: data.unit || 'PCS',
           baseUnitId: data.baseUnitId,
           secondaryUnitId: null,
@@ -1264,22 +1632,82 @@ export const InventoryProductsView: React.FC = () => {
   // =========================================================================
   // BULK ACTIONS HANDLERS
   // =========================================================================
-  const handleBulkInactive = () => {
+  const handleBulkInactive = async () => {
     const targetIds = selectedIds.length > 0 ? selectedIds : products.map((p) => p.id);
+    if (targetIds.length === 0) {
+      toast.warning('No products available or selected.');
+      return;
+    }
+
+    setIsBulkMenuOpen(false);
+    setIsBulkStatusLoading(true);
+
+    try {
+      const res = await productApi.bulkUpdateProductStatus({
+        productIds: targetIds,
+        status: 'Inactive',
+      });
+      if (res?.success) {
+        toast.success(res.message || `${targetIds.length} item(s) marked as Inactive.`);
+        setSelectedIds([]);
+        await loadProducts(true);
+        return;
+      }
+    } catch (err: any) {
+      console.warn('Bulk status Inactive API failed, falling back locally:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to mark items as Inactive';
+      toast.error(errMsg);
+    } finally {
+      setIsBulkStatusLoading(false);
+    }
+
+    // Local state fallback if offline / failed
     setProducts((prev) =>
       prev.map((p) => (targetIds.includes(p.id) ? { ...p, status: 'Inactive' } : p))
     );
-    setIsBulkMenuOpen(false);
-    toast.success(`${targetIds.length} item(s) marked as Inactive.`);
   };
 
-  const handleBulkActive = () => {
+  const handleBulkActive = async () => {
     const targetIds = selectedIds.length > 0 ? selectedIds : products.map((p) => p.id);
+    if (targetIds.length === 0) {
+      toast.warning('No products available or selected.');
+      return;
+    }
+
+    setIsBulkMenuOpen(false);
+    setIsBulkStatusLoading(true);
+
+    try {
+      const res = await productApi.bulkUpdateProductStatus({
+        productIds: targetIds,
+        status: 'Active',
+      });
+      if (res?.success) {
+        toast.success(res.message || `${targetIds.length} item(s) marked as Active.`);
+        setSelectedIds([]);
+        await loadProducts(true);
+        return;
+      }
+    } catch (err: any) {
+      console.warn('Bulk status Active API failed, falling back locally:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to mark items as Active';
+      toast.error(errMsg);
+    } finally {
+      setIsBulkStatusLoading(false);
+    }
+
+    // Local state fallback if offline / failed
     setProducts((prev) =>
       prev.map((p) => (targetIds.includes(p.id) ? { ...p, status: 'Active' } : p))
     );
-    setIsBulkMenuOpen(false);
-    toast.success(`${targetIds.length} item(s) marked as Active.`);
   };
 
   const handleBulkAssignCode = () => {
@@ -1336,6 +1764,7 @@ export const InventoryProductsView: React.FC = () => {
 
   // Calculate modifications count
   const updatesSummary = useMemo(() => {
+    let commonUpdates = 0;
     let pricingUpdates = 0;
     let stockUpdates = 0;
     let infoUpdates = 0;
@@ -1345,47 +1774,194 @@ export const InventoryProductsView: React.FC = () => {
       if (!original) return;
 
       if (
-        item.purchasePrice !== original.purchasePrice ||
-        item.purchasePriceTaxType !== original.purchasePriceTaxType ||
-        item.salePrice !== original.salePrice ||
-        item.salePriceTaxType !== original.salePriceTaxType ||
-        item.discountValue !== original.discountValue ||
-        item.discountType !== original.discountType ||
-        item.taxRate !== original.taxRate
+        (item.productName || '').trim() !== (original.productName || '').trim() ||
+        (item.category || '').trim() !== (original.category || '').trim() ||
+        (item.hsnCode || '').trim() !== (original.hsnCode || '').trim()
+      ) {
+        commonUpdates++;
+      }
+
+      if (
+        Number(item.purchasePrice || 0) !== Number(original.purchasePrice || 0) ||
+        (item.purchasePriceTaxType || 'Excluded') !== (original.purchasePriceTaxType || 'Excluded') ||
+        Number(item.salePrice || 0) !== Number(original.salePrice || 0) ||
+        (item.salePriceTaxType || 'Excluded') !== (original.salePriceTaxType || 'Excluded') ||
+        Number(item.discountValue || 0) !== Number(original.discountValue || 0) ||
+        (item.discountType || 'Percentage') !== (original.discountType || 'Percentage') ||
+        (item.taxRate || 'None') !== (original.taxRate || 'None')
       ) {
         pricingUpdates++;
       }
 
       if (
-        item.openingStock !== original.openingStock ||
-        item.atPrice !== original.atPrice ||
-        item.asOfDate !== original.asOfDate ||
-        item.minStockAlert !== original.minStockAlert ||
-        item.location !== original.location
+        Number(item.openingStock || 0) !== Number(original.openingStock || 0) ||
+        Number(item.atPrice || 0) !== Number(original.atPrice || 0) ||
+        (item.asOfDate || '').split('T')[0] !== (original.asOfDate || '').split('T')[0] ||
+        Number(item.minStockAlert || 0) !== Number(original.minStockAlert || 0) ||
+        (item.location || '').trim() !== (original.location || '').trim()
       ) {
         stockUpdates++;
       }
 
       if (
-        item.productName !== original.productName ||
-        item.productCode !== original.productCode ||
-        item.category !== original.category ||
-        item.hsnCode !== original.hsnCode ||
-        item.unit !== original.unit ||
+        (item.productCode || '').trim() !== (original.productCode || '').trim() ||
+        (item.unit || '').trim() !== (original.unit || '').trim() ||
         item.status !== original.status
       ) {
         infoUpdates++;
       }
     });
 
-    return { pricingUpdates, stockUpdates, infoUpdates };
+    return { commonUpdates, pricingUpdates, stockUpdates, infoUpdates };
   }, [bulkItems, products]);
 
-  // Save Bulk Updates
-  const handleSaveBulkUpdate = () => {
+  // Save Bulk Updates (PUT /commerce/products/bulk)
+  const handleSaveBulkUpdate = async () => {
+    const commonRows: BulkProductCommonRow[] = [];
+    const pricingRows: BulkProductPricingRow[] = [];
+    const stockRows: BulkProductStockRow[] = [];
+    const itemInformationRows: BulkProductItemInfoRow[] = [];
+
+    bulkItems.forEach((item) => {
+      const original = products.find((p) => p.id === item.id);
+      if (!original) return;
+
+      const isCommonChanged =
+        (item.productName || '').trim() !== (original.productName || '').trim() ||
+        (item.category || '').trim() !== (original.category || '').trim() ||
+        (item.hsnCode || '').trim() !== (original.hsnCode || '').trim();
+
+      const isPricingChanged =
+        Number(item.purchasePrice || 0) !== Number(original.purchasePrice || 0) ||
+        (item.purchasePriceTaxType || 'Excluded') !== (original.purchasePriceTaxType || 'Excluded') ||
+        Number(item.salePrice || 0) !== Number(original.salePrice || 0) ||
+        (item.salePriceTaxType || 'Excluded') !== (original.salePriceTaxType || 'Excluded') ||
+        Number(item.discountValue || 0) !== Number(original.discountValue || 0) ||
+        (item.discountType || 'Percentage') !== (original.discountType || 'Percentage') ||
+        (item.taxRate || 'None') !== (original.taxRate || 'None');
+
+      const isStockChanged =
+        Number(item.openingStock || 0) !== Number(original.openingStock || 0) ||
+        Number(item.atPrice || 0) !== Number(original.atPrice || 0) ||
+        (item.asOfDate || '').split('T')[0] !== (original.asOfDate || '').split('T')[0] ||
+        Number(item.minStockAlert || 0) !== Number(original.minStockAlert || 0) ||
+        (item.location || '').trim() !== (original.location || '').trim();
+
+      const isInfoChanged =
+        (item.productCode || '').trim() !== (original.productCode || '').trim() ||
+        (item.unit || '').trim() !== (original.unit || '').trim() ||
+        item.status !== original.status;
+
+      if (isCommonChanged) {
+        commonRows.push({
+          id: item.id,
+          productName: item.productName?.trim() || '',
+          category:
+            item.category && item.category !== '---'
+              ? item.category.trim()
+              : original.category || 'General',
+          hsnCode: item.hsnCode && item.hsnCode !== '---' ? item.hsnCode.trim() : '',
+        });
+      }
+
+      if (isPricingChanged) {
+        pricingRows.push({
+          id: item.id,
+          productName: item.productName?.trim() || '',
+          category:
+            item.category && item.category !== '---'
+              ? item.category.trim()
+              : original.category || 'General',
+          purchasePrice: Number(item.purchasePrice) || 0,
+          purchasePriceTaxType: item.purchasePriceTaxType || 'Excluded',
+          salePrice: Number(item.salePrice) || 0,
+          salePriceTaxType: item.salePriceTaxType || 'Excluded',
+          discountValue: Number(item.discountValue) || 0,
+          discountType: item.discountType || 'Percentage',
+          taxRate: item.taxRate || 'None',
+        });
+      }
+
+      if (isStockChanged) {
+        stockRows.push({
+          id: item.id,
+          openingStock: Number(item.openingStock) || 0,
+          atPrice: Number(item.atPrice) || 0,
+          asOfDate: item.asOfDate
+            ? item.asOfDate.split('T')[0]
+            : new Date().toISOString().split('T')[0],
+          minStockAlert: Number(item.minStockAlert) || 0,
+          location: item.location?.trim() || '',
+        });
+      }
+
+      if (isInfoChanged) {
+        itemInformationRows.push({
+          id: item.id,
+          productCode: item.productCode?.trim() || '',
+          unit: item.unit?.trim() || 'PCS',
+          status: item.status || 'Active',
+        });
+      }
+    });
+
+    if (
+      commonRows.length === 0 &&
+      pricingRows.length === 0 &&
+      stockRows.length === 0 &&
+      itemInformationRows.length === 0
+    ) {
+      toast.info('No changes detected to update.');
+      setIsBulkUpdateModalOpen(false);
+      return;
+    }
+
+    const payload: BulkUpdateProductsPayload = {
+      common: commonRows,
+      pricing: pricingRows,
+      stock: stockRows,
+      itemInformation: itemInformationRows,
+      products: [],
+    };
+
+    setIsSavingBulkUpdate(true);
+    try {
+      const res = await productApi.bulkUpdateProducts(payload);
+      if (res?.success) {
+        toast.success(res.message || 'All item updates saved successfully!');
+        setIsBulkUpdateModalOpen(false);
+        await loadProducts(true);
+        return;
+      }
+    } catch (err: any) {
+      console.error('Bulk update products API failed:', err);
+      const errData = err?.response?.data;
+      const failedList = errData?.data?.failed;
+      if (Array.isArray(failedList) && failedList.length > 0) {
+        const errorDetails = failedList
+          .map((f: any) => {
+            const itemMsg = f.errors?.map((e: any) => e.message).join(', ');
+            return `${f.productCode || f.id}: ${itemMsg || 'Validation error'}`;
+          })
+          .join('\n');
+        toast.error(`Bulk update validation failed:\n${errorDetails}`);
+      } else {
+        const errMsg =
+          errData?.error?.message ||
+          errData?.message ||
+          err?.message ||
+          'Failed to save bulk updates';
+        toast.error(errMsg);
+      }
+      return;
+    } finally {
+      setIsSavingBulkUpdate(false);
+    }
+
+    // Local fallback if offline
     setProducts(bulkItems);
     setIsBulkUpdateModalOpen(false);
-    toast.success('All item updates saved successfully!');
+    toast.success('All item updates saved locally!');
   };
 
   // Filtered bulk items based on bulkSearch
@@ -1446,13 +2022,12 @@ export const InventoryProductsView: React.FC = () => {
   const metrics = useMemo(() => {
     const totalItems = products.length;
     const totalProducts = products.filter((p) => p.itemType === 'Product').length;
-    const totalServices = products.filter((p) => p.itemType === 'Service').length;
     const lowStockCount = products.filter(
-      (p) => p.itemType === 'Product' && p.openingStock <= (p.minStockAlert || 5)
+      (p) => p.openingStock <= (p.minStockAlert || 5)
     ).length;
     const totalStockVal = products.reduce((sum, p) => sum + (p.openingStock * (p.purchasePrice || p.salePrice || 0)), 0);
 
-    return { totalItems, totalProducts, totalServices, lowStockCount, totalStockVal };
+    return { totalItems, totalProducts, lowStockCount, totalStockVal };
   }, [products]);
 
   // Total count calculation
@@ -1522,8 +2097,8 @@ export const InventoryProductsView: React.FC = () => {
 
     exportTableToExcel({
       filename: `Inventory_Products_Report_${new Date().toISOString().split('T')[0]}`,
-      sheetName: 'Products & Services',
-      title: 'YAA CREATIONS CRM - PRODUCTS & SERVICES INVENTORY',
+      sheetName: 'Products',
+      title: 'YAA CREATIONS CRM - PRODUCTS INVENTORY',
       subtitle: `Total Items: ${filteredProducts.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
@@ -1566,7 +2141,7 @@ export const InventoryProductsView: React.FC = () => {
   return (
     <div className="space-y-5">
       {/* 1. Header Overview Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <Package className="w-5 h-5" />
@@ -1588,16 +2163,6 @@ export const InventoryProductsView: React.FC = () => {
         </div>
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center font-bold shrink-0">
-            <Layers className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Services</p>
-            <p className="text-lg font-black text-slate-800">{metrics.totalServices}</p>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
             <AlertTriangle className="w-5 h-5" />
           </div>
@@ -1607,7 +2172,7 @@ export const InventoryProductsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3 col-span-2 sm:col-span-1">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <IndianRupee className="w-5 h-5" />
           </div>
@@ -1627,30 +2192,15 @@ export const InventoryProductsView: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                Products & Services
+                Products
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
                 {totalCount} total
               </span>
-              {isApiConnected === true && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live API
-                </span>
-              )}
-              {isApiConnected === false && (
-                <span
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
-                  title="Local storage mode"
-                >
-                  <Database className="w-3 h-3 text-amber-500" />
-                  Local Mode
-                </span>
-              )}
             </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-            Manage inventory products, service items, pricing, tax rates, stock alerts, and wholesale rates.
+            Manage inventory products, pricing, tax rates, stock alerts, and wholesale rates.
           </p>
         </div>
 
@@ -1700,9 +2250,14 @@ export const InventoryProductsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleBulkInactive}
-                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors"
+                  disabled={isBulkStatusLoading}
+                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Ban className="w-4 h-4 text-slate-500" />
+                  {isBulkStatusLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-500" />
+                  ) : (
+                    <Ban className="w-4 h-4 text-slate-500" />
+                  )}
                   <span>Bulk Inactive</span>
                 </button>
 
@@ -1710,34 +2265,17 @@ export const InventoryProductsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleBulkActive}
-                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors"
+                  disabled={isBulkStatusLoading}
+                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  {isBulkStatusLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  )}
                   <span>Bulk Active</span>
                 </button>
 
-                {/* 3. Bulk Assign Code */}
-                <button
-                  type="button"
-                  onClick={handleBulkAssignCode}
-                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors"
-                >
-                  <Sparkles className="w-4 h-4 text-[#33077C]" />
-                  <span>Bulk Assign Code</span>
-                </button>
-
-                {/* 4. Assign Units */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsBulkMenuOpen(false);
-                    setIsBulkUnitModalOpen(true);
-                  }}
-                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors"
-                >
-                  <Layers3 className="w-4 h-4 text-[#33077C]" />
-                  <span>Assign Units</span>
-                </button>
 
                 {/* 5. Bulk Update Items (Opens full screen) */}
                 <button
@@ -1779,16 +2317,6 @@ export const InventoryProductsView: React.FC = () => {
         }}
         filterSlot={
           <div className="flex flex-wrap items-center gap-2.5">
-            <FilterDropdown
-              options={[
-                { label: 'Type : All', value: 'ALL' },
-                { label: 'Products', value: 'Product' },
-                { label: 'Services', value: 'Service' },
-              ]}
-              value={pendingType}
-              onChange={(val) => setPendingType(val)}
-              placeholder="Type : All"
-            />
             <FilterDropdown
               options={[
                 { label: 'Category : All', value: 'ALL' },
@@ -1897,7 +2425,7 @@ export const InventoryProductsView: React.FC = () => {
                 pagedProducts.map((item, index) => {
                   const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
-                  const isLowStock = item.itemType === 'Product' && item.openingStock <= (item.minStockAlert || 5);
+                  const isLowStock = item.openingStock <= (item.minStockAlert || 5);
                   const isSelected = selectedIds.includes(item.id);
 
                   return (
@@ -1945,26 +2473,23 @@ export const InventoryProductsView: React.FC = () => {
                             />
                           ) : (
                             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 flex items-center justify-center text-[#33077C] shrink-0 font-bold">
-                              {item.itemType === 'Product' ? (
-                                <Package className="w-4 h-4 text-[#33077C]" />
-                              ) : (
-                                <Layers className="w-4 h-4 text-[#4309A2]" />
-                              )}
+                              <Package className="w-4 h-4 text-[#33077C]" />
                             </div>
                           )}
                           <div>
                             <div className="font-bold text-slate-900 leading-snug">{item.productName}</div>
-                            <div className="text-[11px] font-medium text-slate-400 flex items-center gap-2">
-                              <span
-                                className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                                  item.itemType === 'Product'
-                                    ? 'bg-[#33077C]/10 text-[#33077C]'
-                                    : 'bg-purple-100 text-purple-800'
-                                }`}
-                              >
-                                {item.itemType}
-                              </span>
-                              {item.unit && <span>Unit: {item.unit}</span>}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {item.unit && (
+                                <span className="text-[11px] font-medium text-slate-400">
+                                  Unit: {item.unit}
+                                </span>
+                              )}
+                              {item.isBatchTracking && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
+                                  <Tag className="w-2.5 h-2.5" />
+                                  Batch Tracked{item.batchNo ? `: ${item.batchNo}` : ''}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1999,24 +2524,20 @@ export const InventoryProductsView: React.FC = () => {
 
                       {/* STOCK / UNIT */}
                       <td className="py-4 px-5 text-center border-r border-slate-200">
-                        {item.itemType === 'Product' ? (
-                          <div className="inline-flex flex-col items-center">
-                            <span
-                              className={`font-bold px-2 py-0.5 rounded-md text-xs ${
-                                isLowStock
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                  : 'text-slate-800'
-                              }`}
-                            >
-                              {item.openingStock} {item.unit}
-                            </span>
-                            {isLowStock && (
-                              <span className="text-[10px] font-bold text-rose-500">Low Stock</span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 italic text-xs">N/A (Service)</span>
-                        )}
+                        <div className="inline-flex flex-col items-center">
+                          <span
+                            className={`font-bold px-2 py-0.5 rounded-md text-xs ${
+                              isLowStock
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'text-slate-800'
+                            }`}
+                          >
+                            {item.openingStock} {item.unit}
+                          </span>
+                          {isLowStock && (
+                            <span className="text-[10px] font-bold text-rose-500">Low Stock</span>
+                          )}
+                        </div>
                       </td>
 
                       {/* STATUS */}
@@ -2235,16 +2756,8 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Action Icons: Settings & Close */}
+              {/* Right Action: Close */}
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  title="Item Settings"
-                  onClick={() => toast.info('Configure item preferences, wholesale pricing, and barcode settings')}
-                  className="p-1.5 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  <Settings className="w-5 h-5" />
-                </button>
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
@@ -2258,30 +2771,62 @@ export const InventoryProductsView: React.FC = () => {
 
             {/* Modal Body Scroll Area */}
             <div className="overflow-y-auto p-5 sm:p-7 space-y-6 flex-1 bg-[#fafbfc]">
-              {/* Row 1: Item Name, Item HSN, Select Unit, Add Item Image */}
+              {/* Row 1: Category, Subcategory, Item Name */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-                {/* Item Name */}
-                <div className="md:col-span-4">
-                  <input
-                    type="text"
-                    placeholder="Item Name *"
-                    disabled={isSubmitting}
-                    {...register('productName', {
-                      required: 'Item name is required',
-                      minLength: { value: 2, message: 'Item name must be at least 2 characters' },
-                      validate: (val) =>
-                        /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
-                    }}
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
-                      errors.productName
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 bg-rose-50/20'
-                        : 'border border-slate-300 hover:border-slate-400 focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15'
-                    }`}
+                {/* 1.1 Category Select Component (First Field) */}
+                <div className="md:col-span-3">
+                  <CategorySelectField
+                    value={formData.category}
+                    onChange={(val) =>
+                      setFormData({
+                        ...formData,
+                        category: val,
+                        subcategory: '',
+                      })
+                    }
+                    categories={categories}
+                    onAddCategory={handleAddCategory}
                   />
+                </div>
+
+                {/* 1.2 Subcategory Select Component (Second Field) */}
+                <div className="md:col-span-3">
+                  <SubcategorySelectField
+                    value={formData.subcategory || ''}
+                    onChange={(val) => setFormData({ ...formData, subcategory: val })}
+                    category={formData.category}
+                    subcategories={availableSubcategories}
+                    onAddSubcategory={handleAddSubcategory}
+                  />
+                </div>
+
+                {/* 1.3 Item Name with Floating Notch Label */}
+                <div className="md:col-span-6">
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.productName
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
+                      Item Name <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Enter Item Name"
+                      disabled={isSubmitting}
+                      {...register('productName', {
+                        required: 'Item name is required',
+                        minLength: { value: 2, message: 'Item name must be at least 2 characters' },
+                        validate: (val) =>
+                          /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                      })}
+                      onKeyDown={handleTextOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                      }}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                    />
+                  </div>
                   {errors.productName && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2289,28 +2834,35 @@ export const InventoryProductsView: React.FC = () => {
                     </p>
                   )}
                 </div>
+              </div>
 
-                {/* Item HSN */}
-                <div className="md:col-span-3 relative">
-                  <input
-                    type="text"
-                    placeholder="Item HSN"
-                    value={formData.hsnCode}
-                    onChange={(e) => setFormData({ ...formData, hsnCode: e.target.value })}
-                    className="w-full h-11 pl-4 pr-10 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setIsHsnModalOpen(true)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors"
-                    title="Search HSN / SAC Codes"
-                  >
-                    <Search className="w-4 h-4" />
-                  </button>
+              {/* Row 2: Item HSN, Select Unit, Add Item Image */}
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
+                {/* 2.1 Item HSN with Floating Notch Label */}
+                <div className="md:col-span-4">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
+                      Item HSN
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Enter Item HSN"
+                      value={formData.hsnCode}
+                      onChange={(e) => setFormData({ ...formData, hsnCode: e.target.value })}
+                      className="w-full h-full pl-4 pr-10 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setIsHsnModalOpen(true)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors"
+                      title="Search HSN / SAC Codes"
+                    >
+                      <Search className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-
-                {/* Select Unit Button */}
-                <div className="md:col-span-2">
+                {/* 2.1 Select Unit Button */}
+                <div className="md:col-span-4">
                   <button
                     type="button"
                     onClick={() => {
@@ -2328,7 +2880,7 @@ export const InventoryProductsView: React.FC = () => {
                         if (matched) setSelectedBaseUnit(formatUnitOption(matched));
                         else setSelectedBaseUnit(formData.unit);
                       } else {
-                        setSelectedBaseUnit(allAvailableUnits.length > 0 ? formatUnitOption(allAvailableUnits[0]) : 'PIECES (Pcs)');
+                        setSelectedBaseUnit('');
                       }
 
                       if (formData.secondaryUnitId) {
@@ -2353,8 +2905,8 @@ export const InventoryProductsView: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Add Item Image */}
-                <div className="md:col-span-3">
+                {/* 2.2 Add Item Image */}
+                <div className="md:col-span-4">
                   <input
                     type="file"
                     ref={fileInputRef}
@@ -2378,8 +2930,13 @@ export const InventoryProductsView: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setFormData({ ...formData, itemImage: '' })}
-                        className="text-slate-400 hover:text-rose-500 p-1"
+                        onClick={() => {
+                          setValue('itemImage', '', { shouldValidate: true, shouldDirty: true });
+                          setFormData({ ...formData, itemImage: '' });
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                        className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
+                        title="Remove image"
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -2394,43 +2951,6 @@ export const InventoryProductsView: React.FC = () => {
                       <span>Add Item Image</span>
                     </button>
                   )}
-                </div>
-              </div>
-
-              {/* Row 2: Category & Item Code with Assign Code */}
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-                {/* 2.1 Category Select Component */}
-                <div className="md:col-span-4">
-                  <CategorySelectField
-                    value={formData.category}
-                    onChange={(val) => setFormData({ ...formData, category: val })}
-                    categories={categories}
-                    onAddCategory={handleAddCategory}
-                  />
-                </div>
-
-                {/* 2.2 Item Code with Assign Code button */}
-                <div className="md:col-span-5">
-                  <div className="flex items-center w-full h-11 bg-white border border-slate-300 hover:border-slate-400 rounded-xl overflow-hidden focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15 transition-all shadow-2xs">
-                    <input
-                      type="text"
-                      placeholder="Item Code"
-                      value={formData.productCode}
-                      onChange={(e) => setFormData({ ...formData, productCode: e.target.value })}
-                      className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const newCode = generateNewCode(formData.itemType);
-                        setFormData({ ...formData, productCode: newCode });
-                        toast.success(`Assigned code: ${newCode}`);
-                      }}
-                      className="h-8 mr-1.5 px-3 bg-[#33077C]/10 hover:bg-[#33077C]/20 text-[#33077C] font-bold text-xs rounded-lg transition-colors cursor-pointer shrink-0"
-                    >
-                      Assign Code
-                    </button>
-                  </div>
                 </div>
               </div>
 
@@ -2470,21 +2990,21 @@ export const InventoryProductsView: React.FC = () => {
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
                     {/* 1.1 Sale Price Row */}
                     <div>
-                      <label className="text-xs font-bold text-slate-700 block mb-2">
-                        Sale Price
-                      </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* Sale Price + Tax Type */}
-                        <div className="flex flex-col">
-                          <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                        {/* Sale Price + Tax Type with Floating Notch Label */}
+                        <div className="flex flex-col relative pt-1">
+                          <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
                             errors.salePrice
                               ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
                           }`}>
+                            <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                              Sale Price
+                            </span>
                             <input
                               type="text"
                               inputMode="decimal"
-                              placeholder="Sale Price"
+                              placeholder="0.00"
                               {...register('salePrice', {
                                 validate: (val) =>
                                   val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
@@ -2502,7 +3022,7 @@ export const InventoryProductsView: React.FC = () => {
                               onChange={(e) =>
                                 setValue('salePriceTaxType', e.target.value as any)
                               }
-                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                             >
                               <option value="Excluded">Excluded</option>
                               <option value="Included">Included</option>
@@ -2516,17 +3036,20 @@ export const InventoryProductsView: React.FC = () => {
                           )}
                         </div>
 
-                        {/* Disc. On Sale Price + Disc Type */}
-                        <div className="flex flex-col">
-                          <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                        {/* Disc. On Sale Price + Disc Type with Floating Notch Label */}
+                        <div className="flex flex-col relative pt-1">
+                          <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
                             errors.discountValue
                               ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
                           }`}>
+                            <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                              Disc. On Sale Price
+                            </span>
                             <input
                               type="text"
                               inputMode="decimal"
-                              placeholder="Disc. On Sale Price"
+                              placeholder="0.00"
                               {...register('discountValue', {
                                 validate: (val) =>
                                   val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
@@ -2544,7 +3067,7 @@ export const InventoryProductsView: React.FC = () => {
                               onChange={(e) =>
                                 setValue('discountType', e.target.value as 'Percentage' | 'Amount')
                               }
-                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                              className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                             >
                               <option value="Percentage">Percentage</option>
                               <option value="Amount">Amount (₹)</option>
@@ -2591,18 +3114,21 @@ export const InventoryProductsView: React.FC = () => {
                         </div>
 
                         {formData.hasWholesale && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2 animate-in fade-in duration-100">
-                            {/* Wholesale Price + Tax Type */}
-                            <div className="flex flex-col">
-                              <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 animate-in fade-in duration-100">
+                            {/* Wholesale Price + Tax Type with Floating Notch Label */}
+                            <div className="flex flex-col relative pt-1">
+                              <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
                                 errors.wholesalePrice
                                   ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
                               }`}>
+                                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                                  Wholesale Price
+                                </span>
                                 <input
                                   type="text"
                                   inputMode="decimal"
-                                  placeholder="Wholesale Price"
+                                  placeholder="0.00"
                                   {...register('wholesalePrice', {
                                     validate: (val) =>
                                       val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
@@ -2620,7 +3146,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     setValue('wholesaleTaxType', e.target.value as 'Excluded' | 'Included')
                                   }
-                                  className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                                  className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                                 >
                                   <option value="Excluded">Excluded</option>
                                   <option value="Included">Included</option>
@@ -2634,17 +3160,20 @@ export const InventoryProductsView: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Minimum Wholesale Qty with Info Tooltip */}
-                            <div className="flex flex-col">
-                              <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs pr-3 transition-all ${
+                            {/* Minimum Wholesale Qty with Floating Notch Label */}
+                            <div className="flex flex-col relative pt-1">
+                              <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs pr-3 transition-all ${
                                 errors.minWholesaleQty
                                   ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
                               }`}>
+                                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                                  Min Wholesale Qty
+                                </span>
                                 <input
                                   type="text"
                                   inputMode="numeric"
-                                  placeholder="Minimum Wholesale Qty"
+                                  placeholder="0"
                                   {...register('minWholesaleQty', {
                                     validate: (val) =>
                                       val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
@@ -2678,20 +3207,20 @@ export const InventoryProductsView: React.FC = () => {
                   {/* Card 2 & 3: Purchase Price & Taxes */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* Purchase Price Card */}
-                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2">
-                      <label className="text-xs font-bold text-slate-700 block">
-                        Purchase Price
-                      </label>
-                      <div className="flex flex-col">
-                        <div className={`flex items-center h-11 bg-white rounded-xl overflow-hidden shadow-2xs transition-all ${
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
+                      <div className="flex flex-col relative pt-1">
+                        <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
                           errors.purchasePrice
                             ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#4309A2] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                            : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
                         }`}>
+                          <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                            Purchase Price
+                          </span>
                           <input
                             type="text"
                             inputMode="decimal"
-                            placeholder="Purchase Price"
+                            placeholder="0.00"
                             {...register('purchasePrice', {
                               validate: (val) =>
                                 val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
@@ -2709,7 +3238,7 @@ export const InventoryProductsView: React.FC = () => {
                             onChange={(e) =>
                               setValue('purchasePriceTaxType', e.target.value as any)
                             }
-                            className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100"
+                            className="h-full px-3 bg-slate-50 border-l border-slate-200 text-xs font-medium text-slate-700 outline-none cursor-pointer hover:bg-slate-100 rounded-r-xl"
                           >
                             <option value="Excluded">Excluded</option>
                             <option value="Included">Included</option>
@@ -2725,22 +3254,24 @@ export const InventoryProductsView: React.FC = () => {
                     </div>
 
                     {/* Taxes Card */}
-                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-2">
-                      <label className="text-xs font-bold text-slate-700 block">
-                        Taxes
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={formData.taxRate}
-                          onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })}
-                          className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 shadow-2xs cursor-pointer"
-                        >
-                          {TAX_RATE_OPTIONS.map((tax) => (
-                            <option key={tax.value} value={tax.value}>
-                              {tax.label}
-                            </option>
-                          ))}
-                        </select>
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
+                      <div className="relative pt-1">
+                        <div className="relative flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                          <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                            Taxes
+                          </span>
+                          <select
+                            value={formData.taxRate}
+                            onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })}
+                            className="w-full h-full px-4 bg-transparent rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                          >
+                            {TAX_RATE_OPTIONS.map((tax) => (
+                              <option key={tax.value} value={tax.value}>
+                                {tax.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2752,28 +3283,33 @@ export const InventoryProductsView: React.FC = () => {
                 <div className="space-y-4 pt-1 animate-in fade-in duration-100">
                   {/* Row 1: Opening Quantity | At Price | As Of Date */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* 1. Opening Quantity */}
-                    <div>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="Opening Quantity"
-                        {...register('openingStock', {
-                          validate: (val) =>
-                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                        })}
-                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                        onInput={(e) => {
-                          e.currentTarget.value = e.currentTarget.value
-                            .replace(/[^0-9.]/g, '')
-                            .replace(/(\..*?)\..*/g, '$1');
-                        }}
-                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
-                          errors.openingStock
-                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
-                        }`}
-                      />
+                    {/* 1. Opening Quantity with Floating Notch Label */}
+                    <div className="flex flex-col relative pt-1">
+                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        errors.openingStock
+                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                      }`}>
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          Opening Quantity
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0"
+                          {...register('openingStock', {
+                            validate: (val) =>
+                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                          })}
+                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                          onInput={(e) => {
+                            e.currentTarget.value = e.currentTarget.value
+                              .replace(/[^0-9.]/g, '')
+                              .replace(/(\..*?)\..*/g, '$1');
+                          }}
+                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                        />
+                      </div>
                       {errors.openingStock && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2782,28 +3318,33 @@ export const InventoryProductsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 2. At Price */}
-                    <div>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="At Price"
-                        {...register('atPrice', {
-                          validate: (val) =>
-                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                        })}
-                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                        onInput={(e) => {
-                          e.currentTarget.value = e.currentTarget.value
-                            .replace(/[^0-9.]/g, '')
-                            .replace(/(\..*?)\..*/g, '$1');
-                        }}
-                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
-                          errors.atPrice
-                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
-                        }`}
-                      />
+                    {/* 2. At Price with Floating Notch Label */}
+                    <div className="flex flex-col relative pt-1">
+                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        errors.atPrice
+                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                      }`}>
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          At Price
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          {...register('atPrice', {
+                            validate: (val) =>
+                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                          })}
+                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                          onInput={(e) => {
+                            e.currentTarget.value = e.currentTarget.value
+                              .replace(/[^0-9.]/g, '')
+                              .replace(/(\..*?)\..*/g, '$1');
+                          }}
+                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                        />
+                      </div>
                       {errors.atPrice && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2813,9 +3354,9 @@ export const InventoryProductsView: React.FC = () => {
                     </div>
 
                     {/* 3. As Of Date with Floating Notch Label */}
-                    <div className="relative">
+                    <div className="relative pt-1">
                       <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
                           As Of Date
                         </span>
                         <input
@@ -2830,26 +3371,31 @@ export const InventoryProductsView: React.FC = () => {
 
                   {/* Row 2: Min Stock To Maintain | Location */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* 1. Min Stock To Maintain */}
-                    <div>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="Min Stock To Maintain"
-                        {...register('minStockAlert', {
-                          validate: (val) =>
-                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
-                        })}
-                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
-                        onInput={(e) => {
-                          e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
-                        }}
-                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
-                          errors.minStockAlert
-                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
-                        }`}
-                      />
+                    {/* 1. Min Stock To Maintain with Floating Notch Label */}
+                    <div className="flex flex-col relative pt-1">
+                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        errors.minStockAlert
+                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                      }`}>
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          Min Stock To Maintain
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="0"
+                          {...register('minStockAlert', {
+                            validate: (val) =>
+                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
+                          })}
+                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
+                          onInput={(e) => {
+                            e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                          }}
+                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                        />
+                      </div>
                       {errors.minStockAlert && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2858,25 +3404,30 @@ export const InventoryProductsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 2. Location */}
-                    <div>
-                      <input
-                        type="text"
-                        placeholder="Location"
-                        {...register('location', {
-                          validate: (val) =>
-                            !val || /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
-                        })}
-                        onKeyDown={handleTextOnlyKeyDown}
-                        onInput={(e) => {
-                          e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
-                        }}
-                        className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs ${
-                          errors.location
-                            ? 'border border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15'
-                        }`}
-                      />
+                    {/* 2. Location with Floating Notch Label */}
+                    <div className="flex flex-col relative pt-1">
+                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        errors.location
+                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
+                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                      }`}>
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          Location
+                        </span>
+                        <input
+                          type="text"
+                          placeholder="e.g. Warehouse A"
+                          {...register('location', {
+                            validate: (val) =>
+                              !val || /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                          })}
+                          onKeyDown={handleTextOnlyKeyDown}
+                          onInput={(e) => {
+                            e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                          }}
+                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                        />
+                      </div>
                       {errors.location && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2884,6 +3435,105 @@ export const InventoryProductsView: React.FC = () => {
                         </p>
                       )}
                     </div>
+                  </div>
+
+                  {/* Row 3: Batch & Lot Tracking Card */}
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+                          <Tag className="w-4.5 h-4.5 text-[#33077C]" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs sm:text-sm font-bold text-slate-900">
+                              Batch & Lot Tracking
+                            </h4>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                              {formData.isBatchTracking ? 'Enabled' : 'Disabled'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                            Enable if this product requires batch/lot number and expiry date tracking (e.g. food, medicines, cosmetics).
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Custom Toggle Switch */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.isBatchTracking}
+                        onClick={() => setValue('isBatchTracking', !formData.isBatchTracking, { shouldDirty: true })}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          formData.isBatchTracking ? 'bg-[#33077C]' : 'bg-slate-200'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                            formData.isBatchTracking ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Batch Fields (Shown when Batch Tracking is enabled) */}
+                    {formData.isBatchTracking && (
+                      <div className="pt-3 border-t border-slate-100 animate-in fade-in duration-150">
+                        <p className="text-[11px] font-semibold text-slate-600 mb-3">
+                          Initial Batch Information (For opening stock)
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          {/* 1. Initial Batch Number */}
+                          <div className="flex flex-col relative pt-1">
+                            <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs transition-all">
+                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                                Initial Batch No
+                              </span>
+                              <input
+                                type="text"
+                                placeholder="e.g. BAT-2026-001"
+                                {...register('batchNo')}
+                                className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium font-mono text-slate-800 placeholder:text-slate-400 outline-none"
+                              />
+                            </div>
+                            <span className="text-[10px] text-slate-400 mt-1">Batch code for opening quantity</span>
+                          </div>
+
+                          {/* 2. Manufacturing Date (MFG) */}
+                          <div className="relative pt-1">
+                            <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
+                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                                Mfg Date
+                              </span>
+                              <input
+                                type="date"
+                                value={formData.mfgDate || ''}
+                                onChange={(e) => setValue('mfgDate', e.target.value)}
+                                className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                              />
+                            </div>
+                            <span className="text-[10px] text-slate-400 mt-1">Manufacturing date</span>
+                          </div>
+
+                          {/* 3. Expiry Date (EXP) */}
+                          <div className="relative pt-1">
+                            <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
+                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                                Expiry Date
+                              </span>
+                              <input
+                                type="date"
+                                value={formData.expDate || ''}
+                                onChange={(e) => setValue('expDate', e.target.value)}
+                                className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
+                              />
+                            </div>
+                            <span className="text-[10px] text-slate-400 mt-1">Expiry / Best before date</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2899,15 +3549,6 @@ export const InventoryProductsView: React.FC = () => {
               >
                 <X className="w-4 h-4 text-slate-500" />
                 <span>Cancel</span>
-              </button>
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={handleSubmit((data) => handleSaveItem(true, data))}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-50"
-              >
-                <Plus className="w-4 h-4 text-slate-500 stroke-[2.5]" />
-                <span>Save &amp; New</span>
               </button>
               <button
                 type="submit"
@@ -2996,18 +3637,15 @@ export const InventoryProductsView: React.FC = () => {
                         onChange={(e) => setSelectedBaseUnit(e.target.value)}
                         className="w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none cursor-pointer focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
                       >
-                        {allAvailableUnits.length === 0 ? (
-                          <option value="None">None</option>
-                        ) : (
-                          allAvailableUnits.map((u) => {
-                            const formatted = formatUnitOption(u);
-                            return (
-                              <option key={u.id} value={formatted}>
-                                {formatted}
-                              </option>
-                            );
-                          })
-                        )}
+                        <option value="">Select Base Unit</option>
+                        {allAvailableUnits.map((u) => {
+                          const formatted = formatUnitOption(u);
+                          return (
+                            <option key={u.id} value={formatted}>
+                              {formatted}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                   </div>
@@ -3104,7 +3742,7 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
 
                 {/* List of Units Available */}
-                {allAvailableUnits.length > 0 && (
+                {allAvailableUnits.length > 0 ? (
                   <div className="pt-2.5 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-[11px] font-semibold text-slate-500">
@@ -3117,7 +3755,6 @@ export const InventoryProductsView: React.FC = () => {
                         const formatted = formatUnitOption(u);
                         const isCurrentBase = selectedBaseUnit === formatted;
                         const isCurrentSec = selectedSecondaryUnit === formatted;
-                        const isCustomApiUnit = apiUnits.some((item) => item.id === u.id);
                         return (
                           <div
                             key={u.id}
@@ -3136,28 +3773,30 @@ export const InventoryProductsView: React.FC = () => {
                             >
                               {formatted}
                             </span>
-                            {isCustomApiUnit && (
-                              <button
-                                type="button"
-                                disabled={deletingUnitId === u.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteCustomUnit(u);
-                                }}
-                                className="text-slate-400 hover:text-red-600 p-0.5 rounded cursor-pointer transition-colors disabled:opacity-50"
-                                title="Delete this unit"
-                              >
-                                {deletingUnitId === u.id ? (
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" />
-                                ) : (
-                                  <X className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              disabled={deletingUnitId === u.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteCustomUnit(u);
+                              }}
+                              className="text-slate-400 hover:text-red-600 p-0.5 rounded cursor-pointer transition-colors disabled:opacity-50"
+                              title="Delete this unit"
+                            >
+                              {deletingUnitId === u.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" />
+                              ) : (
+                                <X className="w-3.5 h-3.5" />
+                              )}
+                            </button>
                           </div>
                         );
                       })}
                     </div>
+                  </div>
+                ) : (
+                  <div className="pt-2.5 border-t border-slate-100 text-center py-3 text-slate-400 text-xs">
+                    No custom units added yet. Use the field above to add units.
                   </div>
                 )}
               </div>
@@ -3189,7 +3828,12 @@ export const InventoryProductsView: React.FC = () => {
                     }
                   }
 
-                  const chosen = effectiveBase !== 'None' ? effectiveBase : '';
+                  const chosen = effectiveBase && effectiveBase !== 'None' ? effectiveBase : '';
+                  if (!chosen) {
+                    toast.error('Please select a base unit');
+                    return;
+                  }
+
                   let unitCode = chosen;
                   if (chosen.includes('(')) {
                     const match = chosen.match(/\((.*?)\)/);
@@ -3200,11 +3844,11 @@ export const InventoryProductsView: React.FC = () => {
                     baseUnitObj = allAvailableUnits.find((u) => formatUnitOption(u) === chosen);
                   }
 
-                  const secUnitObj = selectedSecondaryUnit !== 'None'
+                  const secUnitObj = selectedSecondaryUnit && selectedSecondaryUnit !== 'None'
                     ? allAvailableUnits.find((u) => formatUnitOption(u) === selectedSecondaryUnit)
                     : null;
 
-                  const finalUnit = unitCode || baseUnitObj?.shortCode || baseUnitObj?.name || 'PCS';
+                  const finalUnit = unitCode || baseUnitObj?.shortCode || baseUnitObj?.name || '';
                   setFormData({
                     ...formData,
                     unit: finalUnit,
@@ -3375,130 +4019,90 @@ export const InventoryProductsView: React.FC = () => {
             }}
             className="relative w-full max-w-7xl h-[92vh] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden"
           >
-            {/* 10.1 Top Header Bar */}
-            <div className="px-6 py-4 border-b border-slate-200 bg-white flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold">
-                  <SlidersHorizontal className="w-4.5 h-4.5" />
-                </div>
-                <h2 className="text-lg font-bold text-slate-800 tracking-tight">Bulk Update Items</h2>
-              </div>
-
-              {/* Top Right: Search & Radio Tabs */}
-              <div className="flex flex-wrap items-center gap-6">
-                {/* Search Bar */}
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by item name / HSN Code"
-                    value={bulkSearch}
-                    onChange={(e) => setBulkSearch(e.target.value)}
-                    className="w-64 h-9 pl-9 pr-3 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-full text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:bg-white transition-all shadow-2xs"
-                  />
-                </div>
-
-                {/* Radio Tabs */}
-                <div className="flex items-center gap-5 text-xs font-semibold text-slate-700">
-                  {/* Pricing Tab */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="radio"
-                      name="bulkTab"
-                      checked={bulkTab === 'Pricing'}
-                      onChange={() => setBulkTab('Pricing')}
-                      className="w-4 h-4 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
-                    />
-                    <span className={bulkTab === 'Pricing' ? 'font-bold text-[#33077C]' : 'text-slate-600'}>
-                      Pricing
-                    </span>
-                  </label>
-
-                  {/* Stock Tab */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="radio"
-                      name="bulkTab"
-                      checked={bulkTab === 'Stock'}
-                      onChange={() => setBulkTab('Stock')}
-                      className="w-4 h-4 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
-                    />
-                    <span className={bulkTab === 'Stock' ? 'font-bold text-[#33077C]' : 'text-slate-600'}>
-                      Stock
-                    </span>
-                  </label>
-
-                  {/* Item Information Tab */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="radio"
-                      name="bulkTab"
-                      checked={bulkTab === 'Item Information'}
-                      onChange={() => setBulkTab('Item Information')}
-                      className="w-4 h-4 text-[#33077C] focus:ring-[#33077C] cursor-pointer"
-                    />
-                    <span className={bulkTab === 'Item Information' ? 'font-bold text-[#33077C]' : 'text-slate-600'}>
-                      Item Information
-                    </span>
-                  </label>
-                </div>
-
-                {/* Modal Close Button */}
+            {/* 10.1 Top Header Bar - Matches CRM Standard #33077C Theme */}
+            <div
+              className="flex items-center justify-between px-6 py-4 text-white shrink-0"
+              style={{ background: '#33077C' }}
+            >
+              <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"
                   onClick={() => setIsBulkUpdateModalOpen(false)}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="p-1.5 -ml-1 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all cursor-pointer flex items-center justify-center shrink-0"
+                  title="Go back"
+                >
+                  <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
+                </button>
+                <div className="min-w-0">
+                  <h3 className="text-base sm:text-xl font-bold tracking-tight text-white truncate">
+                    Bulk Update Items
+                  </h3>
+                  <p className="text-xs text-white/80 font-medium truncate mt-0.5">
+                    Bulk edit inventory pricing, stock quantities, and item information
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkUpdateModalOpen(false)}
+                  className="p-1.5 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  title="Close"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            {/* 10.2 Sub-Header Banner Row */}
-            <div className="bg-[#33077C]/5 px-6 py-2.5 border-b border-[#33077C]/15 flex items-center justify-between text-xs shrink-0">
-              <div className="font-semibold text-slate-700 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#33077C]"></span>
-                <span>
-                  <strong className="text-[#33077C]">{bulkSelectedIds.length}</strong> items selected
-                </span>
+            {/* 10.2 Controls & Tabs Secondary Toolbar */}
+            <div className="px-6 py-3 border-b border-slate-200 bg-white flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
+              {/* Left: Search input */}
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search by item name / HSN Code"
+                  value={bulkSearch}
+                  onChange={(e) => setBulkSearch(e.target.value)}
+                  className="w-72 h-9.5 pl-9 pr-3 bg-white border border-slate-300 hover:border-slate-400 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/15 rounded-xl text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none transition-all shadow-2xs"
+                />
               </div>
 
-              {/* Batch Action: Update Tax Slab */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setBatchTaxDropdownOpen(!batchTaxDropdownOpen)}
-                  className="h-8 px-4 rounded-xl bg-white hover:bg-purple-50 border border-[#33077C]/30 text-[#33077C] font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-2xs"
-                >
-                  <span>Update Tax Slab</span>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#33077C]" />
-                </button>
+              {/* Center: Tabs styled with CRM brand theme */}
+              <div className="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200/60">
+                {(['Pricing', 'Stock', 'Item Information'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setBulkTab(tab)}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      bulkTab === tab
+                        ? 'bg-[#33077C] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
 
-                {batchTaxDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in duration-100">
-                    <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase">Apply to Selected Items</div>
-                    {TAX_RATE_OPTIONS.map((t) => (
-                      <button
-                        key={t.value}
-                        type="button"
-                        onClick={() => handleApplyBatchTaxSlab(t.value)}
-                        className="w-full px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors"
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              {/* Right: Selected items counter badge (Update Tax Slab removed) */}
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-50 text-[#33077C] border border-purple-200 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]"></span>
+                  <span>{bulkSelectedIds.length} items selected</span>
+                </span>
               </div>
             </div>
 
-            {/* 10.3 Editable Data Grid */}
+            {/* 10.3 Editable Data Grid - Follows Application Table Format & Theme */}
             <div className="flex-1 overflow-auto bg-white">
-              <table className="w-full text-left border-collapse border-b border-slate-200 min-w-[1100px]">
+              <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase border-b border-[#33077C]">
                     {/* Checkbox */}
-                    <th className="py-3 px-3 w-10 text-center border-r border-slate-200">
+                    <th className="py-3.5 px-3 w-10 text-center border border-[#33077C]/30 bg-[#33077C] text-white">
                       <input
                         type="checkbox"
                         checked={isAllBulkSelected}
@@ -3508,75 +4112,77 @@ export const InventoryProductsView: React.FC = () => {
                     </th>
 
                     {/* # Index */}
-                    <th className="py-3 px-3 w-10 text-center border-r border-slate-200">#</th>
+                    <th className="py-3.5 px-3 w-12 text-center border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
+                      #
+                    </th>
 
                     {/* Common Header 1: ITEM NAME */}
-                    <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                    <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                       <div className="flex items-center justify-between gap-1">
                         <span>ITEM NAME*</span>
-                        <Filter className="w-3 h-3 text-slate-400" />
+                        <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                       </div>
                     </th>
 
                     {/* Common Header 2: CATEGORY */}
-                    <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                    <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                       <div className="flex items-center justify-between gap-1">
                         <span>CATEGORY</span>
-                        <Filter className="w-3 h-3 text-slate-400" />
+                        <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                       </div>
                     </th>
 
                     {/* Common Header 3: ITEM HSN */}
-                    <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                    <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                       <div className="flex items-center justify-between gap-1">
                         <span>ITEM HSN</span>
-                        <Filter className="w-3 h-3 text-slate-400" />
+                        <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                       </div>
                     </th>
 
                     {/* ================= PRICING TAB COLUMNS ================= */}
                     {bulkTab === 'Pricing' && (
                       <>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>PURCHASE PRICE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>TAX TYPE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>SALE PRICE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>TAX TYPE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>DISCOUNT ON SALE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>DISCOUNT TYPE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>TAX RATE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
                       </>
@@ -3585,64 +4191,58 @@ export const InventoryProductsView: React.FC = () => {
                     {/* ================= STOCK TAB COLUMNS ================= */}
                     {bulkTab === 'Stock' && (
                       <>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>OPENING QUANTITY</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>AT PRICE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>AS OF DATE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>MIN STOCK TO MAINTAIN</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>LOCATION</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
                       </>
                     )}
 
-                    {/* ================= ITEM INFO TAB COLUMNS ================= */}
+                    {/* ================= ITEM INFO TAB COLUMNS (NO TYPE COLUMN) ================= */}
                     {bulkTab === 'Item Information' && (
                       <>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>ITEM CODE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>UNIT</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                           <div className="flex items-center justify-between gap-1">
                             <span>STATUS</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
-                          </div>
-                        </th>
-                        <th className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
-                          <div className="flex items-center justify-between gap-1">
-                            <span>TYPE</span>
-                            <Filter className="w-3 h-3 text-slate-400" />
+                            <Filter className="w-3 h-3 text-white/60 hover:text-white" />
                           </div>
                         </th>
                       </>
@@ -3664,7 +4264,7 @@ export const InventoryProductsView: React.FC = () => {
                       return (
                         <tr
                           key={item.id}
-                          className={`hover:bg-purple-50/20 transition-colors ${
+                          className={`hover:bg-purple-50/20 transition-colors border-b border-slate-200 ${
                             isSelected ? 'bg-purple-50/40' : ''
                           }`}
                         >
@@ -3689,7 +4289,7 @@ export const InventoryProductsView: React.FC = () => {
                               type="text"
                               value={item.productName}
                               onChange={(e) => handleBulkItemChange(item.id, 'productName', e.target.value)}
-                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md font-semibold text-slate-800 outline-none"
+                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg font-semibold text-slate-800 outline-none transition-all"
                             />
                           </td>
 
@@ -3698,7 +4298,7 @@ export const InventoryProductsView: React.FC = () => {
                             <select
                               value={item.category}
                               onChange={(e) => handleBulkItemChange(item.id, 'category', e.target.value)}
-                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                             >
                               <option value="---">---</option>
                               {categories.map((cat) => (
@@ -3715,7 +4315,7 @@ export const InventoryProductsView: React.FC = () => {
                               type="text"
                               value={item.hsnCode || '---'}
                               onChange={(e) => handleBulkItemChange(item.id, 'hsnCode', e.target.value)}
-                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none"
+                              className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none transition-all"
                             />
                           </td>
 
@@ -3725,7 +4325,7 @@ export const InventoryProductsView: React.FC = () => {
                               {/* PURCHASE PRICE */}
                               <td className="py-2.5 px-3 border-r border-slate-200">
                                 <div className="flex items-center">
-                                  <span className="text-slate-400 mr-1">₹</span>
+                                  <span className="text-slate-400 mr-1 font-semibold">₹</span>
                                   <input
                                     type="number"
                                     min="0"
@@ -3733,7 +4333,7 @@ export const InventoryProductsView: React.FC = () => {
                                     onChange={(e) =>
                                       handleBulkItemChange(item.id, 'purchasePrice', Number(e.target.value))
                                     }
-                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md font-medium text-slate-800 outline-none"
+                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg font-medium text-slate-800 outline-none transition-all"
                                   />
                                 </div>
                               </td>
@@ -3745,7 +4345,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'purchasePriceTaxType', e.target.value)
                                   }
-                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
                                   <option value="Excluded">Excluded</option>
                                   <option value="Included">Included</option>
@@ -3755,7 +4355,7 @@ export const InventoryProductsView: React.FC = () => {
                               {/* SALE PRICE */}
                               <td className="py-2.5 px-3 border-r border-slate-200">
                                 <div className="flex items-center">
-                                  <span className="text-slate-400 mr-1">₹</span>
+                                  <span className="text-slate-400 mr-1 font-semibold">₹</span>
                                   <input
                                     type="number"
                                     min="0"
@@ -3763,7 +4363,7 @@ export const InventoryProductsView: React.FC = () => {
                                     onChange={(e) =>
                                       handleBulkItemChange(item.id, 'salePrice', Number(e.target.value))
                                     }
-                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md font-bold text-slate-800 outline-none"
+                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg font-bold text-slate-800 outline-none transition-all"
                                   />
                                 </div>
                               </td>
@@ -3775,7 +4375,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'salePriceTaxType', e.target.value)
                                   }
-                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
                                   <option value="Excluded">Excluded</option>
                                   <option value="Included">Included</option>
@@ -3791,7 +4391,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'discountValue', Number(e.target.value))
                                   }
-                                  className="w-20 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-800 outline-none"
+                                  className="w-20 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-800 outline-none transition-all"
                                 />
                               </td>
 
@@ -3802,7 +4402,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'discountType', e.target.value)
                                   }
-                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
                                   <option value="Percentage">Percentage</option>
                                   <option value="Amount">Amount</option>
@@ -3814,7 +4414,7 @@ export const InventoryProductsView: React.FC = () => {
                                 <select
                                   value={item.taxRate || 'None'}
                                   onChange={(e) => handleBulkItemChange(item.id, 'taxRate', e.target.value)}
-                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
                                   {TAX_RATE_OPTIONS.map((t) => (
                                     <option key={t.value} value={t.value}>
@@ -3838,14 +4438,14 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'openingStock', Number(e.target.value))
                                   }
-                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md font-bold text-slate-800 outline-none"
+                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg font-bold text-slate-800 outline-none transition-all"
                                 />
                               </td>
 
                               {/* AT PRICE */}
                               <td className="py-2.5 px-3 border-r border-slate-200">
                                 <div className="flex items-center">
-                                  <span className="text-slate-400 mr-1">₹</span>
+                                  <span className="text-slate-400 mr-1 font-semibold">₹</span>
                                   <input
                                     type="number"
                                     min="0"
@@ -3853,7 +4453,7 @@ export const InventoryProductsView: React.FC = () => {
                                     onChange={(e) =>
                                       handleBulkItemChange(item.id, 'atPrice', Number(e.target.value))
                                     }
-                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-800 outline-none"
+                                    className="w-24 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-800 outline-none transition-all"
                                   />
                                 </div>
                               </td>
@@ -3864,7 +4464,7 @@ export const InventoryProductsView: React.FC = () => {
                                   type="date"
                                   value={item.asOfDate || ''}
                                   onChange={(e) => handleBulkItemChange(item.id, 'asOfDate', e.target.value)}
-                                  className="h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 />
                               </td>
 
@@ -3877,7 +4477,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'minStockAlert', Number(e.target.value))
                                   }
-                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-800 outline-none"
+                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-800 outline-none transition-all"
                                 />
                               </td>
 
@@ -3888,13 +4488,13 @@ export const InventoryProductsView: React.FC = () => {
                                   value={item.location || ''}
                                   onChange={(e) => handleBulkItemChange(item.id, 'location', e.target.value)}
                                   placeholder="e.g. Rack A"
-                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none"
+                                  className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none transition-all"
                                 />
                               </td>
                             </>
                           )}
 
-                          {/* ================= ITEM INFO TAB ROW FIELDS ================= */}
+                          {/* ================= ITEM INFO TAB ROW FIELDS (NO TYPE COLUMN) ================= */}
                           {bulkTab === 'Item Information' && (
                             <>
                               {/* ITEM CODE */}
@@ -3903,7 +4503,7 @@ export const InventoryProductsView: React.FC = () => {
                                   type="text"
                                   value={item.productCode}
                                   onChange={(e) => handleBulkItemChange(item.id, 'productCode', e.target.value)}
-                                  className="w-28 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md font-mono text-slate-800 outline-none"
+                                  className="w-28 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg font-mono text-slate-800 outline-none transition-all"
                                 />
                               </td>
 
@@ -3912,7 +4512,7 @@ export const InventoryProductsView: React.FC = () => {
                                 <select
                                   value={item.unit}
                                   onChange={(e) => handleBulkItemChange(item.id, 'unit', e.target.value)}
-                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all"
                                 >
                                   {allAvailableUnits.length === 0 ? (
                                     <option value={item.unit || 'PCS'}>{item.unit || 'PCS'}</option>
@@ -3931,24 +4531,11 @@ export const InventoryProductsView: React.FC = () => {
                                 <select
                                   value={item.status}
                                   onChange={(e) => handleBulkItemChange(item.id, 'status', e.target.value as any)}
-                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#33077C] rounded-md text-slate-700 outline-none cursor-pointer"
+                                  className="w-24 h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-700 outline-none cursor-pointer transition-all font-semibold"
                                 >
                                   <option value="Active">Active</option>
                                   <option value="Inactive">Inactive</option>
                                 </select>
-                              </td>
-
-                              {/* TYPE */}
-                              <td className="py-2.5 px-3 border-r border-slate-200">
-                                <span
-                                  className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
-                                    item.itemType === 'Product'
-                                      ? 'bg-[#33077C]/10 text-[#33077C]'
-                                      : 'bg-purple-100 text-purple-800'
-                                  }`}
-                                >
-                                  {item.itemType}
-                                </span>
                               </td>
                             </>
                           )}
@@ -3960,51 +4547,38 @@ export const InventoryProductsView: React.FC = () => {
               </table>
             </div>
 
-            {/* 10.4 Bottom Action Footer Bar */}
-            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-              {/* Left: Dynamic Updates Summary Badge (Themed) */}
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="px-4 py-2 bg-purple-50 border border-[#33077C]/20 text-[11px] text-slate-700 rounded-xl font-medium shadow-2xs flex items-center gap-3">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]"></span>
-                    <strong className="text-slate-800">Pricing:</strong>{' '}
-                    <span className="font-bold text-[#33077C]">{updatesSummary.pricingUpdates} Updates</span>
-                  </span>
-                  <span className="text-purple-200">|</span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]"></span>
-                    <strong className="text-slate-800">Stock:</strong>{' '}
-                    <span className="font-bold text-[#33077C]">{updatesSummary.stockUpdates} Updates</span>
-                  </span>
-                  <span className="text-purple-200">|</span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#33077C]"></span>
-                    <strong className="text-slate-800">Item Information:</strong>{' '}
-                    <span className="font-bold text-[#33077C]">{updatesSummary.infoUpdates} Updates</span>
-                  </span>
-                </div>
-              </div>
-
-            {/* Right: Cancel & Update Buttons */}
-            <div className="flex items-center gap-3">
+            {/* 10.4 Bottom Action Footer Bar - Matches CRM Standard */}
+            <div className="px-6 py-4 bg-white border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsBulkUpdateModalOpen(false)}
-                className="h-10 px-5 rounded-xl border border-slate-300 hover:border-slate-400 bg-white text-xs sm:text-sm font-bold text-slate-700 hover:bg-slate-100 transition-all cursor-pointer shadow-2xs"
+                disabled={isSavingBulkUpdate}
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Cancel
+                <X className="w-4 h-4 text-slate-500" />
+                <span>Cancel</span>
               </button>
               <button
                 type="submit"
                 onClick={handleSaveBulkUpdate}
-                className="h-10 px-7 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-sm font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer"
+                disabled={isSavingBulkUpdate}
+                className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Update
+                {isSavingBulkUpdate ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin stroke-[2.5]" />
+                    <span>Updating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4 stroke-[2.5]" />
+                    <span>Update</span>
+                  </>
+                )}
               </button>
             </div>
-          </div>
-        </form>
-      </div>
+          </form>
+        </div>
       )}
 
       {/* 8. Product Details Modal (GET /commerce/products/:id) */}
@@ -4218,7 +4792,7 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
                 <div className="text-xs sm:text-[13px] text-slate-600 leading-relaxed">
                   <p className="font-semibold text-slate-800 text-sm mb-1">
-                    Delete Product / Service?
+                    Delete Product?
                   </p>
                   <p>
                     Are you sure you want to delete <strong className="text-slate-900">{deleteConfirmItem.productName}</strong>?

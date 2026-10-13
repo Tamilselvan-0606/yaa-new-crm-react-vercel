@@ -105,11 +105,13 @@ export const CustomerSchema = z.object({
   phone: z.string().min(5, 'Phone Number is required'),
   whatsapp: z.string().optional(),
   email: z.string().email('Invalid email address'),
-  alternatePhone: z.string().optional(),
+  gstNumber: z.string().optional(),
+  panNumber: z.string().optional(),
   address: z.string().min(2, 'Address is required'),
-  city: z.string().min(2, 'City is required'),
-  state: z.string().min(2, 'State is required'),
-  pincode: z.string().min(3, 'Pincode is required'),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  pincode: z.string().optional(),
+  alternatePhone: z.string().optional(),
 });
 
 export type CustomerFormData = z.infer<typeof CustomerSchema>;
@@ -125,3 +127,19 @@ export const EmployeeSchema = z.object({
 });
 
 export type EmployeeFormData = z.infer<typeof EmployeeSchema>;
+
+export const SalesRepresentativeSchema = z.object({
+  name: z.string().min(2, 'Full name must be at least 2 characters'),
+  mobile: z
+    .string()
+    .min(7, 'Mobile number is required')
+    .regex(/^\+?[\d\s\-]{7,15}$/, 'Enter a valid mobile number'),
+  email: z
+    .string()
+    .min(1, 'Email address is required')
+    .email('Enter a valid email address'),
+  designation: z.string().optional(),
+  status: z.enum(['Active', 'Inactive']),
+});
+
+export type SalesRepFormData = z.infer<typeof SalesRepresentativeSchema>;

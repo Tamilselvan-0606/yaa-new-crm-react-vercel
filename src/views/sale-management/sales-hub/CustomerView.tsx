@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import {
@@ -39,9 +39,6 @@ import {
   Truck,
   RefreshCw,
   Loader2,
-  Wifi,
-  WifiOff,
-  Database,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -219,9 +216,9 @@ export const CustomerView: React.FC = () => {
     billingAddress: string;
     shippingAddress: string;
     sameAsBilling: boolean;
-    creditLimit: number;
+    creditLimit: number | string;
     paymentTerms: string;
-    openingBalance: number;
+    openingBalance: number | string;
     preferredPaymentMethod: string;
     status: CustomerStatus;
     tags: string;
@@ -242,17 +239,17 @@ export const CustomerView: React.FC = () => {
     address: '',
     city: '',
     state: '',
-    country: 'India',
+    country: '',
     pincode: '',
     gstNumber: '',
     panNumber: '',
     billingAddress: '',
     shippingAddress: '',
     sameAsBilling: true,
-    creditLimit: 50000,
-    paymentTerms: 'Net 30 Days',
-    openingBalance: 0,
-    preferredPaymentMethod: 'Bank Transfer',
+    creditLimit: '',
+    paymentTerms: '',
+    openingBalance: '',
+    preferredPaymentMethod: '',
     status: 'Active',
     tags: '',
     notes: '',
@@ -470,17 +467,17 @@ export const CustomerView: React.FC = () => {
       address: customer.address || '',
       city: customer.city || '',
       state: customer.state || '',
-      country: customer.country || 'India',
+      country: customer.country || '',
       pincode: customer.pincode || '',
       gstNumber: customer.gstNumber || '',
       panNumber: customer.panNumber || '',
       billingAddress: customer.billingAddress || customer.address || '',
       shippingAddress: customer.shippingAddress || customer.address || '',
       sameAsBilling: customer.sameAsBilling !== false,
-      creditLimit: customer.creditLimit || 0,
-      paymentTerms: customer.paymentTerms || 'Net 30 Days',
-      openingBalance: customer.openingBalance || 0,
-      preferredPaymentMethod: customer.preferredPaymentMethod || 'Bank Transfer',
+      creditLimit: customer.creditLimit !== undefined && customer.creditLimit !== null ? customer.creditLimit : '',
+      paymentTerms: customer.paymentTerms || '',
+      openingBalance: customer.openingBalance !== undefined && customer.openingBalance !== null ? customer.openingBalance : '',
+      preferredPaymentMethod: customer.preferredPaymentMethod || '',
       status: customer.status || 'Active',
       salesRepresentativeId: customer.salesRepresentativeId || '',
       tags: customer.tags ? customer.tags.join(', ') : '',
@@ -543,10 +540,10 @@ export const CustomerView: React.FC = () => {
         ? data.billingAddress.trim() || data.address.trim()
         : data.shippingAddress.trim() || data.address.trim(),
       sameAsBilling: data.sameAsBilling,
-      creditLimit: Number(data.creditLimit) || 0,
-      paymentTerms: data.paymentTerms.trim() || 'Net 30 Days',
-      openingBalance: Number(data.openingBalance) || 0,
-      preferredPaymentMethod: data.preferredPaymentMethod,
+      creditLimit: data.creditLimit !== '' && !isNaN(Number(data.creditLimit)) ? Number(data.creditLimit) : 0,
+      paymentTerms: data.paymentTerms.trim(),
+      openingBalance: data.openingBalance !== '' && !isNaN(Number(data.openingBalance)) ? Number(data.openingBalance) : 0,
+      preferredPaymentMethod: data.preferredPaymentMethod || undefined,
       status: data.status,
       notes: data.notes.trim() || undefined,
       tags: data.tags
@@ -974,18 +971,6 @@ export const CustomerView: React.FC = () => {
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
                 {displayedTotalRecords} total
               </span>
-              {isApiConnected === true && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live API
-                </span>
-              )}
-              {isApiConnected === false && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200" title={apiErrorMessage || 'Local storage mode'}>
-                  <Database className="w-3 h-3 text-amber-500" />
-                  Local Mode
-                </span>
-              )}
             </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
@@ -1596,21 +1581,23 @@ export const CustomerView: React.FC = () => {
                   1. Basic Information
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Customer Code <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    {...register('customerCode', { required: 'Customer code is required' })}
-                    placeholder="e.g. CUS-1001"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none transition-all ${
-                      errors.customerCode
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.customerCode
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Customer Code <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="text"
+                      {...register('customerCode', { required: 'Customer code is required' })}
+                      placeholder="e.g. CUS-1001"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none"
+                    />
+                  </div>
                   {errors.customerCode && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1620,28 +1607,30 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Full Name / Contact Person <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    {...register('name', {
-                      required: 'Customer name is required',
-                      minLength: { value: 2, message: 'Name must be at least 2 characters' },
-                      validate: (val) =>
-                        /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
-                    }}
-                    placeholder="e.g. Marcus Vance"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.name
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.name
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Full Name / Contact Person <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="text"
+                      {...register('name', {
+                        required: 'Customer name is required',
+                        minLength: { value: 2, message: 'Name must be at least 2 characters' },
+                        validate: (val) =>
+                          /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      })}
+                      onKeyDown={handleTextOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
+                      }}
+                      placeholder="e.g. Marcus Vance"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.name && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1651,72 +1640,80 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Company Name (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    {...register('company')}
-                    placeholder="e.g. Apex Global Logistics"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Company Name (Optional)
+                    </span>
+                    <input
+                      type="text"
+                      {...register('company')}
+                      placeholder="e.g. Apex Global Logistics"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Customer Type
-                  </label>
-                  <select
-                    {...register('customerType')}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="Business">Business (B2B)</option>
-                    <option value="Individual">Individual (B2C)</option>
-                  </select>
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Customer Type
+                    </span>
+                    <select
+                      {...register('customerType')}
+                      className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="Business">Business (B2B)</option>
+                      <option value="Individual">Individual (B2C)</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Sales Representative
-                  </label>
-                  <select
-                    {...register('salesRepresentativeId')}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="">Select Sales Representative</option>
-                    {salesRepresentatives
-                      .filter((r) => r.status === 'Active' || r.id === watch('salesRepresentativeId'))
-                      .map((rep) => (
-                        <option key={rep.id} value={rep.id}>
-                          {rep.name}
-                        </option>
-                      ))}
-                  </select>
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Sales Representative
+                    </span>
+                    <select
+                      {...register('salesRepresentativeId')}
+                      className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="">Select Sales Representative</option>
+                      {salesRepresentatives
+                        .filter((r) => r.status === 'Active' || r.id === watch('salesRepresentativeId'))
+                        .map((rep) => (
+                          <option key={rep.id} value={rep.id}>
+                            {rep.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Primary Phone <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    maxLength={10}
-                    {...register('phone', {
-                      required: 'Primary phone is required',
-                      validate: (val) =>
-                        /^[0-9]{10}$/.test(val.trim()) || 'Phone number must be exactly 10 digits (numbers only)',
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 10);
-                    }}
-                    placeholder="e.g. 9876543210"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.phone
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.phone
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Primary Phone <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      {...register('phone', {
+                        required: 'Primary phone is required',
+                        validate: (val) =>
+                          /^[0-9]{10}$/.test(val.trim()) || 'Phone number must be exactly 10 digits (numbers only)',
+                      })}
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 10);
+                      }}
+                      placeholder="e.g. 9876543210"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.phone && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1726,27 +1723,29 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Alternate Phone
-                  </label>
-                  <input
-                    type="tel"
-                    maxLength={10}
-                    {...register('alternatePhone', {
-                      validate: (val) =>
-                        !val || /^[0-9]{10}$/.test(val.trim()) || 'Alternate phone must be exactly 10 digits',
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 10);
-                    }}
-                    placeholder="e.g. 9876543211"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.alternatePhone
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.alternatePhone
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Alternate Phone
+                    </span>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      {...register('alternatePhone', {
+                        validate: (val) =>
+                          !val || /^[0-9]{10}$/.test(val.trim()) || 'Alternate phone must be exactly 10 digits',
+                      })}
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 10);
+                      }}
+                      placeholder="e.g. 9876543211"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.alternatePhone && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1756,23 +1755,25 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Email Address <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="email"
-                    {...register('email', {
-                      required: 'Email address is required',
-                      validate: (val) =>
-                        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim()) || 'Please enter a valid email address (e.g. client@company.com)',
-                    })}
-                    placeholder="e.g. client@company.com"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.email
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.email
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Email Address <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="email"
+                      {...register('email', {
+                        required: 'Email address is required',
+                        validate: (val) =>
+                          /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim()) || 'Please enter a valid email address (e.g. client@company.com)',
+                      })}
+                      placeholder="e.g. client@company.com"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.email && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1782,32 +1783,36 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Gender
-                  </label>
-                  <select
-                    {...register('gender')}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="">Select Gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Gender
+                    </span>
+                    <select
+                      {...register('gender')}
+                      className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Account Status
-                  </label>
-                  <select
-                    {...register('status')}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                    <option value="Blocked">Blocked</option>
-                  </select>
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Account Status
+                    </span>
+                    <select
+                      {...register('status')}
+                      className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="Active">Active</option>
+                      <option value="Inactive">Inactive</option>
+                      <option value="Blocked">Blocked</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1820,48 +1825,52 @@ export const CustomerView: React.FC = () => {
                   2. Address & Location
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
                 <div className="sm:col-span-4">
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Street Address
-                  </label>
-                  <input
-                    type="text"
-                    {...register('address')}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setValue('address', val);
-                      if (watchSameAsBilling) {
-                        setValue('billingAddress', val);
-                        setValue('shippingAddress', val);
-                      }
-                    }}
-                    placeholder="e.g. 452 Ocean Avenue, Suite 400"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Street Address
+                    </span>
+                    <input
+                      type="text"
+                      {...register('address')}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setValue('address', val);
+                        if (watchSameAsBilling) {
+                          setValue('billingAddress', val);
+                          setValue('shippingAddress', val);
+                        }
+                      }}
+                      placeholder="e.g. 452 Ocean Avenue, Suite 400"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    City
-                  </label>
-                  <input
-                    type="text"
-                    {...register('city', {
-                      validate: (val) =>
-                        !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
-                    }}
-                    placeholder="e.g. Chennai"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.city
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.city
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      City
+                    </span>
+                    <input
+                      type="text"
+                      {...register('city', {
+                        validate: (val) =>
+                          !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      })}
+                      onKeyDown={handleTextOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
+                      }}
+                      placeholder="e.g. Chennai"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.city && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1871,26 +1880,28 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    State
-                  </label>
-                  <input
-                    type="text"
-                    {...register('state', {
-                      validate: (val) =>
-                        !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
-                    }}
-                    placeholder="e.g. Tamil Nadu"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.state
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.state
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      State
+                    </span>
+                    <input
+                      type="text"
+                      {...register('state', {
+                        validate: (val) =>
+                          !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      })}
+                      onKeyDown={handleTextOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
+                      }}
+                      placeholder="e.g. Tamil Nadu"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.state && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1900,26 +1911,28 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Country
-                  </label>
-                  <input
-                    type="text"
-                    {...register('country', {
-                      validate: (val) =>
-                        !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
-                    }}
-                    placeholder="e.g. India"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.country
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.country
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Country
+                    </span>
+                    <input
+                      type="text"
+                      {...register('country', {
+                        validate: (val) =>
+                          !val || /^[A-Za-z\s]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      })}
+                      onKeyDown={handleTextOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s]/g, '');
+                      }}
+                      placeholder="e.g. India"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.country && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1929,27 +1942,29 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Pincode / ZIP
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    {...register('pincode', {
-                      validate: (val) =>
-                        !val || /^[0-9]{6}$/.test(val.trim()) || 'Pincode must be exactly 6 digits (numbers only)',
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 6);
-                    }}
-                    placeholder="e.g. 600001"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.pincode
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.pincode
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Pincode / ZIP
+                    </span>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      {...register('pincode', {
+                        validate: (val) =>
+                          !val || /^[0-9]{6}$/.test(val.trim()) || 'Pincode must be exactly 6 digits (numbers only)',
+                      })}
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 6);
+                      }}
+                      placeholder="e.g. 600001"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.pincode && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1968,30 +1983,32 @@ export const CustomerView: React.FC = () => {
                   3. Tax & Invoicing Addresses
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    GSTIN (GST Number)
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={15}
-                    {...register('gstNumber', {
-                      validate: (val) =>
-                        !val ||
-                        /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(val.trim().toUpperCase()) ||
-                        'Invalid GSTIN format (e.g. 33AABCZ9876K1Z2)',
-                    })}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.toUpperCase();
-                    }}
-                    placeholder="e.g. 33AABCZ9876K1Z2"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-700 outline-none transition-all ${
-                      errors.gstNumber
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.gstNumber
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      GSTIN (GST Number)
+                    </span>
+                    <input
+                      type="text"
+                      maxLength={15}
+                      {...register('gstNumber', {
+                        validate: (val) =>
+                          !val ||
+                          /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(val.trim().toUpperCase()) ||
+                          'Invalid GSTIN format (e.g. 33AABCZ9876K1Z2)',
+                      })}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                      }}
+                      placeholder="e.g. 33AABCZ9876K1Z2"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.gstNumber && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2001,28 +2018,30 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    PAN Number
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={10}
-                    {...register('panNumber', {
-                      validate: (val) =>
-                        !val ||
-                        /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(val.trim().toUpperCase()) ||
-                        'Invalid PAN format (e.g. ABCDE1234F)',
-                    })}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.toUpperCase();
-                    }}
-                    placeholder="e.g. ABCDE1234F"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-700 outline-none transition-all ${
-                      errors.panNumber
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.panNumber
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      PAN Number
+                    </span>
+                    <input
+                      type="text"
+                      maxLength={10}
+                      {...register('panNumber', {
+                        validate: (val) =>
+                          !val ||
+                          /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(val.trim().toUpperCase()) ||
+                          'Invalid PAN format (e.g. ABCDE1234F)',
+                      })}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                      }}
+                      placeholder="e.g. ABCDE1234F"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.panNumber && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2032,22 +2051,24 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Billing Address
-                  </label>
-                  <textarea
-                    rows={2}
-                    {...register('billingAddress')}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setValue('billingAddress', val);
-                      if (watchSameAsBilling) {
-                        setValue('shippingAddress', val);
-                      }
-                    }}
-                    placeholder="Complete billing address for GST invoices..."
-                    className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all resize-none"
-                  />
+                  <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs p-3 pt-3.5">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Billing Address
+                    </span>
+                    <textarea
+                      rows={2}
+                      {...register('billingAddress')}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setValue('billingAddress', val);
+                        if (watchSameAsBilling) {
+                          setValue('shippingAddress', val);
+                        }
+                      }}
+                      placeholder="Complete billing address for GST invoices..."
+                      className="w-full bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none resize-none"
+                    />
+                  </div>
                 </div>
 
                 <div className="sm:col-span-2 flex items-center gap-2 py-1">
@@ -2071,15 +2092,17 @@ export const CustomerView: React.FC = () => {
 
                 {!watchSameAsBilling && (
                   <div className="sm:col-span-2">
-                    <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                      Shipping / Delivery Address
-                    </label>
-                    <textarea
-                      rows={2}
-                      {...register('shippingAddress')}
-                      placeholder="Delivery warehouse or location address..."
-                      className="w-full p-3 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all resize-none"
-                    />
+                    <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs p-3 pt-3.5">
+                      <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                        Shipping / Delivery Address
+                      </span>
+                      <textarea
+                        rows={2}
+                        {...register('shippingAddress')}
+                        placeholder="Delivery warehouse or location address..."
+                        className="w-full bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none resize-none"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -2093,27 +2116,29 @@ export const CustomerView: React.FC = () => {
                   4. Credit Limit & Payment Terms
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Credit Limit (₹)
-                  </label>
-                  <input
-                    type="text"
-                    {...register('creditLimit', {
-                      validate: (val) => Number(val) >= 0 || 'Credit limit cannot be negative',
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
-                    }}
-                    placeholder="e.g. 50000"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.creditLimit
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.creditLimit
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Credit Limit (₹)
+                    </span>
+                    <input
+                      type="text"
+                      {...register('creditLimit', {
+                        validate: (val) => val === '' || Number(val) >= 0 || 'Credit limit cannot be negative',
+                      })}
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                      }}
+                      placeholder="e.g. 50000"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.creditLimit && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2123,37 +2148,41 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Payment Terms
-                  </label>
-                  <input
-                    type="text"
-                    {...register('paymentTerms')}
-                    placeholder="e.g. Net 30 Days"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Payment Terms
+                    </span>
+                    <input
+                      type="text"
+                      {...register('paymentTerms')}
+                      placeholder="e.g. Net 30 Days"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Opening Balance (₹)
-                  </label>
-                  <input
-                    type="text"
-                    {...register('openingBalance', {
-                      validate: (val) => Number(val) >= 0 || 'Opening balance cannot be negative',
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
-                    }}
-                    placeholder="e.g. 0"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      errors.openingBalance
-                        ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
+                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
+                    errors.openingBalance
+                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                  }`}>
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Opening Balance (₹)
+                    </span>
+                    <input
+                      type="text"
+                      {...register('openingBalance', {
+                        validate: (val) => val === '' || Number(val) >= 0 || 'Opening balance cannot be negative',
+                      })}
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onInput={(e) => {
+                        e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                      }}
+                      placeholder="e.g. 0"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                   {errors.openingBalance && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2163,44 +2192,51 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Preferred Payment
-                  </label>
-                  <select
-                    {...register('preferredPaymentMethod')}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="UPI">UPI</option>
-                    <option value="Card">Card</option>
-                    <option value="Cash">Cash</option>
-                    <option value="Cheque">Cheque</option>
-                    <option value="Credit">Store Credit</option>
-                  </select>
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Preferred Payment
+                    </span>
+                    <select
+                      {...register('preferredPaymentMethod')}
+                      className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
+                    >
+                      <option value="">Select Preferred Payment</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="UPI">UPI</option>
+                      <option value="Card">Card</option>
+                      <option value="Cash">Cash</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Credit">Store Credit</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Tags (Comma-separated)
-                  </label>
-                  <input
-                    type="text"
-                    {...register('tags')}
-                    placeholder="e.g. VIP, Wholesale, Priority"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Tags (Comma-separated)
+                    </span>
+                    <input
+                      type="text"
+                      {...register('tags')}
+                      placeholder="e.g. VIP, Wholesale, Priority"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Notes / Internal Comments
-                  </label>
-                  <input
-                    type="text"
-                    {...register('notes')}
-                    placeholder="Special instructions or account manager notes..."
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Notes / Internal Comments
+                    </span>
+                    <input
+                      type="text"
+                      {...register('notes')}
+                      placeholder="Special instructions or account manager notes..."
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2268,7 +2304,7 @@ export const CustomerView: React.FC = () => {
                 <div>
                   <p className="text-xs font-bold text-slate-900 dark:text-white">{dup.name}</p>
                   <p className="text-[11px] text-slate-500 font-mono">
-                    {dup.customerCode} • {dup.phone} • {dup.email}
+                    {dup.customerCode} â€¢ {dup.phone} â€¢ {dup.email}
                   </p>
                   {dup.company && <p className="text-[11px] text-slate-400">{dup.company}</p>}
                 </div>
@@ -2331,7 +2367,7 @@ export const CustomerView: React.FC = () => {
           isOpen={isDetailModalOpen}
           onClose={() => setIsDetailModalOpen(false)}
           title={`Customer: ${selectedCustomer.name}`}
-          subtitle={`ID: ${selectedCustomer.customerCode} • ${selectedCustomer.customerType} Profile • Credit & Ledger`}
+          subtitle={`ID: ${selectedCustomer.customerCode} â€¢ ${selectedCustomer.customerType} Profile â€¢ Credit & Ledger`}
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
@@ -2359,11 +2395,11 @@ export const CustomerView: React.FC = () => {
                     <span>ID: {selectedCustomer.customerCode}</span>
                     {selectedCustomer.company && (
                       <span className="font-sans font-medium text-slate-700 dark:text-slate-300">
-                        • {selectedCustomer.company}
+                        â€¢ {selectedCustomer.company}
                       </span>
                     )}
-                    <span>• {selectedCustomer.phone}</span>
-                    <span>• {selectedCustomer.email}</span>
+                    <span>â€¢ {selectedCustomer.phone}</span>
+                    <span>â€¢ {selectedCustomer.email}</span>
                     {selectedCustomerCollectionData?.rep && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-900/40 text-[#4309A2] dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
                         <UserCheck className="w-3 h-3 text-[#4309A2]" />
@@ -2565,7 +2601,7 @@ export const CustomerView: React.FC = () => {
                           </p>
                           <p className="text-[10px] text-slate-500 font-medium">
                             {selectedCustomerCollectionData?.rep?.status === 'Active' ? 'Sales Executive' : 'Inactive Rep'}
-                            {selectedCustomer.salesRepresentativeType ? ` • ${selectedCustomer.salesRepresentativeType}` : ''}
+                            {selectedCustomer.salesRepresentativeType ? ` â€¢ ${selectedCustomer.salesRepresentativeType}` : ''}
                           </p>
                         </div>
                       </div>
@@ -2959,7 +2995,7 @@ export const CustomerView: React.FC = () => {
                           <div key={f.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-700 text-xs">
                             <div className="flex items-center justify-between gap-1 flex-wrap">
                               <span className="font-semibold text-slate-800 dark:text-slate-200">
-                                {f.followUpDate} {f.followUpTime && `• ${f.followUpTime}`}
+                                {f.followUpDate} {f.followUpTime && `â€¢ ${f.followUpTime}`}
                               </span>
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-[#33077C]">
                                 {f.outcome}
@@ -3634,7 +3670,7 @@ export const CustomerView: React.FC = () => {
                   {changeRepTargetCustomer.name}
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium">
-                  Code: {changeRepTargetCustomer.customerCode} • {changeRepTargetCustomer.company || 'Direct'}
+                  Code: {changeRepTargetCustomer.customerCode} â€¢ {changeRepTargetCustomer.company || 'Direct'}
                 </span>
               </div>
               <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-white text-[#33077C] border border-purple-200">
@@ -3643,22 +3679,24 @@ export const CustomerView: React.FC = () => {
             </div>
 
             {/* Sales Rep Selector */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Sales Representative <span className="text-rose-500">*</span>
-              </label>
-              <select
-                value={selectedRepIdForCustomer}
-                onChange={(e) => setSelectedRepIdForCustomer(e.target.value)}
-                className="w-full h-11 px-3.5 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
-              >
-                <option value="">-- Select Sales Representative --</option>
-                {salesRepresentatives.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.mobile}) - {r.status}
-                  </option>
-                ))}
-              </select>
+            <div className="relative pt-1">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Sales Representative <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  value={selectedRepIdForCustomer}
+                  onChange={(e) => setSelectedRepIdForCustomer(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent font-semibold text-slate-800 text-xs outline-none cursor-pointer"
+                >
+                  <option value="">-- Select Sales Representative --</option>
+                  {salesRepresentatives.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.mobile}) - {r.status}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Assignment Type (Primary / Temporary) */}
@@ -3695,30 +3733,34 @@ export const CustomerView: React.FC = () => {
             </div>
 
             {/* Effective From */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Effective From
-              </label>
-              <input
-                type="date"
-                value={repEffectiveFrom}
-                onChange={(e) => setRepEffectiveFrom(e.target.value)}
-                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 text-xs font-medium text-slate-700 focus:border-[#33077C] outline-none"
-              />
+            <div className="relative pt-1">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Effective From
+                </span>
+                <input
+                  type="date"
+                  value={repEffectiveFrom}
+                  onChange={(e) => setRepEffectiveFrom(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs font-medium text-slate-700 outline-none"
+                />
+              </div>
             </div>
 
             {/* Notes */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Notes / Handover Instructions
-              </label>
-              <textarea
-                rows={2}
-                value={repAssignmentNotes}
-                onChange={(e) => setRepAssignmentNotes(e.target.value)}
-                placeholder="Reason for assignment, customer preferences, or territory handover notes..."
-                className="w-full p-3 bg-white rounded-xl border border-slate-200 text-xs font-medium text-slate-700 focus:border-[#33077C] outline-none resize-none"
-              />
+            <div className="relative pt-1">
+              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs p-3 pt-3.5">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Notes / Handover Instructions
+                </span>
+                <textarea
+                  rows={2}
+                  value={repAssignmentNotes}
+                  onChange={(e) => setRepAssignmentNotes(e.target.value)}
+                  placeholder="Reason for assignment, customer preferences, or territory handover notes..."
+                  className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none resize-none"
+                />
+              </div>
             </div>
 
             {/* Modal Actions */}
@@ -3748,3 +3790,4 @@ export const CustomerView: React.FC = () => {
     </div>
   );
 };
+

@@ -55,7 +55,10 @@ export interface ApiUser {
 }
 
 export interface ApiLoginRequest {
-  email: string;
+  email?: string;
+  phone?: string;
+  mobileNumber?: string;
+  identifier?: string;
   password?: string;
 }
 

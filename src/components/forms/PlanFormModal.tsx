@@ -230,9 +230,9 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       price: 0,
       gstRate: 18,
       currency: '₹',
-      billingCycle: '' as any,
-      planType: '' as any,
-      status: '' as any,
+      billingCycle: 'Monthly',
+      planType: 'Fixed',
+      status: 'Active',
       maxBranchLimit: '',
       description: '',
       isPopular: false,
@@ -338,9 +338,9 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
         price: 0,
         gstRate: '',
         currency: '₹',
-        billingCycle: '' as any,
-        planType: '' as any,
-        status: '' as any,
+        billingCycle: 'Monthly',
+        planType: 'Fixed',
+        status: 'Active',
         maxBranchLimit: '',
         description: '',
         isPopular: false,
@@ -421,17 +421,23 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
     }));
   };
 
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   const onSubmit = async (data: PlanFormData) => {
-    const finalPlanName = isCustomPlanSelected ? customPlanName.trim() : data.name.trim();
-    if (!finalPlanName) return;
+    setSubmitError(null);
+    const finalPlanName = isCustomPlanSelected ? customPlanName.trim() : (data.name || '').trim();
+    if (!finalPlanName) {
+      setSubmitError('Plan Name is required');
+      return;
+    }
 
     try {
       const planData: Partial<ProductPlan> = {
         name: finalPlanName,
         price: Number(data.price) || 0,
-        currency: data.currency,
+        currency: data.currency || '₹',
         billingCycle: (data.billingCycle as BillingCycle) || 'Monthly',
-        pricingType: data.planType ? (data.planType as PricingType) : undefined,
+        pricingType: data.planType ? (data.planType as PricingType) : 'Fixed',
         customizablePrice: data.planType === 'Custom Quote',
         status: (data.status as 'Active' | 'Inactive') || 'Active',
         maxBranchLimit: data.maxBranchLimit !== '' && data.maxBranchLimit !== undefined ? Number(data.maxBranchLimit) : undefined,
@@ -449,8 +455,18 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
 
       await onSave(selectedProductId, planData, initialPlan?.id);
       onClose();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Plan save error in modal:', err);
+      const msg = err?.response?.data?.message || err?.response?.data?.error?.message || err?.message || 'Failed to save plan';
+      setSubmitError(msg);
+    }
+  };
+
+  const onInvalid = (errors: any) => {
+    console.warn('Form validation failed:', errors);
+    const firstKey = Object.keys(errors)[0];
+    if (firstKey && errors[firstKey]?.message) {
+      setSubmitError(errors[firstKey].message);
     }
   };
 
@@ -546,7 +562,19 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       showBackIcon={true}
       hideCloseButton={true}
     >
-      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+      <form noValidate onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+        {submitError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
+            <span>{submitError}</span>
+            <button
+              type="button"
+              onClick={() => setSubmitError(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold ml-2 cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {isSuperAdmin ? (
           <div className="space-y-4">
             {/* Row 1: Plan Name (1 col), Price (1 col), GST Rate (1 col) */}
@@ -819,10 +847,10 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   onChange={(val) => {
                     if (val === 'Custom') {
                       setIsCustomPlanSelected(true);
-                      setValue('name', '');
+                      setValue('name', customPlanName.trim(), { shouldValidate: true });
                     } else {
                       setIsCustomPlanSelected(false);
-                      setValue('name', val);
+                      setValue('name', val, { shouldValidate: true });
                     }
                   }}
                   options={[

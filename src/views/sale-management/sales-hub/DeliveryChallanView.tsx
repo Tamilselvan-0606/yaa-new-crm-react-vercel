@@ -44,8 +44,6 @@ import {
   Receipt,
   Package,
   Loader2,
-  Wifi,
-  WifiOff,
   FileSpreadsheet,
 } from 'lucide-react';
 import {
@@ -155,10 +153,15 @@ const TAX_RATE_OPTIONS = [
   { label: 'Select Tax', rate: 0 },
   { label: 'Exempted (0%)', rate: 0 },
   { label: 'GST @ 0%', rate: 0 },
+  { label: 'GST @ 0.1%', rate: 0.1 },
+  { label: 'GST @ 0.25%', rate: 0.25 },
+  { label: 'GST @ 1.5%', rate: 1.5 },
+  { label: 'GST @ 3%', rate: 3 },
   { label: 'GST @ 5%', rate: 5 },
   { label: 'GST @ 12%', rate: 12 },
   { label: 'GST @ 18%', rate: 18 },
   { label: 'GST @ 28%', rate: 28 },
+  { label: 'GST @ 40%', rate: 40 },
 ];
 
 const PERIOD_FILTER_OPTIONS = [
@@ -450,6 +453,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           unit: p.unit || 'PCS',
           taxPercent: tax,
           category: p.category || '',
+          batches: (p as any).batches || (p as any).stockBatches || [],
         };
       });
     }
@@ -462,6 +466,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       unit: s.unit || 'PCS',
       taxPercent: 5,
       category: s.category || '',
+      batches: s.batches || [],
     }));
   }, [liveProducts, localStocks]);
 
@@ -1665,7 +1670,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                     <tr>
                       <th className="py-3 px-3 w-10 text-center text-white/80">#</th>
-                      <th className="py-3 px-4 min-w-[220px] text-white">Item</th>
+                      <th className="py-3 px-4 min-w-[200px] text-white">Item</th>
+                      <th className="py-3 px-3 min-w-[130px] text-center text-white">Batch No</th>
                       <th className="py-3 px-3 w-20 text-center text-white">Qty</th>
                       <th className="py-3 px-3 w-28 text-white">Unit</th>
                       <th className="py-3 px-3 min-w-[130px] text-white">
@@ -1716,6 +1722,40 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               <option key={stk.id} value={stk.productName} />
                             ))}
                           </datalist>
+                        </td>
+                        {/* Batch No */}
+                        <td className="py-2.5 px-2">
+                          {(() => {
+                            const matchedStock = allStockItems.find(
+                              (s: any) => s.productId === rowItem.productId || s.id === rowItem.productId
+                            );
+                            const batches = (matchedStock as any)?.batches || [];
+                            if (batches.length > 0) {
+                              return (
+                                <select
+                                  value={rowItem.batch || ''}
+                                  onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
+                                  className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
+                                >
+                                  <option value="">Select Batch...</option>
+                                  {batches.map((b: any) => (
+                                    <option key={b.batchNo || b.id} value={b.batchNo}>
+                                      {b.batchNo} ({b.quantity} in stock)
+                                    </option>
+                                  ))}
+                                </select>
+                              );
+                            }
+                            return (
+                              <input
+                                type="text"
+                                placeholder="Batch No"
+                                value={rowItem.batch || ''}
+                                onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
+                                className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
+                              />
+                            );
+                          })()}
                         </td>
                         <td className="py-2.5 px-2">
                           <input
@@ -2031,53 +2071,67 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             showBackIcon={true}
             hideCloseButton={true}
           >
-            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">
-                  Customer / Business Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Apex Hospitality Corp"
-                  value={quickCustName}
-                  onChange={(e) => setQuickCustName(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Phone Number</label>
+            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4 pt-6">
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Customer / Business Name <span className="text-rose-500">*</span>
+                  </span>
                   <input
-                    type="tel"
-                    placeholder="9876543210"
-                    value={quickCustPhone}
-                    onChange={(e) => setQuickCustPhone(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-600 block mb-1">Email</label>
-                  <input
-                    type="email"
-                    placeholder="dispatch@company.com"
-                    value={quickCustEmail}
-                    onChange={(e) => setQuickCustEmail(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
+                    type="text"
+                    required
+                    placeholder="e.g. Apex Hospitality Corp"
+                    value={quickCustName}
+                    onChange={(e) => setQuickCustName(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-600 block mb-1">Delivery Address</label>
-                <input
-                  type="text"
-                  placeholder="Destination warehouse or site address"
-                  value={quickCustAddress}
-                  onChange={(e) => setQuickCustAddress(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium outline-none focus:border-[#4309A2]"
-                />
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Phone Number
+                    </span>
+                    <input
+                      type="tel"
+                      placeholder="9876543210"
+                      value={quickCustPhone}
+                      onChange={(e) => setQuickCustPhone(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Email
+                    </span>
+                    <input
+                      type="email"
+                      placeholder="dispatch@company.com"
+                      value={quickCustEmail}
+                      onChange={(e) => setQuickCustEmail(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="relative pt-1">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Delivery Address
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Destination warehouse or site address"
+                    value={quickCustAddress}
+                    onChange={(e) => setQuickCustAddress(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
@@ -2122,11 +2176,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
                 {totalApiRecords || challans.length} total
               </span>
-              {!isApiConnected && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                  <WifiOff className="w-3 h-3" /> Offline Mode
-                </span>
-              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Manage delivery challans, goods dispatched, vehicle info, and convert directly to sales invoices.
@@ -2789,6 +2838,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 <tr>
                   <th className="p-2.5 text-white">#</th>
                   <th className="p-2.5 text-white">Item &amp; Description</th>
+                  <th className="p-2.5 text-center text-white">Batch No</th>
                   <th className="p-2.5 text-center text-white">Dispatched Qty</th>
                   <th className="p-2.5 text-right text-white">Unit Price</th>
                   <th className="p-2.5 text-right text-white">Tax (%)</th>
@@ -2800,6 +2850,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   <tr key={i}>
                     <td className="p-2.5 text-slate-400">{i + 1}</td>
                     <td className="p-2.5 font-bold text-slate-800">{it.productName}</td>
+                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">{it.batch || '—'}</td>
                     <td className="p-2.5 text-center font-bold text-[#33077C]">{it.quantity} {it.unit || ''}</td>
                     <td className="p-2.5 text-right">₹{Number(it.unitPrice || 0).toLocaleString('en-IN')}</td>
                     <td className="p-2.5 text-right">{it.taxPercent || 0}%</td>

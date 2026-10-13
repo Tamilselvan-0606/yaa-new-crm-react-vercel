@@ -208,4 +208,8 @@ export {
   ensureValidUuid,
 } from './work/expenseApi';
 
+export * from './commerce/collectionTypes';
+export { collectionApi } from './commerce/collectionApi';
 
+export * from './commerce/salesDashboardTypes';
+export * from './commerce/salesDashboardApi';

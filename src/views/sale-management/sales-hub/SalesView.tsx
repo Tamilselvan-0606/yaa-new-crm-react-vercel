@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   ShoppingCart,
   Plus,
@@ -603,8 +603,8 @@ export const SalesView: React.FC = () => {
     state: "",
     pincode: "",
     gstNumber: "",
-    creditLimit: 50000,
-    paymentTerms: "Net 30 Days",
+    creditLimit: '',
+    paymentTerms: "",
   });
 
   // Payment Recording Modal State
@@ -1325,8 +1325,8 @@ export const SalesView: React.FC = () => {
         quickCustomerForm.address.trim() ||
         `${quickCustomerForm.city || "Chennai"}, ${quickCustomerForm.state || "Tamil Nadu"}`,
       sameAsBilling: true,
-      creditLimit: Number(quickCustomerForm.creditLimit) || 50000,
-      paymentTerms: quickCustomerForm.paymentTerms || "Net 30 Days",
+      creditLimit: Number(quickCustomerForm.creditLimit) || 0,
+      paymentTerms: quickCustomerForm.paymentTerms.trim(),
       openingBalance: 0,
       status: "Active",
       createdAt: new Date().toISOString(),
@@ -2637,8 +2637,8 @@ export const SalesView: React.FC = () => {
                         state: "",
                         pincode: "",
                         gstNumber: "",
-                        creditLimit: 50000,
-                        paymentTerms: "Net 30 Days",
+                        creditLimit: "",
+                        paymentTerms: "",
                       });
                       setIsQuickCustomerModalOpen(true);
                     }}
@@ -5824,53 +5824,59 @@ export const SalesView: React.FC = () => {
             </div>
 
             {/* Sales Rep Selector */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Sales Representative <span className="text-rose-500">*</span>
-              </label>
-              <select
-                value={assignRepId}
-                onChange={(e) => setAssignRepId(e.target.value)}
-                className="w-full h-11 px-3.5 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
-              >
-                <option value="">-- Select Sales Representative --</option>
-                {salesRepresentatives.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.mobile}) - {r.status}
-                  </option>
-                ))}
-              </select>
+            <div className="relative pt-1">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Sales Representative <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  value={assignRepId}
+                  onChange={(e) => setAssignRepId(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent font-semibold text-slate-800 text-xs outline-none cursor-pointer"
+                >
+                  <option value="">-- Select Sales Representative --</option>
+                  {salesRepresentatives.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.mobile}) - {r.status}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Collection Status */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Collection Status
-              </label>
-              <select
-                value={assignStatus}
-                onChange={(e) => setAssignStatus(e.target.value)}
-                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 text-xs font-semibold text-slate-800 focus:border-[#33077C] outline-none"
-              >
-                <option value="Pending Follow-up">Pending Follow-up</option>
-                <option value="Customer Contacted">Customer Contacted</option>
-                <option value="Promise to Pay">Promise to Pay</option>
-                <option value="Dispute Raised">Dispute Raised</option>
-                <option value="Collected">Collected</option>
-              </select>
+            <div className="relative pt-1">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Collection Status
+                </span>
+                <select
+                  value={assignStatus}
+                  onChange={(e) => setAssignStatus(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="Pending Follow-up">Pending Follow-up</option>
+                  <option value="Customer Contacted">Customer Contacted</option>
+                  <option value="Promise to Pay">Promise to Pay</option>
+                  <option value="Dispute Raised">Dispute Raised</option>
+                  <option value="Collected">Collected</option>
+                </select>
+              </div>
             </div>
 
             {/* Next Follow-up Date */}
-            <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block mb-1">
-                Next Follow-up Date (Optional)
-              </label>
-              <input
-                type="date"
-                value={assignNextFollowUp}
-                onChange={(e) => setAssignNextFollowUp(e.target.value)}
-                className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 text-xs font-medium text-slate-700 focus:border-[#33077C] outline-none"
-              />
+            <div className="relative pt-1">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Next Follow-up Date (Optional)
+                </span>
+                <input
+                  type="date"
+                  value={assignNextFollowUp}
+                  onChange={(e) => setAssignNextFollowUp(e.target.value)}
+                  className="w-full h-full px-3.5 bg-transparent text-xs font-medium text-slate-700 outline-none"
+                />
+              </div>
             </div>
 
             {/* Modal Actions */}
@@ -6046,48 +6052,46 @@ export const SalesView: React.FC = () => {
                 </div>
 
                 {/* 3. Payment Date & Notes */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
                       Payment Date <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="relative flex items-center">
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="dd/mm/yyyy"
+                      value={isoToDdmmyyyy(paymentModalDate)}
+                      onChange={(e) => {
+                        const iso = ddmmyyyyToIso(e.target.value);
+                        setPaymentModalDate(iso || e.target.value);
+                      }}
+                      required
+                      className="w-full h-full pl-4 pr-10 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
+                    />
+                    <label className="absolute right-2.5 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
+                      <Calendar className="w-4 h-4" />
                       <input
-                        type="text"
-                        placeholder="dd/mm/yyyy"
-                        value={isoToDdmmyyyy(paymentModalDate)}
+                        type="date"
+                        value={paymentModalDate}
                         onChange={(e) => {
-                          const iso = ddmmyyyyToIso(e.target.value);
-                          setPaymentModalDate(iso || e.target.value);
+                          if (e.target.value)
+                            setPaymentModalDate(e.target.value);
                         }}
-                        required
-                        className="w-full h-10 pl-3.5 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
+                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                       />
-                      <label className="absolute right-2.5 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
-                        <Calendar className="w-4 h-4" />
-                        <input
-                          type="date"
-                          value={paymentModalDate}
-                          onChange={(e) => {
-                            if (e.target.value)
-                              setPaymentModalDate(e.target.value);
-                          }}
-                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                        />
-                      </label>
-                    </div>
+                    </label>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
                       Payment Notes
-                    </label>
+                    </span>
                     <input
                       type="text"
                       value={recordNotes}
                       onChange={(e) => setRecordNotes(e.target.value)}
                       placeholder="Add payment notes..."
-                      className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
                     />
                   </div>
                 </div>
@@ -6335,142 +6339,158 @@ export const SalesView: React.FC = () => {
             e.preventDefault();
             handleSaveQuickCustomer();
           }} className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             <div className="sm:col-span-2">
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Customer / Client Name <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.name}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    name: e.target.value,
-                  })
-                }
-                placeholder="e.g. Acme Corp / Sarah Connor"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Customer / Client Name <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.name}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      name: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. Acme Corp / Sarah Connor"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Company Name (Optional)
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.company}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    company: e.target.value,
-                  })
-                }
-                placeholder="e.g. Acme Enterprises"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Company Name (Optional)
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.company}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      company: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. Acme Enterprises"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Phone Number <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.phone}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    phone: e.target.value,
-                  })
-                }
-                placeholder="e.g. +91 98765 43210"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Phone Number <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.phone}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      phone: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. +91 98765 43210"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={quickCustomerForm.email}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    email: e.target.value,
-                  })
-                }
-                placeholder="e.g. info@acme.com"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Email Address
+                </span>
+                <input
+                  type="email"
+                  value={quickCustomerForm.email}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      email: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. info@acme.com"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                GSTIN / Tax ID
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.gstNumber}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    gstNumber: e.target.value,
-                  })
-                }
-                placeholder="e.g. 33AABCZ9876K1Z2"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  GSTIN / Tax ID
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.gstNumber}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      gstNumber: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. 33AABCZ9876K1Z2"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div className="sm:col-span-2">
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Billing Address
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.address}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    address: e.target.value,
-                  })
-                }
-                placeholder="Street address..."
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Billing Address
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.address}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      address: e.target.value,
+                    })
+                  }
+                  placeholder="Street address..."
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Credit Limit (₹)
-              </label>
-              <input
-                type="number"
-                min="0"
-                value={quickCustomerForm.creditLimit}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    creditLimit: Number(e.target.value),
-                  })
-                }
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Credit Limit (₹)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  value={quickCustomerForm.creditLimit}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      creditLimit: e.target.value,
+                    })
+                  }
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
+                />
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Payment Terms
-              </label>
-              <input
-                type="text"
-                value={quickCustomerForm.paymentTerms}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    paymentTerms: e.target.value,
-                  })
-                }
-                placeholder="e.g. Net 30 Days"
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-              />
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Terms
+                </span>
+                <input
+                  type="text"
+                  value={quickCustomerForm.paymentTerms}
+                  onChange={(e) =>
+                    setQuickCustomerForm({
+                      ...quickCustomerForm,
+                      paymentTerms: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. Net 30 Days"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                />
+              </div>
             </div>
           </div>
 

@@ -42,9 +42,6 @@ import {
   Paperclip,
   PlusCircle,
   Loader2,
-  Wifi,
-  WifiOff,
-  Database,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -130,10 +127,15 @@ const TAX_RATE_OPTIONS = [
   { label: 'Select Tax', rate: 0 },
   { label: 'Exempted (0%)', rate: 0 },
   { label: 'GST @ 0%', rate: 0 },
+  { label: 'GST @ 0.1%', rate: 0.1 },
+  { label: 'GST @ 0.25%', rate: 0.25 },
+  { label: 'GST @ 1.5%', rate: 1.5 },
+  { label: 'GST @ 3%', rate: 3 },
   { label: 'GST @ 5%', rate: 5 },
   { label: 'GST @ 12%', rate: 12 },
   { label: 'GST @ 18%', rate: 18 },
   { label: 'GST @ 28%', rate: 28 },
+  { label: 'GST @ 40%', rate: 40 },
 ];
 
 const PERIOD_FILTER_OPTIONS = [
@@ -1775,6 +1777,7 @@ export const EstimateQuotationView: React.FC = () => {
                     {columnSettings.showDescription && (
                       <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[160px] text-white">DESCRIPTION</th>
                     )}
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">BATCH NO</th>
                     <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">QTY</th>
                     <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">UNIT</th>
                     <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
@@ -1982,6 +1985,17 @@ export const EstimateQuotationView: React.FC = () => {
                           />
                         </td>
                       )}
+
+                      {/* BATCH NO */}
+                      <td className="p-1.5 border-r border-slate-200">
+                        <input
+                          type="text"
+                          value={row.batch || ''}
+                          onChange={(e) => handleRowChange(idx, 'batch', e.target.value)}
+                          placeholder="Batch No"
+                          className="w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none transition-colors"
+                        />
+                      </td>
 
                       {/* QTY */}
                       <td className="p-1.5 border-r border-slate-200">
@@ -2417,41 +2431,51 @@ export const EstimateQuotationView: React.FC = () => {
                 e.preventDefault();
                 handleCreateQuickCustomer();
               }}
-              className="p-5 space-y-4 text-xs"
+              className="p-5 space-y-4 text-xs pt-6"
             >
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  Customer / Party Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newCustomerName}
-                  onChange={(e) => setNewCustomerName(e.target.value)}
-                  placeholder="e.g. Anand Supermarket"
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Customer / Party Name <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="text"
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="e.g. Anand Supermarket"
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Company / Store Name</label>
-                <input
-                  type="text"
-                  value={newCustomerCompany}
-                  onChange={(e) => setNewCustomerCompany(e.target.value)}
-                  placeholder="e.g. Anand Mart Pvt Ltd"
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Company / Store Name
+                  </span>
+                  <input
+                    type="text"
+                    value={newCustomerCompany}
+                    onChange={(e) => setNewCustomerCompany(e.target.value)}
+                    placeholder="e.g. Anand Mart Pvt Ltd"
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="text"
-                  value={newCustomerPhone}
-                  onChange={(e) => setNewCustomerPhone(e.target.value)}
-                  placeholder="e.g. +91 98400 55667"
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Phone Number
+                  </span>
+                  <input
+                    type="text"
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder="e.g. +91 98400 55667"
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                  />
+                </div>
               </div>
 
               <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
@@ -2502,17 +2526,6 @@ export const EstimateQuotationView: React.FC = () => {
               Create, track, and convert sales quotations & estimates into confirmed invoices.
             </p>
             <div className="flex items-center gap-2.5 mt-2 flex-wrap">
-              {isApiConnected === true ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live Commerce API
-                </span>
-              ) : isApiConnected === false ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                  <WifiOff className="w-3 h-3 text-amber-600" />
-                  Offline Cache Mode
-                </span>
-              ) : null}
 
               <button
                 type="button"
@@ -3052,6 +3065,7 @@ export const EstimateQuotationView: React.FC = () => {
               <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                 <tr>
                   <th className="p-2.5 text-left text-white">Item</th>
+                  <th className="p-2.5 text-center w-28 text-white">Batch No</th>
                   <th className="p-2.5 text-center w-16 text-white">Qty</th>
                   <th className="p-2.5 text-right w-24 text-white">Rate (₹)</th>
                   <th className="p-2.5 text-right w-28 text-white">Amount (₹)</th>
@@ -3061,6 +3075,7 @@ export const EstimateQuotationView: React.FC = () => {
                 {previewQuotation.items.map((it, idx) => (
                   <tr key={idx}>
                     <td className="p-2.5 font-semibold text-slate-800">{it.productName}</td>
+                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">{it.batch || '—'}</td>
                     <td className="p-2.5 text-center">{it.quantity}</td>
                     <td className="p-2.5 text-right">₹{Number(it.unitPrice).toLocaleString()}</td>
                     <td className="p-2.5 text-right font-bold">₹{Number(it.total).toLocaleString()}</td>
@@ -3179,17 +3194,19 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
 
             {/* Due Date Picker */}
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">
-                Payment / Document Due Date
-              </label>
-              <input
-                type="date"
-                value={convertDueDate}
-                onChange={(e) => setConvertDueDate(e.target.value)}
-                className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C] transition-colors"
-              />
-              <p className="text-[11px] text-slate-500 mt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment / Document Due Date
+                </span>
+                <input
+                  type="date"
+                  value={convertDueDate}
+                  onChange={(e) => setConvertDueDate(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 pl-1">
                 Specifies the settlement due date for the generated {convertType}.
               </p>
             </div>

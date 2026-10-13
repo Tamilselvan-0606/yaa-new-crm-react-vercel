@@ -1774,63 +1774,67 @@ export const PaymentInView: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                 {/* Party / Customer Name */}
                 <div
                   className="sm:col-span-2 relative"
                   ref={partySelectDropdownRef}
                 >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs sm:text-[13px] font-medium text-slate-600">
-                      Party / Customer Name{" "}
-                      <span className="text-rose-500">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsQuickCustomerOpen(true)}
-                      className="text-xs font-bold text-[#33077C] hover:underline cursor-pointer"
-                    >
-                      + Add New Party
-                    </button>
-                  </div>
-                  <div
-                    onClick={() => setFormPartySearchOpen(!formPartySearchOpen)}
-                    className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
-                      formPartySearchOpen
-                        ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
-                        : selectedCustomerObj
-                          ? "border-purple-300 hover:border-[#33077C]"
-                          : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="truncate pr-2">
-                      {selectedCustomerObj ? (
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
-                            {selectedCustomerObj.name}
-                          </span>
-                          {selectedCustomerObj.phone && (
-                            <span className="text-slate-400 text-xs">
-                              ({selectedCustomerObj.phone})
-                            </span>
-                          )}
-                          {selectedCustomerObj.company && (
-                            <span className="text-slate-500 text-xs">
-                              • {selectedCustomerObj.company}
-                            </span>
-                          )}
-                        </div>
-                      ) : formPartyQuery ? (
-                        <span className="font-bold text-slate-900">
-                          {formPartyQuery}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">
-                          Search customer by name or phone...
-                        </span>
-                      )}
+                  <div className="relative w-full">
+                    <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                      <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
+                        Party / Customer Name <span className="text-rose-500">*</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsQuickCustomerOpen(true);
+                        }}
+                        className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer pointer-events-auto rounded-sm"
+                      >
+                        + Add New Party
+                      </button>
                     </div>
-                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    <div
+                      onClick={() => setFormPartySearchOpen(!formPartySearchOpen)}
+                      className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
+                        formPartySearchOpen
+                          ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
+                          : selectedCustomerObj
+                            ? "border-purple-300 hover:border-[#33077C]"
+                            : "border-slate-300 hover:border-slate-400"
+                      }`}
+                    >
+                      <div className="truncate pr-2">
+                        {selectedCustomerObj ? (
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
+                              {selectedCustomerObj.name}
+                            </span>
+                            {selectedCustomerObj.phone && (
+                              <span className="text-slate-400 text-xs">
+                                ({selectedCustomerObj.phone})
+                              </span>
+                            )}
+                            {selectedCustomerObj.company && (
+                              <span className="text-slate-500 text-xs">
+                                • {selectedCustomerObj.company}
+                              </span>
+                            )}
+                          </div>
+                        ) : formPartyQuery ? (
+                          <span className="font-bold text-slate-900">
+                            {formPartyQuery}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">
+                            Search customer by name or phone...
+                          </span>
+                        )}
+                      </div>
+                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                    </div>
                   </div>
 
                   {/* Customer Dropdown Search Menu */}
@@ -1915,78 +1919,89 @@ export const PaymentInView: React.FC = () => {
                 </div>
 
                 {/* Receipt No */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Receipt Number <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={formReceiptNo}
-                    onChange={(e) => setFormReceiptNo(e.target.value)}
-                    placeholder="e.g. PAY-2026-0001"
-                    className="w-full h-11 px-4 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Receipt Number <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="text"
+                      value={formReceiptNo}
+                      onChange={(e) => setFormReceiptNo(e.target.value)}
+                      placeholder="e.g. PAY-2026-0001"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none"
+                    />
+                  </div>
                 </div>
 
                 {/* Linked Invoice Selector */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Linked Invoice (Optional)
-                  </label>
-                  <select
-                    value={selectedInvoiceId}
-                    onChange={(e) => handleInvoiceSelect(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    <option value="">No Linked Invoice</option>
-                    {sales.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
-                      </option>
-                    ))}
-                  </select>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Linked Invoice (Optional)
+                    </span>
+                    <select
+                      value={selectedInvoiceId}
+                      onChange={(e) => handleInvoiceSelect(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none cursor-pointer"
+                    >
+                      <option value="">No Linked Invoice</option>
+                      {sales.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 {/* Date */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Payment Date <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={formDate}
-                    onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Payment Date <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="date"
+                      value={formDate}
+                      onChange={(e) => setFormDate(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
+                    />
+                  </div>
                 </div>
 
                 {/* Payment Mode / Type */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs sm:text-[13px] font-medium text-slate-600">
-                      Payment Mode <span className="text-rose-500">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddPaymentTypeOpen(true)}
-                      className="text-xs font-bold text-[#33077C] hover:underline cursor-pointer"
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                      <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
+                        Payment Mode <span className="text-rose-500">*</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddPaymentTypeOpen(true);
+                        }}
+                        className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer pointer-events-auto rounded-sm"
+                      >
+                        + Add Type
+                      </button>
+                    </div>
+                    <select
+                      value={formPaymentType}
+                      onChange={(e) =>
+                        setFormPaymentType(e.target.value as PaymentInType)
+                      }
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none cursor-pointer"
                     >
-                      + Add Type
-                    </button>
+                      {availablePaymentTypes.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <select
-                    value={formPaymentType}
-                    onChange={(e) =>
-                      setFormPaymentType(e.target.value as PaymentInType)
-                    }
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                  >
-                    {availablePaymentTypes.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               </div>
             </div>
@@ -2000,14 +2015,14 @@ export const PaymentInView: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                 {/* Received Amount Input */}
                 <div className="sm:col-span-2">
-                  <label className="text-xs sm:text-[13px] font-bold text-slate-800 block mb-1.5">
-                    Received Amount (₹) <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-3 text-sm font-bold text-slate-400 pointer-events-none">
+                  <div className="relative w-full h-11 bg-white border-2 border-purple-200 hover:border-[#33077C] focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Received Amount (₹) <span className="text-rose-500">*</span>
+                    </span>
+                    <span className="pl-4 text-sm font-bold text-slate-400 pointer-events-none">
                       ₹
                     </span>
                     <input
@@ -2017,7 +2032,7 @@ export const PaymentInView: React.FC = () => {
                       value={formReceivedAmount}
                       onChange={(e) => setFormReceivedAmount(e.target.value)}
                       autoFocus
-                      className="w-full h-11 pl-9 pr-4 bg-white border-2 border-purple-200 hover:border-[#33077C] rounded-xl text-base font-extrabold text-[#33077C] outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                      className="w-full h-full pl-2 pr-4 bg-transparent text-base font-extrabold text-[#33077C] outline-none"
                     />
                   </div>
                   {formReceivedAmount && parseFloat(formReceivedAmount) > 0 && (
@@ -2029,16 +2044,18 @@ export const PaymentInView: React.FC = () => {
 
                 {/* Reference Number */}
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Cheque / UPI / Ref No.
-                  </label>
-                  <input
-                    type="text"
-                    value={formReferenceNo}
-                    onChange={(e) => setFormReferenceNo(e.target.value)}
-                    placeholder="e.g. UPI-UTR-9918237192"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Cheque / UPI / Ref No.
+                    </span>
+                    <input
+                      type="text"
+                      value={formReferenceNo}
+                      onChange={(e) => setFormReferenceNo(e.target.value)}
+                      placeholder="e.g. UPI-UTR-9918237192"
+                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2052,19 +2069,21 @@ export const PaymentInView: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start pt-1">
                 {/* Description Textarea */}
                 <div className="sm:col-span-2">
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Description / Remarks
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={formDescription}
-                    onChange={(e) => setFormDescription(e.target.value)}
-                    placeholder="Enter transaction remarks, invoice reference, or settlement notes..."
-                    className="w-full p-3.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
+                  <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Description / Remarks
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={formDescription}
+                      onChange={(e) => setFormDescription(e.target.value)}
+                      placeholder="Enter transaction remarks, invoice reference, or settlement notes..."
+                      className="w-full p-3 pt-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none resize-none"
+                    />
+                  </div>
                 </div>
 
                 {/* Camera / Receipt Image Upload */}
@@ -2158,45 +2177,51 @@ export const PaymentInView: React.FC = () => {
               e.preventDefault();
               handleCreateQuickCustomer();
             }}
-            className="p-2 space-y-4 text-xs sm:text-sm"
+            className="p-2 space-y-4 text-xs sm:text-sm pt-3"
           >
-            <div>
-              <label className="block font-bold text-slate-700 mb-1.5">
-                Customer Name <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={newCustomerName}
-                onChange={(e) => setNewCustomerName(e.target.value)}
-                placeholder="e.g. Acme Technologies Pvt Ltd"
-                className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Customer Name <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  value={newCustomerName}
+                  onChange={(e) => setNewCustomerName(e.target.value)}
+                  placeholder="e.g. Acme Technologies Pvt Ltd"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-semibold text-slate-800 outline-none"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block font-bold text-slate-700 mb-1.5">
-                Company / Firm Name
-              </label>
-              <input
-                type="text"
-                value={newCustomerCompany}
-                onChange={(e) => setNewCustomerCompany(e.target.value)}
-                placeholder="e.g. Acme Group"
-                className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none focus:border-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Company / Firm Name
+                </span>
+                <input
+                  type="text"
+                  value={newCustomerCompany}
+                  onChange={(e) => setNewCustomerCompany(e.target.value)}
+                  placeholder="e.g. Acme Group"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block font-bold text-slate-700 mb-1.5">
-                Phone Number
-              </label>
-              <input
-                type="text"
-                value={newCustomerPhone}
-                onChange={(e) => setNewCustomerPhone(e.target.value)}
-                placeholder="e.g. +91 98765 43210"
-                className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none focus:border-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Phone Number
+                </span>
+                <input
+                  type="text"
+                  value={newCustomerPhone}
+                  onChange={(e) => setNewCustomerPhone(e.target.value)}
+                  placeholder="e.g. +91 98765 43210"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none"
+                />
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -2242,19 +2267,21 @@ export const PaymentInView: React.FC = () => {
               e.preventDefault();
               handleAddPaymentType();
             }}
-            className="p-2 space-y-4 text-xs sm:text-sm"
+            className="p-2 space-y-4 text-xs sm:text-sm pt-3"
           >
-            <div>
-              <label className="block font-bold text-slate-700 mb-1.5">
-                Payment Type Name <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={newPaymentTypeName}
-                onChange={(e) => setNewPaymentTypeName(e.target.value)}
-                placeholder="e.g. RTGS / NEFT or Google Pay"
-                className="w-full h-11 px-4 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Payment Type Name <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="text"
+                  value={newPaymentTypeName}
+                  onChange={(e) => setNewPaymentTypeName(e.target.value)}
+                  placeholder="e.g. RTGS / NEFT or Google Pay"
+                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-semibold text-slate-800 outline-none"
+                />
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

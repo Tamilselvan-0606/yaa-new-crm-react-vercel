@@ -37,8 +37,6 @@ import {
   Network,
   RefreshCw,
   ArrowLeft,
-  UsersRound,
-  ShoppingCart,
 } from 'lucide-react';
 import { Modal } from '../../components/common/Modal';
 import { Button } from '../../components/common/Button';
@@ -272,18 +270,7 @@ export const OrganizationView: React.FC = () => {
     try {
       if (isSubOrgMode) {
         // Active organization context for sub-organizations
-        const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-        const res = await subOrganizationApi.getSubOrganizations(
-          {
-            page_no: page,
-            page_size: limit,
-            pagination_required: 'true',
-            search: search.trim() || undefined,
-            status: status !== 'All' ? (status === 'Suspend' ? 'Suspended' : status) : undefined,
-          },
-          targetParentId || undefined
-        );
-        const parentOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        const parentOrgId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
         let apiItems: OrganizationItem[] = [];
 
         try {
@@ -643,7 +630,7 @@ export const OrganizationView: React.FC = () => {
         }
         if (t(industry) !== (editingOrg.industry || ''))                                            patch.industry = t(industry);
         if (t(location) !== (editingOrg.location || ''))                                            patch.location = t(location);
-        if (t(subscriptionPlan) !== (editingOrg.subscriptionPlan || ''))                            patch.subscriptionPlan = t(subscriptionPlan);
+        if (!isSubOrgMode && t(subscriptionPlan) !== (editingOrg.subscriptionPlan || ''))          patch.subscriptionPlan = t(subscriptionPlan);
         if (t(contactPerson) !== (editingOrg.contactPerson || ''))                                  patch.contactPerson = t(contactPerson);
         if (t(email) !== (editingOrg.email || ''))                                                  patch.email = t(email);
         if (t(phone) !== (editingOrg.phone || ''))                                                  patch.phone = t(phone);
@@ -689,7 +676,6 @@ export const OrganizationView: React.FC = () => {
               organizationType: targetSuiteType,
               industry: industry.trim() || undefined,
               location: location.trim() || undefined,
-              subscriptionPlan: subscriptionPlan.trim() || undefined,
               contactPerson: contactPerson.trim() || undefined,
               email: email.trim() || undefined,
               phone: phone.trim() || undefined,
@@ -796,32 +782,11 @@ export const OrganizationView: React.FC = () => {
             </div>
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
               <span>{isOrgSuperAdmin || isSubOrgMode ? 'Sub Organization' : 'Organizations'}</span>
-              {isOrgSuperAdmin && (
-                <span
-                  className={`text-xs px-2.5 py-0.5 rounded-full font-extrabold uppercase tracking-wider flex items-center gap-1.5 ${
-                    isSaleManagement
-                      ? 'bg-purple-100 text-[#33077C] border border-purple-200'
-                      : 'bg-blue-100 text-blue-700 border border-blue-200'
-                  }`}
-                >
-                  {isSaleManagement ? (
-                    <>
-                      <ShoppingCart className="w-3.5 h-3.5" />
-                      Sale Management Suite
-                    </>
-                  ) : (
-                    <>
-                      <UsersRound className="w-3.5 h-3.5" />
-                      Client Management Suite
-                    </>
-                  )}
-                </span>
-              )}
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             {isOrgSuperAdmin
-              ? `Manage sub organizations strictly for ${isSaleManagement ? 'Sale Management' : 'Client Management'} operations`
+              ? 'Manage sub organizations, operational units, and corporate profiles'
               : 'Manage enterprise organizations, multi-tenant units, and corporate profiles'}
           </p>
         </div>
@@ -839,44 +804,16 @@ export const OrganizationView: React.FC = () => {
             </button>
           )}
 
-          {/* Suite Switcher Tabs inside OrganizationView */}
-          {isOrgSuperAdmin && (
-            <div className="bg-slate-100 p-1 rounded-xl flex items-center border border-slate-200/80 shadow-2xs">
-              <button
-                type="button"
-                onClick={() => setOrgType('Client Management')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  !isSaleManagement
-                    ? 'bg-white text-[#33077C] shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <UsersRound className="w-3.5 h-3.5" />
-                <span>Client Mgmt</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setOrgType('Sales Management')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  isSaleManagement
-                    ? 'bg-white text-[#33077C] shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <ShoppingCart className="w-3.5 h-3.5" />
-                <span>Sale Mgmt</span>
-              </button>
-            </div>
+          {!isOrgSuperAdmin && (
+            <Button
+              variant="primary"
+              size="md"
+              onClick={handleOpenAddModal}
+              icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
+            >
+              {isSubOrgMode ? 'Add Sub Organization' : 'Add New Organization'}
+            </Button>
           )}
-
-          <Button
-            variant="primary"
-            size="md"
-            onClick={handleOpenAddModal}
-            icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
-          >
-            {isOrgSuperAdmin || isSubOrgMode ? 'Add Sub Organization' : 'Add New Organization'}
-          </Button>
         </div>
       </div>
 

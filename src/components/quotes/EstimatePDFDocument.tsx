@@ -291,14 +291,25 @@ const styles = StyleSheet.create({
   },
 });
 
+export interface SellerInfo {
+  name?: string;
+  taxId?: string;
+  pan?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+}
+
 interface EstimatePDFDocumentProps {
   quotation: Quotation;
   documentTitle?: string;
+  sellerDetails?: SellerInfo;
 }
 
 export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
   quotation,
   documentTitle = 'Quotation',
+  sellerDetails,
 }) => {
   // Format items
   const rawItems = quotation.items && quotation.items.length > 0
@@ -327,12 +338,12 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
   const logoSrc = typeof window !== 'undefined' ? `${window.location.origin}/yaa-creations-logo.png` : '/yaa-creations-logo.png';
 
   const company = {
-    name: 'Yaa Creations',
-    taxId: '27AABCA1234F1Z8',
-    pan: 'ABCDE1234F',
-    phone: '+91 98765 43210',
-    email: 'yaaadmin@gmail.com',
-    address: 'Madhapur, Hitech City, Hyderabad, Telangana 500081',
+    name: sellerDetails?.name || 'Yaa Creations',
+    taxId: sellerDetails?.taxId || '',
+    pan: sellerDetails?.pan || '',
+    phone: sellerDetails?.phone || '',
+    email: sellerDetails?.email || '',
+    address: sellerDetails?.address || '',
   };
 
   const bank = {

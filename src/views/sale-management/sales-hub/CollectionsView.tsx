@@ -37,6 +37,7 @@ import {
   MessageSquare,
   PhoneCall,
   UserPlus,
+  Loader2,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -55,6 +56,16 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { toast } from 'sonner';
+import {
+  collectionApi,
+  ApiCollectionInvoiceItem,
+  CollectionTabCounts,
+  CollectionDashboardMetrics,
+  CustomerAssignmentItem,
+  CollectionFollowUpItem,
+  CollectionHistoryItem,
+  CustomerCollectionTimelineData,
+} from '../../../api/commerce/collectionApi';
 
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
 type CollectionsSubView =
@@ -70,7 +81,6 @@ export const CollectionsView: React.FC = () => {
   const {
     sales,
     customers,
-    salesRepresentatives,
     paymentIns,
     collectionFollowUps,
     promisesToPay,
@@ -81,12 +91,31 @@ export const CollectionsView: React.FC = () => {
     getCollectionDashboardMetrics,
   } = useSalesManagementStore();
 
+  // Live sales representatives from API
+  const [liveReps, setLiveReps] = React.useState<import('../../../api/commerce/salesRepresentativeApi').ApiSalesRepresentative[]>([]);
+  React.useEffect(() => {
+    import('../../../api/commerce/salesRepresentativeApi').then(({ salesRepresentativeApi }) => {
+      salesRepresentativeApi.getList({ limit: 200 }).then((res) => {
+        if (res.success) setLiveReps(res.data ?? []);
+      }).catch(() => {});
+    });
+  }, []);
+
   // Current system date reference
-  const todayStr = '2026-10-08';
+  const todayStr = new Date().toISOString().split('T')[0];
 
   // URL search query sync
   const initialSearch = searchParams.get('search') || '';
   const [searchTerm, setSearchTerm] = useState(initialSearch);
+  const [appliedSearch, setAppliedSearch] = useState(initialSearch);
+
+  // Debounce search query to prevent excessive API invocations
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppliedSearch(searchTerm.trim());
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   // Main Sub-views: Dashboard | Customer Assignments | Follow-ups | Collection History
   const rawInitial = (searchParams.get('subView') || searchParams.get('tab') || searchParams.get('view') || 'dashboard') as string;
@@ -106,6 +135,7 @@ export const CollectionsView: React.FC = () => {
       ['dashboard', 'customer-assignments', 'follow-ups', 'collection-history'].includes(urlView as CollectionsSubView)
     ) {
       setSubView(urlView as CollectionsSubView);
+      setCurrentPage(1);
     }
   }, [searchParams]);
 
@@ -136,9 +166,40 @@ export const CollectionsView: React.FC = () => {
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [isAssignCustomerModalOpen, setIsAssignCustomerModalOpen] = useState(false);
 
+  // API States
+  const [dashboardMetrics, setDashboardMetrics] = useState<CollectionDashboardMetrics | null>(null);
+  const [isMetricsLoading, setIsMetricsLoading] = useState(false);
+
+  const [apiInvoices, setApiInvoices] = useState<ApiCollectionInvoiceItem[]>([]);
+  const [isInvoicesLoading, setIsInvoicesLoading] = useState(false);
+  const [tabCounts, setTabCounts] = useState<CollectionTabCounts>({
+    allDues: 0,
+    dueToday: 0,
+    overdue: 0,
+    promiseToPay: 0,
+    collected: 0,
+  });
+  const [totalInvoices, setTotalInvoices] = useState(0);
+
+  const [apiAssignments, setApiAssignments] = useState<CustomerAssignmentItem[]>([]);
+  const [isAssignmentsLoading, setIsAssignmentsLoading] = useState(false);
+  const [totalAssignments, setTotalAssignments] = useState(0);
+
+  const [apiFollowUps, setApiFollowUps] = useState<CollectionFollowUpItem[]>([]);
+  const [isFollowUpsLoading, setIsFollowUpsLoading] = useState(false);
+  const [totalFollowUps, setTotalFollowUps] = useState(0);
+
+  const [apiHistory, setApiHistory] = useState<CollectionHistoryItem[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [totalHistory, setTotalHistory] = useState(0);
+
+  const [customerTimeline, setCustomerTimeline] = useState<CustomerCollectionTimelineData | null>(null);
+  const [isTimelineLoading, setIsTimelineLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Selected Target for Action Modals
-  const [selectedInvoice, setSelectedInvoice] = useState<SaleTransaction | null>(null);
-  const [selectedCustomer, setSelectedCustomer] = useState<SalesCustomer | null>(null);
+  const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   // Form State for Record Payment
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
@@ -193,19 +254,165 @@ export const CollectionsView: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Derived Collection Items from Sales Invoices
+  // -------------------------------------------------------------
+  // API Fetch Functions
+  // -------------------------------------------------------------
+  const loadMetrics = React.useCallback(async () => {
+    try {
+      setIsMetricsLoading(true);
+      const res = await collectionApi.getCollectionMetrics({
+        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+        referenceDate: todayStr,
+      });
+      if (res?.success && res.data) {
+        setDashboardMetrics(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to load collection metrics:', err);
+    } finally {
+      setIsMetricsLoading(false);
+    }
+  }, [selectedRepFilter, todayStr]);
+
+  const loadInvoices = React.useCallback(async () => {
+    try {
+      setIsInvoicesLoading(true);
+      const res = await collectionApi.getCollectionInvoices({
+        tab: activeTab,
+        search: appliedSearch || undefined,
+        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+        customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
+        dueDateFilter: dueDateFilter !== 'ALL' ? dueDateFilter : undefined,
+        status: statusFilter !== 'ALL' ? statusFilter : undefined,
+        paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+        page: currentPage,
+        limit: pageSize,
+      });
+      if (res?.success) {
+        setApiInvoices(Array.isArray(res.data) ? res.data : []);
+        if (res.tabCounts) {
+          setTabCounts(res.tabCounts);
+        }
+        if (res.pagination?.totalRecords !== undefined) {
+          setTotalInvoices(res.pagination.totalRecords);
+        } else {
+          setTotalInvoices(Array.isArray(res.data) ? res.data.length : 0);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load collection invoices:', err);
+      setApiInvoices([]);
+    } finally {
+      setIsInvoicesLoading(false);
+    }
+  }, [
+    activeTab,
+    appliedSearch,
+    selectedRepFilter,
+    selectedCustomerFilter,
+    dueDateFilter,
+    statusFilter,
+    paymentStatusFilter,
+    currentPage,
+    pageSize,
+  ]);
+
+  const loadAssignments = React.useCallback(async () => {
+    try {
+      setIsAssignmentsLoading(true);
+      const res = await collectionApi.getCustomerAssignments({
+        search: appliedSearch || undefined,
+        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+        status: statusFilter !== 'ALL' ? statusFilter : undefined,
+        page: currentPage,
+        limit: pageSize,
+      });
+      if (res?.success) {
+        setApiAssignments(Array.isArray(res.data) ? res.data : []);
+        setTotalAssignments(res.pagination?.totalRecords ?? (Array.isArray(res.data) ? res.data.length : 0));
+      }
+    } catch (err) {
+      console.error('Failed to load customer assignments:', err);
+      setApiAssignments([]);
+    } finally {
+      setIsAssignmentsLoading(false);
+    }
+  }, [appliedSearch, selectedRepFilter, statusFilter, currentPage, pageSize]);
+
+  const loadFollowUps = React.useCallback(async () => {
+    try {
+      setIsFollowUpsLoading(true);
+      const res = await collectionApi.getFollowUps({
+        search: appliedSearch || undefined,
+        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+        outcome: statusFilter !== 'ALL' ? statusFilter : undefined,
+        page: currentPage,
+        pageSize: pageSize,
+      });
+      if (res?.success) {
+        setApiFollowUps(Array.isArray(res.data) ? res.data : []);
+        setTotalFollowUps(res.pagination?.totalRecords ?? (Array.isArray(res.data) ? res.data.length : 0));
+      }
+    } catch (err) {
+      console.error('Failed to load follow-ups:', err);
+      setApiFollowUps([]);
+    } finally {
+      setIsFollowUpsLoading(false);
+    }
+  }, [appliedSearch, selectedRepFilter, statusFilter, currentPage, pageSize]);
+
+  const loadHistory = React.useCallback(async () => {
+    try {
+      setIsHistoryLoading(true);
+      const res = await collectionApi.getCollectionHistory({
+        search: appliedSearch || undefined,
+        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+        paymentMethod: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+        page: currentPage,
+        limit: pageSize,
+      });
+      if (res?.success) {
+        setApiHistory(Array.isArray(res.data) ? res.data : []);
+        setTotalHistory(res.pagination?.totalRecords ?? (Array.isArray(res.data) ? res.data.length : 0));
+      }
+    } catch (err) {
+      console.error('Failed to load collection history:', err);
+      setApiHistory([]);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }, [appliedSearch, selectedRepFilter, paymentStatusFilter, currentPage, pageSize]);
+
+  // Initial and reactive data fetching
+  useEffect(() => {
+    loadMetrics();
+  }, [loadMetrics]);
+
+  useEffect(() => {
+    if (subView === 'dashboard') {
+      loadInvoices();
+    } else if (subView === 'customer-assignments') {
+      loadAssignments();
+    } else if (subView === 'follow-ups') {
+      loadFollowUps();
+    } else if (subView === 'collection-history') {
+      loadHistory();
+    }
+  }, [subView, loadInvoices, loadAssignments, loadFollowUps, loadHistory]);
+
+  // Derived Collection Items from API Invoices
   interface CollectionItem {
     id: string;
-    invoice: SaleTransaction;
+    invoice: any;
     invoiceNumber: string;
     invoiceDate: string;
     dueDate: string;
-    customer: SalesCustomer | null;
+    customer: any | null;
     customerId: string;
     customerName: string;
     customerPhone: string;
     customerEmail: string;
-    salesRep: SalesRepresentative | null;
+    salesRep: any | null;
     salesRepName: string;
     invoiceTotal: number;
     paidAmount: number;
@@ -213,278 +420,154 @@ export const CollectionsView: React.FC = () => {
     status: 'Overdue' | 'Due Today' | 'Upcoming' | 'Promise to Pay' | 'Paid';
     paymentStatus: 'Unpaid' | 'Partial' | 'Paid';
     hasPendingPromise: boolean;
-    pendingPromise?: PromiseToPay;
+    pendingPromise?: any;
     lastPaymentDate?: string;
   }
 
   const collectionItems = useMemo<CollectionItem[]>(() => {
-    return sales.map((inv) => {
-      // Find customer
-      const cust = customers.find(
-        (c) => c.id === inv.customerId || c.name.toLowerCase() === inv.customerName?.toLowerCase()
-      ) || null;
+    if (apiInvoices.length > 0) {
+      return apiInvoices.map((inv) => {
+        const invoiceTotal = Number(inv.grandTotal || 0);
+        const paidAmount = Number(inv.paidAmount || 0);
+        const outstandingAmount =
+          inv.balance !== undefined ? Number(inv.balance) : Math.max(0, invoiceTotal - paidAmount);
 
-      // Find Sales Representative: check invoice first, then customer
-      const repId = inv.salesRepresentativeId || cust?.salesRepresentativeId;
-      const rep = salesRepresentatives.find((r) => r.id === repId) || null;
-
-      // Calculate Total, Paid, and Outstanding
-      const invoiceTotal = inv.grandTotal || 0;
-      const paidAmount = inv.paidAmount || 0;
-      // Outstanding = Invoice Total - Total Payments Applied
-      const outstandingAmount =
-        inv.balance !== undefined ? inv.balance : Math.max(0, invoiceTotal - paidAmount);
-
-      // Check Promise to Pay
-      const activePromise = promisesToPay.find(
-        (p) => (p.invoiceId === inv.id || p.customerId === inv.customerId) && p.status === 'Pending'
-      );
-
-      // Determine Status
-      let status: 'Overdue' | 'Due Today' | 'Upcoming' | 'Promise to Pay' | 'Paid' = 'Paid';
-      if (outstandingAmount > 0) {
-        if (activePromise) {
-          status = 'Promise to Pay';
-        } else if (inv.dueDate && inv.dueDate < todayStr) {
-          status = 'Overdue';
-        } else if (inv.dueDate && inv.dueDate === todayStr) {
-          status = 'Due Today';
-        } else {
-          status = 'Upcoming';
+        let status: 'Overdue' | 'Due Today' | 'Upcoming' | 'Promise to Pay' | 'Paid' = 'Paid';
+        if (outstandingAmount > 0) {
+          if (inv.promiseToPay && (inv.promiseToPay.status === 'Pending' || inv.promiseToPay.status === 'Active')) {
+            status = 'Promise to Pay';
+          } else if (inv.dueDate && inv.dueDate < todayStr) {
+            status = 'Overdue';
+          } else if (inv.dueDate && inv.dueDate === todayStr) {
+            status = 'Due Today';
+          } else {
+            status = 'Upcoming';
+          }
         }
-      }
 
-      // Payment Status
-      let pStatus: 'Unpaid' | 'Partial' | 'Paid' = 'Unpaid';
-      if (outstandingAmount <= 0) {
-        pStatus = 'Paid';
-      } else if (paidAmount > 0) {
-        pStatus = 'Partial';
-      } else {
-        pStatus = 'Unpaid';
-      }
-
-      // Find last payment date for this invoice or customer
-      const invoicePayments = paymentIns
-        .filter((p) => p.invoiceId === inv.id || p.customerId === inv.customerId)
-        .sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || ''));
-
-      return {
-        id: inv.id,
-        invoice: inv,
-        invoiceNumber: inv.invoiceNo,
-        invoiceDate: inv.saleDate,
-        dueDate: inv.dueDate || inv.saleDate,
-        customer: cust,
-        customerId: cust?.id || inv.customerId || '',
-        customerName: cust?.name || inv.customerName || 'Unknown Customer',
-        customerPhone: cust?.phone || inv.customerPhone || 'N/A',
-        customerEmail: cust?.email || '',
-        salesRep: rep,
-        salesRepName: rep?.name || inv.salesRepresentativeName || 'Unassigned',
-        invoiceTotal,
-        paidAmount,
-        outstandingAmount,
-        status,
-        paymentStatus: pStatus,
-        hasPendingPromise: !!activePromise,
-        pendingPromise: activePromise,
-        lastPaymentDate: invoicePayments[0]?.paymentDate,
-      };
-    });
-  }, [sales, customers, salesRepresentatives, promisesToPay, paymentIns, todayStr]);
-
-  // Dashboard Metrics
-  const dashboardMetrics = useMemo(() => {
-    return getCollectionDashboardMetrics(todayStr);
-  }, [getCollectionDashboardMetrics, todayStr]);
-
-  // Tab Counts
-  const tabCounts = useMemo(() => {
-    const allDues = collectionItems.filter((item) => item.outstandingAmount > 0).length;
-    const dueToday = collectionItems.filter(
-      (item) => item.outstandingAmount > 0 && item.dueDate === todayStr
-    ).length;
-    const overdue = collectionItems.filter(
-      (item) => item.outstandingAmount > 0 && item.dueDate < todayStr
-    ).length;
-    const promiseToPay = collectionItems.filter(
-      (item) => item.outstandingAmount > 0 && item.hasPendingPromise
-    ).length;
-    const collected = collectionItems.filter((item) => item.outstandingAmount <= 0).length;
-
-    return { allDues, dueToday, overdue, promiseToPay, collected };
-  }, [collectionItems, todayStr]);
-
-  // Filtered Collection Items
-  const filteredItems = useMemo(() => {
-    return collectionItems.filter((item) => {
-      // 1. Tab Filtering
-      if (activeTab === 'all') {
-        // Show all with open dues by default, or all items
-        // Most ERPs show all active receivables under All Dues
-        if (item.outstandingAmount <= 0 && activeTab === 'all' && !statusFilter.includes('Paid')) {
-          // keep them if user specifically searched, or show only outstanding
+        let pStatus: 'Unpaid' | 'Partial' | 'Paid' = 'Unpaid';
+        if (outstandingAmount <= 0) {
+          pStatus = 'Paid';
+        } else if (paidAmount > 0) {
+          pStatus = 'Partial';
         }
-      } else if (activeTab === 'due-today') {
-        if (!(item.outstandingAmount > 0 && item.dueDate === todayStr)) return false;
-      } else if (activeTab === 'overdue') {
-        if (!(item.outstandingAmount > 0 && item.dueDate < todayStr)) return false;
-      } else if (activeTab === 'promise-to-pay') {
-        if (!item.hasPendingPromise) return false;
-      } else if (activeTab === 'collected') {
-        if (item.outstandingAmount > 0) return false;
-      }
 
-      // 2. Search Filter (Customer name, Invoice No, Phone)
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase().trim();
-        const matchCust = item.customerName.toLowerCase().includes(q);
-        const matchInv = item.invoiceNumber.toLowerCase().includes(q);
-        const matchPhone = item.customerPhone.toLowerCase().includes(q);
-        const matchRep = item.salesRepName.toLowerCase().includes(q);
-        if (!matchCust && !matchInv && !matchPhone && !matchRep) return false;
-      }
+        const matchedCustomer = customers.find((c) => c.id === inv.customerId) || null;
+        const matchedSale = sales.find((s) => s.id === inv.id || s.invoiceNo === inv.invoiceNo);
+        const rep = liveReps.find((r) => r.id === inv.salesRepresentativeId) || null;
 
-      // 3. Sales Rep Filter
-      if (selectedRepFilter !== 'ALL') {
-        if (item.salesRep?.id !== selectedRepFilter) return false;
-      }
+        return {
+          id: inv.id,
+          invoice: matchedSale || ({
+            id: inv.id,
+            invoiceNo: inv.invoiceNo,
+            saleDate: inv.invoiceDate,
+            dueDate: inv.dueDate,
+            customerId: inv.customerId,
+            customerName: inv.customerName,
+            customerPhone: inv.customerPhone,
+            customerEmail: inv.customerEmail,
+            grandTotal: invoiceTotal,
+            paidAmount: paidAmount,
+            balance: outstandingAmount,
+            salesRepresentativeId: inv.salesRepresentativeId,
+            salesRepresentativeName: inv.salesRepresentativeName,
+            status: inv.paymentStatus,
+          } as any),
+          invoiceNumber: inv.invoiceNo,
+          invoiceDate: inv.invoiceDate,
+          dueDate: inv.dueDate || inv.invoiceDate,
+          customer: matchedCustomer || ({
+            id: inv.customerId,
+            name: inv.customerName,
+            phone: inv.customerPhone,
+            email: inv.customerEmail,
+            company: inv.customerCompany,
+            salesRepresentativeId: inv.salesRepresentativeId,
+          } as any),
+          customerId: inv.customerId,
+          customerName: inv.customerName,
+          customerPhone: inv.customerPhone || 'N/A',
+          customerEmail: inv.customerEmail || '',
+          salesRep: rep,
+          salesRepName: inv.salesRepresentativeName || rep?.name || 'Unassigned',
+          invoiceTotal,
+          paidAmount,
+          outstandingAmount,
+          status,
+          paymentStatus: pStatus,
+          hasPendingPromise: !!inv.promiseToPay,
+          pendingPromise: inv.promiseToPay as any,
+          lastPaymentDate: undefined,
+        };
+      });
+    }
 
-      // 4. Customer Filter
-      if (selectedCustomerFilter !== 'ALL') {
-        if (item.customerId !== selectedCustomerFilter) return false;
-      }
+    return [];
+  }, [apiInvoices, customers, sales, liveReps, todayStr]);
 
-      // 5. Due Date Filter
-      if (dueDateFilter === 'OVERDUE') {
-        if (!(item.outstandingAmount > 0 && item.dueDate < todayStr)) return false;
-      } else if (dueDateFilter === 'TODAY') {
-        if (item.dueDate !== todayStr) return false;
-      } else if (dueDateFilter === 'THIS_MONTH') {
-        const curMonth = todayStr.substring(0, 7);
-        if (!item.dueDate.startsWith(curMonth)) return false;
-      }
-
-      // 6. Status Filter
-      if (statusFilter !== 'ALL') {
-        if (item.status !== statusFilter) return false;
-      }
-
-      // 7. Payment Status Filter
-      if (paymentStatusFilter !== 'ALL') {
-        if (item.paymentStatus !== paymentStatusFilter) return false;
-      }
-
-      return true;
-    });
-  }, [
-    collectionItems,
-    activeTab,
-    searchTerm,
-    selectedRepFilter,
-    selectedCustomerFilter,
-    dueDateFilter,
-    statusFilter,
-    paymentStatusFilter,
-    todayStr,
-  ]);
-
-  // Pagination Slice
-  const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;
-  const paginatedItems = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredItems.slice(start, start + pageSize);
-  }, [filteredItems, currentPage, pageSize]);
+  // Invoices are filtered and paginated on server
+  const filteredItems = collectionItems;
+  const totalPages = Math.ceil(totalInvoices / pageSize) || 1;
+  const paginatedItems = collectionItems;
 
   // Sub-view 2: Customer Assignments Memo
   const customerAssignmentsList = useMemo(() => {
-    return customers.map((c) => {
-      const custSales = sales.filter((s) => s.customerId === c.id && s.saleStatus !== 'Cancelled');
-      const outstanding = custSales.reduce((acc, s) => {
-        const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
-        return acc + bal;
-      }, 0);
-      const rep = salesRepresentatives.find((r) => r.id === c.salesRepresentativeId);
-      return {
-        customer: c,
-        outstanding,
-        rep,
-        repName: rep?.name || 'Unassigned',
-        repType: c.salesRepresentativeType || 'Primary',
-        assignedDate: c.assignedDate || '—',
-        status: c.status || 'Active',
-      };
-    });
-  }, [customers, sales, salesRepresentatives]);
+    if (apiAssignments.length > 0) {
+      return apiAssignments.map((ca) => {
+        const rep = liveReps.find((r) => r.id === ca.salesRepresentative?.id);
+        const matchedCust = customers.find((c) => c.id === ca.id);
+        return {
+          customer: matchedCust || ({
+            id: ca.id,
+            name: ca.customerName,
+            customerCode: ca.customerCode,
+            company: ca.company,
+            phone: ca.phone,
+            salesRepresentativeId: ca.salesRepresentative?.id,
+            salesRepresentativeType: ca.salesRepresentative?.type,
+            assignedDate: ca.assignedDate,
+            status: ca.status,
+          } as any),
+          outstanding: Number(ca.totalOutstanding || 0),
+          rep,
+          repName: ca.salesRepresentative?.name || rep?.name || 'Unassigned',
+          repType: ca.salesRepresentative?.type || 'Primary',
+          assignedDate: ca.assignedDate || 'â€”',
+          status: ca.status || 'Active',
+        };
+      });
+    }
+    return [];
+  }, [apiAssignments, customers, liveReps]);
 
-  const filteredCustomerAssignments = useMemo(() => {
-    return customerAssignmentsList.filter((item) => {
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase().trim();
-        const matchName = item.customer.name.toLowerCase().includes(q);
-        const matchCode = (item.customer.customerCode || '').toLowerCase().includes(q);
-        const matchPhone = (item.customer.phone || '').toLowerCase().includes(q);
-        const matchRep = item.repName.toLowerCase().includes(q);
-        if (!matchName && !matchCode && !matchPhone && !matchRep) return false;
-      }
-      if (selectedRepFilter !== 'ALL' && item.rep?.id !== selectedRepFilter) return false;
-      if (statusFilter !== 'ALL' && item.status !== statusFilter) return false;
-      return true;
-    });
-  }, [customerAssignmentsList, searchTerm, selectedRepFilter, statusFilter]);
+  const filteredCustomerAssignments = customerAssignmentsList;
+  const paginatedCustomerAssignments = customerAssignmentsList;
 
-  const paginatedCustomerAssignments = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredCustomerAssignments.slice(start, start + pageSize);
-  }, [filteredCustomerAssignments, currentPage, pageSize]);
-
-  // Sub-view 4: Follow-ups Memo
+  // Sub-view 3: Follow-ups Memo
   const filteredFollowUps = useMemo(() => {
-    return collectionFollowUps.filter((fup) => {
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase().trim();
-        const matchCust = (fup.customerName || '').toLowerCase().includes(q);
-        const matchInv = (fup.invoiceNo || fup.invoiceNumber || '').toLowerCase().includes(q);
-        const matchNotes = (fup.notes || '').toLowerCase().includes(q);
-        const matchRep = (fup.salesRepresentativeName || '').toLowerCase().includes(q);
-        if (!matchCust && !matchInv && !matchNotes && !matchRep) return false;
-      }
-      if (selectedRepFilter !== 'ALL' && fup.salesRepresentativeId !== selectedRepFilter) return false;
-      if (statusFilter !== 'ALL' && fup.outcome !== statusFilter) return false;
-      return true;
-    });
-  }, [collectionFollowUps, searchTerm, selectedRepFilter, statusFilter]);
+    if (apiFollowUps.length > 0) {
+      return apiFollowUps;
+    }
+    return [];
+  }, [apiFollowUps]);
 
-  const paginatedFollowUps = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredFollowUps.slice(start, start + pageSize);
-  }, [filteredFollowUps, currentPage, pageSize]);
+  const paginatedFollowUps = filteredFollowUps;
 
-  // Sub-view 5: Collection History Memo
+  // Sub-view 4: Collection History Memo
   const filteredCollectionHistory = useMemo(() => {
-    return paymentIns.filter((p) => {
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase().trim();
-        const matchReceipt = (p.receiptNo || '').toLowerCase().includes(q);
-        const matchParty = (p.partyName || '').toLowerCase().includes(q);
-        const matchInv = (p.invoiceNo || '').toLowerCase().includes(q);
-        const matchRef = (p.referenceNo || '').toLowerCase().includes(q);
-        if (!matchReceipt && !matchParty && !matchInv && !matchRef) return false;
-      }
-      if (selectedRepFilter !== 'ALL' && p.salesRepresentativeId !== selectedRepFilter) return false;
-      return true;
-    });
-  }, [paymentIns, searchTerm, selectedRepFilter]);
+    if (apiHistory.length > 0) {
+      return apiHistory;
+    }
+    return [];
+  }, [apiHistory]);
 
-  const paginatedHistory = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredCollectionHistory.slice(start, start + pageSize);
-  }, [filteredCollectionHistory, currentPage, pageSize]);
+  const paginatedHistory = filteredCollectionHistory;
 
   // Reset all filters
   const handleResetFilters = () => {
     setSearchTerm('');
+    setAppliedSearch('');
     setSelectedRepFilter('ALL');
     setSelectedCustomerFilter('ALL');
     setDueDateFilter('ALL');
@@ -505,52 +588,74 @@ export const CollectionsView: React.FC = () => {
     setPaymentMethod('Bank Transfer');
     setPaymentReference('');
     setPaymentNotes(`Payment collected for Invoice ${item.invoiceNumber}`);
-    setPaymentRepId(item.salesRep?.id || '');
+    setPaymentRepId(item.salesRep?.id || item.salesRepName || '');
     setIsRecordPaymentModalOpen(true);
     setActiveActionId(null);
   };
 
   // Helper: Submit Record Payment
-  const handleSubmitRecordPayment = (e: React.FormEvent) => {
+  const handleSubmitRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInvoice) return;
 
     if (paymentAmount <= 0) {
-      toast.error('Please enter a valid payment amount greater than ₹0');
+      toast.error('Please enter a valid payment amount greater than �0');
       return;
     }
 
     const currentOutstanding =
       selectedInvoice.balance !== undefined
-        ? selectedInvoice.balance
-        : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0));
+        ? Number(selectedInvoice.balance)
+        : Math.max(0, Number(selectedInvoice.grandTotal || 0) - Number(selectedInvoice.paidAmount || 0));
 
     if (paymentAmount > currentOutstanding) {
       toast.error(
-        `Payment amount (₹${paymentAmount.toLocaleString()}) cannot exceed outstanding amount (₹${currentOutstanding.toLocaleString()})`
+        `Payment amount (�${paymentAmount.toLocaleString()}) cannot exceed outstanding amount (�${currentOutstanding.toLocaleString()})`
       );
       return;
     }
 
-    recordCollectionPayment({
-      invoiceId: selectedInvoice.id,
-      amount: Number(paymentAmount),
-      paymentDate: paymentDate || todayStr,
-      paymentMethod,
-      referenceNo: paymentReference || undefined,
-      notes: paymentNotes || undefined,
-      salesRepresentativeId: paymentRepId || undefined,
-    });
+    try {
+      setIsSubmitting(true);
+      await collectionApi.recordPayment({
+        invoiceId: selectedInvoice.id,
+        customerId: selectedInvoice.customerId || selectedCustomer?.id,
+        amount: Number(paymentAmount),
+        paymentDate: paymentDate || todayStr,
+        paymentMethod,
+        referenceNo: paymentReference || undefined,
+        notes: paymentNotes || undefined,
+        salesRepresentativeId: paymentRepId || undefined,
+      });
 
-    toast.success(
-      `Recorded payment of ₹${Number(paymentAmount).toLocaleString('en-IN', {
-        minimumFractionDigits: 2,
-      })} for Invoice ${selectedInvoice.invoiceNo}`
-    );
+      recordCollectionPayment({
+        invoiceId: selectedInvoice.id,
+        amount: Number(paymentAmount),
+        paymentDate: paymentDate || todayStr,
+        paymentMethod,
+        referenceNo: paymentReference || undefined,
+        notes: paymentNotes || undefined,
+        salesRepresentativeId: paymentRepId || undefined,
+      });
 
-    setIsRecordPaymentModalOpen(false);
-    setSelectedInvoice(null);
-    setSelectedCustomer(null);
+      toast.success(
+        `Recorded payment of �${Number(paymentAmount).toLocaleString('en-IN', {
+          minimumFractionDigits: 2,
+        })} for Invoice ${selectedInvoice.invoiceNo}`
+      );
+
+      setIsRecordPaymentModalOpen(false);
+      setSelectedInvoice(null);
+      setSelectedCustomer(null);
+      loadInvoices();
+      loadMetrics();
+      if (subView === 'collection-history') loadHistory();
+    } catch (err: any) {
+      console.error('Failed to record payment:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to record payment');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper: Open Follow-up Modal
@@ -572,7 +677,7 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Submit Follow-up
-  const handleSubmitFollowUp = (e: React.FormEvent) => {
+  const handleSubmitFollowUp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInvoice || !selectedCustomer) return;
 
@@ -583,58 +688,88 @@ export const CollectionsView: React.FC = () => {
 
     const savedOutcome = followUpHasPromise ? 'Promise to Pay' : followUpOutcome;
 
-    addCollectionFollowUp({
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      invoiceId: selectedInvoice.id,
-      invoiceNo: selectedInvoice.invoiceNo,
-      salesRepresentativeId: followUpRepId || selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
-      salesRepresentativeName:
-        salesRepresentatives.find((r) => r.id === followUpRepId)?.name || selectedInvoice.salesRepresentativeName || 'Sales Rep',
-      contactMethod: followUpContactMethod,
-      followUpDate,
-      followUpTime,
-      outcome: savedOutcome,
-      notes: followUpNotes.trim(),
-      hasPromiseToPay: followUpHasPromise,
-      promisedAmount: followUpHasPromise ? Number(followUpPromiseAmount) : undefined,
-      promiseDate: followUpHasPromise ? followUpPromiseDate : undefined,
-      nextFollowUpDate: nextFollowUpDate || (followUpHasPromise ? followUpPromiseDate : undefined),
-      createdBy: salesRepresentatives.find((r) => r.id === followUpRepId)?.name || 'Kumar',
-    });
+    try {
+      setIsSubmitting(true);
+      await collectionApi.createFollowUp({
+        customerId: selectedCustomer.id,
+        invoiceId: selectedInvoice.id,
+        salesRepresentativeId:
+          followUpRepId || selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
+        contactMethod: followUpContactMethod,
+        followUpDate,
+        followUpTime,
+        outcome: savedOutcome,
+        notes: followUpNotes.trim(),
+        hasPromiseToPay: followUpHasPromise,
+        promisedAmount: followUpHasPromise ? Number(followUpPromiseAmount) : undefined,
+        promiseDate: followUpHasPromise ? followUpPromiseDate : undefined,
+        nextFollowUpDate: nextFollowUpDate || (followUpHasPromise ? followUpPromiseDate : undefined),
+      });
 
-    if (followUpHasPromise && followUpPromiseAmount > 0 && followUpPromiseDate) {
-      savePromiseToPay({
+      addCollectionFollowUp({
         customerId: selectedCustomer.id,
         customerName: selectedCustomer.name,
         invoiceId: selectedInvoice.id,
         invoiceNo: selectedInvoice.invoiceNo,
-        salesRepresentativeId: followUpRepId || selectedInvoice.salesRepresentativeId,
-        salesRepresentativeName: salesRepresentatives.find((r) => r.id === followUpRepId)?.name,
-        promisedAmount: Number(followUpPromiseAmount),
-        promiseDate: followUpPromiseDate,
-        notes: `Promise to Pay recorded during follow-up: ${followUpNotes.trim()}`,
-        status: 'Pending',
+        salesRepresentativeId:
+          followUpRepId || selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
+        salesRepresentativeName:
+          liveReps.find((r) => r.id === followUpRepId)?.name ||
+          selectedInvoice.salesRepresentativeName ||
+          'Sales Rep',
+        contactMethod: followUpContactMethod,
+        followUpDate,
+        followUpTime,
+        outcome: savedOutcome,
+        notes: followUpNotes.trim(),
+        hasPromiseToPay: followUpHasPromise,
+        promisedAmount: followUpHasPromise ? Number(followUpPromiseAmount) : undefined,
+        promiseDate: followUpHasPromise ? followUpPromiseDate : undefined,
+        nextFollowUpDate: nextFollowUpDate || (followUpHasPromise ? followUpPromiseDate : undefined),
+        createdBy: liveReps.find((r) => r.id === followUpRepId)?.name || 'Rep',
       });
-    }
 
-    toast.success(`Follow-up saved for ${selectedCustomer.name}`);
-    setIsFollowUpModalOpen(false);
-    setSelectedInvoice(null);
-    setSelectedCustomer(null);
+      if (followUpHasPromise && followUpPromiseAmount > 0 && followUpPromiseDate) {
+        savePromiseToPay({
+          customerId: selectedCustomer.id,
+          customerName: selectedCustomer.name,
+          invoiceId: selectedInvoice.id,
+          invoiceNo: selectedInvoice.invoiceNo,
+          salesRepresentativeId: followUpRepId || selectedInvoice.salesRepresentativeId,
+          salesRepresentativeName: liveReps.find((r) => r.id === followUpRepId)?.name,
+          promisedAmount: Number(followUpPromiseAmount),
+          promiseDate: followUpPromiseDate,
+          notes: `Promise to Pay recorded during follow-up: ${followUpNotes.trim()}`,
+          status: 'Pending',
+        });
+      }
+
+      toast.success(`Follow-up saved for ${selectedCustomer.name}`);
+      setIsFollowUpModalOpen(false);
+      setSelectedInvoice(null);
+      setSelectedCustomer(null);
+      loadInvoices();
+      loadMetrics();
+      if (subView === 'follow-ups') loadFollowUps();
+    } catch (err: any) {
+      console.error('Failed to create follow-up:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to save follow-up');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper: Open Customer Sales Rep Assignment Modal
-  const handleOpenAssignCustomer = (cust?: SalesCustomer | null) => {
+  const handleOpenAssignCustomer = (cust?: any | null) => {
     if (cust) {
       setAssignCustomerId(cust.id);
-      setAssignRepId(cust.salesRepresentativeId || salesRepresentatives[0]?.id || '');
+      setAssignRepId(cust.salesRepresentativeId || liveReps[0]?.id || '');
       setAssignType(cust.salesRepresentativeType || 'Primary');
       setAssignEffectiveFrom(cust.assignedDate || todayStr);
       setAssignNotes(cust.assignmentNotes || '');
     } else {
       setAssignCustomerId(customers[0]?.id || '');
-      setAssignRepId(salesRepresentatives[0]?.id || '');
+      setAssignRepId(liveReps[0]?.id || '');
       setAssignType('Primary');
       setAssignEffectiveFrom(todayStr);
       setAssignNotes('');
@@ -642,7 +777,7 @@ export const CollectionsView: React.FC = () => {
     setIsAssignCustomerModalOpen(true);
   };
 
-  const handleSubmitAssignCustomer = (e: React.FormEvent) => {
+  const handleSubmitAssignCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignCustomerId) {
       toast.error('Please select a customer');
@@ -652,11 +787,30 @@ export const CollectionsView: React.FC = () => {
       toast.error('Please select a sales representative');
       return;
     }
-    assignCustomerSalesRep(assignCustomerId, assignRepId, assignType, assignEffectiveFrom, assignNotes);
-    const targetCust = customers.find((c) => c.id === assignCustomerId);
-    const targetRep = salesRepresentatives.find((r) => r.id === assignRepId);
-    toast.success(`Assigned ${targetRep?.name || 'Sales Rep'} to ${targetCust?.name || 'Customer'}`);
-    setIsAssignCustomerModalOpen(false);
+
+    try {
+      setIsSubmitting(true);
+      await collectionApi.assignCustomer({
+        customerId: assignCustomerId,
+        salesRepresentativeId: assignRepId,
+        assignmentType: assignType,
+        effectiveFrom: assignEffectiveFrom,
+        notes: assignNotes,
+      });
+
+      assignCustomerSalesRep(assignCustomerId, assignRepId, assignType, assignEffectiveFrom, assignNotes);
+      const targetCust = customers.find((c) => c.id === assignCustomerId);
+      const targetRep = liveReps.find((r) => r.id === assignRepId);
+      toast.success(`Assigned ${targetRep?.name || 'Sales Rep'} to ${targetCust?.name || 'Customer'}`);
+      setIsAssignCustomerModalOpen(false);
+      loadAssignments();
+      loadInvoices();
+    } catch (err: any) {
+      console.error('Failed to assign customer:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to assign sales rep');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper: Open Promise to Pay Modal
@@ -671,7 +825,7 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Submit Promise to Pay
-  const handleSubmitPromiseToPay = (e: React.FormEvent) => {
+  const handleSubmitPromiseToPay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInvoice || !selectedCustomer) return;
 
@@ -685,39 +839,75 @@ export const CollectionsView: React.FC = () => {
       return;
     }
 
-    savePromiseToPay({
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      invoiceId: selectedInvoice.id,
-      invoiceNo: selectedInvoice.invoiceNo,
-      salesRepresentativeId: selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
-      salesRepresentativeName:
-        salesRepresentatives.find(
-          (r) =>
-            r.id ===
-            (selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId)
-        )?.name || 'Admin',
-      promisedAmount: Number(promisedAmount),
-      promiseDate,
-      notes: promiseNotes.trim() || 'Customer promised payment',
-      status: 'Pending',
-    });
+    try {
+      setIsSubmitting(true);
+      await collectionApi.createPromiseToPay({
+        customerId: selectedCustomer.id,
+        invoiceId: selectedInvoice.id,
+        salesRepresentativeId: selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
+        promisedAmount: Number(promisedAmount),
+        promiseDate,
+        notes: promiseNotes.trim() || 'Customer promised payment',
+      });
 
-    toast.success(
-      `Promise to Pay recorded for ₹${Number(promisedAmount).toLocaleString()} on ${promiseDate}`
-    );
+      savePromiseToPay({
+        customerId: selectedCustomer.id,
+        customerName: selectedCustomer.name,
+        invoiceId: selectedInvoice.id,
+        invoiceNo: selectedInvoice.invoiceNo,
+        salesRepresentativeId: selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
+        salesRepresentativeName:
+          liveReps.find(
+            (r) =>
+              r.id ===
+              (selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId)
+          )?.name || 'Admin',
+        promisedAmount: Number(promisedAmount),
+        promiseDate,
+        notes: promiseNotes.trim() || 'Customer promised payment',
+        status: 'Pending',
+      });
 
-    setIsPromiseModalOpen(false);
-    setSelectedInvoice(null);
-    setSelectedCustomer(null);
+      toast.success(
+        `Promise to Pay recorded for �${Number(promisedAmount).toLocaleString()} on ${promiseDate}`
+      );
+
+      setIsPromiseModalOpen(false);
+      setSelectedInvoice(null);
+      setSelectedCustomer(null);
+      loadInvoices();
+      loadMetrics();
+    } catch (err: any) {
+      console.error('Failed to save promise to pay:', err);
+      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to save promise');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Helper: Open Customer Detail & Timeline Modal
-  const handleOpenTimeline = (item: CollectionItem) => {
+  const handleOpenTimeline = async (item: CollectionItem) => {
     setSelectedInvoice(item.invoice);
     setSelectedCustomer(item.customer);
     setIsTimelineModalOpen(true);
     setActiveActionId(null);
+
+    if (item.customerId) {
+      try {
+        setIsTimelineLoading(true);
+        const res = await collectionApi.getCustomerTimeline(item.customerId);
+        if (res?.success && res.data) {
+          setCustomerTimeline(res.data);
+        } else {
+          setCustomerTimeline(null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch customer timeline:', err);
+        setCustomerTimeline(null);
+      } finally {
+        setIsTimelineLoading(false);
+      }
+    }
   };
 
   // Helper: Open Contact Customer
@@ -864,7 +1054,11 @@ export const CollectionsView: React.FC = () => {
           </div>
           <div className="mt-2">
             <span className="text-2xl font-bold text-slate-900 dark:text-white">
-              ₹{(dashboardMetrics?.totalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              {isMetricsLoading ? (
+                <span className="inline-block w-24 h-7 bg-slate-100 dark:bg-slate-700 animate-pulse rounded-md" />
+              ) : (
+                `�${Number(dashboardMetrics?.totalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+              )}
             </span>
             <p className="text-[11px] text-slate-500 mt-0.5">
               Across all open receivables
@@ -885,10 +1079,23 @@ export const CollectionsView: React.FC = () => {
           </div>
           <div className="mt-2">
             <span className="text-2xl font-bold text-rose-600">
-              ₹{(dashboardMetrics?.overdueAmount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              {isMetricsLoading ? (
+                <span className="inline-block w-24 h-7 bg-rose-100/50 animate-pulse rounded-md" />
+              ) : (
+                `�${Number(
+                  (typeof dashboardMetrics?.overdue === 'object'
+                    ? dashboardMetrics?.overdue?.amount
+                    : dashboardMetrics?.overdueAmount) ?? 0
+                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+              )}
             </span>
             <p className="text-[11px] text-rose-600/80 mt-0.5 font-medium">
-              Due Date &lt; Today
+              {Number(
+                (typeof dashboardMetrics?.overdue === 'object'
+                  ? dashboardMetrics?.overdue?.count
+                  : dashboardMetrics?.overdueCount) ?? tabCounts.overdue ?? 0
+              )}{' '}
+              invoices past due date
             </p>
           </div>
         </div>
@@ -906,10 +1113,23 @@ export const CollectionsView: React.FC = () => {
           </div>
           <div className="mt-2">
             <span className="text-2xl font-bold text-amber-800">
-              ₹{(dashboardMetrics?.dueTodayAmount ?? dashboardMetrics?.dueToday ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              {isMetricsLoading ? (
+                <span className="inline-block w-24 h-7 bg-amber-100/50 animate-pulse rounded-md" />
+              ) : (
+                `�${Number(
+                  (typeof dashboardMetrics?.dueToday === 'object'
+                    ? dashboardMetrics?.dueToday?.amount
+                    : dashboardMetrics?.dueTodayAmount) ?? 0
+                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+              )}
             </span>
             <p className="text-[11px] text-amber-700/80 mt-0.5 font-medium">
-              Maturing today ({todayStr})
+              {Number(
+                (typeof dashboardMetrics?.dueToday === 'object'
+                  ? dashboardMetrics?.dueToday?.count
+                  : dashboardMetrics?.dueTodayCount) ?? tabCounts.dueToday ?? 0
+              )}{' '}
+              invoices maturing today
             </p>
           </div>
         </div>
@@ -927,7 +1147,15 @@ export const CollectionsView: React.FC = () => {
           </div>
           <div className="mt-2">
             <span className="text-2xl font-bold text-indigo-800">
-              {dashboardMetrics?.followUpsTodayCount || tabCounts.dueToday || 18}
+              {isMetricsLoading ? (
+                <span className="inline-block w-12 h-7 bg-indigo-100/50 animate-pulse rounded-md" />
+              ) : (
+                Number(
+                  (typeof dashboardMetrics?.followUpsToday === 'object'
+                    ? dashboardMetrics?.followUpsToday?.count
+                    : dashboardMetrics?.followUpsTodayCount) ?? 0
+                )
+              )}
             </span>
             <p className="text-[11px] text-indigo-700/80 mt-0.5 font-medium">
               Scheduled customer interactions
@@ -948,10 +1176,23 @@ export const CollectionsView: React.FC = () => {
           </div>
           <div className="mt-2">
             <span className="text-2xl font-bold text-emerald-700">
-              ₹{(dashboardMetrics?.collectedThisMonth ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              {isMetricsLoading ? (
+                <span className="inline-block w-24 h-7 bg-emerald-100/50 animate-pulse rounded-md" />
+              ) : (
+                `�${Number(
+                  (typeof dashboardMetrics?.collectedThisMonth === 'object'
+                    ? dashboardMetrics?.collectedThisMonth?.amount
+                    : dashboardMetrics?.collectedThisMonthAmount) ?? 0
+                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+              )}
             </span>
             <p className="text-[11px] text-emerald-600/80 mt-0.5 font-medium">
-              Total payment collections
+              {Number(
+                (typeof dashboardMetrics?.collectedThisMonth === 'object'
+                  ? dashboardMetrics?.collectedThisMonth?.count
+                  : dashboardMetrics?.collectedThisMonthCount) ?? tabCounts.collected ?? 0
+              )}{' '}
+              payments collected
             </p>
           </div>
         </div>
@@ -1086,7 +1327,7 @@ export const CollectionsView: React.FC = () => {
               className="w-full h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-slate-200 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
               <option value="ALL">All Representatives</option>
-              {salesRepresentatives.map((rep) => (
+              {liveReps.map((rep) => (
                 <option key={rep.id} value={rep.id}>
                   {rep.name}
                 </option>
@@ -1177,7 +1418,14 @@ export const CollectionsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {paginatedItems.length === 0 ? (
+              {isInvoicesLoading ? (
+                <tr>
+                  <td colSpan={10} className="py-12 text-center text-slate-500">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
+                    <p className="text-sm font-medium">Loading collection invoices...</p>
+                  </td>
+                </tr>
+              ) : paginatedItems.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-12 text-center text-slate-400">
                     <IndianRupee className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
@@ -1249,12 +1497,12 @@ export const CollectionsView: React.FC = () => {
 
                     {/* Invoice Amount */}
                     <td className="py-3 px-3 text-right font-medium text-slate-800 dark:text-slate-200">
-                      ₹{item.invoiceTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      �{item.invoiceTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
 
                     {/* Paid Amount */}
                     <td className="py-3 px-3 text-right text-emerald-600 font-medium">
-                      ₹{item.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      �{item.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
 
                     {/* Outstanding Amount (Calculated: Total - Paid) */}
@@ -1264,7 +1512,7 @@ export const CollectionsView: React.FC = () => {
                           item.outstandingAmount > 0 ? 'text-rose-600' : 'text-slate-400'
                         }`}
                       >
-                        ₹{item.outstandingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        �{item.outstandingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </span>
                     </td>
 
@@ -1436,7 +1684,7 @@ export const CollectionsView: React.FC = () => {
         </div>
 
         {/* Pagination */}
-        {filteredItems.length > 0 && (
+        {(totalInvoices > 0 || filteredItems.length > 0) && (
           <div className="p-3 border-t border-slate-100 dark:border-slate-700">
             <Pagination
               currentPage={currentPage}
@@ -1446,7 +1694,7 @@ export const CollectionsView: React.FC = () => {
                 setPageSize(newSize);
                 setCurrentPage(1);
               }}
-              totalItems={filteredItems.length}
+              totalItems={totalInvoices || filteredItems.length}
             />
           </div>
         )}
@@ -1481,7 +1729,7 @@ export const CollectionsView: React.FC = () => {
                 className="h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-slate-800 font-medium"
               >
                 <option value="ALL">All Representatives</option>
-                {salesRepresentatives.map((rep) => (
+                {liveReps.map((rep) => (
                   <option key={rep.id} value={rep.id}>
                     {rep.name}
                   </option>
@@ -1526,7 +1774,14 @@ export const CollectionsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                  {paginatedCustomerAssignments.length === 0 ? (
+                  {isAssignmentsLoading ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                        <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
+                        <p className="text-sm font-medium">Loading customer assignments...</p>
+                      </td>
+                    </tr>
+                  ) : paginatedCustomerAssignments.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="py-12 text-center text-slate-400">
                         <UsersRound className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
@@ -1544,11 +1799,11 @@ export const CollectionsView: React.FC = () => {
                           <div className="text-[10px] text-slate-400 font-mono">{item.customer.phone}</div>
                         </td>
                         <td className="py-3 px-3 font-mono font-semibold text-purple-700">
-                          {item.customer.customerCode || '—'}
+                          {item.customer.customerCode || 'â€”'}
                         </td>
                         <td className="py-3 px-3 text-right">
                           <span className={`font-bold text-sm ${item.outstanding > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                            ₹{item.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            �{item.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </span>
                         </td>
                         <td className="py-3 px-3">
@@ -1605,7 +1860,7 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {filteredCustomerAssignments.length > 0 && (
+            {(totalAssignments > 0 || filteredCustomerAssignments.length > 0) && (
               <div className="p-3 border-t border-slate-100">
                 <Pagination
                   currentPage={currentPage}
@@ -1615,7 +1870,7 @@ export const CollectionsView: React.FC = () => {
                     setPageSize(newSize);
                     setCurrentPage(1);
                   }}
-                  totalItems={filteredCustomerAssignments.length}
+                  totalItems={totalAssignments || filteredCustomerAssignments.length}
                 />
               </div>
             )}
@@ -1650,7 +1905,7 @@ export const CollectionsView: React.FC = () => {
                 className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
               >
                 <option value="ALL">All Representatives</option>
-                {salesRepresentatives.map((rep) => (
+                {liveReps.map((rep) => (
                   <option key={rep.id} value={rep.id}>
                     {rep.name}
                   </option>
@@ -1701,7 +1956,14 @@ export const CollectionsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                  {paginatedFollowUps.length === 0 ? (
+                  {isFollowUpsLoading ? (
+                    <tr>
+                      <td colSpan={9} className="py-12 text-center text-slate-500">
+                        <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
+                        <p className="text-sm font-medium">Loading follow-up records...</p>
+                      </td>
+                    </tr>
+                  ) : paginatedFollowUps.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="py-12 text-center text-slate-400">
                         <CalendarClock className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
@@ -1716,7 +1978,7 @@ export const CollectionsView: React.FC = () => {
                         <tr key={fup.id} className="hover:bg-slate-50/80 transition-colors">
                           <td className="py-3 px-3.5 font-medium whitespace-nowrap">
                             <div className="font-bold text-slate-900">{fup.followUpDate}</div>
-                            <div className="text-[10px] text-slate-400 font-mono">{fup.followUpTime || '—'}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{fup.followUpTime || 'â€”'}</div>
                           </td>
                           <td className="py-3 px-3 font-medium">
                             <div className="font-bold text-slate-900">{fup.customerName || cust?.name || 'Customer'}</div>
@@ -1755,15 +2017,15 @@ export const CollectionsView: React.FC = () => {
                           <td className="py-3 px-3">
                             {fup.hasPromiseToPay || fup.promisedAmount ? (
                               <div className="text-[11px]">
-                                <span className="font-bold text-indigo-700">₹{Number(fup.promisedAmount || 0).toLocaleString()}</span>
-                                <span className="text-[10px] text-slate-400 block font-mono">Date: {fup.promiseDate || '—'}</span>
+                                <span className="font-bold text-indigo-700">�{Number(fup.promisedAmount || 0).toLocaleString()}</span>
+                                <span className="text-[10px] text-slate-400 block font-mono">Date: {fup.promiseDate || 'â€”'}</span>
                               </div>
                             ) : (
-                              <span className="text-slate-400">—</span>
+                              <span className="text-slate-400">â€”</span>
                             )}
                           </td>
                           <td className="py-3 px-3 font-semibold text-purple-700 font-mono text-[11px]">
-                            {fup.nextFollowUpDate || '—'}
+                            {fup.nextFollowUpDate || 'â€”'}
                           </td>
                           <td className="py-3 px-3.5 text-center">
                             <button
@@ -1798,7 +2060,7 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {filteredFollowUps.length > 0 && (
+            {(totalFollowUps > 0 || filteredFollowUps.length > 0) && (
               <div className="p-3 border-t border-slate-100">
                 <Pagination
                   currentPage={currentPage}
@@ -1808,7 +2070,7 @@ export const CollectionsView: React.FC = () => {
                     setPageSize(newSize);
                     setCurrentPage(1);
                   }}
-                  totalItems={filteredFollowUps.length}
+                  totalItems={totalFollowUps || filteredFollowUps.length}
                 />
               </div>
             )}
@@ -1843,7 +2105,7 @@ export const CollectionsView: React.FC = () => {
                 className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
               >
                 <option value="ALL">All Representatives</option>
-                {salesRepresentatives.map((rep) => (
+                {liveReps.map((rep) => (
                   <option key={rep.id} value={rep.id}>
                     {rep.name}
                   </option>
@@ -1878,7 +2140,14 @@ export const CollectionsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                  {paginatedHistory.length === 0 ? (
+                  {isHistoryLoading ? (
+                    <tr>
+                      <td colSpan={9} className="py-12 text-center text-slate-500">
+                        <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
+                        <p className="text-sm font-medium">Loading collection settlement records...</p>
+                      </td>
+                    </tr>
+                  ) : paginatedHistory.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="py-12 text-center text-slate-400">
                         <History className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
@@ -1909,10 +2178,10 @@ export const CollectionsView: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-slate-500 font-mono text-[11px]">
-                          {p.referenceNo || '—'}
+                          {p.referenceNo || 'â€”'}
                         </td>
                         <td className="py-3 px-3 text-right font-bold text-emerald-700 text-sm">
-                          ₹{Number(p.receivedAmount || p.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          �{Number(p.receivedAmount || p.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1925,7 +2194,7 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {filteredCollectionHistory.length > 0 && (
+            {(totalHistory > 0 || filteredCollectionHistory.length > 0) && (
               <div className="p-3 border-t border-slate-100">
                 <Pagination
                   currentPage={currentPage}
@@ -1935,7 +2204,7 @@ export const CollectionsView: React.FC = () => {
                     setPageSize(newSize);
                     setCurrentPage(1);
                   }}
-                  totalItems={filteredCollectionHistory.length}
+                  totalItems={totalHistory || filteredCollectionHistory.length}
                 />
               </div>
             )}
@@ -1966,7 +2235,7 @@ export const CollectionsView: React.FC = () => {
                   Customer: <span className="font-bold">{selectedCustomer?.name || selectedInvoice.customerName}</span>
                 </p>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  Invoice No: {selectedInvoice.invoiceNo} • Due: {selectedInvoice.dueDate || 'N/A'}
+                  Invoice No: {selectedInvoice.invoiceNo} - Due: {selectedInvoice.dueDate || 'N/A'}
                 </p>
               </div>
               <div className="text-right">
@@ -1974,7 +2243,7 @@ export const CollectionsView: React.FC = () => {
                   Current Outstanding
                 </span>
                 <span className="text-lg font-bold text-rose-600">
-                  ₹{(selectedInvoice.balance !== undefined
+                  �{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -1982,100 +2251,112 @@ export const CollectionsView: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               {/* Payment Amount */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Payment Amount (₹) <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-bold text-sm text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                  required
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Payment Amount (₹) <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                    className="w-full h-full px-4 bg-transparent font-bold text-sm text-slate-900 outline-none"
+                    required
+                  />
+                </div>
               </div>
 
               {/* Payment Date */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Payment Date <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="date"
-                  value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                  required
-                />
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Payment Date <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                    required
+                  />
+                </div>
               </div>
 
               {/* Payment Method */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Payment Method
-                </label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                >
-                  <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
-                  <option value="Cash">Cash</option>
-                  <option value="UPI">UPI / QR</option>
-                  <option value="Cheque">Cheque</option>
-                  <option value="Credit Card">Credit Card / POS</option>
-                </select>
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Payment Method
+                  </span>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                  >
+                    <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI / QR</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Credit Card">Credit Card / POS</option>
+                  </select>
+                </div>
               </div>
 
               {/* Sales Representative */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Collecting Sales Representative
-                </label>
-                <select
-                  value={paymentRepId}
-                  onChange={(e) => setPaymentRepId(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                >
-                  <option value="">Select Representative (Optional)</option>
-                  {salesRepresentatives.map((rep) => (
-                    <option key={rep.id} value={rep.id}>
-                      {rep.name} ({rep.mobile})
-                    </option>
-                  ))}
-                </select>
+              <div className="relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Collecting Sales Representative
+                  </span>
+                  <select
+                    value={paymentRepId}
+                    onChange={(e) => setPaymentRepId(e.target.value)}
+                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                  >
+                    <option value="">Select Representative (Optional)</option>
+                    {liveReps.map((rep) => (
+                      <option key={rep.id} value={rep.id}>
+                        {rep.name} ({rep.mobile})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Reference / Transaction No */}
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Transaction / Cheque / UTR Reference
-                </label>
-                <input
-                  type="text"
-                  value={paymentReference}
-                  onChange={(e) => setPaymentReference(e.target.value)}
-                  placeholder="e.g. UTR12345678 or Cheque #88992"
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-mono text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                />
+              <div className="sm:col-span-2 relative">
+                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Transaction / Cheque / UTR Reference
+                  </span>
+                  <input
+                    type="text"
+                    value={paymentReference}
+                    onChange={(e) => setPaymentReference(e.target.value)}
+                    placeholder="e.g. UTR12345678 or Cheque #88992"
+                    className="w-full h-full px-4 bg-transparent text-xs font-mono text-slate-900 outline-none"
+                  />
+                </div>
               </div>
 
               {/* Notes */}
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Notes / Remarks
-                </label>
-                <textarea
-                  rows={2}
-                  value={paymentNotes}
-                  onChange={(e) => setPaymentNotes(e.target.value)}
-                  placeholder="Additional payment notes..."
-                  className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                />
+              <div className="sm:col-span-2 relative">
+                <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Notes / Remarks
+                  </span>
+                  <textarea
+                    rows={2}
+                    value={paymentNotes}
+                    onChange={(e) => setPaymentNotes(e.target.value)}
+                    placeholder="Additional payment notes..."
+                    className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
+                  />
+                </div>
               </div>
             </div>
 
@@ -2090,10 +2371,11 @@ export const CollectionsView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
+                disabled={isSubmitting}
+                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>Confirm Payment Receipt</span>
+                {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                <span>{isSubmitting ? 'Recording...' : 'Confirm Payment Receipt'}</span>
               </button>
             </div>
           </form>
@@ -2108,7 +2390,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isFollowUpModalOpen}
           onClose={() => setIsFollowUpModalOpen(false)}
           title={`Follow-up: ${selectedCustomer.name}`}
-          subtitle={`Invoice ${selectedInvoice.invoiceNo} • Log customer interaction and commitments`}
+          subtitle={`Invoice ${selectedInvoice.invoiceNo} - Log customer interaction and commitments`}
           maxWidth="lg"
           headerGradient={true}
           showBackIcon={true}
@@ -2127,7 +2409,7 @@ export const CollectionsView: React.FC = () => {
               <div className="text-right">
                 <span className="text-[10px] text-slate-500 uppercase font-semibold block">Outstanding Amount</span>
                 <span className="text-base font-bold text-rose-600">
-                  ₹{(selectedInvoice.balance !== undefined
+                  �{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -2137,155 +2419,173 @@ export const CollectionsView: React.FC = () => {
             </div>
 
             <form noValidate onSubmit={handleSubmitFollowUp} className="space-y-3.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                 {/* Contact Method */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Contact Method <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    value={followUpContactMethod}
-                    onChange={(e) => setFollowUpContactMethod(e.target.value as ContactMethod)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                    required
-                  >
-                    <option value="Phone">Phone</option>
-                    <option value="WhatsApp">WhatsApp</option>
-                    <option value="Email">Email</option>
-                    <option value="In-Person Visit">In-Person Visit</option>
-                  </select>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Contact Method <span className="text-rose-500">*</span>
+                    </span>
+                    <select
+                      value={followUpContactMethod}
+                      onChange={(e) => setFollowUpContactMethod(e.target.value as ContactMethod)}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                      required
+                    >
+                      <option value="Phone">Phone</option>
+                      <option value="WhatsApp">WhatsApp</option>
+                      <option value="Email">Email</option>
+                      <option value="In-Person Visit">In-Person Visit</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Contact Status */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Contact Status <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    value={followUpOutcome}
-                    onChange={(e) => {
-                      const val = e.target.value as FollowUpOutcome;
-                      setFollowUpOutcome(val);
-                      if (val === 'Promise to Pay') {
-                        setFollowUpHasPromise(true);
-                      }
-                    }}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                    required
-                  >
-                    <option value="Customer Contacted">Customer Contacted</option>
-                    <option value="Promise to Pay">Promise to Pay</option>
-                    <option value="Payment Received">Payment Received</option>
-                    <option value="No Response">No Response</option>
-                    <option value="Dispute Raised">Dispute Raised</option>
-                    <option value="Follow-up Required">Follow-up Required</option>
-                  </select>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Contact Status <span className="text-rose-500">*</span>
+                    </span>
+                    <select
+                      value={followUpOutcome}
+                      onChange={(e) => {
+                        const val = e.target.value as FollowUpOutcome;
+                        setFollowUpOutcome(val);
+                        if (val === 'Promise to Pay') {
+                          setFollowUpHasPromise(true);
+                        }
+                      }}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                      required
+                    >
+                      <option value="Customer Contacted">Customer Contacted</option>
+                      <option value="Promise to Pay">Promise to Pay</option>
+                      <option value="Payment Received">Payment Received</option>
+                      <option value="No Response">No Response</option>
+                      <option value="Dispute Raised">Dispute Raised</option>
+                      <option value="Follow-up Required">Follow-up Required</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Sales Representative */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Sales Representative
-                  </label>
-                  <select
-                    value={followUpRepId}
-                    onChange={(e) => setFollowUpRepId(e.target.value)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                  >
-                    <option value="">Select Representative</option>
-                    {salesRepresentatives.map((rep) => (
-                      <option key={rep.id} value={rep.id}>
-                        {rep.name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Sales Representative
+                    </span>
+                    <select
+                      value={followUpRepId}
+                      onChange={(e) => setFollowUpRepId(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                    >
+                      <option value="">Select Representative</option>
+                      {liveReps.map((rep) => (
+                        <option key={rep.id} value={rep.id}>
+                          {rep.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 {/* Follow-up Date */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Follow-up Date <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={followUpDate}
-                    onChange={(e) => setFollowUpDate(e.target.value)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                    required
-                  />
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Follow-up Date <span className="text-rose-500">*</span>
+                    </span>
+                    <input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                      required
+                    />
+                  </div>
                 </div>
 
                 {/* Discussion */}
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Discussion <span className="text-rose-500">*</span>
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={followUpNotes}
-                    onChange={(e) => setFollowUpNotes(e.target.value)}
-                    placeholder="Customer confirmed payment on 10 Oct..."
-                    className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                    required
-                  />
+                <div className="sm:col-span-2 relative">
+                  <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Discussion <span className="text-rose-500">*</span>
+                    </span>
+                    <textarea
+                      rows={2}
+                      value={followUpNotes}
+                      onChange={(e) => setFollowUpNotes(e.target.value)}
+                      placeholder="Customer confirmed payment on 10 Oct..."
+                      className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
+                      required
+                    />
+                  </div>
                 </div>
 
                 {/* Promise to Pay Toggle */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Promise to Pay
-                  </label>
-                  <select
-                    value={followUpHasPromise ? 'Yes' : 'No'}
-                    onChange={(e) => setFollowUpHasPromise(e.target.value === 'Yes')}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                  >
-                    <option value="No">No</option>
-                    <option value="Yes">Yes</option>
-                  </select>
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Promise to Pay
+                    </span>
+                    <select
+                      value={followUpHasPromise ? 'Yes' : 'No'}
+                      onChange={(e) => setFollowUpHasPromise(e.target.value === 'Yes')}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                    >
+                      <option value="No">No</option>
+                      <option value="Yes">Yes</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Next Follow-up */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Next Follow-up
-                  </label>
-                  <input
-                    type="date"
-                    value={nextFollowUpDate}
-                    onChange={(e) => setNextFollowUpDate(e.target.value)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                  />
+                <div className="relative">
+                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                      Next Follow-up
+                    </span>
+                    <input
+                      type="date"
+                      value={nextFollowUpDate}
+                      onChange={(e) => setNextFollowUpDate(e.target.value)}
+                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                    />
+                  </div>
                 </div>
 
                 {/* Conditional Promise Fields */}
                 {followUpHasPromise && (
                   <>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Promise Date <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={followUpPromiseDate}
-                        onChange={(e) => setFollowUpPromiseDate(e.target.value)}
-                        className="w-full h-9 px-3 rounded-xl border border-indigo-200 bg-indigo-50/30 text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
-                        required={followUpHasPromise}
-                      />
+                    <div className="relative">
+                      <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          Promise Date <span className="text-rose-500">*</span>
+                        </span>
+                        <input
+                          type="date"
+                          value={followUpPromiseDate}
+                          onChange={(e) => setFollowUpPromiseDate(e.target.value)}
+                          className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                          required={followUpHasPromise}
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Expected Amount (₹) <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="1"
-                        value={followUpPromiseAmount}
-                        onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
-                        className="w-full h-9 px-3 rounded-xl border border-indigo-200 bg-indigo-50/30 text-xs font-bold text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
-                        required={followUpHasPromise}
-                      />
+                    <div className="relative">
+                      <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                          Expected Amount (₹) <span className="text-rose-500">*</span>
+                        </span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          value={followUpPromiseAmount}
+                          onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
+                          className="w-full h-full px-4 bg-transparent text-xs font-bold text-slate-900 outline-none"
+                          required={followUpHasPromise}
+                        />
+                      </div>
                     </div>
                   </>
                 )}
@@ -2302,10 +2602,11 @@ export const CollectionsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
+                  disabled={isSubmitting}
+                  className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Save Follow-up</span>
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  <span>{isSubmitting ? 'Saving...' : 'Save Follow-up'}</span>
                 </button>
               </div>
             </form>
@@ -2316,25 +2617,35 @@ export const CollectionsView: React.FC = () => {
                 Interaction History & Timeline
               </h5>
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                {collectionFollowUps
-                  .filter((f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id)
-                  .map((item) => (
+                {(() => {
+                  const items = apiFollowUps.length > 0
+                    ? apiFollowUps.filter((f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id)
+                    : collectionFollowUps.filter((f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id);
+                  if (items.length === 0) {
+                    return (
+                      <p className="text-[11px] text-slate-400 italic py-2 text-center">
+                        No prior follow-ups recorded
+                      </p>
+                    );
+                  }
+                  return items.map((item) => (
                     <div key={item.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] flex items-start justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-900">{item.followUpDate}</span>
-                          <span className="text-purple-700 font-semibold">• {item.outcome}</span>
+                          <span className="text-purple-700 font-semibold">- {item.outcome}</span>
                         </div>
                         <p className="text-slate-600 mt-0.5 italic">"{item.notes}"</p>
                         <p className="text-[10px] text-slate-400 mt-1">by {item.salesRepresentativeName || 'Sales Rep'}</p>
                       </div>
-                      {item.hasPromiseToPay && item.promisedAmount && (
+                      {Boolean(item.hasPromiseToPay || item.promisedAmount) && (
                         <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-bold text-[10px] shrink-0">
-                          Promise: ₹{item.promisedAmount.toLocaleString()}
+                          Promise: �{Number(item.promisedAmount || 0).toLocaleString()}
                         </span>
                       )}
                     </div>
-                  ))}
+                  ));
+                })()}
               </div>
             </div>
           </div>
@@ -2349,7 +2660,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isPromiseModalOpen}
           onClose={() => setIsPromiseModalOpen(false)}
           title={`Record Promise to Pay: ${selectedCustomer.name}`}
-          subtitle={`Invoice ${selectedInvoice.invoiceNo} • Outstanding: ₹${(
+          subtitle={`Invoice ${selectedInvoice.invoiceNo} - Outstanding: �${(
             selectedInvoice.balance !== undefined
               ? selectedInvoice.balance
               : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
@@ -2360,46 +2671,52 @@ export const CollectionsView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsPromiseModalOpen(false)}
         >
-          <form noValidate onSubmit={handleSubmitPromiseToPay} className="space-y-4 p-2 text-xs">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Promised Amount (₹) <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="1"
-                value={promisedAmount}
-                onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-bold text-sm text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                required
-              />
+          <form noValidate onSubmit={handleSubmitPromiseToPay} className="space-y-4 p-2 text-xs pt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Promised Amount (₹) <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="1"
+                  value={promisedAmount}
+                  onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
+                  className="w-full h-full px-4 bg-transparent font-bold text-sm text-slate-900 outline-none"
+                  required
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Promised Payment Date <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={promiseDate}
-                onChange={(e) => setPromiseDate(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                required
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Promised Payment Date <span className="text-rose-500">*</span>
+                </span>
+                <input
+                  type="date"
+                  value={promiseDate}
+                  onChange={(e) => setPromiseDate(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                  required
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Notes / Commitment Details
-              </label>
-              <textarea
-                rows={2}
-                value={promiseNotes}
-                onChange={(e) => setPromiseNotes(e.target.value)}
-                placeholder="e.g. Customer confirmed bank transfer by end of day"
-                className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Notes / Commitment Details
+                </span>
+                <textarea
+                  rows={2}
+                  value={promiseNotes}
+                  onChange={(e) => setPromiseNotes(e.target.value)}
+                  placeholder="e.g. Customer confirmed bank transfer by end of day"
+                  className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
+                />
+              </div>
             </div>
 
             <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
@@ -2412,10 +2729,11 @@ export const CollectionsView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
+                disabled={isSubmitting}
+                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 cursor-pointer"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>Save Promise</span>
+                {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                <span>{isSubmitting ? 'Saving...' : 'Save Promise'}</span>
               </button>
             </div>
           </form>
@@ -2430,7 +2748,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isTimelineModalOpen}
           onClose={() => setIsTimelineModalOpen(false)}
           title={`Collection Detail: ${selectedCustomer.name}`}
-          subtitle={`Phone: ${selectedCustomer.phone} • Ledger & Receivable Status`}
+          subtitle={`Phone: ${selectedCustomer.phone} - Ledger & Receivable Status`}
           maxWidth="3xl"
           headerGradient={true}
           showBackIcon={true}
@@ -2476,7 +2794,7 @@ export const CollectionsView: React.FC = () => {
               .filter((p) => p.customerId === selectedCustomer.id)
               .sort((a, b) => (b.promiseDate || '').localeCompare(a.promiseDate || ''));
 
-            const rep = salesRepresentatives.find(
+            const rep = liveReps.find(
               (r) => r.id === selectedCustomer.salesRepresentativeId
             );
 
@@ -2487,7 +2805,7 @@ export const CollectionsView: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">{selectedCustomer.name}</h3>
                     <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                      Phone: {selectedCustomer.phone} • Email: {selectedCustomer.email || 'N/A'}
+                      Phone: {selectedCustomer.phone} - Email: {selectedCustomer.email || 'N/A'}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5 bg-purple-50 text-[#33077C] px-3 py-1.5 rounded-lg border border-purple-200 font-semibold text-xs">
@@ -2503,7 +2821,7 @@ export const CollectionsView: React.FC = () => {
                       Total Outstanding
                     </span>
                     <span className="text-base font-bold text-purple-900">
-                      ₹{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      �{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
@@ -2512,7 +2830,7 @@ export const CollectionsView: React.FC = () => {
                       Overdue Amount
                     </span>
                     <span className="text-base font-bold text-rose-900">
-                      ₹{overdueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      �{overdueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
@@ -2522,7 +2840,7 @@ export const CollectionsView: React.FC = () => {
                     </span>
                     <span className="text-xs font-bold text-emerald-900">
                       {lastPayment
-                        ? `₹${(lastPayment.amount || 0).toLocaleString()} (${lastPayment.paymentDate})`
+                        ? `�${(lastPayment.amount || 0).toLocaleString()} (${lastPayment.paymentDate})`
                         : 'None'}
                     </span>
                   </div>
@@ -2582,13 +2900,13 @@ export const CollectionsView: React.FC = () => {
                               <td className="py-2 px-3 text-slate-600">{s.saleDate}</td>
                               <td className="py-2 px-3 text-slate-600">{s.dueDate || 'N/A'}</td>
                               <td className="py-2 px-3 text-right">
-                                ₹{(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                �{(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-right text-emerald-600">
-                                ₹{(s.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                �{(s.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-right font-bold text-rose-600">
-                                ₹{bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                �{bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusBg}`}>
@@ -2629,79 +2947,104 @@ export const CollectionsView: React.FC = () => {
                     Collection Activity Timeline
                   </h4>
 
-                  <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                    {/* Events list */}
-                    {custFollowUps.map((f) => (
-                      <div key={f.id} className="relative flex items-start gap-3">
-                        <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#4309A2] border-2 border-white" />
-                        <div className="flex-1 bg-purple-50/50 p-3 rounded-xl border border-purple-100">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-slate-900">
-                              Follow-up Made: {f.outcome}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {f.followUpDate} {f.followUpTime}
-                            </span>
-                          </div>
-                          <p className="text-slate-600 mt-1 italic">"{f.notes}"</p>
-                          <div className="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1 border-t border-purple-100">
-                            <span>Rep: {f.salesRepresentativeName}</span>
-                            {f.nextFollowUpDate && (
-                              <span className="font-semibold text-purple-700">
-                                Next: {f.nextFollowUpDate}
-                              </span>
+                  {isTimelineLoading ? (
+                    <div className="py-8 text-center text-slate-500">
+                      <Loader2 className="w-6 h-6 animate-spin mx-auto text-[#33077C] mb-2" />
+                      <p className="text-xs font-medium">Loading collection timeline...</p>
+                    </div>
+                  ) : customerTimeline?.events && customerTimeline.events.length > 0 ? (
+                    <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                      {customerTimeline.events.map((evt) => (
+                        <div key={evt.id} className="relative flex items-start gap-3">
+                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#4309A2] border-2 border-white" />
+                          <div className="flex-1 bg-purple-50/50 p-3 rounded-xl border border-purple-100">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-slate-900">{evt.title}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">{evt.date}</span>
+                            </div>
+                            {evt.subtitle && (
+                              <p className="text-[11px] font-semibold text-purple-700 mt-0.5">{evt.subtitle}</p>
                             )}
+                            {evt.details && <p className="text-slate-600 mt-1 italic text-[11px]">"{evt.details}"</p>}
                           </div>
                         </div>
-                      </div>
-                    ))}
-
-                    {custPromises.map((p) => (
-                      <div key={p.id} className="relative flex items-start gap-3">
-                        <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-indigo-600 border-2 border-white" />
-                        <div className="flex-1 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-indigo-900">
-                              Promise to Pay: ₹{p.promisedAmount.toLocaleString()}
-                            </span>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                              Status: {p.status}
-                            </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                      {/* Events list */}
+                      {custFollowUps.map((f) => (
+                        <div key={f.id} className="relative flex items-start gap-3">
+                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#4309A2] border-2 border-white" />
+                          <div className="flex-1 bg-purple-50/50 p-3 rounded-xl border border-purple-100">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-slate-900">
+                                Follow-up Made: {f.outcome}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {f.followUpDate} {f.followUpTime}
+                              </span>
+                            </div>
+                            <p className="text-slate-600 mt-1 italic">"{f.notes}"</p>
+                            <div className="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1 border-t border-purple-100">
+                              <span>Rep: {f.salesRepresentativeName}</span>
+                              {f.nextFollowUpDate && (
+                                <span className="font-semibold text-purple-700">
+                                  Next: {f.nextFollowUpDate}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <p className="text-slate-600 mt-1">
-                            Promised settlement on: <span className="font-bold">{p.promiseDate}</span>
-                          </p>
-                          {p.notes && <p className="text-slate-500 italic mt-0.5 text-[11px]">"{p.notes}"</p>}
                         </div>
-                      </div>
-                    ))}
+                      ))}
 
-                    {custPayments.map((pay) => (
-                      <div key={pay.id} className="relative flex items-start gap-3">
-                        <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-emerald-600 border-2 border-white" />
-                        <div className="flex-1 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-emerald-900">
-                              Payment Received: ₹{pay.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                            </span>
-                            <span className="text-[10px] text-emerald-700 font-mono">
-                              {pay.paymentDate}
-                            </span>
+                      {custPromises.map((p) => (
+                        <div key={p.id} className="relative flex items-start gap-3">
+                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-indigo-600 border-2 border-white" />
+                          <div className="flex-1 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-indigo-900">
+                                Promise to Pay: �{p.promisedAmount.toLocaleString()}
+                              </span>
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                                Status: {p.status}
+                              </span>
+                            </div>
+                            <p className="text-slate-600 mt-1">
+                              Promised settlement on: <span className="font-bold">{p.promiseDate}</span>
+                            </p>
+                            {p.notes && <p className="text-slate-500 italic mt-0.5 text-[11px]">"{p.notes}"</p>}
                           </div>
-                          <p className="text-slate-600 mt-1">
-                            Settled via {pay.paymentMethod || 'Bank Transfer'}{' '}
-                            {pay.referenceNo && `• Ref: ${pay.referenceNo}`}
-                          </p>
                         </div>
-                      </div>
-                    ))}
+                      ))}
 
-                    {custFollowUps.length === 0 && custPromises.length === 0 && custPayments.length === 0 && (
-                      <p className="text-slate-400 py-3 text-center">
-                        No collection interactions or payment records logged yet.
-                      </p>
-                    )}
-                  </div>
+                      {custPayments.map((pay) => (
+                        <div key={pay.id} className="relative flex items-start gap-3">
+                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-emerald-600 border-2 border-white" />
+                          <div className="flex-1 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-emerald-900">
+                                Payment Received: �{pay.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                              <span className="text-[10px] text-emerald-700 font-mono">
+                                {pay.paymentDate}
+                              </span>
+                            </div>
+                            <p className="text-slate-600 mt-1">
+                              Settled via {pay.paymentMethod || 'Bank Transfer'}{' '}
+                              {pay.referenceNo && `- Ref: ${pay.referenceNo}`}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+
+                      {custFollowUps.length === 0 && custPromises.length === 0 && custPayments.length === 0 && (
+                        <p className="text-slate-400 py-3 text-center">
+                          No collection interactions or payment records logged yet.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-3 flex justify-end">
@@ -2727,7 +3070,7 @@ export const CollectionsView: React.FC = () => {
           isOpen={isInvoicePreviewModalOpen}
           onClose={() => setIsInvoicePreviewModalOpen(false)}
           title={`Invoice Preview: ${selectedInvoice.invoiceNo}`}
-          subtitle={`Date: ${selectedInvoice.saleDate} • Due: ${selectedInvoice.dueDate || 'N/A'}`}
+          subtitle={`Date: ${selectedInvoice.saleDate} - Due: ${selectedInvoice.dueDate || 'N/A'}`}
           maxWidth="lg"
           headerGradient={true}
           showBackIcon={true}
@@ -2745,7 +3088,7 @@ export const CollectionsView: React.FC = () => {
               <div className="text-right">
                 <span className="text-[10px] text-slate-500 block uppercase font-semibold">Total Amount</span>
                 <span className="text-base font-bold text-slate-900">
-                  ₹{(selectedInvoice.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  �{(selectedInvoice.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
               </div>
             </div>
@@ -2766,10 +3109,10 @@ export const CollectionsView: React.FC = () => {
                       <td className="py-2 px-3 font-medium text-slate-800">{item.name || item.productId}</td>
                       <td className="py-2 px-3 text-right text-slate-600">{item.quantity}</td>
                       <td className="py-2 px-3 text-right text-slate-600">
-                        ₹{(item.unitPrice || item.rate || 0).toLocaleString()}
+                        �{(item.unitPrice || item.rate || 0).toLocaleString()}
                       </td>
                       <td className="py-2 px-3 text-right font-bold text-slate-800">
-                        ₹{(item.total || (item.quantity * (item.unitPrice || item.rate || 0))).toLocaleString()}
+                        �{(item.total || (item.quantity * (item.unitPrice || item.rate || 0))).toLocaleString()}
                       </td>
                     </tr>
                   ))}
@@ -2781,13 +3124,13 @@ export const CollectionsView: React.FC = () => {
               <div>
                 <span className="text-[11px] text-slate-600">Settled to Date:</span>
                 <span className="font-bold text-emerald-700 ml-1.5">
-                  ₹{(selectedInvoice.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  �{(selectedInvoice.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
               </div>
               <div>
                 <span className="text-[11px] text-slate-600">Outstanding:</span>
                 <span className="font-bold text-rose-600 ml-1.5">
-                  ₹{(selectedInvoice.balance !== undefined
+                  �{(selectedInvoice.balance !== undefined
                     ? selectedInvoice.balance
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -2900,96 +3243,106 @@ export const CollectionsView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsAssignCustomerModalOpen(false)}
         >
-          <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Customer <span className="text-rose-500">*</span>
-              </label>
-              <select
-                value={assignCustomerId}
-                onChange={(e) => setAssignCustomerId(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                required
-              >
-                <option value="">Select customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.customerCode || c.id}) {c.company ? `• ${c.company}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Sales Representative <span className="text-rose-500">*</span>
-              </label>
-              <select
-                value={assignRepId}
-                onChange={(e) => setAssignRepId(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-                required
-              >
-                <option value="">Select sales representative...</option>
-                {salesRepresentatives.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} {r.designation ? `(${r.designation})` : ''} • {r.mobile}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                Assignment Type
-              </label>
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
-                  <input
-                    type="radio"
-                    name="assignType"
-                    checked={assignType === 'Primary'}
-                    onChange={() => setAssignType('Primary')}
-                    className="text-[#33077C] focus:ring-[#33077C]"
-                  />
-                  <span>Primary Rep</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
-                  <input
-                    type="radio"
-                    name="assignType"
-                    checked={assignType === 'Temporary'}
-                    onChange={() => setAssignType('Temporary')}
-                    className="text-[#33077C] focus:ring-[#33077C]"
-                  />
-                  <span>Temporary Rep</span>
-                </label>
+          <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs pt-1">
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Customer <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  value={assignCustomerId}
+                  onChange={(e) => setAssignCustomerId(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent font-medium text-slate-900 outline-none cursor-pointer"
+                  required
+                >
+                  <option value="">Select customer...</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.customerCode || c.id}) {c.company ? `- ${c.company}` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Effective From
-              </label>
-              <input
-                type="date"
-                value={assignEffectiveFrom}
-                onChange={(e) => setAssignEffectiveFrom(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Sales Representative <span className="text-rose-500">*</span>
+                </span>
+                <select
+                  value={assignRepId}
+                  onChange={(e) => setAssignRepId(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent font-medium text-slate-900 outline-none cursor-pointer"
+                  required
+                >
+                  <option value="">Select sales representative...</option>
+                  {liveReps.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} {r.designation ? `(${r.designation})` : ''} - {r.mobile}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Notes
-              </label>
-              <textarea
-                rows={2}
-                value={assignNotes}
-                onChange={(e) => setAssignNotes(e.target.value)}
-                placeholder="Enter assignment notes or transition instructions..."
-                className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
-              />
+            <div className="relative">
+              <div className="relative w-full p-2.5 pt-3.5 bg-white rounded-xl border border-slate-300">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Assignment Type
+                </span>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                    <input
+                      type="radio"
+                      name="assignType"
+                      checked={assignType === 'Primary'}
+                      onChange={() => setAssignType('Primary')}
+                      className="text-[#33077C] focus:ring-[#33077C]"
+                    />
+                    <span>Primary Rep</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                    <input
+                      type="radio"
+                      name="assignType"
+                      checked={assignType === 'Temporary'}
+                      onChange={() => setAssignType('Temporary')}
+                      className="text-[#33077C] focus:ring-[#33077C]"
+                    />
+                    <span>Temporary Rep</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="relative">
+              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Effective From
+                </span>
+                <input
+                  type="date"
+                  value={assignEffectiveFrom}
+                  onChange={(e) => setAssignEffectiveFrom(e.target.value)}
+                  className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div className="relative">
+              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
+                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                  Notes
+                </span>
+                <textarea
+                  rows={2}
+                  value={assignNotes}
+                  onChange={(e) => setAssignNotes(e.target.value)}
+                  placeholder="Enter assignment notes or transition instructions..."
+                  className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
+                />
+              </div>
             </div>
 
             <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
@@ -3002,9 +3355,11 @@ export const CollectionsView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md shadow-[#33077C]/20 cursor-pointer"
+                disabled={isSubmitting}
+                className="h-9 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-[#33077C]/20 cursor-pointer flex items-center gap-1.5"
               >
-                Assign
+                {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>{isSubmitting ? 'Assigning...' : 'Assign'}</span>
               </button>
             </div>
           </form>
@@ -3014,3 +3369,4 @@ export const CollectionsView: React.FC = () => {
   );
 };
 export default CollectionsView;
+

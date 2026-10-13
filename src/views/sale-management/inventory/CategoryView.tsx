@@ -14,7 +14,6 @@ import {
   Forward,
   FileSpreadsheet,
   Loader2,
-  Database,
   Layers,
   Sparkles,
   AlertCircle,
@@ -142,8 +141,14 @@ export const CategoryView: React.FC = () => {
    * Query parameters are only requested when applied
    */
   const loadCategories = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: { search?: string; status?: string; page?: number }
+    ) => {
+      const targetPage = overrides?.page ?? page;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
 
       // Prevent concurrent calls or redundant re-fetching of identical parameters
       if (isFetchingRef.current) return;
@@ -155,17 +160,17 @@ export const CategoryView: React.FC = () => {
 
       try {
         const res = await categoryApi.getCategories({
-          page_no: page,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           sortOrder: 'desc',
-          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+          status: targetStatus !== 'ALL' ? targetStatus : undefined,
         });
 
         if (res && res.success && Array.isArray(res.data)) {
           const mapped = res.data.map((item, idx) =>
-            mapApiCategoryToCategoryItem(item, (page - 1) * pageSize + idx)
+            mapApiCategoryToCategoryItem(item, (targetPage - 1) * pageSize + idx)
           );
           setCategories(mapped);
           setIsApiConnected(true);
@@ -398,17 +403,16 @@ export const CategoryView: React.FC = () => {
     try {
       const res = await categoryApi.deleteCategory(id);
       if (res?.success) {
-        setCategories((prev) => prev.filter((c) => c.id !== id));
-        setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
         toast.success(name ? `Category "${name}" deleted.` : 'Category deleted successfully.');
+        // Reset fetch key so loadCategories always re-fetches fresh data
+        lastFetchKeyRef.current = '';
+        loadCategories(true);
         return;
       }
     } catch (apiErr: any) {
-      console.warn('Remote category delete failed, falling back to local:', apiErr);
+      console.warn('Remote category delete failed:', apiErr);
+      toast.error('Failed to delete category. Please try again.');
     }
-
-    setCategories((prev) => prev.filter((c) => c.id !== id));
-    toast.success(name ? `Category "${name}" deleted.` : 'Category deleted.');
   };
 
   // Export to Excel
@@ -463,18 +467,6 @@ export const CategoryView: React.FC = () => {
               <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
                 {totalCount} total
               </span>
-              {isApiConnected === true && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live API
-                </span>
-              )}
-              {isApiConnected === false && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200" title="Local storage mode">
-                  <Database className="w-3 h-3 text-amber-500" />
-                  Local Mode
-                </span>
-              )}
             </div>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
@@ -512,10 +504,13 @@ export const CategoryView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by category name, code..."
         onSubmit={() => {
+          const newSearch = pendingSearch.trim();
+          const newStatus = pendingStatus;
           lastFetchKeyRef.current = null;
-          setAppliedSearch(pendingSearch.trim());
-          setAppliedStatus(pendingStatus);
+          setAppliedSearch(newSearch);
+          setAppliedStatus(newStatus);
           setPage(1);
+          loadCategories(true, { search: newSearch, status: newStatus, page: 1 });
         }}
         onReset={() => {
           lastFetchKeyRef.current = null;
@@ -524,6 +519,7 @@ export const CategoryView: React.FC = () => {
           setPendingStatus('ALL');
           setAppliedStatus('ALL');
           setPage(1);
+          loadCategories(true, { search: '', status: 'ALL', page: 1 });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5">
@@ -534,12 +530,7 @@ export const CategoryView: React.FC = () => {
                 { label: 'Inactive', value: 'Inactive', dotColor: '#64748b' },
               ]}
               value={pendingStatus}
-              onChange={(val) => {
-                setPendingStatus(val);
-                lastFetchKeyRef.current = null;
-                setAppliedStatus(val);
-                setPage(1);
-              }}
+              onChange={(val) => setPendingStatus(val)}
               placeholder="Status : All"
             />
           </div>
@@ -907,38 +898,40 @@ export const CategoryView: React.FC = () => {
           onClose={() => !isSubmitting && setIsModalOpen(false)}
           title={editingCategory ? 'Edit Category' : 'Add Category'}
           subtitle="Configure category details, status, and classification"
-          maxWidth="4xl"
+          maxWidth="lg"
           headerGradient={true}
           showBackIcon={true}
           hideCloseButton={true}
           onBack={() => !isSubmitting && setIsModalOpen(false)}
         >
-          <form noValidate onSubmit={handleSubmit(handleSaveCategory)} className="space-y-4.5 p-2 sm:p-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[140px]">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Category Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  disabled={isSubmitting}
-                  {...register('categoryName', {
-                    required: 'Category name is required',
-                    minLength: { value: 2, message: 'Category name must be at least 2 characters' },
-                    validate: (val) =>
-                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                  })}
-                  onKeyDown={handleTextOnlyKeyDown}
-                  onInput={(e) => {
-                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
-                  }}
-                  placeholder="e.g. Grains & Flours"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    errors.categoryName
-                      ? 'border border-rose-400 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 bg-rose-50/20'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
-                />
+          <form noValidate onSubmit={handleSubmit(handleSaveCategory)} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              <div className="flex flex-col relative">
+                <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                  errors.categoryName
+                    ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
+                    : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                }`}>
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Category Name <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="text"
+                    disabled={isSubmitting}
+                    {...register('categoryName', {
+                      required: 'Category name is required',
+                      minLength: { value: 2, message: 'Category name must be at least 2 characters' },
+                      validate: (val) =>
+                        /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                    })}
+                    onKeyDown={handleTextOnlyKeyDown}
+                    onInput={(e) => {
+                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                    }}
+                    placeholder="Enter category name"
+                    className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 placeholder:text-slate-400 outline-none"
+                  />
+                </div>
                 {errors.categoryName && (
                   <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -947,24 +940,26 @@ export const CategoryView: React.FC = () => {
                 )}
               </div>
 
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Status <span className="text-rose-500">*</span>
-                </label>
-                <CustomSelect
-                  options={[
-                    { label: 'Active', value: 'Active' },
-                    { label: 'Inactive', value: 'Inactive' },
-                  ]}
-                  value={watchStatus || 'Active'}
-                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
-                  placeholder="Select status"
-                  activeColor="brand"
-                />
+              <div className="flex flex-col relative">
+                <div className="relative">
+                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
+                    Status <span className="text-rose-500">*</span>
+                  </span>
+                  <CustomSelect
+                    options={[
+                      { label: 'Active', value: 'Active' },
+                      { label: 'Inactive', value: 'Inactive' },
+                    ]}
+                    value={watchStatus || 'Active'}
+                    onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+                    placeholder="Select status"
+                    activeColor="brand"
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+            <div className="pt-3 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
                 type="button"
                 disabled={isSubmitting}

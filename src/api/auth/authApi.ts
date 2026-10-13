@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { AUTH_API_BASE_URL, getStoredToken } from '../config';
+import { API_BASE_URL, AUTH_API_BASE_URL, getStoredToken } from '../config';
 import {
   ApiLoginRequest,
   ApiLoginResponse,
@@ -30,11 +30,28 @@ export const extractAccessToken = (response: any): string | null => {
 };
 
 /**
+ * Bare axios instance used ONLY for /auth/refresh.
+ * Has ZERO interceptors so the HttpOnly yaa_crm_refresh cookie is sent cleanly.
+ * No Authorization header is injected — the server reads the cookie exclusively.
+ * Mirrors the bellsnrings-customer-portal axiosInstance pattern exactly.
+ */
+const refreshHttpClient: AxiosInstance = axios.create({
+  baseURL: API_BASE_URL,
+  withCredentials: true, // sends HttpOnly yaa_crm_refresh cookie automatically
+  // timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': '*/*',
+  },
+});
+
+/**
  * Dedicated Auth API client targeting /api/v1/auth
  */
 export const authHttpClient: AxiosInstance = axios.create({
   baseURL: AUTH_API_BASE_URL,
   withCredentials: true,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -101,19 +118,46 @@ export const authApi = {
     return res.data;
   },
 
-  // POST /refresh - Rotates session and issues new access token via yaa_crm_refresh HttpOnly cookie
+  // POST /refresh - Uses bare refreshHttpClient (no interceptors) so the
+  // HttpOnly yaa_crm_refresh cookie is sent without any Authorization header.
+  // Mirrors bellsnrings-customer-portal axiosBaseQueryWithReauth exactly.
   refreshToken: async (): Promise<ApiRefreshTokenResponse> => {
-    const res = await authHttpClient.post<ApiRefreshTokenResponse>(
-      '/refresh',
-      {},
-      {
-        headers: {
-          'X-CSRF-Protection': '1',
-          'accept': '*/*',
-        },
-      }
+    console.group('🔄 [AuthApi] POST /auth/refresh invoked');
+    console.log(
+      '📋 Visible cookies (HttpOnly cookies like yaa_crm_refresh are NOT visible here, but ARE sent by browser):',
+      document.cookie || '(none visible to JS)'
     );
-    return res.data;
+    console.log('📡 Using refreshHttpClient — bare instance, NO interceptors, withCredentials: true');
+    console.log('🎯 POST URL:', `${API_BASE_URL}/auth/refresh`);
+
+    try {
+      // Use refreshHttpClient (bare, no interceptors) to POST /auth/refresh.
+      // The browser automatically attaches the HttpOnly yaa_crm_refresh cookie.
+      // No Authorization header is sent — server reads cookie exclusively.
+      const res = await refreshHttpClient.post<ApiRefreshTokenResponse>(
+        '/auth/refresh',
+        undefined, // empty body — server reads cookie only
+        {
+          headers: {
+            'X-CSRF-Protection': '1',
+          },
+        }
+      );
+      console.log('✅ [AuthApi] /auth/refresh succeeded! Status:', res.status);
+      console.log('📦 Response data:', res.data);
+      console.groupEnd();
+      return res.data;
+    } catch (error: any) {
+      console.error('❌ [AuthApi] /auth/refresh FAILED:', {
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        responseData: error?.response?.data,
+        headers: error?.config?.headers,
+        message: error?.message,
+      });
+      console.groupEnd();
+      throw error; // re-throw original AxiosError (not wrapped)
+    }
   },
 
   // POST /logout
