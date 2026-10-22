@@ -120,6 +120,7 @@ export interface QuotationFilterParams {
 
 /**
  * Payload for line item in POST / PUT
+ * Strictly adheres to backend schema: NO 'unit' or unrecognized keys
  */
 export interface CreateQuotationItemPayload {
   productId: string;
@@ -130,7 +131,6 @@ export interface CreateQuotationItemPayload {
   unitPrice: number;
   discountPercent?: number;
   taxPercent?: number;
-  unit?: string;
 }
 
 /**

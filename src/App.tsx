@@ -27,6 +27,7 @@ import { OrganizationSubscriptionsView } from './views/subscriptions/Organizatio
 import { RemindersView } from './views/reminders/RemindersView';
 import { EmployeesView } from './views/employees/EmployeesView';
 import { ReportsView } from './views/reports/ReportsView';
+import { AiCopilotView } from './views/ai-copilot/AiCopilotView';
 import { SettingsView } from './views/settings/SettingsView';
 import { QuotesView } from './views/quotes/QuotesView';
 import { LoginView } from './views/login/LoginView';
@@ -195,6 +196,7 @@ const MainLayout: React.FC = () => {
               <Route path="/payments" element={<PaymentsView />} />
               <Route path="/subscriptions" element={<SubscriptionsView />} />
               <Route path="/reminders" element={<RemindersView />} />
+              <Route path="/ai-copilot" element={<AiCopilotView />} />
 
               {/* Admin Protected Views */}
               <Route

@@ -14,6 +14,7 @@ import {
   PurchaseRequestDeleteResponse,
   CreatePurchaseRequestPayload,
   UpdatePurchaseRequestPayload,
+  UpdatePurchaseRequestStatusPayload,
 } from './purchaseRequestTypes';
 
 export * from './purchaseRequestTypes';
@@ -132,6 +133,56 @@ export const mapUiToCreatePayload = (
 };
 
 /**
+ * Allowed fields for PUT /commerce/purchase-requests/{id}
+ * The backend schema allows updating only mutable operational fields:
+ * - department
+ * - requiredDate
+ * - priority
+ * - items
+ * - notes
+ *
+ * It strictly rejects: "requestNo", "requestDate", "requestedBy", "status", "approvedBy", etc.
+ */
+export const sanitizeCommercePurchaseRequestUpdatePayload = (
+  payload: Record<string, any>
+): UpdatePurchaseRequestPayload => {
+  const allowedKeys: (keyof UpdatePurchaseRequestPayload)[] = [
+    'department',
+    'requiredDate',
+    'priority',
+    'items',
+    'notes',
+  ];
+
+  const sanitized: UpdatePurchaseRequestPayload = {};
+
+  allowedKeys.forEach((key) => {
+    if (payload[key] !== undefined && payload[key] !== null) {
+      if (key === 'items' && Array.isArray(payload[key])) {
+        sanitized.items = payload.items.map((it: any) => ({
+          productId: ensureValidUuid(it.productId),
+          productName: String(it.productName || '').trim(),
+          currentStock: Number(it.currentStock) || 0,
+          requestedQuantity: Math.max(1, Number(it.requestedQuantity) || 1),
+          estimatedUnitPrice: Number(it.estimatedUnitPrice) || 0,
+          requiredDate: it.requiredDate,
+          remarks: it.remarks?.trim() || undefined,
+        }));
+      } else if (typeof payload[key] === 'string') {
+        const trimmed = payload[key].trim();
+        if (trimmed) {
+          (sanitized as any)[key] = trimmed;
+        }
+      } else {
+        (sanitized as any)[key] = payload[key];
+      }
+    }
+  });
+
+  return sanitized;
+};
+
+/**
  * Maps UI update data into payload for PUT /commerce/purchase-requests/{id}
  */
 export const mapUiToUpdatePayload = (
@@ -139,22 +190,13 @@ export const mapUiToUpdatePayload = (
 ): UpdatePurchaseRequestPayload => {
   const payload: UpdatePurchaseRequestPayload = {};
 
-  if (req.requestNo) payload.requestNo = req.requestNo.trim();
-  if (req.requestDate) payload.requestDate = req.requestDate;
-  if (req.requestedBy) payload.requestedBy = req.requestedBy.trim();
-  if (req.department) payload.department = req.department.trim();
+  if (req.department && req.department.trim()) payload.department = req.department.trim();
   if (req.requiredDate) payload.requiredDate = req.requiredDate;
   if (req.priority) payload.priority = req.priority;
-  if (req.status) payload.status = req.status;
   if (typeof req.notes !== 'undefined') payload.notes = req.notes?.trim() || '';
-  if (typeof req.rejectionReason !== 'undefined') payload.rejectionReason = req.rejectionReason;
-  if (typeof req.approvedBy !== 'undefined') payload.approvedBy = req.approvedBy;
-  if (typeof req.approvedAt !== 'undefined') payload.approvedAt = req.approvedAt;
-  if (typeof req.createdPurchaseId !== 'undefined') payload.createdPurchaseId = req.createdPurchaseId;
 
   if (Array.isArray(req.items)) {
     payload.items = req.items.map((it) => ({
-      id: it.id,
       productId: ensureValidUuid(it.productId),
       productName: it.productName.trim(),
       currentStock: Number(it.currentStock) || 0,
@@ -165,7 +207,7 @@ export const mapUiToUpdatePayload = (
     }));
   }
 
-  return payload;
+  return sanitizeCommercePurchaseRequestUpdatePayload(payload);
 };
 
 // =========================================================================
@@ -242,6 +284,21 @@ export const commercePurchaseRequestEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/purchase-requests/${id}`,
         method: 'PUT',
+        body: sanitizeCommercePurchaseRequestUpdatePayload(payload),
+      }),
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: 'PurchaseRequest', id },
+        { type: 'PurchaseRequest', id: 'LIST' },
+      ],
+    }),
+
+    patchCommercePurchaseRequestStatus: builder.mutation<
+      PurchaseRequestSingleResponse,
+      { id: string; payload: UpdatePurchaseRequestStatusPayload }
+    >({
+      query: ({ id, payload }) => ({
+        url: `/commerce/purchase-requests/${id}/status`,
+        method: 'PATCH',
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
@@ -269,6 +326,7 @@ export const {
   useGetCommercePurchaseRequestByIdQuery,
   useCreateCommercePurchaseRequestMutation,
   useUpdateCommercePurchaseRequestMutation,
+  usePatchCommercePurchaseRequestStatusMutation,
   useDeleteCommercePurchaseRequestMutation,
 } = commercePurchaseRequestEndpoints;
 
@@ -353,9 +411,31 @@ export const commercePurchaseRequestApi = {
     id: string,
     payload: UpdatePurchaseRequestPayload
   ): Promise<PurchaseRequestSingleResponse> => {
+    const cleanPayload = sanitizeCommercePurchaseRequestUpdatePayload(payload);
     const response = await baseClient.put<PurchaseRequestSingleResponse>(
       `/commerce/purchase-requests/${id}`,
-      payload
+      cleanPayload
+    );
+    return response.data;
+  },
+
+  /**
+   * Update purchase request status / approve / reject
+   * PATCH /commerce/purchase-requests/{id}/status
+   */
+  patchPurchaseRequestStatus: async (
+    id: string,
+    payload: UpdatePurchaseRequestStatusPayload,
+    organizationId?: string
+  ): Promise<PurchaseRequestSingleResponse> => {
+    const headers: Record<string, string> = {};
+    if (organizationId) {
+      headers['x-organization-id'] = organizationId;
+    }
+    const response = await baseClient.patch<PurchaseRequestSingleResponse>(
+      `/commerce/purchase-requests/${id}/status`,
+      payload,
+      { headers }
     );
     return response.data;
   },

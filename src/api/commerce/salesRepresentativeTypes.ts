@@ -210,10 +210,30 @@ export interface CreateSalesRepPayload {
 
 export interface UpdateSalesRepPayload {
   name?: string;
+  fullName?: string;
   mobile?: string;
+  phone?: string;
+  phoneNumber?: string;
   email?: string;
   designation?: string;
+  title?: string;
   status?: 'Active' | 'Inactive';
+  active?: boolean;
+  isActive?: boolean;
+  branchId?: string | null;
+  subOrganizationId?: string | null;
+  organizationId?: string | null;
+  userId?: string;
+  roleId?: string;
+  user?: {
+    id?: string;
+    name?: string;
+    email?: string;
+    phone?: string;
+    mobile?: string;
+    active?: boolean;
+    roleId?: string;
+  };
 }
 
 export interface SalesRepListParams {

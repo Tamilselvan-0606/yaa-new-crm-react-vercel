@@ -35,6 +35,7 @@ import {
   Clock,
   UserCheck,
   IndianRupee,
+  Check,
 } from 'lucide-react';
 
 interface SubNavItem {
@@ -349,6 +350,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Sales Management Suite Navigation Items (The 4 modules in the image)
   const salesManagementNavItems: NavItem[] = [
     { id: 'dashboard', path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'ai-copilot', path: '/ai-copilot', label: 'AI Copilot', icon: Sparkles },
     ...(isOrgSuperAdmin || isOrgAdminUser
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
@@ -363,6 +365,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Client Management Suite Menu Items (Remaining modules)
   const clientManagementNavItems: NavItem[] = [
     { id: 'dashboard', path: '/', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
+    { id: 'ai-copilot', path: '/ai-copilot', label: 'AI Copilot', icon: Sparkles, adminOnly: false },
     ...(isOrgSuperAdmin || isOrgAdminUser
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
@@ -390,16 +393,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'sales-invoices', path: '/sales/invoices', label: 'Invoices', icon: Receipt },
       ],
     },
-    {
-      id: 'tasks-group',
-      label: 'Work Management',
-      icon: CheckSquare,
-      adminOnly: false,
-      children: [
-        { id: 'content', path: '/content', label: 'Content Planner', icon: Film },
-        { id: 'tasks', path: '/tasks', label: "Today's Tasks", icon: CheckSquare },
-      ],
-    },
+    // Temporarily commented out Work Management
+    // {
+    //   id: 'tasks-group',
+    //   label: 'Work Management',
+    //   icon: CheckSquare,
+    //   adminOnly: false,
+    //   children: [
+    //     { id: 'content', path: '/content', label: 'Content Planner', icon: Film },
+    //     { id: 'tasks', path: '/tasks', label: "Today's Tasks", icon: CheckSquare },
+    //   ],
+    // },
     { id: 'payments', path: '/payments', label: 'Payments', icon: CreditCard, adminOnly: false },
     { id: 'subscriptions', path: '/subscriptions', label: 'Subscriptions', icon: Repeat, adminOnly: false },
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, adminOnly: false, count: unreadRemindersCount },
@@ -468,6 +472,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (isStaffUser) {
       const staffAllowedIds = [
         'dashboard',
+        'ai-copilot',
         'leads',
         'quotes',
         'proforma-group',
@@ -522,7 +527,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (item.id === 'organization') {
       return location.pathname === '/organization' || location.pathname.startsWith('/organization/');
     }
-    return item.path ? location.pathname === item.path || location.pathname.startsWith(item.path) : false;
+    return item.path
+      ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+      : false;
   };
 
   const handleNavClick = (item: NavItem | SubNavItem) => {
@@ -549,11 +556,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               id={`sidebar-subgroup-${subItem.id}`}
               onClick={() => toggleGroup(subItem.id)}
-              className={`w-full text-left cursor-pointer flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-150 ${
-                active || isSubOpen
+              className={`w-full text-left cursor-pointer flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-150 ${active || isSubOpen
                   ? 'bg-white/10 text-white font-bold shadow-xs'
                   : 'text-white/80 hover:bg-white/5 hover:text-white font-semibold'
-              }`}
+                }`}
               style={{
                 marginLeft: '12px',
                 width: 'calc(100% - 12px)',
@@ -561,9 +567,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <div className="flex items-center flex-1 min-w-0">
                 <div
-                  className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 transition-colors ${
-                    active || isSubOpen ? 'bg-white/20 text-white' : 'bg-white/5 text-white/70'
-                  }`}
+                  className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 transition-colors ${active || isSubOpen ? 'bg-white/20 text-white' : 'bg-white/5 text-white/70'
+                    }`}
                 >
                   <SubIcon className="w-3.5 h-3.5" />
                 </div>
@@ -572,16 +577,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </span>
               </div>
               <ChevronDown
-                className={`w-3.5 h-3.5 text-white/60 transition-transform duration-200 shrink-0 ${
-                  isSubOpen ? 'rotate-180' : ''
-                }`}
+                className={`w-3.5 h-3.5 text-white/60 transition-transform duration-200 shrink-0 ${isSubOpen ? 'rotate-180' : ''
+                  }`}
               />
             </button>
 
             <div
-              className={`grid transition-all duration-200 ease-in-out ${
-                isSubOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
-              }`}
+              className={`grid transition-all duration-200 ease-in-out ${isSubOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                }`}
             >
               <div className="overflow-hidden">
                 <div
@@ -600,20 +603,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           key={subItem.id}
           id={`sidebar-sublink-${subItem.id}`}
           onClick={() => handleNavClick(subItem)}
-          className={`sidebar-link sidebar-sublink w-full text-left cursor-pointer flex items-center py-2 px-2.5 rounded-lg transition-all ${
-            active ? 'active font-bold text-white bg-white/15' : 'text-white/70 hover:text-white hover:bg-white/5'
-          }`}
+          className={`sidebar-link sidebar-sublink w-full text-left cursor-pointer flex items-center py-2 px-2.5 rounded-lg transition-all ${active ? 'active font-bold text-white bg-white/15' : 'text-white/70 hover:text-white hover:bg-white/5'
+            }`}
         >
           <div className="flex items-center w-full min-w-0">
             <SubIcon
-              className={`w-4 h-4 shrink-0 transition-colors mr-2.5 ${
-                active ? 'text-white' : 'text-white/60'
-              }`}
+              className={`w-4 h-4 shrink-0 transition-colors mr-2.5 ${active ? 'text-white' : 'text-white/60'
+                }`}
             />
             <span
-              className={`text-[13px] truncate leading-relaxed ${
-                active ? 'font-bold text-white' : 'font-normal text-white/80'
-              }`}
+              className={`text-[13px] truncate leading-relaxed ${active ? 'font-bold text-white' : 'font-normal text-white/80'
+                }`}
             >
               {subItem.label}
             </span>
@@ -640,11 +640,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           color: '#FFFFFF',
           borderColor: 'rgba(255, 255, 255, 0.12)',
         }}
-        className={`fixed lg:static top-0 bottom-0 left-0 z-50 flex flex-col shrink-0 transition-transform duration-200 ease-in-out border-r select-none overflow-x-hidden print:hidden ${
-          collapsed ? 'w-20' : 'w-72'
-        } ${
-          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
+        className={`fixed lg:static top-0 bottom-0 left-0 z-50 flex flex-col shrink-0 transition-transform duration-200 ease-in-out border-r select-none overflow-x-hidden print:hidden ${collapsed ? 'w-20' : 'w-72'
+          } ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+          }`}
       >
         {/* Brand Header */}
         <div className="p-5 flex items-center justify-between border-b" style={{ borderColor: 'rgba(255, 255, 255, 0.12)' }}>
@@ -686,18 +684,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Module Switcher for Organization Type 0 (ALL) - Hidden for Super Admin */}
         {!isSuperAdmin && orgCaps.isAll && !collapsed && (
           <div className="px-3 pt-3 pb-2 border-b border-white/10">
-            <div className="bg-black/25 p-1 rounded-xl flex items-center border border-white/10 shadow-inner">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 id="switch-client-management-button"
                 onClick={() => handleSwitchOrgType('Client Management')}
-                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeOrgType === 'Client Management'
-                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
-                    : 'text-white/70 hover:text-white hover:bg-white/10 font-semibold'
-                }`}
+                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${activeOrgType === 'Client Management'
+                    ? 'bg-[#33077C] text-white shadow-sm ring-1 ring-white/30 font-extrabold'
+                    : 'bg-white text-slate-700 hover:bg-slate-50 shadow-2xs font-semibold'
+                  }`}
               >
-                <UsersRound className="w-3.5 h-3.5 shrink-0" />
+                {activeOrgType === 'Client Management' && (
+                  <Check className="w-3.5 h-3.5 stroke-[3] text-white shrink-0" />
+                )}
                 <span className="truncate">Client Mgmt</span>
               </button>
 
@@ -705,13 +704,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 id="switch-sales-management-button"
                 onClick={() => handleSwitchOrgType('Sales Management')}
-                className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeOrgType === 'Sales Management'
-                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
-                    : 'text-white/70 hover:text-white hover:bg-white/10 font-semibold'
-                }`}
+                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${activeOrgType === 'Sales Management'
+                    ? 'bg-[#33077C] text-white shadow-sm ring-1 ring-white/30 font-extrabold'
+                    : 'bg-white text-slate-700 hover:bg-slate-50 shadow-2xs font-semibold'
+                  }`}
               >
-                <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+                {activeOrgType === 'Sales Management' && (
+                  <Check className="w-3.5 h-3.5 stroke-[3] text-white shrink-0" />
+                )}
                 <span className="truncate">Sale Mgmt</span>
               </button>
             </div>
@@ -725,13 +725,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               id="switch-module-collapsed-button"
               onClick={() => handleSwitchOrgType(activeOrgType === 'Sales Management' ? 'Client Management' : 'Sales Management')}
               title={`Currently: ${activeOrgType === 'Sales Management' ? 'Sale Management' : 'Client Management'} (Click to switch)`}
-              className="w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-all cursor-pointer border border-white/20 shadow-xs"
+              className="w-10 h-10 rounded-xl bg-white text-[#33077C] hover:bg-slate-50 flex items-center justify-center transition-all cursor-pointer shadow-xs font-bold text-xs"
             >
-              {activeOrgType === 'Sales Management' ? (
-                <ShoppingCart className="w-4.5 h-4.5 text-white" />
-              ) : (
-                <UsersRound className="w-4.5 h-4.5 text-white" />
-              )}
+              {activeOrgType === 'Sales Management' ? 'SM' : 'CM'}
             </button>
           </div>
         )}
@@ -752,9 +748,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     id={`sidebar-link-${item.id}`}
                     onClick={() => toggleGroup(item.id)}
                     title={collapsed ? item.label : undefined}
-                    className={`sidebar-link sidebar-group-toggle w-full text-left cursor-pointer flex items-center justify-between ${
-                      isGroupActive ? 'active' : ''
-                    }`}
+                    className={`sidebar-link sidebar-group-toggle w-full text-left cursor-pointer flex items-center justify-between ${isGroupActive ? 'active' : ''
+                      }`}
                   >
                     <div className="flex items-center flex-1 min-w-0">
                       <Icon
@@ -764,9 +759,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         }}
                       />
                       {!collapsed && (
-                        <span className={`ml-3.5 flex-1 text-[15px] truncate leading-relaxed ${
-                          isGroupActive ? 'font-extrabold text-white' : 'font-medium text-white/80'
-                        }`}>
+                        <span className={`ml-3.5 flex-1 text-[15px] truncate leading-relaxed ${isGroupActive ? 'font-extrabold text-white' : 'font-medium text-white/80'
+                          }`}>
                           {item.label}
                         </span>
                       )}
@@ -774,9 +768,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                     {!collapsed && (
                       <ChevronDown
-                        className={`w-4.5 h-4.5 text-white/70 transition-transform duration-200 shrink-0 ${
-                          isGroupOpen ? 'rotate-180' : ''
-                        }`}
+                        className={`w-4.5 h-4.5 text-white/70 transition-transform duration-200 shrink-0 ${isGroupOpen ? 'rotate-180' : ''
+                          }`}
                       />
                     )}
                   </button>
@@ -784,9 +777,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {/* Dropdown Children with smooth height & opacity transition */}
                   {!collapsed && (
                     <div
-                      className={`grid transition-all duration-200 ease-in-out ${
-                        isGroupOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
-                      }`}
+                      className={`grid transition-all duration-200 ease-in-out ${isGroupOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+                        }`}
                     >
                       <div className="overflow-hidden">
                         <div className="space-y-0.5 pt-0.5 pb-0.5">
@@ -807,9 +799,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 id={`sidebar-link-${item.id}`}
                 onClick={() => handleNavClick(item)}
                 title={collapsed ? item.label : undefined}
-                className={`sidebar-link w-full text-left cursor-pointer ${
-                  active ? 'active' : ''
-                }`}
+                className={`sidebar-link w-full text-left cursor-pointer ${active ? 'active' : ''
+                  }`}
               >
                 <Icon
                   className="w-5 h-5 shrink-0 transition-colors"
@@ -819,9 +810,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 />
 
                 {!collapsed && (
-                  <span className={`ml-3.5 flex-1 text-[15px] truncate leading-relaxed ${
-                    active ? 'font-extrabold text-white' : 'font-medium text-white/80'
-                  }`}>
+                  <span className={`ml-3.5 flex-1 text-[15px] truncate leading-relaxed ${active ? 'font-extrabold text-white' : 'font-medium text-white/80'
+                    }`}>
                     {item.label}
                   </span>
                 )}
@@ -845,9 +835,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       backgroundColor: 'var(--accent)',
                       color: 'var(--accent-contrast)',
                     }}
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                      active ? '' : 'animate-pulse'
-                    }`}
+                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${active ? '' : 'animate-pulse'
+                      }`}
                   >
                     {item.count}
                   </span>
@@ -875,11 +864,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               {currentUser?.name
                 ? currentUser.name
-                    .split(' ')
-                    .map((n) => n[0])
-                    .join('')
-                    .substring(0, 2)
-                    .toUpperCase()
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')
+                  .substring(0, 2)
+                  .toUpperCase()
                 : 'JD'}
             </div>
             {!collapsed && (
@@ -888,12 +877,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {isOrgSuperAdmin || isOrgAdminUser
                     ? 'Organisation Administrator'
                     : isSuperAdmin
-                    ? 'Super Administrator'
-                    : isSubOrgAdmin
-                    ? 'Sub Org Administrator'
-                    : isBranchAdmin
-                    ? 'Branch Administrator'
-                    : 'Staff Member'}
+                      ? 'Super Administrator'
+                      : isSubOrgAdmin
+                        ? 'Sub Org Administrator'
+                        : isBranchAdmin
+                          ? 'Branch Administrator'
+                          : 'Staff Member'}
                 </p>
               </div>
             )}

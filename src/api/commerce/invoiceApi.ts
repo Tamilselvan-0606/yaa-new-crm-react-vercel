@@ -360,6 +360,9 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -376,6 +379,9 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -391,6 +397,9 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'SalesInvoice', id },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -403,6 +412,9 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -419,6 +431,9 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 

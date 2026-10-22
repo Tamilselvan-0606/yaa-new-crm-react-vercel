@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   ShoppingCart,
   Plus,
@@ -52,7 +52,6 @@ import {
   PaymentSplitItem,
   SalePaymentRecord,
 } from "../../../store/useSalesManagementStore";
-import { clientProductApi } from "../../../api/platform/clientProductApi";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -79,6 +78,9 @@ import {
   mapApiStockToInventoryStockItem,
   productApi,
 } from "../../../api";
+import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
+import { initializeWorkflowIntegrity } from "../../../utils/salesDocumentWorkflow";
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
 
 // Helper functions for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -336,38 +338,28 @@ export const SalesView: React.FC = () => {
   const [customerList, setCustomerList] = useState<any[]>([]);
   const [productList, setProductList] = useState<any[]>([]);
 
-  useEffect(() => {
-    let isMounted = true;
-    const loadCommerceData = async () => {
-      try {
-        const [custRes, prodRes] = await Promise.all([
-          customerApi.getCustomers({ pagination_required: false, page_size: 100 }).catch(() => null),
-          clientProductApi.getProducts({ limit: 100 }).catch(() => null),
-        ]);
-        if (isMounted) {
-          if (custRes?.data && Array.isArray(custRes.data)) {
-            setCustomerList(custRes.data.map(mapApiCustomerToSalesCustomer));
-          }
-          if (prodRes?.data && Array.isArray(prodRes.data)) {
-            setProductList(
-              prodRes.data.map((p) => ({
-                id: p.id,
-                name: p.name,
-                code: p.code || p.id,
-                plans: p.plans || [],
-              }))
-            );
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to load customers/products in SalesView:', err);
+  // Deduplicated customer master data loader (only runs once on mount)
+  const hasLoadedCustomersRef = useRef(false);
+  const loadCustomersData = useCallback(async () => {
+    if (hasLoadedCustomersRef.current) return;
+    hasLoadedCustomersRef.current = true;
+    try {
+      const custRes = await customerApi.getCustomers({ pagination_required: false, page_size: 100 }).catch(() => null);
+      if (custRes?.data && Array.isArray(custRes.data)) {
+        const mapped = custRes.data.map(mapApiCustomerToSalesCustomer);
+        setCustomerList(mapped);
+        setCustomersList(mapped);
       }
-    };
-    loadCommerceData();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    } catch (err) {
+      console.warn("Failed to load customers in SalesView:", err);
+    }
+  }, [setCustomersList]);
+
+  useEffect(() => {
+    loadCustomersData();
+  }, [loadCustomersData]);
+
+
 
 
 
@@ -385,6 +377,30 @@ export const SalesView: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isSalesGraphModalOpen, setIsSalesGraphModalOpen] = useState(false);
+
+  useEffect(() => {
+    initializeWorkflowIntegrity();
+  }, []);
+
+  useEffect(() => {
+    const q = searchParams.get("search");
+    if (q) {
+      setPendingSearch(q);
+      setAppliedSearch(q);
+    }
+  }, [searchParams]);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setCurrentPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -426,6 +442,66 @@ export const SalesView: React.FC = () => {
     null,
   );
   const [editingSale, setEditingSale] = useState<SaleTransaction | null>(null);
+
+  // Load Stocks on demand only when Form Modal is opened (products are searched on demand)
+  const hasLoadedProductsRef = useRef(false);
+  const loadProductAndStockData = useCallback(async () => {
+    if (hasLoadedProductsRef.current) return;
+    hasLoadedProductsRef.current = true;
+    try {
+      const stockRes = await stockApi.getStocks({ pagination_required: false });
+      if (stockRes && stockRes.data && Array.isArray(stockRes.data)) {
+        setStocksList(stockRes.data.map(mapApiStockToInventoryStockItem));
+      }
+    } catch (err) {
+      console.warn("Failed to load stocks for form modal:", err);
+    }
+  }, [setStocksList]);
+
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+
+  // On-demand product search: only calls products API when user is actively searching
+  const handleProductSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setIsSearchingProducts(true);
+    try {
+      const res = await productApi.getProducts({
+        search: trimmed,
+        page_size: 30,
+        pagination_required: false,
+      });
+      if (res && res.data && Array.isArray(res.data)) {
+        setProductList((prev) => {
+          const map = new Map<string, any>();
+          prev.forEach((p) => map.set(p.id, p));
+          res.data.forEach((p: any) => {
+            map.set(p.id, {
+              id: p.id,
+              name: p.productName || p.name,
+              code: p.productCode || p.sku || p.code || p.id,
+              sku: p.productCode || p.sku || p.code || p.id,
+              price: Number(p.salePrice || p.unitPrice || 0),
+              cost: Number(p.purchasePrice || p.costPrice || 0),
+              unit: p.unit || "PCS",
+              batches: p.batches || [],
+            });
+          });
+          return Array.from(map.values());
+        });
+      }
+    } catch (err) {
+      console.warn("Failed to search products in SalesView:", err);
+    } finally {
+      setIsSearchingProducts(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isFormModalOpen) {
+      loadProductAndStockData();
+    }
+  }, [isFormModalOpen, loadProductAndStockData]);
 
   // API States
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -503,7 +579,10 @@ export const SalesView: React.FC = () => {
   };
 
   // Live Invoices Fetching
+  const isFetchingInvoicesRef = useRef(false);
   const fetchSalesInvoices = useCallback(async () => {
+    if (isFetchingInvoicesRef.current) return;
+    isFetchingInvoicesRef.current = true;
     setIsApiLoading(true);
     try {
       const params: InvoiceFilterParams = {
@@ -515,58 +594,48 @@ export const SalesView: React.FC = () => {
       if (appliedSearch && appliedSearch.trim()) {
         params.search = appliedSearch.trim();
       }
-      if (appliedSaleStatus && appliedSaleStatus !== "All") {
+      if (appliedSaleStatus && appliedSaleStatus.toUpperCase() !== "ALL") {
         params.status = appliedSaleStatus;
       }
-      if (appliedPaymentStatus && appliedPaymentStatus !== "All") {
+      if (appliedPaymentStatus && appliedPaymentStatus.toUpperCase() !== "ALL") {
         params.paymentStatus = appliedPaymentStatus;
       }
-      if (appliedCustomer && appliedCustomer !== "All" && UUID_REGEX.test(appliedCustomer)) {
+      if (appliedCustomer && appliedCustomer.toUpperCase() !== "ALL" && UUID_REGEX.test(appliedCustomer)) {
         params.customerId = appliedCustomer;
       }
 
       const res = await commerceInvoiceApi.getInvoices(params);
       if (res && res.data && Array.isArray(res.data)) {
         const mapped = res.data.map((inv) => mapApiInvoiceToSaleTransaction(inv));
-        setSalesList(mapped);
+        const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
+        const localSales: SaleTransaction[] = rawLocal ? JSON.parse(rawLocal) : [];
+        const apiInvoiceNos = new Set(mapped.map((m) => m.invoiceNo || m.id));
+        const extraLocals = localSales.filter((l) => !apiInvoiceNos.has(l.invoiceNo) && !apiInvoiceNos.has(l.id));
+        const merged = [...extraLocals, ...mapped];
+
+        setSalesList(merged);
         if (res.pagination) {
-          setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
-          setTotalApiPages(res.pagination.totalPages ?? 1);
+          setTotalApiRecords((res.pagination.totalRecords ?? mapped.length) + extraLocals.length);
+          setTotalApiPages(Math.max(1, Math.ceil(merged.length / pageSize)));
         } else {
-          setTotalApiRecords(mapped.length);
+          setTotalApiRecords(merged.length);
           setTotalApiPages(1);
         }
         setIsApiConnected(true);
       }
     } catch (err: any) {
       console.error("Failed to fetch invoices:", err);
+      const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
+      const localSales: SaleTransaction[] = rawLocal ? JSON.parse(rawLocal) : [];
+      if (localSales.length > 0) {
+        setSalesList(localSales);
+      }
       setIsApiConnected(false);
     } finally {
       setIsApiLoading(false);
+      isFetchingInvoicesRef.current = false;
     }
   }, [currentPage, pageSize, appliedSearch, appliedSaleStatus, appliedPaymentStatus, appliedCustomer, setSalesList]);
-
-  // Master Data Fetching
-  const fetchMasterData = useCallback(async () => {
-    try {
-      const [custRes, stockRes] = await Promise.allSettled([
-        customerApi.getCustomers({ pagination_required: false }),
-        stockApi.getStocks({ pagination_required: false }),
-      ]);
-      if (custRes.status === "fulfilled" && custRes.value?.data) {
-        setCustomersList(custRes.value.data.map(mapApiCustomerToSalesCustomer));
-      }
-      if (stockRes.status === "fulfilled" && stockRes.value?.data) {
-        setStocksList(stockRes.value.data.map(mapApiStockToInventoryStockItem));
-      }
-    } catch (err) {
-      console.warn("Master data load error:", err);
-    }
-  }, [setCustomersList, setStocksList]);
-
-  useEffect(() => {
-    fetchMasterData();
-  }, [fetchMasterData]);
 
   useEffect(() => {
     fetchSalesInvoices();
@@ -745,30 +814,53 @@ export const SalesView: React.FC = () => {
     };
   }, [sales]);
 
-  // Product Selection helper
-  // Product Selection helper with real stock batches
+  // Product Selection helper with real stock batches and searched products
   const availableProducts = useMemo(() => {
-    if (stocks && stocks.length > 0) {
-      return stocks.map((stk) => ({
-        id: stk.productId,
-        name: stk.productName,
-        price: stk.unitPrice || 0,
-        cost: stk.unitCost || 0,
-        sku: stk.sku,
-        batches: stk.batches || [],
-        stock: stk.inStock,
-      }));
-    }
-    return productList.map((p) => ({
-      id: p.id,
-      name: p.name,
-      price: 98,
-      cost: 0,
-      sku: `SKU-${p.code || "PRD"}`,
-      batches: [],
-      stock: 86,
-    }));
-  }, [stocks, productList]);
+    const map = new Map<string, any>();
+
+    productList.forEach((p) => {
+      map.set(p.id, {
+        id: p.id,
+        name: p.name,
+        price: p.price ?? 0,
+        cost: p.cost ?? 0,
+        sku: p.sku || `SKU-${p.code || "PRD"}`,
+        batches: p.batches || [],
+        stock: p.stock ?? 0,
+      });
+    });
+
+    stocks.forEach((stk) => {
+      if (!map.has(stk.productId)) {
+        map.set(stk.productId, {
+          id: stk.productId,
+          name: stk.productName,
+          price: stk.unitPrice || 0,
+          cost: stk.unitCost || 0,
+          sku: stk.sku,
+          batches: stk.batches || [],
+          stock: stk.inStock,
+        });
+      }
+    });
+
+    // Also include line items currently on the invoice so their names are retained
+    formData.items.forEach((it) => {
+      if (it.productId && !map.has(it.productId)) {
+        map.set(it.productId, {
+          id: it.productId,
+          name: it.productName || "Product",
+          price: it.unitPrice || 0,
+          cost: it.purchasePrice || 0,
+          sku: it.sku,
+          batches: [],
+          stock: 0,
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [stocks, productList, formData.items]);
 
   const productOptions = useMemo(() => {
     return availableProducts.map((p) => ({
@@ -1302,6 +1394,11 @@ export const SalesView: React.FC = () => {
       toast.error("Customer phone number is required.");
       return;
     }
+    const cleanPhone = quickCustomerForm.phone.replace(/[\s\-()]/g, "");
+    if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
+      toast.error("Phone number must be a valid 10-digit Indian mobile number (e.g. 9876543210).");
+      return;
+    }
     const newCust: SalesCustomer = {
       id: `cust_${Date.now()}`,
       customerCode: `CUS-${1000 + (customers?.length || 0) + 1}`,
@@ -1819,13 +1916,11 @@ export const SalesView: React.FC = () => {
 
   // Void / Cancel Invoice
   const handleCancelInvoice = async (sale: SaleTransaction) => {
-    if (!confirm(`Are you sure you want to cancel invoice ${sale.invoiceNo}? Restores stock items.`)) {
-      return;
-    }
     setIsActionLoading(true);
     try {
-      if (UUID_REGEX.test(sale.id)) {
-        await commerceInvoiceApi.updateStatus(sale.id, "Cancelled");
+      const cleanId = (sale.id || "").trim();
+      if (cleanId && !cleanId.startsWith("mock_") && !cleanId.startsWith("local_")) {
+        await commerceInvoiceApi.updateStatus(cleanId, "Cancelled");
       }
       const updatedSale: SaleTransaction = {
         ...sale,
@@ -1845,22 +1940,43 @@ export const SalesView: React.FC = () => {
 
   // Delete Invoice
   const handleDeleteSaleInvoice = async (sale: SaleTransaction) => {
-    if (!confirm(`Are you sure you want to void / delete invoice ${sale.invoiceNo}?`)) {
-      return;
-    }
     setIsActionLoading(true);
     try {
-      if (UUID_REGEX.test(sale.id)) {
-        await commerceInvoiceApi.deleteInvoice(sale.id);
+      const cleanId = (sale.id || "").trim();
+      if (cleanId && !cleanId.startsWith("mock_") && !cleanId.startsWith("local_")) {
+        await commerceInvoiceApi.deleteInvoice(cleanId);
       }
       deleteSale(sale.id);
+      setSalesList(
+        sales.filter((s) => s.id !== sale.id && s.invoiceNo !== sale.invoiceNo),
+      );
+      try {
+        const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
+        if (rawLocal) {
+          const list: SaleTransaction[] = JSON.parse(rawLocal);
+          const updated = list.filter(
+            (s) => s.id !== sale.id && s.invoiceNo !== sale.invoiceNo,
+          );
+          localStorage.setItem(
+            "yaa_crm_sales_transactions",
+            JSON.stringify(updated),
+          );
+        }
+      } catch (e) {
+        console.warn("Local storage delete notice:", e);
+      }
       toast.success(`Invoice ${sale.invoiceNo} deleted successfully.`);
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to delete invoice:", err);
-      toast.error(err?.message || "Failed to delete invoice.");
+      toast.error(
+        err?.response?.data?.error?.message ||
+          err?.message ||
+          "Failed to delete invoice.",
+      );
     } finally {
       setIsActionLoading(false);
+      setActiveDropdownId(null);
     }
   };
 
@@ -3093,9 +3209,13 @@ export const SalesView: React.FC = () => {
                                     onChange={(val) =>
                                       handleItemProductChange(idx, val)
                                     }
+                                    onSearch={handleProductSearch}
+                                    isLoading={isSearchingProducts}
                                     options={productOptions}
                                     placeholder="Select Product..."
                                     searchPlaceholder="Search product by name or SKU..."
+                                    emptyText="Type to search products..."
+                                    allowClear
                                     size="md"
                                   />
                                   {item.productId && item.sku && (
@@ -4085,16 +4205,6 @@ export const SalesView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            icon={<RefreshCw className={`w-4 h-4 text-slate-600 ${isApiLoading ? "animate-spin text-[#33077C]" : ""}`} />}
-            onClick={() => fetchSalesInvoices()}
-            disabled={isApiLoading}
-            className="hover:border-slate-400 transition-colors"
-          >
-            {isApiLoading ? "Syncing..." : "Refresh"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="md"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
             onClick={handleExportExcel}
             className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
@@ -4266,8 +4376,12 @@ export const SalesView: React.FC = () => {
               <div className="flex items-center gap-2.5 flex-wrap">
                 <FilterDropdown
                   placeholder="Sale Status : All"
-                  value={pendingSaleStatus}
-                  onChange={(val) => setPendingSaleStatus(val)}
+                  value={appliedSaleStatus}
+                  onChange={(val) => {
+                    setPendingSaleStatus(val);
+                    setAppliedSaleStatus(val);
+                    setCurrentPage(1);
+                  }}
                   options={[
                     { label: "Sale Status : All", value: "All" },
                     { label: "Draft", value: "Draft", dotColor: "#64748b" },
@@ -4291,8 +4405,12 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Payment : All"
-                  value={pendingPaymentStatus}
-                  onChange={(val) => setPendingPaymentStatus(val)}
+                  value={appliedPaymentStatus}
+                  onChange={(val) => {
+                    setPendingPaymentStatus(val);
+                    setAppliedPaymentStatus(val);
+                    setCurrentPage(1);
+                  }}
                   options={[
                     { label: "Payment : All", value: "All" },
                     { label: "Paid", value: "Paid", dotColor: "#10b981" },
@@ -4304,8 +4422,12 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Customer : All"
-                  value={pendingCustomer}
-                  onChange={(val) => setPendingCustomer(val)}
+                  value={appliedCustomer}
+                  onChange={(val) => {
+                    setPendingCustomer(val);
+                    setAppliedCustomer(val);
+                    setCurrentPage(1);
+                  }}
                   options={[
                     { label: "Customer : All", value: "All" },
                     ...customerList.map((c) => ({
@@ -4317,8 +4439,12 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Sales Rep : All"
-                  value={pendingSalesRep}
-                  onChange={(val) => setPendingSalesRep(val)}
+                  value={appliedSalesRep}
+                  onChange={(val) => {
+                    setPendingSalesRep(val);
+                    setAppliedSalesRep(val);
+                    setCurrentPage(1);
+                  }}
                   options={[
                     { label: "Sales Rep : All", value: "All" },
                     ...salesRepresentatives.map((r) => ({
@@ -4395,10 +4521,16 @@ export const SalesView: React.FC = () => {
                 <thead>
                   <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      INVOICE & CODE
+                      CUSTOMER
                     </th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      CUSTOMER
+                      INVOICE NO.
+                    </th>
+                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span>DATE</span>
+                        <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
+                      </div>
                     </th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
                       ITEMS
@@ -4427,7 +4559,7 @@ export const SalesView: React.FC = () => {
                   {paginatedSales.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
                       >
                         <ShoppingCart className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
@@ -4451,29 +4583,8 @@ export const SalesView: React.FC = () => {
                           key={sale.id}
                           className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
                         >
-                          {/* 1. Invoice & Code */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
-                                {initials}
-                              </div>
-                              <div className="flex flex-col">
-                                <span
-                                  className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
-                                  onClick={() => handleOpenViewInvoice(sale)}
-                                >
-                                  {sale.invoiceNo}
-                                </span>
-                                <span className="text-[11px] text-slate-400 font-medium mt-0.5">
-                                  {sale.saleDate}{" "}
-                                  {sale.dueDate ? `• Due ${sale.dueDate}` : ""}
-                                </span>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* 2. Customer */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                          {/* 1. Customer */}
+                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                             <div className="flex items-center gap-2.5">
                               <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
                                 <User className="w-4 h-4 text-[#33077C]" />
@@ -4489,8 +4600,41 @@ export const SalesView: React.FC = () => {
                             </div>
                           </td>
 
+                          {/* 2. Invoice No. */}
+                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
+                                {initials}
+                              </div>
+                              <div className="flex flex-col">
+                                <span
+                                  className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
+                                  onClick={() => handleOpenViewInvoice(sale)}
+                                >
+                                  {sale.invoiceNo}
+                                </span>
+                                {sale.referenceNo && (
+                                  <span className="text-[11px] text-slate-400 font-medium mt-0.5">
+                                    Ref: {sale.referenceNo}
+                                  </span>
+                                )}
+                                <DocumentLineageBadges docRef={sale.invoiceNo || sale.referenceNo} currentType="Invoice" className="justify-start mt-1" />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 3. Date */}
+                          <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle font-medium text-slate-700">
+                            <div className="font-semibold text-slate-800">{sale.saleDate}</div>
+                            {sale.dueDate && (
+                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">
+                                Due: {sale.dueDate}
+                              </div>
+                            )}
+                          </td>
+
                           {/* 3. Items */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                             <div className="font-medium text-slate-800 text-xs">
                               {sale.items[0]?.productName || "Custom Line Item"}
                             </div>
@@ -4502,7 +4646,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 4. Total Amount */}
-                          <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap font-bold text-slate-900 text-xs sm:text-[13px]">
+                          <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap font-bold text-slate-900 text-xs sm:text-[13px] align-middle">
                             ₹
                             {sale.grandTotal.toLocaleString("en-IN", {
                               minimumFractionDigits: 2,
@@ -4510,7 +4654,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 5. Paid / Balance */}
-                          <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap">
+                          <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap align-middle">
                             <div className="font-bold text-emerald-600 text-xs">
                               ₹
                               {sale.paidAmount.toLocaleString("en-IN", {
@@ -4532,7 +4676,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 6. Payment Status */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
                             {sale.paymentStatus === "Paid" ? (
                               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
@@ -4552,7 +4696,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 7. Sale Status */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
                             {sale.saleStatus === "Completed" ? (
                               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
@@ -4577,7 +4721,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 8. Sales Rep */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                             <div className="flex flex-col gap-0.5">
                               {sale.salesRepresentativeName || sale.salesperson ? (
                                 <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
@@ -4599,7 +4743,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 9. Actions */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
                             <div className="flex items-center justify-center gap-1.5 action-dropdown-container">
                               {/* 1. Print Action Button */}
                               <button
@@ -4782,21 +4926,7 @@ export const SalesView: React.FC = () => {
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setActiveDropdownId(null);
-                                          if (
-                                            confirm(
-                                              `Are you sure you want to cancel invoice ${sale.invoiceNo}?`,
-                                            )
-                                          ) {
-                                            const updatedSale: SaleTransaction = {
-                                              ...sale,
-                                              saleStatus: "Cancelled",
-                                              updatedAt: new Date().toISOString(),
-                                            };
-                                            saveSale(updatedSale);
-                                            toast.error(
-                                              `Invoice ${sale.invoiceNo} has been cancelled.`,
-                                            );
-                                          }
+                                          handleCancelInvoice(sale);
                                         }}
                                         className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                       >
@@ -4809,16 +4939,7 @@ export const SalesView: React.FC = () => {
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setActiveDropdownId(null);
-                                          if (
-                                            confirm(
-                                              `Are you sure you want to delete invoice ${sale.invoiceNo}?`,
-                                            )
-                                          ) {
-                                            deleteSale(sale.id);
-                                            toast.success(
-                                              `Invoice ${sale.invoiceNo} deleted.`,
-                                            );
-                                          }
+                                          handleDeleteSaleInvoice(sale);
                                         }}
                                         className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
                                       >
@@ -4858,22 +4979,7 @@ export const SalesView: React.FC = () => {
                                         Duplicate
                                       </button>
 
-                                      {/* 9. Open PDF */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          setSelectedSale(sale);
-                                          setIsInvoiceModalOpen(true);
-                                          toast.info(
-                                            `Opening PDF preview for ${sale.invoiceNo}`,
-                                          );
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Open PDF
-                                      </button>
+
 
                                       {/* 10. Preview */}
                                       <button
@@ -4889,18 +4995,7 @@ export const SalesView: React.FC = () => {
                                         Preview
                                       </button>
 
-                                      {/* 11. Print */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handlePrintSaleInvoice(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Print
-                                      </button>
+
 
                                       {/* 12. View History */}
                                       <button
@@ -5824,59 +5919,47 @@ export const SalesView: React.FC = () => {
             </div>
 
             {/* Sales Rep Selector */}
-            <div className="relative pt-1">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Sales Representative <span className="text-rose-500">*</span>
-                </span>
-                <select
-                  value={assignRepId}
-                  onChange={(e) => setAssignRepId(e.target.value)}
-                  className="w-full h-full px-3.5 bg-transparent font-semibold text-slate-800 text-xs outline-none cursor-pointer"
-                >
-                  <option value="">-- Select Sales Representative --</option>
-                  {salesRepresentatives.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({r.mobile}) - {r.status}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <FormLabel required>Sales Representative</FormLabel>
+              <select
+                value={assignRepId}
+                onChange={(e) => setAssignRepId(e.target.value)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="">-- Select Sales Representative --</option>
+                {salesRepresentatives.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.mobile}) - {r.status}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Collection Status */}
-            <div className="relative pt-1">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Collection Status
-                </span>
-                <select
-                  value={assignStatus}
-                  onChange={(e) => setAssignStatus(e.target.value)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
-                >
-                  <option value="Pending Follow-up">Pending Follow-up</option>
-                  <option value="Customer Contacted">Customer Contacted</option>
-                  <option value="Promise to Pay">Promise to Pay</option>
-                  <option value="Dispute Raised">Dispute Raised</option>
-                  <option value="Collected">Collected</option>
-                </select>
-              </div>
+            <div>
+              <FormLabel>Collection Status</FormLabel>
+              <select
+                value={assignStatus}
+                onChange={(e) => setAssignStatus(e.target.value)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Pending Follow-up">Pending Follow-up</option>
+                <option value="Customer Contacted">Customer Contacted</option>
+                <option value="Promise to Pay">Promise to Pay</option>
+                <option value="Dispute Raised">Dispute Raised</option>
+                <option value="Collected">Collected</option>
+              </select>
             </div>
 
             {/* Next Follow-up Date */}
-            <div className="relative pt-1">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Next Follow-up Date (Optional)
-                </span>
-                <input
-                  type="date"
-                  value={assignNextFollowUp}
-                  onChange={(e) => setAssignNextFollowUp(e.target.value)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs font-medium text-slate-700 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Next Follow-up Date (Optional)</FormLabel>
+              <input
+                type="date"
+                value={assignNextFollowUp}
+                onChange={(e) => setAssignNextFollowUp(e.target.value)}
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
             {/* Modal Actions */}
@@ -6053,45 +6136,43 @@ export const SalesView: React.FC = () => {
 
                 {/* 3. Payment Date & Notes */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Payment Date <span className="text-rose-500">*</span>
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="dd/mm/yyyy"
-                      value={isoToDdmmyyyy(paymentModalDate)}
-                      onChange={(e) => {
-                        const iso = ddmmyyyyToIso(e.target.value);
-                        setPaymentModalDate(iso || e.target.value);
-                      }}
-                      required
-                      className="w-full h-full pl-4 pr-10 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
-                    />
-                    <label className="absolute right-2.5 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
-                      <Calendar className="w-4 h-4" />
+                  <div>
+                    <FormLabel required>Payment Date</FormLabel>
+                    <div className="relative">
                       <input
-                        type="date"
-                        value={paymentModalDate}
+                        type="text"
+                        placeholder="dd/mm/yyyy"
+                        value={isoToDdmmyyyy(paymentModalDate)}
                         onChange={(e) => {
-                          if (e.target.value)
-                            setPaymentModalDate(e.target.value);
+                          const iso = ddmmyyyyToIso(e.target.value);
+                          setPaymentModalDate(iso || e.target.value);
                         }}
-                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                        required
+                        className={`${FORM_INPUT_CLS} pr-10`}
                       />
-                    </label>
+                      <label className="absolute right-2.5 top-2.5 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
+                        <Calendar className="w-4 h-4" />
+                        <input
+                          type="date"
+                          value={paymentModalDate}
+                          onChange={(e) => {
+                            if (e.target.value)
+                              setPaymentModalDate(e.target.value);
+                          }}
+                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                        />
+                      </label>
+                    </div>
                   </div>
 
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Payment Notes
-                    </span>
+                  <div>
+                    <FormLabel>Payment Notes</FormLabel>
                     <input
                       type="text"
                       value={recordNotes}
                       onChange={(e) => setRecordNotes(e.target.value)}
                       placeholder="Add payment notes..."
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
+                      className={FORM_INPUT_CLS}
                     />
                   </div>
                 </div>
@@ -6341,156 +6422,124 @@ export const SalesView: React.FC = () => {
           }} className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             <div className="sm:col-span-2">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Customer / Client Name <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.name}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      name: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. Acme Corp / Sarah Connor"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel required>Customer / Client Name</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.name}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    name: e.target.value,
+                  })
+                }
+                placeholder="e.g. Acme Corp / Sarah Connor"
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Company Name (Optional)
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.company}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      company: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. Acme Enterprises"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel>Company Name (Optional)</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.company}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    company: e.target.value,
+                  })
+                }
+                placeholder="e.g. Acme Enterprises"
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Phone Number <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.phone}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      phone: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. +91 98765 43210"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel required>Phone Number</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.phone}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    phone: e.target.value,
+                  })
+                }
+                placeholder="e.g. +91 98765 43210"
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Email Address
-                </span>
-                <input
-                  type="email"
-                  value={quickCustomerForm.email}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      email: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. info@acme.com"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel>Email Address</FormLabel>
+              <input
+                type="email"
+                value={quickCustomerForm.email}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    email: e.target.value,
+                  })
+                }
+                placeholder="e.g. info@acme.com"
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  GSTIN / Tax ID
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.gstNumber}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      gstNumber: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. 33AABCZ9876K1Z2"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono uppercase font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel>GSTIN / Tax ID</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.gstNumber}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    gstNumber: e.target.value,
+                  })
+                }
+                placeholder="e.g. 33AABCZ9876K1Z2"
+                className={`${FORM_INPUT_CLS} font-mono uppercase`}
+              />
             </div>
             <div className="sm:col-span-2">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Billing Address
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.address}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      address: e.target.value,
-                    })
-                  }
-                  placeholder="Street address..."
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel>Billing Address</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.address}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    address: e.target.value,
+                  })
+                }
+                placeholder="Street address..."
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Credit Limit (₹)
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  value={quickCustomerForm.creditLimit}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      creditLimit: e.target.value,
-                    })
-                  }
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Credit Limit (₹)</FormLabel>
+              <input
+                type="number"
+                min="0"
+                value={quickCustomerForm.creditLimit}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    creditLimit: e.target.value,
+                  })
+                }
+                className={FORM_INPUT_CLS}
+              />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Terms
-                </span>
-                <input
-                  type="text"
-                  value={quickCustomerForm.paymentTerms}
-                  onChange={(e) =>
-                    setQuickCustomerForm({
-                      ...quickCustomerForm,
-                      paymentTerms: e.target.value,
-                    })
-                  }
-                  placeholder="e.g. Net 30 Days"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                />
-              </div>
+              <FormLabel>Payment Terms</FormLabel>
+              <input
+                type="text"
+                value={quickCustomerForm.paymentTerms}
+                onChange={(e) =>
+                  setQuickCustomerForm({
+                    ...quickCustomerForm,
+                    paymentTerms: e.target.value,
+                  })
+                }
+                placeholder="e.g. Net 30 Days"
+                className={FORM_INPUT_CLS}
+              />
             </div>
           </div>
 

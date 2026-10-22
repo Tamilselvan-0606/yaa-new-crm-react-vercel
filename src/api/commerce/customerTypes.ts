@@ -32,6 +32,15 @@ export interface ApiCustomer {
   branchId?: string | null;
   subOrganizationId?: string | null;
   outstandingBalance?: number;
+  salesRepresentativeId?: string | null;
+  salesRepresentativeName?: string | null;
+  salesRepresentativeType?: 'Primary' | 'Temporary' | null;
+  salesRepresentative?: {
+    id: string;
+    name: string;
+    mobile?: string;
+    email?: string;
+  } | null;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -158,6 +167,8 @@ export interface CreateCustomerPayload {
   notes?: string;
   tags?: string[];
   status?: CustomerStatus;
+  salesRepresentativeId?: string;
+  salesRepresentativeType?: 'Primary' | 'Temporary';
   branchId?: string | null;
   subOrganizationId?: string | null;
 }
@@ -206,7 +217,15 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     status: (apiCust.status as CustomerStatus) || 'Active',
     totalSales: (apiCust as any).totalSales ?? 0,
     paidAmount: (apiCust as any).paidAmount ?? 0,
-    outstandingAmount: (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance || 0),
+    outstandingAmount: (() => {
+      const openingBal = Number(apiCust.openingBalance) || 0;
+      const raw = (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance);
+      const parsed = raw !== undefined && raw !== null ? Number(raw) : NaN;
+      return !isNaN(parsed) && parsed > 0 ? parsed : openingBal;
+    })(),
+    salesRepresentativeId: apiCust.salesRepresentativeId || (apiCust as any).salesRepresentative?.id || undefined,
+    salesRepresentativeName: apiCust.salesRepresentativeName || (apiCust as any).salesRepresentative?.name || undefined,
+    salesRepresentativeType: (apiCust.salesRepresentativeType as 'Primary' | 'Temporary') || undefined,
     activities: [],
     createdAt: apiCust.createdAt || new Date().toISOString(),
     updatedAt: apiCust.updatedAt || new Date().toISOString(),
@@ -215,7 +234,7 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
 
 export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPayload => {
   return {
-    customerCode: cust.customerCode || undefined,
+    customerCode: cust.customerCode && cust.customerCode.trim() ? cust.customerCode.trim() : undefined,
     name: cust.name,
     company: cust.company || undefined,
     customerType: cust.customerType === 'Individual' ? 'Individual' : 'Business',

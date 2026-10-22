@@ -6,9 +6,21 @@ import { Customer, DocumentItem } from '../../types';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { CustomSelect } from '../common/CustomSelect';
+import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { customerApi } from '../../api/commerce/customerApi';
-import { clientProductApi, ClientProductApiItem } from '../../api';
+import {
+  clientProductApi,
+  ClientProductApiItem,
+  platformClientApi,
+  subOrganizationApi,
+  SubOrganizationApiItem,
+  branchApi,
+  BranchApiItem,
+  organizationApi,
+  OrganizationApiItem,
+  getStoredOrganizationId,
+} from '../../api';
 import { useAppDispatch } from '../../hooks/redux';
 import { baseApi } from '../../api/baseApi';
 import { toast } from 'sonner';
@@ -20,6 +32,9 @@ import {
   Check,
   CheckCircle2,
   FileCheck,
+  Paperclip,
+  Eye,
+  ExternalLink,
 } from 'lucide-react';
 
 interface CustomerFormModalProps {
@@ -38,6 +53,140 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   initialCustomer,
 }) => {
   const dispatch = useAppDispatch();
+  const { currentUser } = useAuth();
+
+  // Role determination
+  const userRole = (currentUser?.role || '').toString().toUpperCase();
+  const isSuperAdmin = userRole === 'SUPER_ADMIN' || userRole === 'SUPERADMIN';
+  const isSubOrgAdmin =
+    userRole === 'SUB_ORG_ADMIN' ||
+    userRole === 'SUBORGADMIN' ||
+    currentUser?.email?.toLowerCase() === 'suborgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
+  const isOrgAdmin = !isSuperAdmin && !isSubOrgAdmin;
+
+  // Organization, SubOrg, Branch State
+  const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+  const [organizations, setOrganizations] = useState<OrganizationApiItem[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState<string>('');
+  const [selectedOrgName, setSelectedOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem('active_organization_orgsuperadmin') ||
+      localStorage.getItem('active_organization') ||
+      currentUser?.organization?.name ||
+      'Yaa Creations'
+    );
+  });
+
+  const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
+  const [loadingSubOrgs, setLoadingSubOrgs] = useState(false);
+  const [selectedSubOrgId, setSelectedSubOrgId] = useState<string>('');
+  const [selectedSubOrgName, setSelectedSubOrgName] = useState<string>('');
+
+  const [branches, setBranches] = useState<BranchApiItem[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+
+  // Fetch Organizations (for Super Admin) or default org name
+  useEffect(() => {
+    if (!isOpen) return;
+    if (isSuperAdmin) {
+      organizationApi.getOrganizations(1, 100).then((res) => {
+        if (res && Array.isArray(res.data)) {
+          setOrganizations(res.data);
+          if (res.data.length > 0 && !selectedOrgId) {
+            setSelectedOrgId(res.data[0].id);
+            setSelectedOrgName(res.data[0].name);
+          }
+        }
+      }).catch((e) => console.warn('Could not load orgs:', e));
+    } else {
+      setSelectedOrgId(activeOrgId || '');
+      if (activeOrgId) {
+        organizationApi.getOrganizationById(activeOrgId).then((res) => {
+          if (res?.data?.name) {
+            setSelectedOrgName(res.data.name);
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [isOpen, isSuperAdmin, activeOrgId]);
+
+  // Fetch Sub-Organizations
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchSubOrgs = async () => {
+      try {
+        setLoadingSubOrgs(true);
+        const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
+        const res = await subOrganizationApi.getSubOrganizations(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          orgToQuery || undefined
+        );
+        if (res && Array.isArray(res.data)) {
+          setSubOrganizations(res.data);
+
+          // If sub-org admin, resolve default sub-org
+          if (isSubOrgAdmin) {
+            const savedSubName =
+              localStorage.getItem('active_sub_organization') ||
+              (currentUser as any)?.subOrganization?.name ||
+              (currentUser as any)?.subOrganizationName ||
+              '';
+            const matched = res.data.find(
+              (s) =>
+                s.name.toLowerCase() === savedSubName.toLowerCase() ||
+                s.id === (currentUser as any)?.subOrganizationId
+            ) || res.data[0];
+            if (matched) {
+              setSelectedSubOrgId(matched.id);
+              setSelectedSubOrgName(matched.name);
+            }
+          }
+        } else {
+          setSubOrganizations([]);
+        }
+      } catch (err) {
+        console.warn('Failed to load sub-organizations:', err);
+        setSubOrganizations([]);
+      } finally {
+        setLoadingSubOrgs(false);
+      }
+    };
+    fetchSubOrgs();
+  }, [isOpen, selectedOrgId, activeOrgId, isSuperAdmin, isSubOrgAdmin]);
+
+  // Fetch Branches
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchBranches = async () => {
+      try {
+        setLoadingBranches(true);
+        const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
+        const res = await branchApi.getBranches(
+          {
+            page_no: 1,
+            page_size: 100,
+            pagination_required: 'false',
+            sub_organization_id: selectedSubOrgId || undefined,
+            organization_id: orgToQuery || undefined,
+          },
+          orgToQuery || undefined
+        );
+        if (res && Array.isArray(res.data)) {
+          setBranches(res.data);
+        } else {
+          setBranches([]);
+        }
+      } catch (err) {
+        console.warn('Failed to load branches:', err);
+        setBranches([]);
+      } finally {
+        setLoadingBranches(false);
+      }
+    };
+    fetchBranches();
+  }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin]);
 
   // Products from API
   const [products, setProducts] = useState<ClientProductApiItem[]>([]);
@@ -256,36 +405,82 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       };
 
       if (initialCustomer) {
+        let updated = false;
         try {
-          await customerApi.updateCustomer(initialCustomer.id, {
-            name: data.clientName,
-            company: data.businessName,
+          await platformClientApi.updateClient(initialCustomer.id, {
+            name: data.businessName || data.clientName,
+            legalName: data.businessName,
+            contactPerson: data.contactPerson || data.clientName,
             phone: data.phone,
+            whatsapp: data.whatsapp || data.phone,
             email: data.email,
             address: data.address,
-            gstin: data.gstNumber,
-            pan: data.panNumber,
-          } as any);
-        } catch {
-          await api.updateCustomer(initialCustomer.id, payload as any);
+            gstNumber: data.gstNumber,
+            panNumber: data.panNumber,
+          });
+          updated = true;
+        } catch (platformErr: any) {
+          console.warn('platformClientApi.updateClient failed, trying fallback:', platformErr);
+        }
+
+        if (!updated) {
+          try {
+            await customerApi.updateCustomer(initialCustomer.id, {
+              name: data.clientName,
+              company: data.businessName,
+              phone: data.phone,
+              email: data.email,
+              address: data.address,
+              gstin: data.gstNumber,
+              pan: data.panNumber,
+            } as any);
+          } catch {
+            await api.updateCustomer(initialCustomer.id, payload as any);
+          }
         }
         toast.success('Client updated successfully');
       } else {
+        let created = false;
         try {
-          await customerApi.createCustomer({
-            name: data.clientName,
-            company: data.businessName,
-            phone: data.phone,
+          await platformClientApi.createClient({
+            name: data.businessName || data.clientName,
+            code: data.clientId,
+            legalName: data.businessName,
             email: data.email,
-            customerType: 'Business',
+            password: 'ClientInitialPassword123!@#',
+            phone: data.phone,
+            whatsapp: data.whatsapp || data.phone,
+            contactPerson: data.contactPerson || data.clientName,
             address: data.address,
-            country: 'India',
+            gstNumber: data.gstNumber,
+            panNumber: data.panNumber,
+            registrationType: 'Pvt Ltd',
+            organizationType: 1,
             status: 'Active',
-            gstin: data.gstNumber,
-            pan: data.panNumber,
-          } as any);
-        } catch {
-          await api.createCustomer(payload as any);
+            subOrganizationSupport: true,
+          });
+          created = true;
+        } catch (platformErr: any) {
+          console.warn('platformClientApi.createClient failed, trying fallback:', platformErr);
+        }
+
+        if (!created) {
+          try {
+            await customerApi.createCustomer({
+              name: data.clientName,
+              company: data.businessName,
+              phone: data.phone,
+              email: data.email,
+              customerType: 'Business',
+              address: data.address,
+              country: 'India',
+              status: 'Active',
+              gstin: data.gstNumber,
+              pan: data.panNumber,
+            } as any);
+          } catch {
+            await api.createCustomer(payload as any);
+          }
         }
         toast.success('Client profile created successfully');
       }
@@ -293,6 +488,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       dispatch(
         baseApi.util.invalidateTags([
           { type: 'Customer', id: 'LIST' },
+          { type: 'PlatformClient', id: 'LIST' },
           'Dashboard',
         ])
       );
@@ -321,6 +517,96 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       onBack={onClose}
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
+          {/* Organization */}
+          <div>
+            <label className={labelClass}>Organization</label>
+            {isSuperAdmin ? (
+              <CustomSelect
+                value={selectedOrgId}
+                onChange={(val) => {
+                  setSelectedOrgId(val);
+                  const matched = organizations.find((o) => o.id === val);
+                  if (matched) setSelectedOrgName(matched.name);
+                  setSelectedSubOrgId('');
+                  setSelectedBranchId('');
+                }}
+                options={
+                  organizations.length > 0
+                    ? organizations.map((org) => ({ value: org.id, label: org.name }))
+                    : [{ value: '', label: 'No Organizations found' }]
+                }
+                placeholder="Select Organization"
+              />
+            ) : (
+              <div>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={selectedOrgName}
+                  title="Default organization cannot be modified"
+                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+                />
+                <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
+              </div>
+            )}
+          </div>
+
+          {/* Sub-Organization */}
+          <div>
+            <label className={labelClass}>Sub-Organization</label>
+            {isSubOrgAdmin ? (
+              <div>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={selectedSubOrgName || 'Sub Organization'}
+                  title="Default sub-organization cannot be modified"
+                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+                />
+                <span className="text-[11px] text-slate-400 mt-1 block">Default sub-organization (non-editable)</span>
+              </div>
+            ) : (
+              <CustomSelect
+                value={selectedSubOrgId}
+                onChange={(val) => {
+                  setSelectedSubOrgId(val);
+                  const matched = subOrganizations.find((s) => s.id === val);
+                  if (matched) setSelectedSubOrgName(matched.name);
+                  setSelectedBranchId('');
+                }}
+                options={
+                  subOrganizations.length > 0
+                    ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
+                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
+                }
+                placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
+              />
+            )}
+          </div>
+
+          {/* Branch */}
+          <div>
+            <label className={labelClass}>Branch</label>
+            <CustomSelect
+              value={selectedBranchId}
+              onChange={(val) => setSelectedBranchId(val)}
+              options={
+                branches.length > 0
+                  ? branches.map((b) => ({
+                      value: b.id,
+                      label: `${b.name}${b.location ? ` - ${b.location}` : ''}`,
+                    }))
+                  : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }]
+              }
+              placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
+            />
+          </div>
+        </div>
+
         {/* Row 1: Client ID | Client Name | Client Business */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
@@ -473,9 +759,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           </div>
         </div>
 
-        {/* Row 4: Address (2 columns) | Product Selection (1 column) */}
+        {/* Row 4: Address | Product Selection (3 fields per row grid layout) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2">
+          <div>
             <label className={labelClass}>
               Address <span className="text-slate-500">*</span>
             </label>
@@ -510,20 +796,43 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         </div>
 
         {/* Row 5: Document Uploads (Two Columns: Our Documents & Client Documents) */}
-        <div className="pt-2 border-t border-slate-100">
-          <label className="text-xs sm:text-[13px] font-bold text-slate-700 block mb-3">
-            Document Uploads
-          </label>
+        <div className="pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-3.5">
+            <div>
+              <label className="text-xs sm:text-[13px] font-bold text-slate-800 flex items-center gap-2">
+                <Paperclip className="w-4 h-4 text-[#4309A2]" />
+                Document Uploads
+              </label>
+              <p className="text-[11px] text-slate-400 mt-0.5">Attach contractual agreements and verification documents</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
+                Total: <span className="font-bold text-slate-800">{ourDocuments.length + clientDocuments.length}</span> files
+              </span>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Column A: Our Documents (Shared to Client) */}
-            <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs sm:text-sm font-bold text-slate-800">Our Documents</h4>
-                  <p className="text-[11px] text-slate-400">Contracts, agreements, and proposals shared to client</p>
+            <div className="group/card bg-gradient-to-b from-purple-50/40 via-white to-white rounded-2xl border border-purple-100/80 hover:border-purple-200 p-4 transition-all shadow-xs space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-purple-100/70 text-[#4309A2] flex items-center justify-center shrink-0 shadow-2xs">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-xs sm:text-sm font-bold text-slate-800">Our Documents</h4>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-purple-100/80 text-[#4309A2]">
+                        {ourDocuments.length}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                      Contracts, MSA &amp; proposals sent to client
+                    </p>
+                  </div>
                 </div>
-                <label className="inline-flex items-center gap-1.5 h-8 px-3 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-xs rounded-lg transition-all cursor-pointer shadow-2xs">
+                <label className="inline-flex items-center gap-1.5 h-8 px-3.5 bg-gradient-to-r from-[#4309A2] to-[#5A0EC8] hover:from-[#370685] hover:to-[#4309A2] text-white font-semibold text-xs rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0">
                   <Upload className="w-3.5 h-3.5" />
                   <span>Upload</span>
                   <input
@@ -536,39 +845,66 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               </div>
 
               {/* Uploaded Our Documents List */}
-              <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 custom-scrollbar">
                 {ourDocuments.length === 0 ? (
-                  <div className="text-center py-5 border border-dashed border-slate-200 rounded-xl bg-white text-slate-400">
-                    <FileText className="w-5 h-5 mx-auto mb-1 text-slate-300" />
-                    <p className="text-xs font-medium">No company documents attached</p>
-                  </div>
+                  <label className="flex flex-col items-center justify-center py-6 border-2 border-dashed border-purple-200/70 hover:border-[#4309A2]/40 rounded-xl bg-white/70 hover:bg-purple-50/20 text-slate-400 cursor-pointer transition-all">
+                    <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center text-[#4309A2] mb-1.5">
+                      <Upload className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-semibold text-slate-600">No company documents attached</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Click "Upload" or drop files here</p>
+                    <input
+                      type="file"
+                      multiple
+                      onChange={(e) => handleFileUpload(e, 'shared_by_company')}
+                      className="hidden"
+                    />
+                  </label>
                 ) : (
                   ourDocuments.map((doc) => (
                     <div
                       key={doc.id}
-                      className="p-2.5 bg-white rounded-xl border border-slate-200/90 flex items-center justify-between gap-2 shadow-2xs"
+                      className="group/item p-2.5 bg-white hover:bg-purple-50/30 rounded-xl border border-slate-200/80 hover:border-purple-200 flex items-center justify-between gap-2.5 transition-all shadow-2xs"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-7 h-7 rounded-lg bg-purple-50 text-[#33077C] flex items-center justify-center shrink-0 font-bold text-xs">
-                          <FileText className="w-3.5 h-3.5" />
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-purple-50 text-[#4309A2] flex items-center justify-center shrink-0 font-bold border border-purple-100">
+                          <FileText className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
                           <p className="text-xs font-semibold text-slate-800 truncate" title={doc.title}>
                             {doc.title}
                           </p>
-                          <span className="text-[10px] text-slate-400">
-                            {doc.category || 'Agreement'} &bull; {doc.fileSize || 'PDF'}
-                          </span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                              {doc.category || 'Agreement'}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {doc.fileSize || 'PDF'}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveDoc(doc.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1 rounded-md transition-colors"
-                        title="Remove Document"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {doc.url && (
+                          <a
+                            href={doc.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-slate-400 hover:text-[#4309A2] hover:bg-purple-50 p-1.5 rounded-lg transition-colors"
+                            title="View Document"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDoc(doc.id)}
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors"
+                          title="Remove Document"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -576,13 +912,25 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             </div>
 
             {/* Column B: Client Documents (Received from Client) */}
-            <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs sm:text-sm font-bold text-slate-800">Client Documents</h4>
-                  <p className="text-[11px] text-slate-400">GST certificate, PAN card, cheques, and proof files</p>
+            <div className="group/card bg-gradient-to-b from-emerald-50/40 via-white to-white rounded-2xl border border-emerald-100/80 hover:border-emerald-200 p-4 transition-all shadow-xs space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-100/70 text-emerald-700 flex items-center justify-center shrink-0 shadow-2xs">
+                    <FileCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h4 className="text-xs sm:text-sm font-bold text-slate-800">Client Documents</h4>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100/80 text-emerald-700">
+                        {clientDocuments.length}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                      GST certificate, PAN card, cheques &amp; proofs
+                    </p>
+                  </div>
                 </div>
-                <label className="inline-flex items-center gap-1.5 h-8 px-3 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-xs rounded-lg transition-all cursor-pointer shadow-2xs">
+                <label className="inline-flex items-center gap-1.5 h-8 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold text-xs rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0">
                   <Upload className="w-3.5 h-3.5" />
                   <span>Upload</span>
                   <input
@@ -595,39 +943,66 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               </div>
 
               {/* Uploaded Client Documents List */}
-              <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 custom-scrollbar">
                 {clientDocuments.length === 0 ? (
-                  <div className="text-center py-5 border border-dashed border-slate-200 rounded-xl bg-white text-slate-400">
-                    <FileCheck className="w-5 h-5 mx-auto mb-1 text-slate-300" />
-                    <p className="text-xs font-medium">No client documents attached</p>
-                  </div>
+                  <label className="flex flex-col items-center justify-center py-6 border-2 border-dashed border-emerald-200/70 hover:border-emerald-500/40 rounded-xl bg-white/70 hover:bg-emerald-50/20 text-slate-400 cursor-pointer transition-all">
+                    <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600 mb-1.5">
+                      <Upload className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-semibold text-slate-600">No client documents attached</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Click "Upload" or drop files here</p>
+                    <input
+                      type="file"
+                      multiple
+                      onChange={(e) => handleFileUpload(e, 'shared_by_client')}
+                      className="hidden"
+                    />
+                  </label>
                 ) : (
                   clientDocuments.map((doc) => (
                     <div
                       key={doc.id}
-                      className="p-2.5 bg-white rounded-xl border border-slate-200/90 flex items-center justify-between gap-2 shadow-2xs"
+                      className="group/item p-2.5 bg-white hover:bg-emerald-50/30 rounded-xl border border-slate-200/80 hover:border-emerald-200 flex items-center justify-between gap-2.5 transition-all shadow-2xs"
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 font-bold text-xs">
-                          <FileCheck className="w-3.5 h-3.5" />
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 font-bold border border-emerald-100">
+                          <FileCheck className="w-4 h-4" />
                         </div>
                         <div className="min-w-0">
                           <p className="text-xs font-semibold text-slate-800 truncate" title={doc.title}>
                             {doc.title}
                           </p>
-                          <span className="text-[10px] text-slate-400">
-                            {doc.category || 'Tax/Proof'} &bull; {doc.fileSize || 'PDF'}
-                          </span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                              {doc.category || 'Proof'}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {doc.fileSize || 'PDF'}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveDoc(doc.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1 rounded-md transition-colors"
-                        title="Remove Document"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {doc.url && (
+                          <a
+                            href={doc.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 p-1.5 rounded-lg transition-colors"
+                            title="View Document"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDoc(doc.id)}
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors"
+                          title="Remove Document"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidIndianPhone, INDIAN_PHONE_ERROR_MESSAGE } from '../utils/validation';
 
 export const LoginSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Invalid email address'),
@@ -13,10 +14,28 @@ export const LeadSchema = z.object({
   name: z.string().min(2, 'Contact Person Name is required'),
   company: z.string().min(2, 'Lead / Business Name is required'),
   designation: z.string().optional(),
-  phone: z.string().min(5, 'Phone number is required'),
-  whatsapp: z.string().optional(),
+  phone: z
+    .string()
+    .min(1, 'Phone number is required')
+    .refine(
+      (val) => isValidIndianPhone(val),
+      INDIAN_PHONE_ERROR_MESSAGE
+    ),
+  whatsapp: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || !val.trim() || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian WhatsApp number'
+    ),
   email: z.string().email('Invalid email format').or(z.literal('')),
-  alternatePhone: z.string().optional(),
+  alternatePhone: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || !val.trim() || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian alternate phone number'
+    ),
   address: z.string().optional(),
   city: z.string().optional(),
   state: z.string().optional(),
@@ -102,8 +121,20 @@ export const CustomerSchema = z.object({
   clientName: z.string().min(2, 'Client Name is required'),
   businessName: z.string().min(2, 'Client Business Name is required'),
   contactPerson: z.string().min(2, 'Contact Person Name is required'),
-  phone: z.string().min(5, 'Phone Number is required'),
-  whatsapp: z.string().optional(),
+  phone: z
+    .string()
+    .min(1, 'Phone Number is required')
+    .refine(
+      (val) => isValidIndianPhone(val),
+      INDIAN_PHONE_ERROR_MESSAGE
+    ),
+  whatsapp: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || !val.trim() || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian WhatsApp number'
+    ),
   email: z.string().email('Invalid email address'),
   gstNumber: z.string().optional(),
   panNumber: z.string().optional(),
@@ -111,7 +142,13 @@ export const CustomerSchema = z.object({
   city: z.string().optional(),
   state: z.string().optional(),
   pincode: z.string().optional(),
-  alternatePhone: z.string().optional(),
+  alternatePhone: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || !val.trim() || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian alternate phone number'
+    ),
 });
 
 export type CustomerFormData = z.infer<typeof CustomerSchema>;
@@ -132,8 +169,15 @@ export const SalesRepresentativeSchema = z.object({
   name: z.string().min(2, 'Full name must be at least 2 characters'),
   mobile: z
     .string()
-    .min(7, 'Mobile number is required')
-    .regex(/^\+?[\d\s\-]{7,15}$/, 'Enter a valid mobile number'),
+    .min(1, 'Mobile number is required')
+    .refine(
+      (val) => {
+        if (!val) return false;
+        const clean = val.replace(/\D/g, '');
+        return /^[6-9]\d{9}$/.test(clean);
+      },
+      'Mobile number must be a valid 10-digit number starting with 6, 7, 8, or 9'
+    ),
   email: z
     .string()
     .min(1, 'Email address is required')

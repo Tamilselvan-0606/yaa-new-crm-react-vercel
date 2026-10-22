@@ -521,7 +521,7 @@ export const OrganizationView: React.FC = () => {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [legalName, setLegalName] = useState('');
-  const [organizationType, setOrganizationType] = useState('All');
+  const [organizationType, setOrganizationType] = useState('');
   const [industry, setIndustry] = useState('');
   const [location, setLocation] = useState('');
   const [subscriptionPlan, setSubscriptionPlan] = useState('');
@@ -533,11 +533,12 @@ export const OrganizationView: React.FC = () => {
   const [gstNumber, setGstNumber] = useState('');
   const [panNumber, setPanNumber] = useState('');
   const [registrationType, setRegistrationType] = useState('');
-  const [formStatus, setFormStatus] = useState<string>('Active');
+  const [formStatus, setFormStatus] = useState<string>('');
   const [address, setAddress] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [subOrganizationSupport, setSubOrganizationSupport] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -550,6 +551,13 @@ export const OrganizationView: React.FC = () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         setLogo(reader.result as string);
+        if (formErrors.logo) {
+          setFormErrors((prev) => {
+            const next = { ...prev };
+            delete next.logo;
+            return next;
+          });
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -560,7 +568,7 @@ export const OrganizationView: React.FC = () => {
     setName('');
     setCode('');
     setLegalName('');
-    setOrganizationType(isSaleManagement ? 'Sales Management' : 'Client Management');
+    setOrganizationType('');
     setIndustry('');
     setLocation('');
     setSubscriptionPlan('');
@@ -572,11 +580,12 @@ export const OrganizationView: React.FC = () => {
     setGstNumber('');
     setPanNumber('');
     setRegistrationType('');
-    setFormStatus('Active');
+    setFormStatus('');
     setAddress('');
     setPassword('');
     setShowPassword(false);
     setSubOrganizationSupport(false);
+    setFormErrors({});
     setIsModalOpen(true);
   };
 
@@ -602,15 +611,85 @@ export const OrganizationView: React.FC = () => {
     setPassword('');
     setShowPassword(false);
     setSubOrganizationSupport(!!org.subOrganizationSupport);
+    setFormErrors({});
     setIsModalOpen(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      showToast('error', 'Validation Error', 'Organization name is required');
+
+    const errors: Record<string, string> = {};
+
+    if (!editingOrg) {
+      if (!logo) {
+        errors.logo = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Logo is required`;
+      }
+      if (!name.trim()) {
+        errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
+      }
+      if (!code.trim()) {
+        errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
+      }
+      if (!organizationType || organizationType === 'All') {
+        errors.organizationType = isOrgSuperAdmin
+          ? 'Sub Organization Suite is required'
+          : 'Organization Type is required';
+      }
+      if (!formStatus) {
+        errors.status = 'Status is required';
+      }
+      if (!subscriptionPlan.trim()) {
+        errors.subscriptionPlan = 'Subscription Plan is required';
+      }
+      if (!gstNumber.trim()) {
+        errors.gstNumber = 'GST Number is required';
+      }
+      if (!panNumber.trim()) {
+        errors.panNumber = 'PAN Number is required';
+      }
+      if (!location.trim()) {
+        errors.location = 'Location / HQ City is required';
+      }
+      if (!contactPerson.trim()) {
+        errors.contactPerson = 'Contact Person Name is required';
+      }
+      if (!phone.trim()) {
+        errors.phone = 'Contact Phone is required';
+      } else if (phone.trim().length !== 10) {
+        errors.phone = 'Contact Phone must be exactly 10 digits';
+      }
+      if (whatsapp.trim() && whatsapp.trim().length !== 10) {
+        errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
+      }
+      if (!email.trim()) {
+        errors.email = 'Official Email is required';
+      }
+      if (!password.trim()) {
+        errors.password = 'Password is required';
+      }
+      if (!address.trim()) {
+        errors.address = 'Address is required';
+      }
+    } else {
+      if (!name.trim()) {
+        errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
+      }
+      if (!code.trim()) {
+        errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
+      }
+      if (phone.trim() && phone.trim().length !== 10) {
+        errors.phone = 'Contact Phone must be exactly 10 digits';
+      }
+      if (whatsapp.trim() && whatsapp.trim().length !== 10) {
+        errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
+      }
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
       return;
     }
+    setFormErrors({});
 
     setIsSubmitting(true);
     try {
@@ -676,6 +755,7 @@ export const OrganizationView: React.FC = () => {
               organizationType: targetSuiteType,
               industry: industry.trim() || undefined,
               location: location.trim() || undefined,
+              subscriptionPlan: subscriptionPlan.trim() || undefined,
               contactPerson: contactPerson.trim() || undefined,
               email: email.trim() || undefined,
               phone: phone.trim() || undefined,
@@ -723,6 +803,16 @@ export const OrganizationView: React.FC = () => {
             email: email.trim() || undefined,
             phone: phone.trim() || undefined,
             password: password.trim() || undefined,
+            logo: logo || undefined,
+            status: formStatus || 'Active',
+            subscriptionPlan: subscriptionPlan.trim() || undefined,
+            location: location.trim() || undefined,
+            contactPerson: contactPerson.trim() || undefined,
+            address: address.trim() || undefined,
+            registrationType: registrationType.trim() || undefined,
+            industry: industry.trim() || undefined,
+            whatsapp: whatsapp.trim() || undefined,
+            subOrganizationSupport,
           });
           showToast('success', 'Organization Created', `${name} has been successfully created.`);
         }
@@ -891,9 +981,9 @@ export const OrganizationView: React.FC = () => {
                       <td className="py-4 px-5 border border-slate-200">
                         <div className="flex items-center gap-3.5">
                           {org.logo ? (
-                            <img src={org.logo} alt={org.name} className="w-10 h-10 rounded-xl object-cover shrink-0 border border-slate-200 shadow-xs" />
+                            <img src={org.logo} alt={org.name} className="w-10 h-10 rounded-full object-cover shrink-0 border-2 border-[#33077C] shadow-xs" />
                           ) : (
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#2B3991] to-[#33077C] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#2B3991] to-[#33077C] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs border-2 border-[#33077C]">
                               {initials}
                             </div>
                           )}
@@ -1249,12 +1339,13 @@ export const OrganizationView: React.FC = () => {
           showBackIcon={true}
           hideCloseButton={true}
         >
-          <form onSubmit={handleSubmit} className="space-y-4.5 p-2 sm:p-4">
-            {/* Row 1: Logo, Name, Code */}
+          <form onSubmit={handleSubmit} noValidate className="space-y-4.5 p-2 sm:p-4">
+            {/* Unified 3-fields-per-row Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Field 1: Logo */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isSubOrgMode ? 'Sub Organization Logo' : 'Organization Logo'}
+                  {isSubOrgMode ? 'Sub Organization Logo' : 'Organization Logo'} <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <div className="flex items-center gap-2.5">
                   <input
@@ -1264,15 +1355,19 @@ export const OrganizationView: React.FC = () => {
                     accept="image/*"
                     className="hidden"
                   />
-                  <div className="w-11 h-11 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
-                    {logo && (
+                  <div className={`w-11 h-11 rounded-full bg-slate-100 ${!logo ? (formErrors.logo ? 'border-2 border-red-500' : 'border border-dashed border-slate-300') : 'border-2 border-[#33077C]'} flex items-center justify-center overflow-hidden shrink-0 shadow-2xs`}>
+                    {logo ? (
                       <img src={logo} alt="Logo" className="w-full h-full object-cover" />
+                    ) : (
+                      <ImageIcon className="w-5 h-5 text-slate-400" />
                     )}
                   </div>
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 h-11 px-3 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs sm:text-[13px] border border-slate-200 hover:border-slate-300 transition-all cursor-pointer flex items-center justify-center gap-2 shadow-2xs"
+                    className={`flex-1 h-11 px-3 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs sm:text-[13px] border ${
+                      formErrors.logo ? 'border-red-500' : 'border-slate-200 hover:border-slate-300'
+                    } transition-all cursor-pointer flex items-center justify-center gap-2 shadow-2xs`}
                   >
                     <Upload className="w-3.5 h-3.5 text-[#33077C]" />
                     <span>{logo ? 'Change' : 'Upload Logo'}</span>
@@ -1288,65 +1383,81 @@ export const OrganizationView: React.FC = () => {
                     </button>
                   )}
                 </div>
+                {formErrors.logo && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.logo}</p>
+                )}
               </div>
 
+              {/* Field 2: Name */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isSubOrgMode ? 'Sub Organization Name' : 'Organization Name'} <span className="text-slate-500">*</span>
+                  {isSubOrgMode ? 'Sub Organization Name' : 'Organization Name'} <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
+                  }}
+                  placeholder="Enter organization name"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.name
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.name && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
+                )}
               </div>
 
+              {/* Field 3: Code */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'} <span className="text-slate-500">*</span>
+                  {isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'} <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  required
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    setCode(e.target.value);
+                    if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
+                  }}
+                  placeholder="e.g. ORG-001"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                    formErrors.code
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.code && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
+                )}
               </div>
-            </div>
 
-            {/* Row 2: (Suite / Org Type) + Legal Entity Name + Company Registration Type */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {isOrgSuperAdmin ? (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Sub Organization Suite <span className="text-[#33077C] font-bold">*</span>
-                  </label>
-                  <CustomSelect
-                    value={organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
-                    onChange={(val) => setOrganizationType(val)}
-                    options={['Client Management', 'Sales Management']}
-                    placeholder="Select sub-organization suite"
-                    activeColor="brand"
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Organization Type
-                  </label>
-                  <CustomSelect
-                    value={organizationType}
-                    onChange={(val) => setOrganizationType(val)}
-                    options={ORGANIZATION_TYPE_OPTIONS}
-                    placeholder="Select organization type"
-                    activeColor="brand"
-                  />
-                </div>
-              )}
+              {/* Field 4: Organization Type / Suite */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  {isOrgSuperAdmin ? 'Sub Organization Suite' : 'Organization Type'} <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <CustomSelect
+                  value={organizationType}
+                  onChange={(val) => {
+                    setOrganizationType(val);
+                    if (formErrors.organizationType) setFormErrors((prev) => ({ ...prev, organizationType: '' }));
+                  }}
+                  options={isOrgSuperAdmin ? ['Client Management', 'Sales Management'] : ORGANIZATION_TYPE_OPTIONS.filter((opt) => opt !== 'All')}
+                  placeholder="Select company type"
+                  activeColor="brand"
+                  error={!!formErrors.organizationType}
+                />
+                {formErrors.organizationType && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organizationType}</p>
+                )}
+              </div>
 
+              {/* Field 5: Legal Entity Name */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Legal Entity Name
@@ -1355,10 +1466,12 @@ export const OrganizationView: React.FC = () => {
                   type="text"
                   value={legalName}
                   onChange={(e) => setLegalName(e.target.value)}
+                  placeholder="Enter legal entity name"
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                 />
               </div>
 
+              {/* Field 6: Company Registration Type */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Company Registration Type
@@ -1372,97 +1485,97 @@ export const OrganizationView: React.FC = () => {
                 />
               </div>
 
-              {/* In Sub Organization mode, Status cleanly fills the 3rd slot of Row 2 */}
-              {isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Status
-                  </label>
-                  <CustomSelect
-                    value={formStatus}
-                    onChange={(val) => setFormStatus(val as 'Active' | 'Inactive' | 'Suspend')}
-                    options={STATUS_OPTIONS}
-                    placeholder="Select status"
-                    activeColor="brand"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Row 3: Subscription Plan (or Status if not sub-org), GST Number, PAN Number (3 per row) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {!isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Status
-                  </label>
-                  <CustomSelect
-                    value={formStatus}
-                    onChange={(val) => setFormStatus(val as 'Active' | 'Inactive' | 'Suspend')}
-                    options={STATUS_OPTIONS}
-                    placeholder="Select status"
-                    activeColor="brand"
-                  />
-                </div>
-              )}
-
+              {/* Field 7: Status */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Subscription Plan
+                  Status <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <CustomSelect
+                  value={formStatus}
+                  onChange={(val) => {
+                    setFormStatus(val as 'Active' | 'Inactive' | 'Suspend');
+                    if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
+                  }}
+                  options={STATUS_OPTIONS}
+                  placeholder="Select status"
+                  activeColor="brand"
+                  error={!!formErrors.status}
+                />
+                {formErrors.status && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
+                )}
+              </div>
+
+              {/* Field 8: Subscription Plan */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Subscription Plan <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subscriptionPlan}
-                  onChange={(val) => setSubscriptionPlan(val)}
+                  onChange={(val) => {
+                    setSubscriptionPlan(val);
+                    if (formErrors.subscriptionPlan) setFormErrors((prev) => ({ ...prev, subscriptionPlan: '' }));
+                  }}
                   options={subscriptionPlanOptions}
                   placeholder="Select subscription plan"
                   activeColor="brand"
+                  error={!!formErrors.subscriptionPlan}
                 />
+                {formErrors.subscriptionPlan && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subscriptionPlan}</p>
+                )}
               </div>
 
+              {/* Field 9: GST Number */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  GST Number
+                  GST Number <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={gstNumber}
-                  onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
+                  onChange={(e) => {
+                    setGstNumber(e.target.value.toUpperCase());
+                    if (formErrors.gstNumber) setFormErrors((prev) => ({ ...prev, gstNumber: '' }));
+                  }}
+                  placeholder="e.g. 22AAAAA0000A1Z5"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                    formErrors.gstNumber
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.gstNumber && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.gstNumber}</p>
+                )}
               </div>
 
-              {/* In Sub Organization mode, PAN Number fills the 3rd slot of Row 3 */}
-              {isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    PAN Number
-                  </label>
-                  <input
-                    type="text"
-                    value={panNumber}
-                    onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
-                  />
-                </div>
-              )}
-            </div>
+              {/* Field 10: PAN Number */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  PAN Number <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={panNumber}
+                  onChange={(e) => {
+                    setPanNumber(e.target.value.toUpperCase());
+                    if (formErrors.panNumber) setFormErrors((prev) => ({ ...prev, panNumber: '' }));
+                  }}
+                  placeholder="e.g. ABCDE1234F"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                    formErrors.panNumber
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {formErrors.panNumber && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.panNumber}</p>
+                )}
+              </div>
 
-            {/* Row 4: (PAN Number if parent org), Industry / Domain, Location / HQ City, Contact Person Name (3 per row) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {!isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    PAN Number
-                  </label>
-                  <input
-                    type="text"
-                    value={panNumber}
-                    onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all uppercase"
-                  />
-                </div>
-              )}
-
+              {/* Field 11: Industry / Domain */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Industry / Domain
@@ -1471,121 +1584,156 @@ export const OrganizationView: React.FC = () => {
                   type="text"
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
+                  placeholder="e.g. Information Technology"
                   className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                 />
               </div>
 
+              {/* Field 12: Location / HQ City */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Location / HQ City
+                  Location / HQ City <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    setLocation(e.target.value);
+                    if (formErrors.location) setFormErrors((prev) => ({ ...prev, location: '' }));
+                  }}
+                  placeholder="e.g. Chennai, Tamil Nadu"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.location
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.location && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.location}</p>
+                )}
               </div>
 
-              {/* In Sub Organization mode, Contact Person Name fills the 3rd slot of Row 4 */}
-              {isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Contact Person Name
-                  </label>
-                  <input
-                    type="text"
-                    value={contactPerson}
-                    onChange={(e) => setContactPerson(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Row 5: (Contact Person if parent org) + Contact Phone + WhatsApp + Official Email (3 per row) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {!isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Contact Person Name
-                  </label>
-                  <input
-                    type="text"
-                    value={contactPerson}
-                    onChange={(e) => setContactPerson(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                </div>
-              )}
-
+              {/* Field 13: Contact Person Name */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Contact Phone
+                  Contact Person Name <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  value={contactPerson}
+                  onChange={(e) => {
+                    setContactPerson(e.target.value);
+                    if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
+                  }}
+                  placeholder="Enter contact person name"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.contactPerson
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.contactPerson && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
+                )}
               </div>
 
+              {/* Field 14: Contact Phone */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Contact Phone <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={phone}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setPhone(val);
+                    if (formErrors.phone) setFormErrors((prev) => ({ ...prev, phone: '' }));
+                  }}
+                  placeholder="e.g. 9876543210"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.phone
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {formErrors.phone && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.phone}</p>
+                )}
+              </div>
+
+              {/* Field 15: WhatsApp Number */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   WhatsApp Number
                 </label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setWhatsapp(val);
+                    if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: '' }));
+                  }}
+                  placeholder="e.g. 9876543210"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.whatsapp
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.whatsapp && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.whatsapp}</p>
+                )}
               </div>
 
-              {/* In Sub Organization mode, Official Email fills the 3rd slot of Row 5 */}
-              {isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Official Email
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Row 6: (Official Email if parent org) + Password + Address (3 per row) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {!isSubOrgMode && (
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Official Email
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                  />
-                </div>
-              )}
-
+              {/* Field 16: Official Email */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Password
+                  Official Email <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: '' }));
+                  }}
+                  placeholder="e.g. admin@organization.com"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.email
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {formErrors.email && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.email}</p>
+                )}
+              </div>
+
+              {/* Field 17: Password */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Password <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
                     placeholder={editingOrg ? 'Leave empty to keep unchanged' : '••••••••'}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full h-11 pl-4 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (formErrors.password) setFormErrors((prev) => ({ ...prev, password: '' }));
+                    }}
+                    className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.password
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
                   <button
                     type="button"
@@ -1596,20 +1744,36 @@ export const OrganizationView: React.FC = () => {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                {formErrors.password && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.password}</p>
+                )}
               </div>
 
+              {/* Field 18: Address */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Address
+                  Address <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    setAddress(e.target.value);
+                    if (formErrors.address) setFormErrors((prev) => ({ ...prev, address: '' }));
+                  }}
+                  placeholder="Enter complete address"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.address
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {formErrors.address && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
+                )}
               </div>
 
+              {/* Field 19: Sub-Organization Support (Parent Org SuperAdmin only) */}
               {isSuperAdmin && !isSubOrgMode && (
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1692,7 +1856,7 @@ export const OrganizationView: React.FC = () => {
             <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
               <div className="flex items-center gap-4">
                 {viewingOrg.logo ? (
-                  <div className="w-14 h-14 rounded-full bg-white border border-slate-200 p-0.5 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
+                  <div className="w-14 h-14 rounded-full bg-white border-2 border-[#33077C] p-0.5 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
                     <img src={viewingOrg.logo} alt={viewingOrg.name} className="w-full h-full object-cover rounded-full" />
                   </div>
                 ) : (

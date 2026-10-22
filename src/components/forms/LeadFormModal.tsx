@@ -11,7 +11,17 @@ import {
   useUpdatePlatformLeadMutation,
   CreatePlatformLeadRequest,
 } from '../../api/platform/leadApi';
-import { clientProductApi, ClientProductApiItem } from '../../api';
+import {
+  clientProductApi,
+  ClientProductApiItem,
+  subOrganizationApi,
+  SubOrganizationApiItem,
+  branchApi,
+  BranchApiItem,
+  organizationApi,
+  OrganizationApiItem,
+  getStoredOrganizationId,
+} from '../../api';
 import { CustomSelect } from '../common/CustomSelect';
 import { X, Check } from 'lucide-react';
 
@@ -68,26 +78,138 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
   const generateLeadId = () => `LD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+  // Role determination
+  const userRole = (currentUser?.role || '').toString().toUpperCase();
+  const isSuperAdmin = userRole === 'SUPER_ADMIN' || userRole === 'SUPERADMIN';
+  const isSubOrgAdmin =
+    userRole === 'SUB_ORG_ADMIN' ||
+    userRole === 'SUBORGADMIN' ||
+    currentUser?.email?.toLowerCase() === 'suborgadmin@gmail.com' ||
+    currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
+  const isOrgAdmin = !isSuperAdmin && !isSubOrgAdmin;
+
+  // Organization, SubOrg, Branch State
+  const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+  const [organizations, setOrganizations] = useState<OrganizationApiItem[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState<string>('');
+  const [selectedOrgName, setSelectedOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem('active_organization_orgsuperadmin') ||
+      localStorage.getItem('active_organization') ||
+      currentUser?.organization?.name ||
+      'Yaa Creations'
+    );
+  });
+
+  const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
+  const [loadingSubOrgs, setLoadingSubOrgs] = useState(false);
+  const [selectedSubOrgId, setSelectedSubOrgId] = useState<string>('');
+  const [selectedSubOrgName, setSelectedSubOrgName] = useState<string>('');
+
+  const [branches, setBranches] = useState<BranchApiItem[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+
+  // Fetch Organizations (for Super Admin) or default org name
   useEffect(() => {
     if (!isOpen) return;
-    const fetchProducts = async () => {
+    if (isSuperAdmin) {
+      organizationApi.getOrganizations(1, 100).then((res) => {
+        if (res && Array.isArray(res.data)) {
+          setOrganizations(res.data);
+          if (res.data.length > 0 && !selectedOrgId) {
+            setSelectedOrgId(res.data[0].id);
+            setSelectedOrgName(res.data[0].name);
+          }
+        }
+      }).catch((e) => console.warn('Could not load orgs:', e));
+    } else {
+      setSelectedOrgId(activeOrgId || '');
+      if (activeOrgId) {
+        organizationApi.getOrganizationById(activeOrgId).then((res) => {
+          if (res?.data?.name) {
+            setSelectedOrgName(res.data.name);
+          }
+        }).catch(() => {});
+      }
+    }
+  }, [isOpen, isSuperAdmin, activeOrgId]);
+
+  // Fetch Sub-Organizations
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchSubOrgs = async () => {
       try {
-        setLoadingProducts(true);
-        const res = await clientProductApi.getProducts({ page: 1, limit: 100 });
-        if (res && res.success && Array.isArray(res.data)) {
-          setProducts(res.data);
+        setLoadingSubOrgs(true);
+        const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
+        const res = await subOrganizationApi.getSubOrganizations(
+          { page_no: 1, page_size: 100, pagination_required: 'false' },
+          orgToQuery || undefined
+        );
+        if (res && Array.isArray(res.data)) {
+          setSubOrganizations(res.data);
+
+          // If sub-org admin, resolve default sub-org
+          if (isSubOrgAdmin) {
+            const savedSubName =
+              localStorage.getItem('active_sub_organization') ||
+              (currentUser as any)?.subOrganization?.name ||
+              (currentUser as any)?.subOrganizationName ||
+              '';
+            const matched = res.data.find(
+              (s) =>
+                s.name.toLowerCase() === savedSubName.toLowerCase() ||
+                s.id === (currentUser as any)?.subOrganizationId
+            ) || res.data[0];
+            if (matched) {
+              setSelectedSubOrgId(matched.id);
+              setSelectedSubOrgName(matched.name);
+            }
+          }
         } else {
-          setProducts([]);
+          setSubOrganizations([]);
         }
       } catch (err) {
-        console.warn('Failed to load products for Lead modal:', err);
-        setProducts([]);
+        console.warn('Failed to load sub-organizations:', err);
+        setSubOrganizations([]);
       } finally {
-        setLoadingProducts(false);
+        setLoadingSubOrgs(false);
       }
     };
-    fetchProducts();
-  }, [isOpen]);
+    fetchSubOrgs();
+  }, [isOpen, selectedOrgId, activeOrgId, isSuperAdmin, isSubOrgAdmin]);
+
+  // Fetch Branches
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchBranches = async () => {
+      try {
+        setLoadingBranches(true);
+        const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
+        const res = await branchApi.getBranches(
+          {
+            page_no: 1,
+            page_size: 100,
+            pagination_required: 'false',
+            sub_organization_id: selectedSubOrgId || undefined,
+            organization_id: orgToQuery || undefined,
+          },
+          orgToQuery || undefined
+        );
+        if (res && Array.isArray(res.data)) {
+          setBranches(res.data);
+        } else {
+          setBranches([]);
+        }
+      } catch (err) {
+        console.warn('Failed to load branches:', err);
+        setBranches([]);
+      } finally {
+        setLoadingBranches(false);
+      }
+    };
+    fetchBranches();
+  }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin]);
 
   const {
     register,
@@ -281,6 +403,94 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       onBack={onClose}
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
+          {/* Organization */}
+          <div>
+            <label className={labelClass}>Organization</label>
+            {isSuperAdmin ? (
+              <CustomSelect
+                value={selectedOrgId}
+                onChange={(val) => {
+                  setSelectedOrgId(val);
+                  const matched = organizations.find((o) => o.id === val);
+                  if (matched) setSelectedOrgName(matched.name);
+                  setSelectedSubOrgId('');
+                  setSelectedBranchId('');
+                }}
+                options={
+                  organizations.length > 0
+                    ? organizations.map((org) => ({ value: org.id, label: org.name }))
+                    : [{ value: '', label: 'No Organizations found' }]
+                }
+                placeholder="Select Organization"
+              />
+            ) : (
+              <div>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={selectedOrgName}
+                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Sub-Organization */}
+          <div>
+            <label className={labelClass}>Sub-Organization</label>
+            {isSubOrgAdmin ? (
+              <div>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={selectedSubOrgName || 'Sub Organization'}
+                  title="Default sub-organization cannot be modified"
+                  className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+                />
+                <span className="text-[11px] text-slate-400 mt-1 block">Default sub-organization (non-editable)</span>
+              </div>
+            ) : (
+              <CustomSelect
+                value={selectedSubOrgId}
+                onChange={(val) => {
+                  setSelectedSubOrgId(val);
+                  const matched = subOrganizations.find((s) => s.id === val);
+                  if (matched) setSelectedSubOrgName(matched.name);
+                  setSelectedBranchId('');
+                }}
+                options={
+                  subOrganizations.length > 0
+                    ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
+                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
+                }
+                placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
+              />
+            )}
+          </div>
+
+          {/* Branch */}
+          <div>
+            <label className={labelClass}>Branch</label>
+            <CustomSelect
+              value={selectedBranchId}
+              onChange={(val) => setSelectedBranchId(val)}
+              options={
+                branches.length > 0
+                  ? branches.map((b) => ({
+                      value: b.id,
+                      label: `${b.name}${b.location ? ` - ${b.location}` : ''}`,
+                    }))
+                  : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }]
+              }
+              placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
+            />
+          </div>
+        </div>
+
         {/* Row 1: Lead ID | Lead Name | Date */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
@@ -461,15 +671,17 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           </div>
         </div>
 
-        {/* Row 5: Feedback (Full width or across 3 columns) */}
-        <div>
-          <label className={labelClass}>Feedback</label>
-          <textarea
-            {...register('feedback')}
-            rows={3}
-            placeholder="Notes from initial conversation, client feedback, or specific requirements..."
-            className="w-full px-4 py-2.5 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none resize-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-          />
+        {/* Row 5: Feedback (3-fields-per-row grid layout) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className={labelClass}>Feedback</label>
+            <input
+              {...register('feedback')}
+              type="text"
+              placeholder="Client feedback or notes..."
+              className={inputClass}
+            />
+          </div>
         </div>
 
         {/* Modal Footer */}

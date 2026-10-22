@@ -211,14 +211,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     };
   }, []);
 
-  const mappedPlatformClients: Customer[] = platformOrgs.map((org) => ({
+  const mappedPlatformClients: Customer[] = platformOrgs.map((org: any) => ({
     id: org.id,
     name: org.name,
     company: org.name,
     email: org.email || '',
     phone: org.phone || '',
-    location: '',
-    address: '',
+    location: org.location || '',
+    address: org.address || org.location || org.user?.address || '',
     status: 'Active' as const,
     linkedProducts: [],
     gstin: org.gstNumber || '',
@@ -684,63 +684,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
                 Sale Configuration
               </h2>
-
-              {/* Product Suite / Brand Dropdown next to Sale Configuration (Admin only) */}
-              {!isSuperAdmin && (
-                <div className="relative" ref={companyProductDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsCompanyProductDropdownOpen(!isCompanyProductDropdownOpen)}
-                    className="inline-flex items-center gap-2 h-8 px-3 bg-white/15 hover:bg-white/25 active:scale-[0.98] rounded-xl text-xs font-semibold text-white transition-all duration-150 cursor-pointer select-none shadow-xs"
-                    title="Select Product / Brand"
-                  >
-                    <span className="max-w-[140px] sm:max-w-[170px] truncate font-bold">
-                      {selectedProductSuite || 'Select Product / Suite'}
-                    </span>
-                    <ChevronDown
-                      className={`w-3.5 h-3.5 text-white/80 shrink-0 transition-transform duration-150 ${isCompanyProductDropdownOpen ? 'rotate-180 text-white' : ''
-                        }`}
-                    />
-                  </button>
-
-                  {isCompanyProductDropdownOpen && (
-                    <div className="absolute top-full left-0 mt-2 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 p-1.5 z-50 overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
-                      <div className="max-h-60 overflow-y-auto space-y-0.5">
-                        {[
-                          { id: 'yaa_connect', label: 'Yaa connect' },
-                          { id: 'doc_motez', label: 'Doc motez' },
-                          { id: 'doc_dentq', label: 'Doc DentQ' },
-                          { id: 'aarudam_ai', label: 'Aarudam AI' },
-                          { id: 'turfylock', label: 'Turfylock' },
-                          { id: 'omniflow_erp', label: 'OmniFlow ERP' },
-                        ].map((suite) => {
-                          const isSelected = selectedProductSuite.toLowerCase() === suite.label.toLowerCase();
-                          return (
-                            <button
-                              key={suite.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedProductSuite(suite.label);
-                                setIsCompanyProductDropdownOpen(false);
-                                showToast('success', 'Product Selected', `Selected product: ${suite.label}`);
-                              }}
-                              className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${isSelected
-                                ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
-                                }`}
-                            >
-                              <span className="truncate">{suite.label}</span>
-                              {isSelected && (
-                                <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
             <button
               type="button"
@@ -986,9 +929,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         {/* ===================================================================== */}
         {/* CARD 2 (RIGHT): Client / Customer Assignment & Billing Info */}
         {/* ===================================================================== */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
           {/* Card Header */}
-          <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between">
+          <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between rounded-t-2xl">
             <div className="flex items-center gap-3.5">
               <h2 className="text-base font-bold text-white tracking-tight">
                 Organization / Bill To
@@ -1062,8 +1005,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                 {/* Dropdown Menu Popup: Direct List of Organizations */}
                 {isClientDropdownOpen && (
-                  <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-[320px] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
-                    <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
+                  <div className="dropdown-menu absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="max-h-60 overflow-y-auto space-y-1">
                       {filteredCustomers.length === 0 ? (
                         <div className="py-4 text-center text-xs text-slate-400">
                           No matching organizations found for "{clientSearchQuery}".
@@ -1071,25 +1014,26 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       ) : (
                         filteredCustomers.map((cust) => {
                           const isSelected = selectedCustomer?.id === cust.id;
+                          const displayName = cust.company || cust.name;
                           return (
                             <button
                               key={cust.id}
                               type="button"
                               onClick={() => {
                                 setSelectedCustomer(cust);
-                                setClientSearchQuery(cust.company || cust.name);
+                                setClientSearchQuery(displayName);
                                 setIsClientDropdownOpen(false);
-                                showToast('success', 'Organization Selected', `Selected "${cust.company || cust.name}".`);
+                                showToast('success', 'Organization Selected', `Selected "${displayName}".`);
                               }}
-                              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
+                              className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                 ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
                                 : 'hover:bg-slate-50 text-slate-800 font-medium'
                                 }`}
                             >
-                              <div className="min-w-0">
-                                <span className="truncate block font-semibold text-slate-800">{cust.company || cust.name}</span>
-                              </div>
-                              {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
+                              <span className="truncate block font-semibold text-slate-800">{displayName}</span>
+                              {isSelected && (
+                                <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />
+                              )}
                             </button>
                           );
                         })
@@ -1120,6 +1064,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">Email</span>
                       <span className="text-slate-700">: {selectedCustomer.email || 'N/A'}</span>
+                    </div>
+                    <div className="grid grid-cols-[140px_1fr] gap-2 items-start">
+                      <span className="font-bold text-slate-800">Address</span>
+                      <span className="text-slate-700 leading-relaxed">: {selectedCustomer.address || (selectedCustomer as any).location || 'N/A'}</span>
                     </div>
                   </div>
                 </div>

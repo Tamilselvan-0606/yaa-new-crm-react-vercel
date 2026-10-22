@@ -167,7 +167,7 @@ export interface ProformaDeleteResponse {
  * Payload for POST /commerce/proformas/{id}/convert
  */
 export interface ConvertProformaPayload {
-  targetType: 'Invoice' | string;
+  targetType: 'Invoice' | 'Order' | string;
   dueDate?: string;
 }
 
@@ -181,7 +181,7 @@ export interface ConvertProformaResponse {
   data: {
     source: ApiProformaInvoice;
     convertedTo: {
-      type: 'Invoice' | string;
+      type: 'Invoice' | 'Order' | string;
       id: string;
       documentNo: string;
     };

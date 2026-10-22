@@ -38,6 +38,7 @@ import { sendWhatsAppDocument } from '../../services/whatsappGateway';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Pagination } from '../../components/common/Pagination';
+import { Button } from '../../components/common/Button';
 import {
   proformaInvoiceApi,
   ProformaInvoiceApiItem,
@@ -54,12 +55,35 @@ interface InvoicesViewProps {
   isProforma?: boolean;
 }
 
+const formatDate = (dateStr?: string): string => {
+  if (!dateStr) return '-';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) {
+      // Check if format is YYYY-MM-DD
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        return `${parts[2].slice(0, 2).padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`;
+      }
+      return dateStr;
+    }
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+  } catch {
+    return dateStr;
+  }
+};
+
 const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice => {
+  const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
+  const rawDueDate = api.dueDate || '';
   return {
     id: api.id,
     invoiceNumber: api.proformaNumber || 'PI-0000',
-    invoiceDate: api.invoiceDate ? api.invoiceDate.split('T')[0] : '',
-    dueDate: api.dueDate ? api.dueDate.split('T')[0] : '',
+    invoiceDate: formatDate(rawInvoiceDate),
+    dueDate: rawDueDate ? formatDate(rawDueDate) : '',
     referenceNumbers: api.sourceQuoteId ? [`QUOTE-${api.sourceQuoteId.slice(0, 8)}`] : ['REF-PI'],
     description: api.notes || 'Proforma Invoice',
     status: (api.status as any) || 'Draft',
@@ -133,11 +157,14 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     };
   }
 
+  const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
+  const rawDueDate = api.dueDate || '';
+
   return {
     id: api.id,
     invoiceNumber: api.invoiceNumber || 'INV-0000',
-    invoiceDate: api.invoiceDate ? api.invoiceDate.split('T')[0] : '',
-    dueDate: api.dueDate ? api.dueDate.split('T')[0] : '',
+    invoiceDate: formatDate(rawInvoiceDate),
+    dueDate: rawDueDate ? formatDate(rawDueDate) : '',
     referenceNumbers: api.sourceId ? [`REF-${api.sourceId.slice(0, 8)}`] : [],
     description: api.notes || 'Sales Invoice',
     status: (api.status as any) || (api.amountPaid >= api.grandTotal - 0.001 ? 'Paid' : api.amountPaid > 0 ? 'Partially Paid' : 'Pending'),
@@ -860,11 +887,11 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span className="text-slate-500 font-medium w-36">
                   {isProforma ? 'Proforma Invoice Date:' : 'Invoice Date:'}
                 </span>
-                <span className="font-semibold text-slate-800">{activeInvoice.invoiceDate}</span>
+                <span className="font-semibold text-slate-800">{formatDate(activeInvoice.invoiceDate)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 font-medium w-28">Due Date:</span>
-                {activeInvoice.dueDate && <span className="font-semibold text-slate-800">{activeInvoice.dueDate}</span>}
+                {activeInvoice.dueDate && <span className="font-semibold text-slate-800">{formatDate(activeInvoice.dueDate)}</span>}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-slate-500 font-medium w-28">Reference:</span>
@@ -1359,14 +1386,14 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           </p>
         </div>
         <div>
-          <Link
-            to={isProforma ? '/proforma/new' : '/sales/new'}
-            style={{ borderRadius: '6px' }}
-            className="inline-flex items-center justify-center font-bold !rounded-[6px] transition-all duration-200 cursor-pointer select-none bg-[#33077C] hover:bg-[#432eb5] text-white shadow-md hover:shadow-lg active:scale-[0.98] h-10 px-4 text-xs sm:text-sm gap-2"
+          <Button
+            variant="primary"
+            size="md"
+            icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
+            onClick={() => navigate(isProforma ? '/proforma/new' : '/sales/new')}
           >
-            <Plus className="w-4 h-4" strokeWidth={2.5} />
-            <span>{isProforma ? 'Create Proforma Invoice' : 'Create New Sale'}</span>
-          </Link>
+            {isProforma ? 'Create Proforma Invoice' : 'Create New Sale'}
+          </Button>
         </div>
       </div>
 
@@ -1469,8 +1496,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                         <span className="text-[11px] text-slate-400 block truncate">{inv.client.name} &bull; {inv.client.email || inv.client.phone || ''}</span>
                       </div>
                     </td>
-                    <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{inv.invoiceDate}</td>
-                    <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{inv.dueDate}</td>
+                    <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{formatDate(inv.invoiceDate)}</td>
+                    <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{inv.dueDate ? formatDate(inv.dueDate) : '-'}</td>
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center font-bold text-slate-900 font-sans">
                       ₹{inv.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
@@ -1610,19 +1637,17 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       </div>
 
       {/* Pagination */}
-      {totalInvoiceCount > 0 && (
-        <Pagination
-          total={totalInvoiceCount}
-          currentPage={currentPage}
-          pageSize={pageSize}
-          pageSizeOptions={[5, 10, 20, 50]}
-          onPageChange={(page) => setCurrentPage(page)}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            setCurrentPage(1);
-          }}
-        />
-      )}
+      <Pagination
+        total={totalInvoiceCount}
+        currentPage={currentPage}
+        pageSize={pageSize}
+        pageSizeOptions={[5, 10, 20, 50]}
+        onPageChange={(page) => setCurrentPage(page)}
+        onPageSizeChange={(size) => {
+          setPageSize(size);
+          setCurrentPage(1);
+        }}
+      />
 
       {/* Action Dropdown Menu Portal / Fixed Overlay outside of overflow container */}
       {openActionMenuId && actionDropdownPos && (() => {

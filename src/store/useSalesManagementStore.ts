@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { calculateCustomerOutstanding } from '../utils/outstandingBalance';
 
 // ==========================================
 // 1. DATA MODELS & INTERFACES
@@ -406,6 +407,8 @@ export interface PurchaseRequest {
   priority: PurchaseRequestPriority;
   status: PurchaseRequestStatus;
   items: PurchaseRequestItem[];
+  supplierId?: string;
+  supplierName?: string;
   notes?: string;
   organizationId?: string;
   totalEstimatedAmount?: number;
@@ -450,8 +453,11 @@ export interface PurchaseProductItem {
   mfgDate?: string;
   expDate?: string;
   quantity: number;
+  freeQuantity?: number;
   unit?: string;
+  packingUnit?: number | string;
   purchasePrice: number;
+  salePrice?: number;
   discountPercent: number;
   discountAmount?: number;
   taxPercent: number;
@@ -583,6 +589,7 @@ export interface InventoryStockItem {
   unitPrice: number;
   lastUpdated: string;
   batches?: StockBatch[];
+  itemImage?: string;
 }
 
 // ==========================================
@@ -1101,34 +1108,32 @@ export const useSalesManagementStore = () => {
   const getCustomerMetrics = (customerId: string) => {
     const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
     const customer = currentCustomers.find((c) => c.id === customerId);
-    const customerSales = sales.filter((s) => s.customerId === customerId && s.saleStatus !== 'Cancelled');
-    const customerReturns = salesReturns.filter((r) => r.customerId === customerId && r.returnStatus !== 'Rejected');
-
-    const totalSalesAmount = customerSales.reduce((sum, s) => sum + (s.grandTotal || 0), 0);
-    const totalPaidAmount = customerSales.reduce((sum, s) => sum + (s.paidAmount || 0), 0);
-    const openingBal = customer?.openingBalance || 0;
-    const salesBalance = customerSales.reduce((sum, s) => sum + (s.balance || 0), 0);
-    const totalReturnAmount = customerReturns.reduce((sum, r) => sum + (r.returnAmount || 0), 0);
-    const totalRefunded = customerReturns
-      .filter((r) => r.refundStatus === 'Refunded' || r.refundStatus === 'Store Credit')
-      .reduce((sum, r) => sum + (r.refundAmount || 0), 0);
-
-    const outstandingAmount = Math.max(0, openingBal + salesBalance - (totalReturnAmount - totalRefunded));
-    const creditLimit = customer?.creditLimit || 0;
-    const availableCredit = Math.max(0, creditLimit - outstandingAmount);
-    const creditUtilizationPercent = creditLimit > 0 ? Math.min(100, (outstandingAmount / creditLimit) * 100) : 0;
-
+    if (!customer) {
+      return {
+        totalSalesAmount: 0,
+        totalPaidAmount: 0,
+        outstandingAmount: 0,
+        totalSalesCount: 0,
+        totalReturnsCount: 0,
+        totalReturnAmount: 0,
+        creditLimit: 0,
+        availableCredit: 0,
+        creditUtilizationPercent: 0,
+        openingBalance: 0,
+      };
+    }
+    const metrics = calculateCustomerOutstanding(customer, sales as any, salesReturns as any, paymentIns as any);
     return {
-      totalSalesAmount,
-      totalPaidAmount,
-      outstandingAmount,
-      totalSalesCount: customerSales.length,
-      totalReturnsCount: customerReturns.length,
-      totalReturnAmount,
-      creditLimit,
-      availableCredit,
-      creditUtilizationPercent,
-      openingBalance: openingBal,
+      totalSalesAmount: metrics.totalSalesAmount,
+      totalPaidAmount: metrics.totalPaidAmount,
+      outstandingAmount: metrics.outstandingAmount,
+      totalSalesCount: metrics.totalSalesCount,
+      totalReturnsCount: metrics.totalReturnsCount,
+      totalReturnAmount: metrics.totalReturnAmount,
+      creditLimit: metrics.creditLimit,
+      availableCredit: metrics.availableCredit,
+      creditUtilizationPercent: metrics.creditUtilizationPercent,
+      openingBalance: metrics.openingBalance,
     };
   };
 
@@ -1198,9 +1203,27 @@ export const useSalesManagementStore = () => {
   };
 
   const setCustomersList = useCallback((newCustomers: SalesCustomer[]) => {
-    setStorage(KEYS.CUSTOMERS, newCustomers);
-    setCustomers(newCustomers);
-    return newCustomers;
+    // Preserve existing salesRepresentative fields if newCustomers from API didn't include them
+    const currentCustomers = getStorage<SalesCustomer[]>(KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const customerMap = new Map<string, SalesCustomer>();
+    currentCustomers.forEach((c) => customerMap.set(c.id, c));
+
+    const merged = newCustomers.map((newC) => {
+      const existing = customerMap.get(newC.id);
+      if (!existing) return newC;
+      return {
+        ...newC,
+        salesRepresentativeId: newC.salesRepresentativeId || existing.salesRepresentativeId,
+        salesRepresentativeName: newC.salesRepresentativeName || existing.salesRepresentativeName,
+        salesRepresentativeType: newC.salesRepresentativeType || existing.salesRepresentativeType,
+        assignedDate: newC.assignedDate || existing.assignedDate,
+        assignmentNotes: newC.assignmentNotes || existing.assignmentNotes,
+      };
+    });
+
+    setStorage(KEYS.CUSTOMERS, merged);
+    setCustomers(merged);
+    return merged;
   }, []);
 
   const addCustomerActivity = (customerId: string, action: string, details: string, user: string = 'Current User') => {
@@ -1757,6 +1780,18 @@ export const useSalesManagementStore = () => {
     return updated;
   };
 
+  const updatePurchaseOrderStatus = (id: string, purchaseStatus: PurchaseStatus) => {
+    const current = getStorage<PurchaseOrder[]>(KEYS.PURCHASES, INITIAL_PURCHASES);
+    const updated = current.map((p) =>
+      p.id === id || p.purchaseNo === id
+        ? { ...p, purchaseStatus, updatedAt: new Date().toISOString() }
+        : p
+    );
+    setStorage(KEYS.PURCHASES, updated);
+    setPurchases(updated);
+    return updated;
+  };
+
   // ----------------------------------------
   // Purchase Return Actions
   // ----------------------------------------
@@ -2177,20 +2212,22 @@ export const useSalesManagementStore = () => {
     return updated;
   };
 
-  const setSalesRepresentativesList = (reps: SalesRepresentative[]) => {
+  const setSalesRepresentativesList = useCallback((reps: SalesRepresentative[]) => {
     setStorage(KEYS.SALES_REPRESENTATIVES, reps);
     setSalesRepresentatives(reps);
-  };
+  }, []);
 
   const assignCustomerSalesRep = (
     customerId: string,
     repId: string,
     assignmentType: 'Primary' | 'Temporary' = 'Primary',
     effectiveFrom?: string,
-    notes?: string
+    notes?: string,
+    repNameInput?: string
   ) => {
-    const rep = salesRepresentatives.find((r) => r.id === repId);
-    const repName = rep?.name || 'Unassigned';
+    const storedReps = getStorage<SalesRepresentative[]>(KEYS.SALES_REPRESENTATIVES, []);
+    const rep = salesRepresentatives.find((r) => r.id === repId) || storedReps.find((r) => r.id === repId);
+    const repName = repNameInput || rep?.name || 'Unassigned';
     const effectiveDate = effectiveFrom || new Date().toISOString().split('T')[0];
 
     // 1. Update Customer
@@ -2669,6 +2706,7 @@ export const useSalesManagementStore = () => {
     savePurchase,
     setPurchasesList,
     deletePurchase,
+    updatePurchaseOrderStatus,
     updatePurchasePayment,
     savePurchaseReturn,
     setPurchaseReturnsList,

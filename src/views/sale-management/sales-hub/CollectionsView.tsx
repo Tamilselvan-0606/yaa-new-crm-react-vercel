@@ -38,6 +38,8 @@ import {
   PhoneCall,
   UserPlus,
   Loader2,
+  FileSpreadsheet,
+  Printer,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -56,6 +58,9 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { toast } from 'sonner';
+import { store } from '../../../store/store';
+import { baseApi } from '../../../api/baseApi';
+import { calculateCustomerOutstanding } from '../../../utils/outstandingBalance';
 import {
   collectionApi,
   ApiCollectionInvoiceItem,
@@ -66,6 +71,7 @@ import {
   CollectionHistoryItem,
   CustomerCollectionTimelineData,
 } from '../../../api/commerce/collectionApi';
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
 
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
 type CollectionsSubView =
@@ -81,6 +87,7 @@ export const CollectionsView: React.FC = () => {
   const {
     sales,
     customers,
+    salesReturns,
     paymentIns,
     collectionFollowUps,
     promisesToPay,
@@ -109,13 +116,16 @@ export const CollectionsView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [appliedSearch, setAppliedSearch] = useState(initialSearch);
 
-  // Debounce search query to prevent excessive API invocations
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      setAppliedSearch(searchTerm.trim());
-    }, 350);
+      const trimmed = searchTerm.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+      }
+    }, 600);
     return () => clearTimeout(timer);
-  }, [searchTerm]);
+  }, [searchTerm, appliedSearch]);
 
   // Main Sub-views: Dashboard | Customer Assignments | Follow-ups | Collection History
   const rawInitial = (searchParams.get('subView') || searchParams.get('tab') || searchParams.get('view') || 'dashboard') as string;
@@ -517,6 +527,19 @@ export const CollectionsView: React.FC = () => {
       return apiAssignments.map((ca) => {
         const rep = liveReps.find((r) => r.id === ca.salesRepresentative?.id);
         const matchedCust = customers.find((c) => c.id === ca.id);
+        const custForCalc = matchedCust || {
+          id: ca.id,
+          name: ca.customerName,
+          customerCode: ca.customerCode,
+          openingBalance: Number((ca as any).openingBalance || 0),
+          outstandingAmount: Number(ca.totalOutstanding || 0),
+        };
+        const metrics = calculateCustomerOutstanding(
+          custForCalc as any,
+          (sales || []) as any,
+          (salesReturns || []) as any,
+          (paymentIns || []) as any
+        );
         return {
           customer: matchedCust || ({
             id: ca.id,
@@ -529,17 +552,17 @@ export const CollectionsView: React.FC = () => {
             assignedDate: ca.assignedDate,
             status: ca.status,
           } as any),
-          outstanding: Number(ca.totalOutstanding || 0),
+          outstanding: metrics.outstandingAmount,
           rep,
           repName: ca.salesRepresentative?.name || rep?.name || 'Unassigned',
           repType: ca.salesRepresentative?.type || 'Primary',
-          assignedDate: ca.assignedDate || 'â€”',
+          assignedDate: ca.assignedDate || '—',
           status: ca.status || 'Active',
         };
       });
     }
     return [];
-  }, [apiAssignments, customers, liveReps]);
+  }, [apiAssignments, customers, liveReps, sales, salesReturns, paymentIns]);
 
   const filteredCustomerAssignments = customerAssignmentsList;
   const paginatedCustomerAssignments = customerAssignmentsList;
@@ -647,6 +670,16 @@ export const CollectionsView: React.FC = () => {
       setIsRecordPaymentModalOpen(false);
       setSelectedInvoice(null);
       setSelectedCustomer(null);
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'Customer', id: 'LIST' },
+          'SalesInvoice',
+          'PaymentIn',
+          'Payment',
+          'SalesRepresentative',
+          'Dashboard',
+        ])
+      );
       loadInvoices();
       loadMetrics();
       if (subView === 'collection-history') loadHistory();
@@ -803,6 +836,14 @@ export const CollectionsView: React.FC = () => {
       const targetRep = liveReps.find((r) => r.id === assignRepId);
       toast.success(`Assigned ${targetRep?.name || 'Sales Rep'} to ${targetCust?.name || 'Customer'}`);
       setIsAssignCustomerModalOpen(false);
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'Customer', id: 'LIST' },
+          { type: 'Customer', id: assignCustomerId },
+          'SalesRepresentative',
+          'Dashboard',
+        ])
+      );
       loadAssignments();
       loadInvoices();
     } catch (err: any) {
@@ -992,37 +1033,38 @@ export const CollectionsView: React.FC = () => {
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
-      {/* 1. Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1 border-b border-slate-200/80 dark:border-slate-800">
+      {/* 1. Page Header Banner */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C] text-white flex items-center justify-center font-bold text-sm shadow-xs">
-              <IndianRupee className="w-4 h-4" />
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+              <IndianRupee className="w-4.5 h-4.5" />
             </div>
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
               Customer Collections & Dues
             </h1>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
             Manage receivable invoices, follow-ups, payment promises, and collection workflows.
           </p>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
           <Button
             variant="secondary"
-            size="sm"
+            size="md"
+            className="w-full sm:w-auto justify-center"
             onClick={handleExportExcel}
-            className="h-9 px-3 rounded-xl border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+            icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
-            <Download className="w-3.5 h-3.5 text-slate-500" />
-            <span>Export</span>
+            Excel Report
           </Button>
 
           <Button
             variant="primary"
-            size="sm"
+            size="md"
+            className="w-full sm:w-auto justify-center"
             onClick={() => {
               // Open general record payment modal with first open invoice or blank
               const firstOpen = collectionItems.find((i) => i.outstandingAmount > 0);
@@ -1032,123 +1074,119 @@ export const CollectionsView: React.FC = () => {
                 toast.info('No open receivable invoices found to collect');
               }
             }}
-            className="h-9 px-3.5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20"
+            icon={<Plus className="w-4 h-4 text-white" />}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Record Payment</span>
+            Record Payment
           </Button>
         </div>
       </div>
 
       {/* 2. Collection Dashboard Top Summary Cards (5 Key Metrics) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3.5 sm:gap-4">
         {/* Card 1: Total Outstanding */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-purple-200 transition-all">
+        <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Total Outstanding
             </span>
-            <div className="w-8 h-8 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-purple-50 text-[#33077C] flex items-center justify-center">
               <IndianRupee className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-slate-900 dark:text-white">
+          <div className="mt-3">
+            <div className="text-xl font-bold text-slate-900">
               {isMetricsLoading ? (
-                <span className="inline-block w-24 h-7 bg-slate-100 dark:bg-slate-700 animate-pulse rounded-md" />
+                <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `�${Number(dashboardMetrics?.totalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                `₹${Number(dashboardMetrics?.totalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
-            </span>
-            <p className="text-[11px] text-slate-500 mt-0.5">
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
               Across all open receivables
-            </p>
+            </div>
           </div>
         </div>
 
         {/* Card 2: Overdue Amount */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-rose-200/80 dark:border-rose-900/40 shadow-xs hover:border-rose-300 transition-all bg-gradient-to-br from-white via-rose-50/20 to-rose-50/40">
+        <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-rose-600 uppercase tracking-wider flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Overdue
             </span>
-            <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-rose-600">
+          <div className="mt-3">
+            <div className="text-xl font-bold text-slate-900">
               {isMetricsLoading ? (
-                <span className="inline-block w-24 h-7 bg-rose-100/50 animate-pulse rounded-md" />
+                <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `�${Number(
+                `₹${Number(
                   (typeof dashboardMetrics?.overdue === 'object'
                     ? dashboardMetrics?.overdue?.amount
                     : dashboardMetrics?.overdueAmount) ?? 0
                 ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
-            </span>
-            <p className="text-[11px] text-rose-600/80 mt-0.5 font-medium">
+            </div>
+            <div className="text-xs text-rose-600 font-medium mt-0.5">
               {Number(
                 (typeof dashboardMetrics?.overdue === 'object'
                   ? dashboardMetrics?.overdue?.count
                   : dashboardMetrics?.overdueCount) ?? tabCounts.overdue ?? 0
               )}{' '}
               invoices past due date
-            </p>
+            </div>
           </div>
         </div>
 
         {/* Card 3: Due Today */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-amber-200/80 dark:border-amber-900/40 shadow-xs hover:border-amber-300 transition-all bg-gradient-to-br from-white via-amber-50/20 to-amber-50/40">
+        <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-amber-700 uppercase tracking-wider flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Due Today
             </span>
-            <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
-              <CalendarDays className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <Calendar className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-amber-800">
+          <div className="mt-3">
+            <div className="text-xl font-bold text-slate-900">
               {isMetricsLoading ? (
-                <span className="inline-block w-24 h-7 bg-amber-100/50 animate-pulse rounded-md" />
+                <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `�${Number(
+                `₹${Number(
                   (typeof dashboardMetrics?.dueToday === 'object'
                     ? dashboardMetrics?.dueToday?.amount
                     : dashboardMetrics?.dueTodayAmount) ?? 0
                 ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
-            </span>
-            <p className="text-[11px] text-amber-700/80 mt-0.5 font-medium">
+            </div>
+            <div className="text-xs text-amber-600 font-medium mt-0.5">
               {Number(
                 (typeof dashboardMetrics?.dueToday === 'object'
                   ? dashboardMetrics?.dueToday?.count
                   : dashboardMetrics?.dueTodayCount) ?? tabCounts.dueToday ?? 0
               )}{' '}
               invoices maturing today
-            </p>
+            </div>
           </div>
         </div>
 
         {/* Card 4: Follow-ups Today */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-indigo-200/80 dark:border-indigo-900/40 shadow-xs hover:border-indigo-300 transition-all bg-gradient-to-br from-white via-indigo-50/20 to-indigo-50/40">
+        <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-indigo-700 uppercase tracking-wider flex items-center gap-1">
-              <Phone className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Follow-ups Today
             </span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
               <CalendarClock className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-indigo-800">
+          <div className="mt-3">
+            <div className="text-xl font-bold text-slate-900">
               {isMetricsLoading ? (
-                <span className="inline-block w-12 h-7 bg-indigo-100/50 animate-pulse rounded-md" />
+                <span className="inline-block w-12 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
                 Number(
                   (typeof dashboardMetrics?.followUpsToday === 'object'
@@ -1156,59 +1194,57 @@ export const CollectionsView: React.FC = () => {
                     : dashboardMetrics?.followUpsTodayCount) ?? 0
                 )
               )}
-            </span>
-            <p className="text-[11px] text-indigo-700/80 mt-0.5 font-medium">
+            </div>
+            <div className="text-xs text-indigo-600 font-medium mt-0.5">
               Scheduled customer interactions
-            </p>
+            </div>
           </div>
         </div>
 
         {/* Card 5: Collected This Month */}
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-emerald-200/80 dark:border-emerald-900/40 shadow-xs hover:border-emerald-300 transition-all bg-gradient-to-br from-white via-emerald-50/20 to-emerald-50/40">
+        <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
-              <TrendingUp className="w-3.5 h-3.5" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Collected This Month
             </span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-emerald-700">
+          <div className="mt-3">
+            <div className="text-xl font-bold text-slate-900">
               {isMetricsLoading ? (
-                <span className="inline-block w-24 h-7 bg-emerald-100/50 animate-pulse rounded-md" />
+                <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `�${Number(
+                `₹${Number(
                   (typeof dashboardMetrics?.collectedThisMonth === 'object'
                     ? dashboardMetrics?.collectedThisMonth?.amount
                     : dashboardMetrics?.collectedThisMonthAmount) ?? 0
                 ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
-            </span>
-            <p className="text-[11px] text-emerald-600/80 mt-0.5 font-medium">
+            </div>
+            <div className="text-xs text-emerald-600 font-medium mt-0.5">
               {Number(
                 (typeof dashboardMetrics?.collectedThisMonth === 'object'
                   ? dashboardMetrics?.collectedThisMonth?.count
                   : dashboardMetrics?.collectedThisMonthCount) ?? tabCounts.collected ?? 0
               )}{' '}
               payments collected
-            </p>
+            </div>
           </div>
         </div>
       </div>
 
       {/* 3. Sub-Module Navigation (4 Main Sections) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2 rounded-2xl shadow-xs gap-3">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           {[
-            { id: 'dashboard', label: 'Collection Dashboard', icon: LayoutDashboard },
-            { id: 'customer-assignments', label: 'Customer Assignments', icon: UsersRound },
-            { id: 'follow-ups', label: 'Follow-ups & Timeline', icon: CalendarClock },
-            { id: 'collection-history', label: 'Collection History', icon: History },
+            { id: 'dashboard', label: 'Collection Dashboard' },
+            { id: 'customer-assignments', label: 'Customer Assignments' },
+            { id: 'follow-ups', label: 'Follow-ups & Timeline' },
+            { id: 'collection-history', label: 'Collection History' },
           ].map((tab) => {
             const isActive = subView === tab.id;
-            const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
@@ -1217,13 +1253,13 @@ export const CollectionsView: React.FC = () => {
                   setSubView(tab.id as CollectionsSubView);
                   setSearchParams({ tab: tab.id });
                 }}
-                className={`flex items-center gap-2 py-2 px-3.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
                   isActive
-                    ? 'bg-[#33077C] text-white shadow-sm shadow-[#33077C]/25'
-                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-slate-700/50'
+                    ? 'bg-[#33077C] text-white shadow-sm'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
+                {isActive && <Check className="w-3.5 h-3.5 stroke-[3] text-white" />}
                 <span>{tab.label}</span>
               </button>
             );
@@ -1233,27 +1269,25 @@ export const CollectionsView: React.FC = () => {
         {subView === 'customer-assignments' && (
           <Button
             variant="primary"
-            size="sm"
+            size="md"
             onClick={() => handleOpenAssignCustomer(null)}
-            className="h-8.5 px-3.5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shrink-0"
+            icon={<UserPlus className="w-4 h-4" />}
           >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>+ Assign Sales Rep</span>
+            Assign Sales Rep
           </Button>
         )}
 
         {subView === 'follow-ups' && (
           <Button
             variant="primary"
-            size="sm"
+            size="md"
             onClick={() => {
               const firstItem = collectionItems[0];
               if (firstItem) handleOpenFollowUp(firstItem);
             }}
-            className="h-8.5 px-3.5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm shrink-0"
+            icon={<CalendarClock className="w-4 h-4" />}
           >
-            <CalendarClock className="w-3.5 h-3.5" />
-            <span>+ Log Follow-up</span>
+            Log Follow-up
           </Button>
         )}
       </div>
@@ -1263,68 +1297,57 @@ export const CollectionsView: React.FC = () => {
       {/* ------------------------------------------------------------- */}
       {subView === 'dashboard' && (
         <div className="space-y-4">
-          {/* 3. Collection Tabs */}
-          <div className="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto gap-2">
-        {[
-          { id: 'all', label: 'All Dues', count: tabCounts.allDues },
-          { id: 'due-today', label: 'Due Today', count: tabCounts.dueToday },
-          { id: 'overdue', label: 'Overdue', count: tabCounts.overdue },
-          { id: 'promise-to-pay', label: 'Promise to Pay', count: tabCounts.promiseToPay },
-          { id: 'collected', label: 'Collected', count: tabCounts.collected },
-        ].map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id as CollectionTab);
-                setCurrentPage(1);
-              }}
-              className={`flex items-center gap-2 py-2.5 px-4 text-xs font-semibold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
-                isActive
-                  ? 'border-[#33077C] text-[#33077C] font-bold'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <span>{tab.label}</span>
-              <span
-                className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                  isActive
-                    ? 'bg-[#33077C] text-white'
-                    : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-                }`}
-              >
-                {tab.count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 4. Compact Filters Bar */}
-      <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {/* Search Bar */}
-          <div className="lg:col-span-2">
-            <SearchBar
-              value={searchTerm}
-              onChange={(val) => {
-                setSearchTerm(val);
-                setCurrentPage(1);
-              }}
-              placeholder="Search customer, invoice no, phone..."
-            />
+          {/* 3. Collection Tabs (Clean without icons and counts) */}
+          <div className="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto gap-4">
+            {[
+              { id: 'all', label: 'All Dues' },
+              { id: 'due-today', label: 'Due Today' },
+              { id: 'overdue', label: 'Overdue' },
+              { id: 'promise-to-pay', label: 'Promise to Pay' },
+              { id: 'collected', label: 'Collected' },
+            ].map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id as CollectionTab);
+                    setCurrentPage(1);
+                  }}
+                  className={`py-2 px-1 text-xs sm:text-[13px] font-semibold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
+                    isActive
+                      ? 'border-[#33077C] text-[#33077C] font-bold'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Sales Representative Filter */}
-          <div>
+      {/* 4. Search & Filter Bar (Aligned with Reference UI) */}
+      <SearchBar
+        placeholder="Search by customer, invoice no, phone..."
+        value={searchTerm}
+        onChange={(val) => {
+          setSearchTerm(val);
+          setCurrentPage(1);
+        }}
+        onSubmit={() => {
+          setCurrentPage(1);
+        }}
+        onReset={handleResetFilters}
+        filterSlot={
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Sales Representative Filter */}
             <select
               value={selectedRepFilter}
               onChange={(e) => {
                 setSelectedRepFilter(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-slate-200 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
+              className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
               <option value="ALL">All Representatives</option>
               {liveReps.map((rep) => (
@@ -1333,238 +1356,255 @@ export const CollectionsView: React.FC = () => {
                 </option>
               ))}
             </select>
-          </div>
 
-          {/* Due Date Filter */}
-          <div>
+            {/* Due Date Filter */}
             <select
               value={dueDateFilter}
               onChange={(e) => {
                 setDueDateFilter(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-slate-200 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
+              className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
               <option value="ALL">All Due Dates</option>
               <option value="OVERDUE">Overdue (Past)</option>
               <option value="TODAY">Due Today</option>
               <option value="THIS_MONTH">Due This Month</option>
             </select>
-          </div>
 
-          {/* Status Filter */}
-          <div>
+            {/* Status Filter */}
             <select
               value={statusFilter}
               onChange={(e) => {
                 setStatusFilter(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-slate-200 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
+              className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
-              <option value="ALL">All Statuses</option>
+              <option value="ALL">Status : All</option>
               <option value="Overdue">Overdue</option>
               <option value="Due Today">Due Today</option>
               <option value="Upcoming">Upcoming</option>
               <option value="Promise to Pay">Promise to Pay</option>
               <option value="Paid">Paid</option>
             </select>
-          </div>
 
-          {/* Payment Status & Reset */}
-          <div className="flex items-center gap-2">
+            {/* Payment Status */}
             <select
               value={paymentStatusFilter}
               onChange={(e) => {
                 setPaymentStatusFilter(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-2 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-slate-800 dark:text-slate-200 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
+              className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
-              <option value="ALL">Payment: All</option>
+              <option value="ALL">Payment : All</option>
               <option value="Unpaid">Unpaid</option>
               <option value="Partial">Partially Paid</option>
               <option value="Paid">Fully Paid</option>
             </select>
-
-            <button
-              type="button"
-              onClick={handleResetFilters}
-              title="Reset Filters"
-              className="h-9 px-2.5 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
           </div>
-        </div>
-      </div>
+        }
+        rightSlot={
+          <div className="flex items-center gap-3 pr-1">
+            {isInvoicesLoading && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />
+                <span>Updating...</span>
+              </div>
+            )}
+            <span className="text-xs font-semibold text-slate-500">
+              Total Invoices :{' '}
+              <span className="text-[#33077C] font-bold">{filteredItems.length}</span>
+            </span>
+          </div>
+        }
+      />
 
       {/* 5. Collection Table */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-[#33077C] text-white font-bold uppercase text-[10px] tracking-wider">
-              <tr>
-                <th className="py-3 px-3.5 text-white">Customer</th>
-                <th className="py-3 px-3 text-white">Invoice No</th>
-                <th className="py-3 px-3 text-white">Invoice Date</th>
-                <th className="py-3 px-3 text-white">Due Date</th>
-                <th className="py-3 px-3 text-right text-white">Invoice Amount</th>
-                <th className="py-3 px-3 text-right text-white">Paid Amount</th>
-                <th className="py-3 px-3 text-right text-white">Outstanding</th>
-                <th className="py-3 px-3 text-white">Sales Rep</th>
-                <th className="py-3 px-3 text-center text-white">Status</th>
-                <th className="py-3 px-3.5 text-center text-white">Action</th>
+          <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
+            <thead>
+              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CUSTOMER</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE NO</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE DATE</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">DUE DATE</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">INVOICE AMOUNT</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PAID AMOUNT</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">OUTSTANDING</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">SALES REP</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+            <tbody className="text-sm">
               {isInvoicesLoading ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-500">
-                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#33077C] mb-2" />
-                    <p className="text-sm font-medium">Loading collection invoices...</p>
+                  <td colSpan={10} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin stroke-[2]" />
+                    <p className="font-semibold text-slate-700 text-sm">Loading collection invoices...</p>
+                    <p className="text-xs text-slate-400 mt-1">Fetching live invoice directory from server</p>
                   </td>
                 </tr>
               ) : paginatedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-400">
+                  <td colSpan={10} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
                     <IndianRupee className="w-10 h-10 mx-auto text-slate-300 mb-2 opacity-50" />
-                    <p className="text-sm font-medium">No collection records found</p>
+                    <p className="font-semibold text-slate-700 text-sm">No collection records found</p>
                     <p className="text-xs text-slate-400 mt-1">
                       Try adjusting your search criteria or resetting filters
                     </p>
                   </td>
                 </tr>
               ) : (
-                paginatedItems.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/60 transition-colors"
-                  >
-                    {/* Customer */}
-                    <td className="py-3 px-3.5 font-medium">
-                      <div className="flex items-center gap-2">
+                paginatedItems.map((item) => {
+                  const customerInitials = (item.customerName || 'CU')
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')
+                    .toUpperCase()
+                    .slice(0, 2);
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
+                    >
+                      {/* Customer */}
+                      <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
+                            {customerInitials}
+                          </div>
+                          <div className="flex flex-col">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenTimeline(item)}
+                              className="font-bold text-slate-900 text-xs sm:text-[14px] text-left hover:text-[#33077C] hover:underline cursor-pointer"
+                            >
+                              {item.customerName}
+                            </button>
+                            <span className="text-[11px] text-slate-500 font-mono mt-0.5">
+                              {item.customerPhone}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Invoice No */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => handleOpenTimeline(item)}
-                          className="text-left font-bold text-slate-900 dark:text-white hover:text-[#33077C] cursor-pointer"
+                          onClick={() => handleOpenInvoicePreview(item)}
+                          className="font-mono font-bold text-[#33077C] hover:underline cursor-pointer text-xs"
                         >
-                          {item.customerName}
+                          {item.invoiceNumber}
                         </button>
-                      </div>
-                      <span className="text-[11px] text-slate-500 font-mono block">
-                        {item.customerPhone}
-                      </span>
-                    </td>
+                      </td>
 
-                    {/* Invoice No */}
-                    <td className="py-3 px-3">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenInvoicePreview(item)}
-                        className="font-mono font-bold text-[#33077C] dark:text-purple-300 hover:underline cursor-pointer"
-                      >
-                        {item.invoiceNumber}
-                      </button>
-                    </td>
+                      {/* Invoice Date */}
+                      <td className="py-4 px-4 border border-slate-200 text-slate-600 whitespace-nowrap text-xs">
+                        {item.invoiceDate}
+                      </td>
 
-                    {/* Invoice Date */}
-                    <td className="py-3 px-3 text-slate-600 dark:text-slate-300">
-                      {item.invoiceDate}
-                    </td>
-
-                    {/* Due Date */}
-                    <td className="py-3 px-3">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`font-semibold ${
-                            item.outstandingAmount > 0 && item.dueDate < todayStr
-                              ? 'text-rose-600'
-                              : item.outstandingAmount > 0 && item.dueDate === todayStr
-                              ? 'text-amber-600'
-                              : 'text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          {item.dueDate}
-                        </span>
-                        {item.outstandingAmount > 0 && item.dueDate === todayStr && (
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-bold">
-                            Today
+                      {/* Due Date */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap text-xs">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`font-semibold ${
+                              item.outstandingAmount > 0 && item.dueDate < todayStr
+                                ? 'text-rose-600'
+                                : item.outstandingAmount > 0 && item.dueDate === todayStr
+                                ? 'text-amber-600'
+                                : 'text-slate-700'
+                            }`}
+                          >
+                            {item.dueDate}
                           </span>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Invoice Amount */}
-                    <td className="py-3 px-3 text-right font-medium text-slate-800 dark:text-slate-200">
-                      �{item.invoiceTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-
-                    {/* Paid Amount */}
-                    <td className="py-3 px-3 text-right text-emerald-600 font-medium">
-                      �{item.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </td>
-
-                    {/* Outstanding Amount (Calculated: Total - Paid) */}
-                    <td className="py-3 px-3 text-right">
-                      <span
-                        className={`font-bold text-sm ${
-                          item.outstandingAmount > 0 ? 'text-rose-600' : 'text-slate-400'
-                        }`}
-                      >
-                        �{item.outstandingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
-                    </td>
-
-                    {/* Sales Representative */}
-                    <td className="py-3 px-3">
-                      {item.salesRepName && item.salesRepName !== 'Unassigned' ? (
-                        <div>
-                          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 bg-purple-50/80 dark:bg-slate-700 px-2.5 py-1 rounded-lg border border-purple-200/50">
-                            <UserCheck className="w-3.5 h-3.5 text-[#33077C]" />
-                            {item.salesRepName}
-                          </span>
-                          {item.customer?.salesRepresentativeType && (
-                            <div className="mt-0.5">
-                              <span className="text-[10px] text-purple-700 dark:text-purple-300 font-medium">
-                                {item.customer.salesRepresentativeType} Rep
-                              </span>
-                            </div>
+                          {item.outstandingAmount > 0 && item.dueDate === todayStr && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-bold">
+                              Today
+                            </span>
                           )}
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAssignCustomer(item.customer)}
-                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] hover:text-[#4309A2] bg-purple-50 hover:bg-purple-100 dark:bg-slate-700 px-2.5 py-1 rounded-lg border border-purple-200/80 transition-colors cursor-pointer"
-                          title="Assign Sales Rep to this Customer"
+                      </td>
+
+                      {/* Invoice Amount */}
+                      <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap font-bold text-slate-900 text-xs sm:text-[13px]">
+                        ₹{item.invoiceTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+
+                      {/* Paid Amount */}
+                      <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap">
+                        <div className="font-bold text-emerald-600 text-xs sm:text-[13px]">
+                          ₹{item.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                      </td>
+
+                      {/* Outstanding Amount */}
+                      <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap">
+                        <span
+                          className={`font-bold text-xs sm:text-[13px] ${
+                            item.outstandingAmount > 0 ? 'text-rose-600' : 'text-slate-400'
+                          }`}
                         >
-                          <UserPlus className="w-3 h-3 text-[#33077C]" />
-                          <span>+ Assign Rep</span>
-                        </button>
-                      )}
-                    </td>
+                          ₹{item.outstandingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </td>
 
-                    {/* Status */}
-                    <td className="py-3 px-3 text-center">{renderStatusBadge(item.status)}</td>
-
-                    {/* Action */}
-                    <td className="py-3 px-3.5 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        {item.outstandingAmount > 0 ? (
+                      {/* Sales Representative */}
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap text-xs">
+                        {item.salesRepName && item.salesRepName !== 'Unassigned' ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 bg-purple-50/80 px-2.5 py-1 rounded-lg border border-purple-200/50">
+                              <UserCheck className="w-3.5 h-3.5 text-[#33077C]" />
+                              {item.salesRepName}
+                            </span>
+                            {item.customer?.salesRepresentativeType && (
+                              <div className="mt-0.5">
+                                <span className="text-[10px] text-purple-700 font-medium">
+                                  {item.customer.salesRepresentativeType} Rep
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
                           <button
                             type="button"
-                            onClick={() => handleOpenRecordPayment(item)}
-                            className="h-7 px-2.5 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                            onClick={() => handleOpenAssignCustomer(item.customer)}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] hover:text-[#4309A2] bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg border border-purple-200/80 transition-colors cursor-pointer"
+                            title="Assign Sales Rep to this Customer"
                           >
-                            <CreditCard className="w-3 h-3" />
-                            <span>Collect</span>
+                            <UserPlus className="w-3 h-3 text-[#33077C]" />
+                            <span>+ Assign Rep</span>
                           </button>
-                        ) : (
-                          <span className="text-[11px] text-emerald-600 font-bold px-2 py-0.5 bg-emerald-50 rounded-md border border-emerald-200">
-                            Settled
-                          </span>
                         )}
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                        {renderStatusBadge(item.status)}
+                      </td>
+
+                      {/* Action */}
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {item.outstandingAmount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenRecordPayment(item)}
+                              className="h-8 px-3 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                            >
+                              <CreditCard className="w-3.5 h-3.5" />
+                              <span>Collect</span>
+                            </button>
+                          ) : (
+                            <span className="text-xs text-emerald-600 font-bold px-2.5 py-1 bg-emerald-50 rounded-md border border-emerald-200">
+                              Settled
+                            </span>
+                          )}
 
                         {/* 3-dots action menu trigger */}
                         <div className="relative">
@@ -1603,27 +1643,27 @@ export const CollectionsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleOpenInvoicePreview(item)}
-                                className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-slate-700 dark:text-slate-200 cursor-pointer"
+                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                               >
-                                <Eye className="w-3.5 h-3.5 text-slate-400" />
+                                <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>View Invoice</span>
                               </button>
 
                               <button
                                 type="button"
                                 onClick={() => handleOpenContact(item)}
-                                className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-slate-700 dark:text-slate-200 cursor-pointer"
+                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                               >
-                                <Phone className="w-3.5 h-3.5 text-slate-400" />
+                                <Phone className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Contact Customer</span>
                               </button>
 
                               <button
                                 type="button"
                                 onClick={() => handleOpenFollowUp(item)}
-                                className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-slate-700 dark:text-slate-200 cursor-pointer"
+                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                               >
-                                <Clock className="w-3.5 h-3.5 text-purple-600" />
+                                <Clock className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Add Follow-up</span>
                               </button>
 
@@ -1633,9 +1673,9 @@ export const CollectionsView: React.FC = () => {
                                   setActiveActionId(null);
                                   handleOpenAssignCustomer(item.customer);
                                 }}
-                                className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-[#33077C] font-semibold cursor-pointer"
+                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                               >
-                                <UserCheck className="w-3.5 h-3.5 text-[#33077C]" />
+                                <UserCheck className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Assign / Change Rep</span>
                               </button>
 
@@ -1643,9 +1683,9 @@ export const CollectionsView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenPromiseToPay(item)}
-                                  className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-slate-700 dark:text-slate-200 cursor-pointer"
+                                  className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                                 >
-                                  <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                                  <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                   <span>Record Promise to Pay</span>
                                 </button>
                               )}
@@ -1654,9 +1694,9 @@ export const CollectionsView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenRecordPayment(item)}
-                                  className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-emerald-700 font-semibold cursor-pointer"
+                                  className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                                 >
-                                  <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
+                                  <CreditCard className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                   <span>Record Payment</span>
                                 </button>
                               )}
@@ -1666,9 +1706,9 @@ export const CollectionsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => handleOpenTimeline(item)}
-                                className="w-full px-3 py-1.5 text-left flex items-center gap-2 hover:bg-slate-50 text-[#33077C] font-semibold cursor-pointer"
+                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
                               >
-                                <TrendingUp className="w-3.5 h-3.5 text-[#33077C]" />
+                                <TrendingUp className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Collection Timeline</span>
                               </button>
                             </div>
@@ -1677,8 +1717,9 @@ export const CollectionsView: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
+                );
+              })
+            )}
             </tbody>
           </table>
         </div>
@@ -2253,110 +2294,86 @@ export const CollectionsView: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               {/* Payment Amount */}
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Payment Amount (₹) <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    value={paymentAmount}
-                    onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
-                    className="w-full h-full px-4 bg-transparent font-bold text-sm text-slate-900 outline-none"
-                    required
-                  />
-                </div>
+              <div>
+                <FormLabel required>Payment Amount (₹)</FormLabel>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                  className={`${FORM_INPUT_CLS} font-bold text-sm`}
+                  required
+                />
               </div>
 
               {/* Payment Date */}
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Payment Date <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="date"
-                    value={paymentDate}
-                    onChange={(e) => setPaymentDate(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                    required
-                  />
-                </div>
+              <div>
+                <FormLabel required>Payment Date</FormLabel>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                  required
+                />
               </div>
 
               {/* Payment Method */}
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Payment Method
-                  </span>
-                  <select
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                  >
-                    <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
-                    <option value="Cash">Cash</option>
-                    <option value="UPI">UPI / QR</option>
-                    <option value="Cheque">Cheque</option>
-                    <option value="Credit Card">Credit Card / POS</option>
-                  </select>
-                </div>
+              <div>
+                <FormLabel>Payment Method</FormLabel>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
+                  <option value="Cash">Cash</option>
+                  <option value="UPI">UPI / QR</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Credit Card">Credit Card / POS</option>
+                </select>
               </div>
 
               {/* Sales Representative */}
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Collecting Sales Representative
-                  </span>
-                  <select
-                    value={paymentRepId}
-                    onChange={(e) => setPaymentRepId(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                  >
-                    <option value="">Select Representative (Optional)</option>
-                    {liveReps.map((rep) => (
-                      <option key={rep.id} value={rep.id}>
-                        {rep.name} ({rep.mobile})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div>
+                <FormLabel>Collecting Sales Representative</FormLabel>
+                <select
+                  value={paymentRepId}
+                  onChange={(e) => setPaymentRepId(e.target.value)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="">Select Representative (Optional)</option>
+                  {liveReps.map((rep) => (
+                    <option key={rep.id} value={rep.id}>
+                      {rep.name} ({rep.mobile})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Reference / Transaction No */}
-              <div className="sm:col-span-2 relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Transaction / Cheque / UTR Reference
-                  </span>
-                  <input
-                    type="text"
-                    value={paymentReference}
-                    onChange={(e) => setPaymentReference(e.target.value)}
-                    placeholder="e.g. UTR12345678 or Cheque #88992"
-                    className="w-full h-full px-4 bg-transparent text-xs font-mono text-slate-900 outline-none"
-                  />
-                </div>
+              <div className="sm:col-span-2">
+                <FormLabel>Transaction / Cheque / UTR Reference</FormLabel>
+                <input
+                  type="text"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  placeholder="e.g. UTR12345678 or Cheque #88992"
+                  className={`${FORM_INPUT_CLS} font-mono`}
+                />
               </div>
 
               {/* Notes */}
-              <div className="sm:col-span-2 relative">
-                <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Notes / Remarks
-                  </span>
-                  <textarea
-                    rows={2}
-                    value={paymentNotes}
-                    onChange={(e) => setPaymentNotes(e.target.value)}
-                    placeholder="Additional payment notes..."
-                    className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
-                  />
-                </div>
+              <div className="sm:col-span-2">
+                <FormLabel>Notes / Remarks</FormLabel>
+                <textarea
+                  rows={2}
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  placeholder="Additional payment notes..."
+                  className={FORM_TEXTAREA_CLS}
+                />
               </div>
             </div>
 
@@ -2421,171 +2438,135 @@ export const CollectionsView: React.FC = () => {
             <form noValidate onSubmit={handleSubmitFollowUp} className="space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                 {/* Contact Method */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Contact Method <span className="text-rose-500">*</span>
-                    </span>
-                    <select
-                      value={followUpContactMethod}
-                      onChange={(e) => setFollowUpContactMethod(e.target.value as ContactMethod)}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                      required
-                    >
-                      <option value="Phone">Phone</option>
-                      <option value="WhatsApp">WhatsApp</option>
-                      <option value="Email">Email</option>
-                      <option value="In-Person Visit">In-Person Visit</option>
-                    </select>
-                  </div>
+                <div>
+                  <FormLabel required>Contact Method</FormLabel>
+                  <select
+                    value={followUpContactMethod}
+                    onChange={(e) => setFollowUpContactMethod(e.target.value as ContactMethod)}
+                    className={FORM_SELECT_CLS}
+                    required
+                  >
+                    <option value="Phone">Phone</option>
+                    <option value="WhatsApp">WhatsApp</option>
+                    <option value="Email">Email</option>
+                    <option value="In-Person Visit">In-Person Visit</option>
+                  </select>
                 </div>
 
                 {/* Contact Status */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Contact Status <span className="text-rose-500">*</span>
-                    </span>
-                    <select
-                      value={followUpOutcome}
-                      onChange={(e) => {
-                        const val = e.target.value as FollowUpOutcome;
-                        setFollowUpOutcome(val);
-                        if (val === 'Promise to Pay') {
-                          setFollowUpHasPromise(true);
-                        }
-                      }}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                      required
-                    >
-                      <option value="Customer Contacted">Customer Contacted</option>
-                      <option value="Promise to Pay">Promise to Pay</option>
-                      <option value="Payment Received">Payment Received</option>
-                      <option value="No Response">No Response</option>
-                      <option value="Dispute Raised">Dispute Raised</option>
-                      <option value="Follow-up Required">Follow-up Required</option>
-                    </select>
-                  </div>
+                <div>
+                  <FormLabel required>Contact Status</FormLabel>
+                  <select
+                    value={followUpOutcome}
+                    onChange={(e) => {
+                      const val = e.target.value as FollowUpOutcome;
+                      setFollowUpOutcome(val);
+                      if (val === 'Promise to Pay') {
+                        setFollowUpHasPromise(true);
+                      }
+                    }}
+                    className={FORM_SELECT_CLS}
+                    required
+                  >
+                    <option value="Customer Contacted">Customer Contacted</option>
+                    <option value="Promise to Pay">Promise to Pay</option>
+                    <option value="Payment Received">Payment Received</option>
+                    <option value="No Response">No Response</option>
+                    <option value="Dispute Raised">Dispute Raised</option>
+                    <option value="Follow-up Required">Follow-up Required</option>
+                  </select>
                 </div>
 
                 {/* Sales Representative */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Sales Representative
-                    </span>
-                    <select
-                      value={followUpRepId}
-                      onChange={(e) => setFollowUpRepId(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                    >
-                      <option value="">Select Representative</option>
-                      {liveReps.map((rep) => (
-                        <option key={rep.id} value={rep.id}>
-                          {rep.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div>
+                  <FormLabel>Sales Representative</FormLabel>
+                  <select
+                    value={followUpRepId}
+                    onChange={(e) => setFollowUpRepId(e.target.value)}
+                    className={FORM_SELECT_CLS}
+                  >
+                    <option value="">Select Representative</option>
+                    {liveReps.map((rep) => (
+                      <option key={rep.id} value={rep.id}>
+                        {rep.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Follow-up Date */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Follow-up Date <span className="text-rose-500">*</span>
-                    </span>
-                    <input
-                      type="date"
-                      value={followUpDate}
-                      onChange={(e) => setFollowUpDate(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                      required
-                    />
-                  </div>
+                <div>
+                  <FormLabel required>Follow-up Date</FormLabel>
+                  <input
+                    type="date"
+                    value={followUpDate}
+                    onChange={(e) => setFollowUpDate(e.target.value)}
+                    className={FORM_INPUT_CLS}
+                    required
+                  />
                 </div>
 
                 {/* Discussion */}
-                <div className="sm:col-span-2 relative">
-                  <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Discussion <span className="text-rose-500">*</span>
-                    </span>
-                    <textarea
-                      rows={2}
-                      value={followUpNotes}
-                      onChange={(e) => setFollowUpNotes(e.target.value)}
-                      placeholder="Customer confirmed payment on 10 Oct..."
-                      className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
-                      required
-                    />
-                  </div>
+                <div className="sm:col-span-2">
+                  <FormLabel required>Discussion</FormLabel>
+                  <textarea
+                    rows={2}
+                    value={followUpNotes}
+                    onChange={(e) => setFollowUpNotes(e.target.value)}
+                    placeholder="Customer confirmed payment on 10 Oct..."
+                    className={FORM_TEXTAREA_CLS}
+                    required
+                  />
                 </div>
 
                 {/* Promise to Pay Toggle */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Promise to Pay
-                    </span>
-                    <select
-                      value={followUpHasPromise ? 'Yes' : 'No'}
-                      onChange={(e) => setFollowUpHasPromise(e.target.value === 'Yes')}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                    >
-                      <option value="No">No</option>
-                      <option value="Yes">Yes</option>
-                    </select>
-                  </div>
+                <div>
+                  <FormLabel>Promise to Pay</FormLabel>
+                  <select
+                    value={followUpHasPromise ? 'Yes' : 'No'}
+                    onChange={(e) => setFollowUpHasPromise(e.target.value === 'Yes')}
+                    className={FORM_SELECT_CLS}
+                  >
+                    <option value="No">No</option>
+                    <option value="Yes">Yes</option>
+                  </select>
                 </div>
 
                 {/* Next Follow-up */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Next Follow-up
-                    </span>
-                    <input
-                      type="date"
-                      value={nextFollowUpDate}
-                      onChange={(e) => setNextFollowUpDate(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                    />
-                  </div>
+                <div>
+                  <FormLabel>Next Follow-up</FormLabel>
+                  <input
+                    type="date"
+                    value={nextFollowUpDate}
+                    onChange={(e) => setNextFollowUpDate(e.target.value)}
+                    className={FORM_INPUT_CLS}
+                  />
                 </div>
 
                 {/* Conditional Promise Fields */}
                 {followUpHasPromise && (
                   <>
-                    <div className="relative">
-                      <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          Promise Date <span className="text-rose-500">*</span>
-                        </span>
-                        <input
-                          type="date"
-                          value={followUpPromiseDate}
-                          onChange={(e) => setFollowUpPromiseDate(e.target.value)}
-                          className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                          required={followUpHasPromise}
-                        />
-                      </div>
+                    <div>
+                      <FormLabel required>Promise Date</FormLabel>
+                      <input
+                        type="date"
+                        value={followUpPromiseDate}
+                        onChange={(e) => setFollowUpPromiseDate(e.target.value)}
+                        className={FORM_INPUT_CLS}
+                        required={followUpHasPromise}
+                      />
                     </div>
-                    <div className="relative">
-                      <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          Expected Amount (₹) <span className="text-rose-500">*</span>
-                        </span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="1"
-                          value={followUpPromiseAmount}
-                          onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
-                          className="w-full h-full px-4 bg-transparent text-xs font-bold text-slate-900 outline-none"
-                          required={followUpHasPromise}
-                        />
-                      </div>
+                    <div>
+                      <FormLabel required>Expected Amount (₹)</FormLabel>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        value={followUpPromiseAmount}
+                        onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
+                        className={`${FORM_INPUT_CLS} font-bold`}
+                        required={followUpHasPromise}
+                      />
                     </div>
                   </>
                 )}
@@ -2672,51 +2653,39 @@ export const CollectionsView: React.FC = () => {
           onBack={() => setIsPromiseModalOpen(false)}
         >
           <form noValidate onSubmit={handleSubmitPromiseToPay} className="space-y-4 p-2 text-xs pt-1">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Promised Amount (₹) <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="1"
-                  value={promisedAmount}
-                  onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full h-full px-4 bg-transparent font-bold text-sm text-slate-900 outline-none"
-                  required
-                />
-              </div>
+            <div>
+              <FormLabel required>Promised Amount (₹)</FormLabel>
+              <input
+                type="number"
+                step="0.01"
+                min="1"
+                value={promisedAmount}
+                onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
+                className={`${FORM_INPUT_CLS} font-bold text-sm`}
+                required
+              />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Promised Payment Date <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="date"
-                  value={promiseDate}
-                  onChange={(e) => setPromiseDate(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                  required
-                />
-              </div>
+            <div>
+              <FormLabel required>Promised Payment Date</FormLabel>
+              <input
+                type="date"
+                value={promiseDate}
+                onChange={(e) => setPromiseDate(e.target.value)}
+                className={FORM_INPUT_CLS}
+                required
+              />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Notes / Commitment Details
-                </span>
-                <textarea
-                  rows={2}
-                  value={promiseNotes}
-                  onChange={(e) => setPromiseNotes(e.target.value)}
-                  placeholder="e.g. Customer confirmed bank transfer by end of day"
-                  className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Notes / Commitment Details</FormLabel>
+              <textarea
+                rows={2}
+                value={promiseNotes}
+                onChange={(e) => setPromiseNotes(e.target.value)}
+                placeholder="e.g. Customer confirmed bank transfer by end of day"
+                className={FORM_TEXTAREA_CLS}
+              />
             </div>
 
             <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
@@ -3244,105 +3213,85 @@ export const CollectionsView: React.FC = () => {
           onBack={() => setIsAssignCustomerModalOpen(false)}
         >
           <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs pt-1">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Customer <span className="text-rose-500">*</span>
-                </span>
-                <select
-                  value={assignCustomerId}
-                  onChange={(e) => setAssignCustomerId(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent font-medium text-slate-900 outline-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select customer...</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.customerCode || c.id}) {c.company ? `- ${c.company}` : ''}
-                    </option>
-                  ))}
-                </select>
+            <div>
+              <FormLabel required>Customer</FormLabel>
+              <select
+                value={assignCustomerId}
+                onChange={(e) => setAssignCustomerId(e.target.value)}
+                className={FORM_SELECT_CLS}
+                required
+              >
+                <option value="">Select customer...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.customerCode || c.id}) {c.company ? `- ${c.company}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <FormLabel required>Sales Representative</FormLabel>
+              <select
+                value={assignRepId}
+                onChange={(e) => setAssignRepId(e.target.value)}
+                className={FORM_SELECT_CLS}
+                required
+              >
+                <option value="">Select sales representative...</option>
+                {liveReps.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} {r.designation ? `(${r.designation})` : ''} - {r.mobile}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <FormLabel>Assignment Type</FormLabel>
+              <div className="flex items-center gap-6 h-11 px-4 bg-white rounded-xl border border-slate-200">
+                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-xs sm:text-[13px]">
+                  <input
+                    type="radio"
+                    name="assignType"
+                    checked={assignType === 'Primary'}
+                    onChange={() => setAssignType('Primary')}
+                    className="text-[#33077C] focus:ring-[#33077C]"
+                  />
+                  <span>Primary Rep</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-xs sm:text-[13px]">
+                  <input
+                    type="radio"
+                    name="assignType"
+                    checked={assignType === 'Temporary'}
+                    onChange={() => setAssignType('Temporary')}
+                    className="text-[#33077C] focus:ring-[#33077C]"
+                  />
+                  <span>Temporary Rep</span>
+                </label>
               </div>
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Sales Representative <span className="text-rose-500">*</span>
-                </span>
-                <select
-                  value={assignRepId}
-                  onChange={(e) => setAssignRepId(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent font-medium text-slate-900 outline-none cursor-pointer"
-                  required
-                >
-                  <option value="">Select sales representative...</option>
-                  {liveReps.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} {r.designation ? `(${r.designation})` : ''} - {r.mobile}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <FormLabel>Effective From</FormLabel>
+              <input
+                type="date"
+                value={assignEffectiveFrom}
+                onChange={(e) => setAssignEffectiveFrom(e.target.value)}
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full p-2.5 pt-3.5 bg-white rounded-xl border border-slate-300">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Assignment Type
-                </span>
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
-                    <input
-                      type="radio"
-                      name="assignType"
-                      checked={assignType === 'Primary'}
-                      onChange={() => setAssignType('Primary')}
-                      className="text-[#33077C] focus:ring-[#33077C]"
-                    />
-                    <span>Primary Rep</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
-                    <input
-                      type="radio"
-                      name="assignType"
-                      checked={assignType === 'Temporary'}
-                      onChange={() => setAssignType('Temporary')}
-                      className="text-[#33077C] focus:ring-[#33077C]"
-                    />
-                    <span>Temporary Rep</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Effective From
-                </span>
-                <input
-                  type="date"
-                  value={assignEffectiveFrom}
-                  onChange={(e) => setAssignEffectiveFrom(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent text-xs font-medium text-slate-900 outline-none cursor-pointer"
-                />
-              </div>
-            </div>
-
-            <div className="relative">
-              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Notes
-                </span>
-                <textarea
-                  rows={2}
-                  value={assignNotes}
-                  onChange={(e) => setAssignNotes(e.target.value)}
-                  placeholder="Enter assignment notes or transition instructions..."
-                  className="w-full p-3 pt-3.5 bg-transparent text-xs text-slate-900 outline-none resize-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Notes</FormLabel>
+              <textarea
+                rows={2}
+                value={assignNotes}
+                onChange={(e) => setAssignNotes(e.target.value)}
+                placeholder="Enter assignment notes or transition instructions..."
+                className={FORM_TEXTAREA_CLS}
+              />
             </div>
 
             <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">

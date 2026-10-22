@@ -340,7 +340,7 @@ export const commerceDeliveryChallanEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/challans',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -438,6 +438,8 @@ export const commerceDeliveryChallanEndpoints = baseApi.injectEndpoints({
         { type: 'DeliveryChallan', id },
         { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
       ],
     }),
 
@@ -453,6 +455,8 @@ export const commerceDeliveryChallanEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
       ],
     }),
   }),
@@ -512,7 +516,7 @@ export const commerceDeliveryChallanApi = {
     }
 
     const response = await baseClient.get<DeliveryChallanListResponse>('/commerce/challans', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },

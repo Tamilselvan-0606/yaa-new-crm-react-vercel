@@ -148,7 +148,7 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
         return {
           url: '/work/payments-out',
           method: 'GET',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -185,7 +185,11 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
           body: cleanPayload,
         };
       },
-      invalidatesTags: [{ type: 'PaymentOut', id: 'LIST' }],
+      invalidatesTags: [
+        { type: 'PaymentOut', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
+      ],
     }),
 
     updateWorkPaymentOut: builder.mutation<
@@ -208,6 +212,8 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
 
@@ -231,6 +237,8 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
 
@@ -242,6 +250,8 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, id) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
   }),
@@ -293,7 +303,7 @@ export const workPaymentOutApi = {
     const response = await baseClient.get<PaymentOutListResponse>(
       '/work/payments-out',
       {
-        params: queryParams,
+        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
       }
     );
     return response.data;

@@ -122,15 +122,10 @@ export interface CreatePurchaseRequestPayload {
 }
 
 export interface UpdatePurchaseRequestPayload {
-  requestNo?: string;
-  requestDate?: string;
-  requestedBy?: string;
   department?: string;
   requiredDate?: string;
   priority?: string;
-  status?: string;
   items?: Array<{
-    id?: string;
     productId: string;
     productName: string;
     currentStock?: number;
@@ -140,8 +135,10 @@ export interface UpdatePurchaseRequestPayload {
     remarks?: string;
   }>;
   notes?: string;
-  rejectionReason?: string | null;
-  approvedBy?: string | null;
-  approvedAt?: string | null;
-  createdPurchaseId?: string | null;
+}
+
+export interface UpdatePurchaseRequestStatusPayload {
+  status: 'Approved' | 'Rejected' | 'Pending Approval' | 'Draft' | 'Purchase Created' | string;
+  approvedBy?: string;
+  rejectionReason?: string;
 }

@@ -553,16 +553,16 @@ export const SalesReportView: React.FC = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CUSTOMER</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">SUBTOTAL</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">DISCOUNT</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TAX</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">GRAND TOTAL</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">EST. PROFIT</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase select-none">
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white min-w-[110px]">DATE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white min-w-[120px]">INVOICE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white min-w-[180px]">CUSTOMER</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right min-w-[110px]">SUBTOTAL</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right min-w-[110px]">DISCOUNT</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right min-w-[110px]">TAX</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right min-w-[120px]">GRAND TOTAL</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right min-w-[120px]">EST. PROFIT</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center min-w-[110px]">STATUS</th>
               </tr>
             </thead>
             <tbody className="text-sm">
@@ -570,22 +570,22 @@ export const SalesReportView: React.FC = () => {
                 const profit = (s.subtotal - s.totalDiscount) * 0.45;
                 return (
                   <tr key={s.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
-                    <td className="py-4 px-5 border border-slate-200 text-slate-600 text-xs">{s.saleDate}</td>
-                    <td className="py-4 px-5 border border-slate-200 font-bold text-[#33077C] text-xs">{s.invoiceNo}</td>
-                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                    <td className="py-4 px-5 border border-slate-200 text-slate-600 text-xs align-middle">{s.saleDate}</td>
+                    <td className="py-4 px-5 border border-slate-200 font-bold text-[#33077C] text-xs align-middle">{s.invoiceNo}</td>
+                    <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                       <div className="font-bold text-slate-900 text-xs sm:text-[13px]">{s.customerName}</div>
                       {s.customerCompany && <div className="text-[10px] text-slate-400">{s.customerCompany}</div>}
                     </td>
-                    <td className="py-4 px-4 border border-slate-200 text-right text-slate-700 text-xs font-semibold">₹{s.subtotal.toLocaleString('en-IN')}</td>
-                    <td className="py-4 px-4 border border-slate-200 text-right text-amber-600 text-xs font-semibold">-₹{s.totalDiscount.toLocaleString('en-IN')}</td>
-                    <td className="py-4 px-4 border border-slate-200 text-right text-blue-600 text-xs font-semibold">+₹{s.totalTax.toLocaleString('en-IN')}</td>
-                    <td className="py-4 px-4 border border-slate-200 text-right font-bold text-slate-900 text-xs sm:text-[13px]">
+                    <td className="py-4 px-4 border border-slate-200 text-right text-slate-700 text-xs font-semibold align-middle">₹{s.subtotal.toLocaleString('en-IN')}</td>
+                    <td className="py-4 px-4 border border-slate-200 text-right text-amber-600 text-xs font-semibold align-middle">-₹{s.totalDiscount.toLocaleString('en-IN')}</td>
+                    <td className="py-4 px-4 border border-slate-200 text-right text-blue-600 text-xs font-semibold align-middle">+₹{s.totalTax.toLocaleString('en-IN')}</td>
+                    <td className="py-4 px-4 border border-slate-200 text-right font-bold text-slate-900 text-xs sm:text-[13px] align-middle">
                       ₹{s.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="py-4 px-4 border border-slate-200 text-right font-bold text-emerald-600 text-xs">
+                    <td className="py-4 px-4 border border-slate-200 text-right font-bold text-emerald-600 text-xs align-middle">
                       ₹{profit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
                       {s.saleStatus === 'Completed' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />

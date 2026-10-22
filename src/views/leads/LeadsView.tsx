@@ -48,6 +48,12 @@ import {
   useConvertPlatformLeadMutation,
   PlatformLeadItem,
 } from "../../api/platform/leadApi";
+import {
+  useGetPlatformClientsQuery,
+  useUpdatePlatformClientMutation,
+  useDeletePlatformClientMutation,
+  PlatformClientItem,
+} from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
 
 interface LeadsViewProps {
@@ -131,6 +137,36 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   const customers = commerceCustomers;
 
+  // Client Filters State (Pending & Applied)
+  const [pendingClientSearch, setPendingClientSearch] = useState("");
+  const [appliedClientSearch, setAppliedClientSearch] = useState("");
+  const [pendingClientStatus, setPendingClientStatus] = useState("All");
+  const [appliedClientStatus, setAppliedClientStatus] = useState("All");
+  const [clientProductFilter, setClientProductFilter] = useState("All");
+  const [clientStaffFilter, setClientStaffFilter] = useState("All");
+  const [clientPaymentFilter, setClientPaymentFilter] = useState("All");
+  const [clientPage, setClientPage] = useState(1);
+  const [clientLimit, setClientLimit] = useState(10);
+
+  // Platform Clients API Query & Mutations
+  const {
+    data: platformClientsResponse,
+    isLoading: isClientsLoading,
+    refetch: refetchClients,
+  } = useGetPlatformClientsQuery({
+    page: clientPage,
+    limit: clientLimit,
+    search: appliedClientSearch || undefined,
+    status: appliedClientStatus !== "All" ? (appliedClientStatus as any) : undefined,
+  });
+
+  const [updatePlatformClient] = useUpdatePlatformClientMutation();
+  const [deletePlatformClient] = useDeletePlatformClientMutation();
+
+  const clientsPagination = platformClientsResponse?.pagination;
+  const totalClientsCount =
+    clientsPagination?.totalRecords ?? (platformClientsResponse?.data?.length || 0);
+
   // Platform Leads API Query & Mutations
   const {
     data: platformLeadsResponse,
@@ -151,30 +187,37 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const leadsSummary = platformLeadsResponse?.summary;
   const totalLeadsCount = leadsPagination?.totalRecords ?? (platformLeadsResponse?.data?.length || 0);
 
-  const handleToggleCustomerStatus = async (customer: Customer) => {
+  const handleToggleCustomerStatus = async (customer: any) => {
     const nextStatus = customer.status === 'Active' ? 'Inactive' : 'Active';
     try {
-      await customerApi.patchCustomer(customer.id, { status: nextStatus as any });
-      setCommerceCustomers((prev) =>
-        prev.map((c) => (c.id === customer.id ? { ...c, status: nextStatus } : c))
-      );
+      await updatePlatformClient({
+        id: customer.id,
+        payload: {
+          status: nextStatus as any,
+          active: nextStatus === 'Active',
+        },
+      }).unwrap();
     } catch {
-      // Fallback local update
-      setCommerceCustomers((prev) =>
-        prev.map((c) => (c.id === customer.id ? { ...c, status: nextStatus } : c))
-      );
+      try {
+        await customerApi.patchCustomer(customer.id, { status: nextStatus as any });
+      } catch {
+        // Fallback
+      }
     }
     setActiveDropdownId(null);
     setDropdownPos(null);
   };
 
   const handleDeleteCustomerItem = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this client?')) {
+    if (window.confirm('Are you sure you want to deactivate/delete this client?')) {
       try {
-        await customerApi.deleteCustomer(id);
-        setCommerceCustomers((prev) => prev.filter((c) => c.id !== id));
+        await deletePlatformClient(id).unwrap();
       } catch {
-        setCommerceCustomers((prev) => prev.filter((c) => c.id !== id));
+        try {
+          await customerApi.deleteCustomer(id);
+        } catch {
+          // Fallback
+        }
       }
     }
     setActiveDropdownId(null);
@@ -264,26 +307,86 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     setIsAddClientOpen(true);
   };
 
-  // Client Filters State (Pending & Applied)
-  const [pendingClientSearch, setPendingClientSearch] = useState("");
-  const [appliedClientSearch, setAppliedClientSearch] = useState("");
-  const [pendingClientStatus, setPendingClientStatus] = useState("All");
-  const [appliedClientStatus, setAppliedClientStatus] = useState("All");
-  const [clientProductFilter, setClientProductFilter] = useState("All");
-  const [clientStaffFilter, setClientStaffFilter] = useState("All");
-  const [clientPaymentFilter, setClientPaymentFilter] = useState("All");
+  // Map Platform Client items into unified table format
+  const rawPlatformClients: PlatformClientItem[] = platformClientsResponse?.data || [];
+  const clientsFromApi: any[] = rawPlatformClients.map((pc, idx) => {
+    const rawProds: any[] = [];
+    if (pc.subscription?.planName || pc.subscriptionPlan) {
+      rawProds.push({
+        productId: pc.subscription?.planId || "prod_sub",
+        productName: pc.subscription?.planName || pc.subscriptionPlan || "Enterprise Plan",
+        planName: pc.subscription?.planName || pc.subscriptionPlan || "Enterprise Plan",
+        amount: pc.subscription?.amount || 0,
+        since: pc.subscription?.startDate || (pc.createdAt ? pc.createdAt.split("T")[0] : ""),
+        status: pc.subscription?.status || "Active",
+      });
+    }
 
-  // Filtered Clients
-  const filteredCustomers = customers.filter((c: any) => {
-    const q = appliedClientSearch.toLowerCase().trim();
-    const matchesSearch =
-      !q ||
-      (c.name || "").toLowerCase().includes(q) ||
-      (c.company || "").toLowerCase().includes(q) ||
-      (c.email || "").toLowerCase().includes(q) ||
-      (c.phone || "").toLowerCase().includes(q) ||
-      (c.clientId || "").toLowerCase().includes(q);
+    // Format renewal date
+    let renewalDisplay = "None";
+    if (pc.subscription?.endDate) {
+      const d = new Date(pc.subscription.endDate);
+      renewalDisplay = !isNaN(d.getTime())
+        ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+        : pc.subscription.endDate;
+    }
 
+    // Payment / Invoice status
+    let paymentStatus = "Paid";
+    if (pc.billing) {
+      if (pc.billing.overdueInvoices > 0) {
+        paymentStatus = "Overdue";
+      } else if (pc.billing.outstanding > 0) {
+        paymentStatus = "Pending";
+      } else {
+        paymentStatus = "Paid";
+      }
+    }
+
+    return {
+      id: pc.id,
+      clientId: pc.code || pc.id,
+      code: pc.code,
+      name: pc.name,
+      company: pc.legalName || pc.name,
+      legalName: pc.legalName,
+      contactPerson: pc.contactPerson || pc.name,
+      phone: pc.phone || "",
+      whatsapp: pc.whatsapp || pc.phone || "",
+      email: pc.email || "",
+      alternatePhone: "",
+      address: pc.address || pc.location || "",
+      location: pc.location || "",
+      city: pc.location || "",
+      state: "",
+      pincode: "",
+      industry: pc.industry || "Technology & Logistics",
+      status: pc.status || (pc.active ? "Active" : "Inactive"),
+      active: pc.active,
+      organizationType: pc.organizationType,
+      registrationType: pc.registrationType,
+      gstNumber: pc.gstNumber,
+      gstin: pc.gstNumber,
+      panNumber: pc.panNumber,
+      pan: pc.panNumber,
+      renewalDate: renewalDisplay,
+      paymentStatus,
+      billing: pc.billing,
+      subscription: pc.subscription,
+      branchesCount: pc.branchesCount,
+      subOrganizationsCount: pc.subOrganizationsCount,
+      membersCount: pc.membersCount,
+      linkedProducts: rawProds,
+      documents: [],
+      createdAt: pc.createdAt,
+      updatedAt: pc.updatedAt,
+    };
+  });
+
+  // Filtered Clients (incorporating live API clients + fallback)
+  const allCustomerSource = clientsFromApi.length > 0 ? clientsFromApi : customers;
+  const filteredCustomers = allCustomerSource.filter((c: any) => {
+    // If backend already filtered search and status, respect it, but apply client dropdown filters if any
     const prods = (c.linkedProducts || []).map((p: any) =>
       p.productName.toLowerCase(),
     );
@@ -294,11 +397,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       ) ||
       (clientProductFilter === "Digital Marketing" && c.usesDigitalMarketing);
 
-    const status = c.status || "Active";
-    const matchesStatus =
-      appliedClientStatus === "All" ||
-      status.toLowerCase() === appliedClientStatus.toLowerCase();
-
     const staff = c.assignedStaffName || "Alex Rivera";
     const matchesStaff =
       clientStaffFilter === "All" || staff.includes(clientStaffFilter);
@@ -307,13 +405,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     const matchesPayment =
       clientPaymentFilter === "All" || payment === clientPaymentFilter;
 
-    return (
-      matchesSearch &&
-      matchesProduct &&
-      matchesStatus &&
-      matchesStaff &&
-      matchesPayment
-    );
+    return matchesProduct && matchesStaff && matchesPayment;
   });
 
   // Map Platform Lead items into table format
@@ -594,7 +686,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <span className="text-xs font-semibold text-slate-500">
                   Total Clients :{" "}
                   <span className="text-[#33077C] font-bold">
-                    {filteredCustomers.length}
+                    {totalClientsCount}
                   </span>
                 </span>
               </div>
@@ -634,7 +726,17 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="text-sm">
-                  {filteredCustomers.length === 0 ? (
+                  {isClientsLoading ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="py-16 text-center text-slate-400 border border-slate-200"
+                      >
+                        <div className="w-7 h-7 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                        <p className="font-bold text-slate-700 text-sm">Loading client accounts...</p>
+                      </td>
+                    </tr>
+                  ) : filteredCustomers.length === 0 ? (
                     <tr>
                       <td
                         colSpan={8}
@@ -652,22 +754,12 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     </tr>
                   ) : (
                     filteredCustomers.map((client: any, index: number) => {
-                      const clientStatus =
-                        client.status || (index === 1 ? "Onboard" : "Active");
-                      const renewalDate =
-                        client.renewalDate ||
-                        (index === 0
-                          ? "12 Oct 2026"
-                          : index === 1
-                            ? "28 Sep 2026"
-                            : "15 Nov 2026");
-                      const paymentStatus =
-                        client.paymentStatus ||
-                        (index === 1 ? "Pending" : "Paid");
-                      const phoneNum = client.phone || "+91 96325 87410";
-                      const whatsappNum =
-                        client.whatsapp || client.phone || "+91 96325 87410";
-                      const emailAddr = client.email || "client@example.com";
+                      const clientStatus = client.status || (client.active ? "Active" : "Inactive");
+                      const renewalDate = client.renewalDate && client.renewalDate !== "None" ? client.renewalDate : "-";
+                      const paymentStatus = client.paymentStatus || "-";
+                      const phoneNum = client.phone || "";
+                      const whatsappNum = client.whatsapp || client.phone || "";
+                      const emailAddr = client.email || "";
 
                       return (
                         <tr
@@ -725,10 +817,15 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                                 const uniqueProds = Array.from(
                                   new Set(rawProds),
                                 );
-                                const finalProds =
-                                  uniqueProds.length > 0
-                                    ? uniqueProds
-                                    : ["YaaConnect"];
+                                const finalProds = uniqueProds;
+
+                                if (finalProds.length === 0) {
+                                  return (
+                                    <span className="text-xs text-slate-400 font-normal">
+                                      -
+                                    </span>
+                                  );
+                                }
 
                                 const visibleProds = finalProds.slice(0, 1);
                                 const remainingCount = finalProds.length - 1;
@@ -880,17 +977,21 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
                           {/* 7. Payment */}
                           <td className="py-4 px-4 border border-slate-200">
-                            <span
-                              className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                paymentStatus === "Paid"
-                                  ? "bg-emerald-50 text-emerald-600"
-                                  : paymentStatus === "Pending"
-                                    ? "bg-amber-50 text-amber-600"
-                                    : "bg-rose-50 text-rose-600"
-                              }`}
-                            >
-                              {paymentStatus}
-                            </span>
+                            {paymentStatus && paymentStatus !== "-" ? (
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                  paymentStatus === "Paid"
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : paymentStatus === "Pending"
+                                      ? "bg-amber-50 text-amber-600"
+                                      : "bg-rose-50 text-rose-600"
+                                }`}
+                              >
+                                {paymentStatus}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400 font-normal">-</span>
+                            )}
                           </td>
 
                           {/* 8. Actions */}
@@ -940,6 +1041,21 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* Client Pagination */}
+          <div className="pt-2">
+            <Pagination
+              currentPage={clientPage}
+              pageSize={clientLimit}
+              total={totalClientsCount}
+              pageSizeOptions={[5, 10, 20, 50]}
+              onPageChange={(p) => setClientPage(p)}
+              onPageSizeChange={(size) => {
+                setClientLimit(size);
+                setClientPage(1);
+              }}
+            />
           </div>
         </div>
       )}
@@ -1320,21 +1436,19 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           </div>
 
           {/* Leads Pagination */}
-          {totalLeadsCount > 0 && (
-            <div className="pt-2">
-              <Pagination
-                currentPage={leadPage}
-                pageSize={leadLimit}
-                total={totalLeadsCount}
-                pageSizeOptions={[5, 10, 20, 50]}
-                onPageChange={(p) => setLeadPage(p)}
-                onPageSizeChange={(size) => {
-                  setLeadLimit(size);
-                  setLeadPage(1);
-                }}
-              />
-            </div>
-          )}
+          <div className="pt-2">
+            <Pagination
+              currentPage={leadPage}
+              pageSize={leadLimit}
+              total={totalLeadsCount}
+              pageSizeOptions={[5, 10, 20, 50]}
+              onPageChange={(p) => setLeadPage(p)}
+              onPageSizeChange={(size) => {
+                setLeadLimit(size);
+                setLeadPage(1);
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -2005,7 +2119,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
         dropdownPos &&
         (() => {
           const currentLead = leads.find((l) => l.id === activeDropdownId);
-          const currentClient = customers.find(
+          const currentClient = allCustomerSource.find(
             (c) => c.id === activeDropdownId,
           );
 

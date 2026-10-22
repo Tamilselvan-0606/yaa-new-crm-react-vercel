@@ -180,6 +180,9 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -196,6 +199,9 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id },
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -212,6 +218,9 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id },
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -224,6 +233,9 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id },
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
   }),

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check, X } from 'lucide-react';
+import { ChevronDown, Check, X, Loader2 } from 'lucide-react';
 
 export interface SearchableOption {
   value: string;
@@ -24,6 +24,8 @@ interface SearchableSelectProps {
   size?: 'sm' | 'md' | 'lg';
   allowClear?: boolean;
   emptyText?: string;
+  onSearch?: (query: string) => void;
+  isLoading?: boolean;
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -39,6 +41,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   size = 'md',
   allowClear = false,
   emptyText = 'No options found',
+  onSearch,
+  isLoading = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,20 +69,38 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     return normalizedOptions.find((opt) => opt.value === value);
   }, [normalizedOptions, value]);
 
+  // Debounce API search callback when typing
+  useEffect(() => {
+    if (!onSearch || !isTyping) return;
+    const timer = setTimeout(() => {
+      onSearch(searchTerm.trim());
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm, isTyping, onSearch]);
+
   // Filtered options based on search query typed directly into the box
   const filteredOptions = useMemo(() => {
     if (!isTyping || !searchTerm.trim()) {
       return normalizedOptions;
     }
     const query = searchTerm.toLowerCase().trim();
-    return normalizedOptions.filter((opt) => {
+    const localMatches = normalizedOptions.filter((opt) => {
       const matchLabel = opt.label.toLowerCase().includes(query);
       const matchSub = opt.subLabel?.toLowerCase().includes(query);
       const matchBadge = opt.badge?.toLowerCase().includes(query);
       const matchVal = opt.value.toLowerCase().includes(query);
       return matchLabel || matchSub || matchBadge || matchVal;
     });
-  }, [normalizedOptions, isTyping, searchTerm]);
+
+    // If onSearch is provided, and local matching found items, show them.
+    // If backend already filtered for this query but fields didn't match the strict check, display normalizedOptions
+    if (onSearch && localMatches.length === 0 && normalizedOptions.length > 0) {
+      return normalizedOptions;
+    }
+
+    return localMatches;
+  }, [normalizedOptions, isTyping, searchTerm, onSearch]);
 
   // Calculate dropdown portal position
   const updatePosition = () => {
@@ -286,11 +308,25 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           >
             {/* Options List */}
             <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5 custom-scrollbar">
+              {isLoading && (
+                <div className="px-3 py-1.5 mb-1 rounded-lg flex items-center gap-2 bg-[#33077C]/5 text-[11px] text-[#33077C] font-semibold border border-[#33077C]/15">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />
+                  <span>Searching products...</span>
+                </div>
+              )}
+
               {filteredOptions.length === 0 ? (
                 <div className="py-6 px-3 text-center text-slate-400 font-medium text-xs">
-                  {isTyping && searchTerm.trim()
-                    ? `No matching options for "${searchTerm}"`
-                    : emptyText}
+                  {isLoading ? (
+                    <div className="flex items-center justify-center gap-2 text-[#33077C]">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Loading products...</span>
+                    </div>
+                  ) : isTyping && searchTerm.trim() ? (
+                    `No matching options for "${searchTerm}"`
+                  ) : (
+                    emptyText || 'Type to search products...'
+                  )}
                 </div>
               ) : (
                 filteredOptions.map((opt) => {

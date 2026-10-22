@@ -44,6 +44,7 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { UniversalShareDropdown, formatPaymentInShare } from "../../../utils/shareUtils";
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
 import { toast } from "sonner";
 import {
   commercePaymentInApi,
@@ -203,13 +204,17 @@ export const PaymentInView: React.FC = () => {
   const [pendingSearch, setPendingSearch] = useState<string>("");
   const [appliedSearch, setAppliedSearch] = useState<string>("");
 
-  // Debounce search query to prevent excessive API invocations
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      setAppliedSearch(pendingSearch.trim());
-    }, 350);
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setCurrentPage(1);
+      }
+    }, 600);
     return () => clearTimeout(timer);
-  }, [pendingSearch]);
+  }, [pendingSearch, appliedSearch]);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -359,30 +364,41 @@ export const PaymentInView: React.FC = () => {
     selectedFirm,
   ]);
 
-  // Load Customers & Invoices for linking if not loaded (Runs once on mount)
+  // Load Customers for filter dropdown (Runs once on mount)
+  const hasLoadedCustomersRef = useRef(false);
   useEffect(() => {
-    if (hasLoadedPrereqs.current) return;
-    hasLoadedPrereqs.current = true;
-    const loadPrerequisites = async () => {
-      try {
-        const [custRes, invRes] = await Promise.all([
-          customerApi.getCustomers({ pagination_required: false }),
-          commerceInvoiceApi.getInvoices({ pagination_required: false }),
-        ]);
-        if (custRes?.success && Array.isArray(custRes.data)) {
-          const mappedCusts = custRes.data.map(mapApiCustomerToSalesCustomer);
-          setCustomersList(mappedCusts);
+    if (hasLoadedCustomersRef.current) return;
+    hasLoadedCustomersRef.current = true;
+    customerApi
+      .getCustomers({ pagination_required: false })
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data)) {
+          setCustomersList(res.data.map(mapApiCustomerToSalesCustomer));
         }
-        if (invRes?.success && Array.isArray(invRes.data)) {
-          const mappedInvs = invRes.data.map(mapApiInvoiceToSaleTransaction);
-          setSalesList(mappedInvs);
-        }
-      } catch (e) {
-        console.warn("Prerequisites fetch failed:", e);
+      })
+      .catch((e) => console.warn("Customer load error in PaymentIn:", e));
+  }, [setCustomersList]);
+
+  // Load Invoices for linking ONLY when Create or Edit Modal is opened
+  const hasLoadedInvoicesRef = useRef(false);
+  const loadInvoicesForModal = useCallback(async () => {
+    if (hasLoadedInvoicesRef.current) return;
+    hasLoadedInvoicesRef.current = true;
+    try {
+      const invRes = await commerceInvoiceApi.getInvoices({ pagination_required: false });
+      if (invRes?.success && Array.isArray(invRes.data)) {
+        setSalesList(invRes.data.map(mapApiInvoiceToSaleTransaction));
       }
-    };
-    loadPrerequisites();
-  }, [setCustomersList, setSalesList]);
+    } catch (e) {
+      console.warn("Invoices fetch for PaymentIn modal failed:", e);
+    }
+  }, [setSalesList]);
+
+  useEffect(() => {
+    if (isCreateModalOpen || editingPaymentIn) {
+      loadInvoicesForModal();
+    }
+  }, [isCreateModalOpen, editingPaymentIn, loadInvoicesForModal]);
 
   // Trigger list fetch on dependency changes
   useEffect(() => {
@@ -642,7 +658,7 @@ export const PaymentInView: React.FC = () => {
     setNewCustomerName("");
     setNewCustomerPhone("");
     setNewCustomerCompany("");
-    toast.success(`Party "${newCust.name}" added successfully`);
+    toast.success(`Customer "${newCust.name}" added successfully`);
   };
 
   // Handle Add Custom Payment Type
@@ -775,7 +791,7 @@ export const PaymentInView: React.FC = () => {
 
         <div class="grid">
           <div class="card">
-            <div class="label">Received From (Party)</div>
+            <div class="label">Received From (Customer)</div>
             <div class="val">${activeItem.partyName}</div>
             ${activeItem.customerCompany ? `<div style="font-size:12px; color:#64748b; margin-top:2px;">${activeItem.customerCompany}</div>` : ""}
             ${activeItem.customerPhone ? `<div style="font-size:12px; color:#64748b;">${activeItem.customerPhone}</div>` : ""}
@@ -863,7 +879,7 @@ export const PaymentInView: React.FC = () => {
       `*PAYMENT RECEIPT ACKNOWLEDGEMENT*\n` +
         `--------------------------------\n` +
         `*Receipt #:* #${item.receiptNo}\n` +
-        `*Party Name:* ${item.partyName}\n` +
+        `*Customer Name:* ${item.partyName}\n` +
         `*Date:* ${isoToDdmmyyyy(item.date)}\n` +
         `*Payment Mode:* ${item.paymentType}\n` +
         `*Amount Received:* ₹${item.receivedAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n` +
@@ -881,28 +897,22 @@ export const PaymentInView: React.FC = () => {
 
   // Delete / Void Payment Record via Backend API
   const handleDeletePayment = async (id: string, receiptNo: string) => {
-    if (
-      window.confirm(
-        `Are you sure you want to void payment receipt #${receiptNo}? This will mark it cancelled and re-open any linked invoice balance.`,
-      )
-    ) {
-      try {
-        if (UUID_REGEX.test(id)) {
-          await commercePaymentInApi.deletePaymentIn(id);
-        }
-        setPaymentIns((prev) => prev.filter((p) => p.id !== id));
-        deleteStorePaymentIn(id);
-        toast.success(`Payment-In #${receiptNo} voided successfully`);
-        fetchPaymentIns();
-      } catch (err: any) {
-        console.error("Failed to void payment:", err);
-        const msg =
-          err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          "Failed to void payment receipt";
-        toast.error(msg);
+    try {
+      if (UUID_REGEX.test(id)) {
+        await commercePaymentInApi.deletePaymentIn(id);
       }
+      setPaymentIns((prev) => prev.filter((p) => p.id !== id));
+      deleteStorePaymentIn(id);
+      toast.success(`Payment-In #${receiptNo} voided successfully`);
+      fetchPaymentIns();
+    } catch (err: any) {
+      console.error("Failed to void payment:", err);
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to void payment receipt";
+      toast.error(msg);
     }
   };
 
@@ -935,7 +945,7 @@ export const PaymentInView: React.FC = () => {
   // Save / Submit Payment-In (Create or Update via Backend API)
   const handleSavePayment = useCallback(async () => {
     if (!selectedCustomerId && !formPartyQuery.trim()) {
-      toast.error("Please select or enter a party / customer name");
+      toast.error("Please select or enter a customer name");
       return;
     }
     const amountNum = parseFloat(formReceivedAmount);
@@ -1113,7 +1123,7 @@ export const PaymentInView: React.FC = () => {
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },
         { header: "Receipt No.", key: "receiptNo", align: "center", width: 16 },
-        { header: "Party Name", key: "partyName", align: "left", width: 28 },
+        { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         { header: "Phone", key: "customerPhone", align: "left", width: 18 },
         {
           header: "Payment Type",
@@ -1312,7 +1322,7 @@ export const PaymentInView: React.FC = () => {
           setAppliedSearch(val.trim());
           setCurrentPage(1);
         }}
-        placeholder="Search by party, receipt #, phone, or remarks..."
+        placeholder="Search by customer name, receipt #, phone, or remarks..."
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
@@ -1380,7 +1390,7 @@ export const PaymentInView: React.FC = () => {
               No payment receipts match your filters
             </h3>
             <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md">
-              Try adjusting your search terms, date range, payment mode, or party filters.
+              Try adjusting your search terms, date range, payment mode, or customer filters.
             </p>
             <div className="mt-6">
               <Button
@@ -1438,29 +1448,29 @@ export const PaymentInView: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[760px]">
               <thead>
-                <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider">
-                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap">
+                <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider select-none">
+                  <th className="py-4 px-5 border-r border-[#4309A2]/60 min-w-[180px]">
+                    CUSTOMER NAME
+                  </th>
+                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-center min-w-[120px]">
+                    RECEIPT NO.
+                  </th>
+                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap min-w-[110px]">
                     <div className="flex items-center gap-1.5">
                       <span>DATE</span>
                       <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-center">
-                    RECEIPT NO.
-                  </th>
-                  <th className="py-4 px-5 border-r border-[#4309A2]/60 min-w-[200px]">
-                    PARTY NAME
-                  </th>
-                  <th className="py-4 px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap">
+                  <th className="py-4 px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap min-w-[120px]">
                     PAYMENT TYPE
                   </th>
-                  <th className="py-4 px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap">
+                  <th className="py-4 px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap min-w-[130px]">
                     AMOUNT RECEIVED
                   </th>
-                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap">
+                  <th className="py-4 px-4 border-r border-[#4309A2]/60 whitespace-nowrap min-w-[140px]">
                     DESCRIPTION
                   </th>
-                  <th className="py-4 px-4 text-center whitespace-nowrap w-36">
+                  <th className="py-4 px-4 text-center whitespace-nowrap min-w-[130px] w-36">
                     Actions
                   </th>
                 </tr>
@@ -1474,18 +1484,8 @@ export const PaymentInView: React.FC = () => {
                       key={item.id}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200"
                     >
-                      {/* Date */}
-                      <td className="py-4 px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.date)}
-                      </td>
-
-                      {/* Receipt No */}
-                      <td className="py-4 px-4 font-extrabold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
-                        #{item.receiptNo}
-                      </td>
-
                       {/* Party Name */}
-                      <td className="py-4 px-5 font-semibold text-slate-900 border-r border-slate-200 break-words">
+                      <td className="py-4 px-5 font-semibold text-slate-900 border-r border-slate-200 break-words align-middle">
                         <div className="font-bold text-sm text-slate-900">
                           {item.partyName}
                         </div>
@@ -1507,8 +1507,18 @@ export const PaymentInView: React.FC = () => {
                         )}
                       </td>
 
+                      {/* Receipt No */}
+                      <td className="py-4 px-4 font-extrabold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        #{item.receiptNo}
+                      </td>
+
+                      {/* Date */}
+                      <td className="py-4 px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                        {isoToDdmmyyyy(item.date)}
+                      </td>
+
                       {/* Payment Type Badge */}
-                      <td className="py-4 px-4 text-center border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-4 px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <span
                           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
                             item.paymentType === "Cash"
@@ -1534,7 +1544,7 @@ export const PaymentInView: React.FC = () => {
                       </td>
 
                       {/* Amount Received */}
-                      <td className="py-4 px-4 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-4 px-4 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         <span className="text-[#33077C] text-sm sm:text-base font-extrabold">
                           ₹{" "}
                           {item.receivedAmount.toLocaleString("en-IN", {
@@ -1544,14 +1554,14 @@ export const PaymentInView: React.FC = () => {
                       </td>
 
                       {/* Description */}
-                      <td className="py-4 px-4 text-slate-600 border-r border-slate-200 max-w-xs truncate">
+                      <td className="py-4 px-4 text-slate-600 border-r border-slate-200 max-w-xs truncate align-middle">
                         {item.description || item.notes || (
                           <span className="text-slate-300 italic">None</span>
                         )}
                       </td>
 
                       {/* Action Buttons Column */}
-                      <td className="py-4 px-4 text-center whitespace-nowrap">
+                      <td className="py-4 px-4 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                         <div className="inline-flex items-center justify-center gap-1">
                           {/* 1. Direct Print Button */}
                           <button
@@ -1638,35 +1648,11 @@ export const PaymentInView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleOpenEditModal(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View/Edit
                                 </button>
 
-                                {/* 2. Open PDF / Receipt */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setSelectedPaymentIn(item);
-                                    setIsViewReceiptModalOpen(true);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
-
-                                {/* 3. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handlePrintReceipt(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
 
                                 {/* 4. Delete / Void */}
                                 <button
@@ -1678,7 +1664,7 @@ export const PaymentInView: React.FC = () => {
                                       item.receiptNo,
                                     );
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-rose-600 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Void / Delete
                                 </button>
@@ -1690,7 +1676,7 @@ export const PaymentInView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleDuplicatePayment(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
@@ -1702,7 +1688,7 @@ export const PaymentInView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setHistoryPaymentIn(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View History
                                 </button>
@@ -1748,7 +1734,7 @@ export const PaymentInView: React.FC = () => {
           }
           subtitle={
             editingPaymentIn
-              ? `Update payment voucher #${editingPaymentIn.receiptNo} and party balance`
+              ? `Update payment voucher #${editingPaymentIn.receiptNo} and customer balance`
               : "Record client payment receipts, counter cash settlements, and digital collections"
           }
           maxWidth="4xl"
@@ -1765,35 +1751,35 @@ export const PaymentInView: React.FC = () => {
             }}
             className="space-y-6 max-h-[75vh] overflow-y-auto p-2 sm:p-4 text-xs animate-in fade-in duration-150"
           >
-            {/* Section 1: Party & Basic Voucher Info */}
+            {/* Section 1: Customer & Basic Voucher Info */}
             <div>
               <div className="flex items-center gap-2 mb-3 pb-2 border-b border-purple-100">
                 <span className="px-2.5 py-1 rounded-lg bg-purple-50 text-[#33077C] font-bold text-xs flex items-center gap-1.5 border border-purple-200">
                   <User className="w-3.5 h-3.5 text-[#4309A2]" />
-                  1. Party & Voucher Information
+                  1. Customer & Voucher Information
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
-                {/* Party / Customer Name */}
+                {/* Customer Name */}
                 <div
                   className="sm:col-span-2 relative"
                   ref={partySelectDropdownRef}
                 >
                   <div className="relative w-full">
-                    <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-                      <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
-                        Party / Customer Name <span className="text-rose-500">*</span>
-                      </span>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <FormLabel required className="mb-0">
+                        Customer Name
+                      </FormLabel>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setIsQuickCustomerOpen(true);
                         }}
-                        className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer pointer-events-auto rounded-sm"
+                        className="text-xs font-semibold text-[#4309A2] hover:underline cursor-pointer"
                       >
-                        + Add New Party
+                        + Add New Customer
                       </button>
                     </div>
                     <div
@@ -1845,7 +1831,7 @@ export const PaymentInView: React.FC = () => {
                           <Search className="w-4 h-4 text-slate-400 shrink-0 mr-2" />
                           <input
                             type="text"
-                            placeholder="Type to filter party name or phone..."
+                            placeholder="Type to filter customer name or phone..."
                             value={formPartyQuery}
                             onChange={(e) => {
                               setFormPartyQuery(e.target.value);
@@ -1879,7 +1865,7 @@ export const PaymentInView: React.FC = () => {
                       <div className="max-h-48 overflow-y-auto space-y-1">
                         {filteredCustomerCandidates.length === 0 ? (
                           <div className="p-3 text-center text-xs text-slate-400">
-                            No party found matching "{formPartyQuery}".
+                            No customer found matching "{formPartyQuery}".
                           </div>
                         ) : (
                           filteredCustomerCandidates.map((cust) => (
@@ -1919,89 +1905,75 @@ export const PaymentInView: React.FC = () => {
                 </div>
 
                 {/* Receipt No */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Receipt Number <span className="text-rose-500">*</span>
-                    </span>
-                    <input
-                      type="text"
-                      value={formReceiptNo}
-                      onChange={(e) => setFormReceiptNo(e.target.value)}
-                      placeholder="e.g. PAY-2026-0001"
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono font-bold text-[#33077C] outline-none"
-                    />
-                  </div>
+                <div>
+                  <FormLabel required>Receipt Number</FormLabel>
+                  <input
+                    type="text"
+                    value={formReceiptNo}
+                    onChange={(e) => setFormReceiptNo(e.target.value)}
+                    placeholder="e.g. PAY-2026-0001"
+                    className={`${FORM_INPUT_CLS} font-mono font-bold text-[#33077C]`}
+                  />
                 </div>
 
                 {/* Linked Invoice Selector */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Linked Invoice (Optional)
-                    </span>
-                    <select
-                      value={selectedInvoiceId}
-                      onChange={(e) => handleInvoiceSelect(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none cursor-pointer"
-                    >
-                      <option value="">No Linked Invoice</option>
-                      {sales.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div>
+                  <FormLabel>Linked Invoice (Optional)</FormLabel>
+                  <select
+                    value={selectedInvoiceId}
+                    onChange={(e) => handleInvoiceSelect(e.target.value)}
+                    className={FORM_SELECT_CLS}
+                  >
+                    <option value="">No Linked Invoice</option>
+                    {sales.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.invoiceNo} - {s.customerName} (Bal: ₹{s.balance})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Date */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Payment Date <span className="text-rose-500">*</span>
-                    </span>
-                    <input
-                      type="date"
-                      value={formDate}
-                      onChange={(e) => setFormDate(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
-                    />
-                  </div>
+                <div>
+                  <FormLabel required>Payment Date</FormLabel>
+                  <input
+                    type="date"
+                    value={formDate}
+                    onChange={(e) => setFormDate(e.target.value)}
+                    className={FORM_INPUT_CLS}
+                  />
                 </div>
 
                 {/* Payment Mode / Type */}
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-                      <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
-                        Payment Mode <span className="text-rose-500">*</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsAddPaymentTypeOpen(true);
-                        }}
-                        className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer pointer-events-auto rounded-sm"
-                      >
-                        + Add Type
-                      </button>
-                    </div>
-                    <select
-                      value={formPaymentType}
-                      onChange={(e) =>
-                        setFormPaymentType(e.target.value as PaymentInType)
-                      }
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none cursor-pointer"
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <FormLabel required className="mb-0">
+                      Payment Mode
+                    </FormLabel>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsAddPaymentTypeOpen(true);
+                      }}
+                      className="text-xs font-semibold text-[#4309A2] hover:underline cursor-pointer"
                     >
-                      {availablePaymentTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
+                      + Add Type
+                    </button>
                   </div>
+                  <select
+                    value={formPaymentType}
+                    onChange={(e) =>
+                      setFormPaymentType(e.target.value as PaymentInType)
+                    }
+                    className={FORM_SELECT_CLS}
+                  >
+                    {availablePaymentTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -2018,11 +1990,9 @@ export const PaymentInView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                 {/* Received Amount Input */}
                 <div className="sm:col-span-2">
-                  <div className="relative w-full h-11 bg-white border-2 border-purple-200 hover:border-[#33077C] focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Received Amount (₹) <span className="text-rose-500">*</span>
-                    </span>
-                    <span className="pl-4 text-sm font-bold text-slate-400 pointer-events-none">
+                  <FormLabel required>Received Amount (₹)</FormLabel>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400 pointer-events-none">
                       ₹
                     </span>
                     <input
@@ -2032,7 +2002,7 @@ export const PaymentInView: React.FC = () => {
                       value={formReceivedAmount}
                       onChange={(e) => setFormReceivedAmount(e.target.value)}
                       autoFocus
-                      className="w-full h-full pl-2 pr-4 bg-transparent text-base font-extrabold text-[#33077C] outline-none"
+                      className={`${FORM_INPUT_CLS} pl-8 text-base font-extrabold text-[#33077C]`}
                     />
                   </div>
                   {formReceivedAmount && parseFloat(formReceivedAmount) > 0 && (
@@ -2044,18 +2014,14 @@ export const PaymentInView: React.FC = () => {
 
                 {/* Reference Number */}
                 <div>
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Cheque / UPI / Ref No.
-                    </span>
-                    <input
-                      type="text"
-                      value={formReferenceNo}
-                      onChange={(e) => setFormReferenceNo(e.target.value)}
-                      placeholder="e.g. UPI-UTR-9918237192"
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none"
-                    />
-                  </div>
+                  <FormLabel>Cheque / UPI / Ref No.</FormLabel>
+                  <input
+                    type="text"
+                    value={formReferenceNo}
+                    onChange={(e) => setFormReferenceNo(e.target.value)}
+                    placeholder="e.g. UPI-UTR-9918237192"
+                    className={FORM_INPUT_CLS}
+                  />
                 </div>
               </div>
             </div>
@@ -2072,25 +2038,19 @@ export const PaymentInView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start pt-1">
                 {/* Description Textarea */}
                 <div className="sm:col-span-2">
-                  <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Description / Remarks
-                    </span>
-                    <textarea
-                      rows={3}
-                      value={formDescription}
-                      onChange={(e) => setFormDescription(e.target.value)}
-                      placeholder="Enter transaction remarks, invoice reference, or settlement notes..."
-                      className="w-full p-3 pt-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 outline-none resize-none"
-                    />
-                  </div>
+                  <FormLabel>Description / Remarks</FormLabel>
+                  <textarea
+                    rows={3}
+                    value={formDescription}
+                    onChange={(e) => setFormDescription(e.target.value)}
+                    placeholder="Enter transaction remarks, invoice reference, or settlement notes..."
+                    className={FORM_TEXTAREA_CLS}
+                  />
                 </div>
 
                 {/* Camera / Receipt Image Upload */}
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-600 block mb-1.5">
-                    Receipt Photo / Attachment
-                  </label>
+                  <FormLabel>Receipt Photo / Attachment</FormLabel>
                   <input
                     type="file"
                     ref={fileInputRef}
@@ -2163,7 +2123,7 @@ export const PaymentInView: React.FC = () => {
         <Modal
           isOpen={isQuickCustomerOpen}
           onClose={() => setIsQuickCustomerOpen(false)}
-          title="Add New Party / Customer"
+          title="Add New Customer"
           subtitle="Create customer record directly from voucher entry"
           maxWidth="md"
           headerGradient={true}
@@ -2179,49 +2139,37 @@ export const PaymentInView: React.FC = () => {
             }}
             className="p-2 space-y-4 text-xs sm:text-sm pt-3"
           >
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Customer Name <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  value={newCustomerName}
-                  onChange={(e) => setNewCustomerName(e.target.value)}
-                  placeholder="e.g. Acme Technologies Pvt Ltd"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-semibold text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel required>Customer Name</FormLabel>
+              <input
+                type="text"
+                value={newCustomerName}
+                onChange={(e) => setNewCustomerName(e.target.value)}
+                placeholder="e.g. Acme Technologies Pvt Ltd"
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Company / Firm Name
-                </span>
-                <input
-                  type="text"
-                  value={newCustomerCompany}
-                  onChange={(e) => setNewCustomerCompany(e.target.value)}
-                  placeholder="e.g. Acme Group"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Company / Firm Name</FormLabel>
+              <input
+                type="text"
+                value={newCustomerCompany}
+                onChange={(e) => setNewCustomerCompany(e.target.value)}
+                placeholder="e.g. Acme Group"
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Phone Number
-                </span>
-                <input
-                  type="text"
-                  value={newCustomerPhone}
-                  onChange={(e) => setNewCustomerPhone(e.target.value)}
-                  placeholder="e.g. +91 98765 43210"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Phone Number</FormLabel>
+              <input
+                type="text"
+                value={newCustomerPhone}
+                onChange={(e) => setNewCustomerPhone(e.target.value)}
+                placeholder="e.g. +91 98765 43210"
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -2239,7 +2187,7 @@ export const PaymentInView: React.FC = () => {
                 type="submit"
                 className="bg-[#33077C] hover:bg-[#280563]"
               >
-                Save Party
+                Save Customer
               </Button>
             </div>
           </form>
@@ -2269,19 +2217,15 @@ export const PaymentInView: React.FC = () => {
             }}
             className="p-2 space-y-4 text-xs sm:text-sm pt-3"
           >
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Type Name <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  value={newPaymentTypeName}
-                  onChange={(e) => setNewPaymentTypeName(e.target.value)}
-                  placeholder="e.g. RTGS / NEFT or Google Pay"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-semibold text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel required>Payment Type Name</FormLabel>
+              <input
+                type="text"
+                value={newPaymentTypeName}
+                onChange={(e) => setNewPaymentTypeName(e.target.value)}
+                placeholder="e.g. RTGS / NEFT or Google Pay"
+                className={FORM_INPUT_CLS}
+              />
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -2346,7 +2290,7 @@ export const PaymentInView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                 <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Party Name
+                  Customer Name
                 </div>
                 <div className="font-bold text-base text-slate-900 mt-1">
                   {selectedPaymentIn.partyName}

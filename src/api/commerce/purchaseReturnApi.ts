@@ -160,20 +160,14 @@ export const mapUiToUpdatePayload = (
 ): UpdatePurchaseReturnPayload => {
   const payload: UpdatePurchaseReturnPayload = {};
 
-  if (ret.returnNo) payload.returnNo = ret.returnNo.trim();
-  if (ret.purchaseId && UUID_REGEX.test(ret.purchaseId)) payload.purchaseId = ret.purchaseId;
-  if (ret.purchaseNo) payload.purchaseNo = ret.purchaseNo.trim();
-  if (ret.supplierId) payload.supplierId = ensureValidUuid(ret.supplierId);
-  if (ret.supplierName) payload.supplierName = ret.supplierName.trim();
   if (ret.returnDate) payload.returnDate = ret.returnDate;
   if (ret.refundStatus) payload.refundStatus = ret.refundStatus;
   if (ret.returnStatus) payload.returnStatus = ret.returnStatus;
-  if (typeof ret.returnAmount === 'number') payload.returnAmount = ret.returnAmount;
   if (typeof ret.notes !== 'undefined') payload.notes = ret.notes?.trim() || '';
 
   if (Array.isArray(ret.items)) {
     payload.items = ret.items.map((it) => ({
-      productId: ensureValidUuid(it.productId),
+      productId: it.productId && UUID_REGEX.test(it.productId) ? it.productId : undefined,
       productName: it.productName.trim(),
       batch: it.batch?.trim() || undefined,
       purchasedQuantity: Number(it.purchasedQuantity) || 0,
@@ -230,7 +224,7 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/purchase-returns',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -256,7 +250,12 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'PurchaseReturn', id: 'LIST' }],
+      invalidatesTags: [
+        { type: 'PurchaseReturn', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
+      ],
     }),
 
     updateCommercePurchaseReturn: builder.mutation<
@@ -271,6 +270,9 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PurchaseReturn', id },
         { type: 'PurchaseReturn', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
       ],
     }),
 
@@ -282,6 +284,9 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, id) => [
         { type: 'PurchaseReturn', id },
         { type: 'PurchaseReturn', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
+        { type: 'Purchase', id: 'LIST' },
       ],
     }),
   }),
@@ -342,7 +347,7 @@ export const commercePurchaseReturnApi = {
     const response = await baseClient.get<PurchaseReturnListResponse>(
       '/commerce/purchase-returns',
       {
-        params: queryParams,
+        params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
       }
     );
     return response.data;

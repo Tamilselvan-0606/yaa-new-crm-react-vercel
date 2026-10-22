@@ -29,7 +29,6 @@ import {
   ChevronDown,
   ShoppingBag,
   ShoppingCart,
-  RefreshCw,
   Ban,
   Calculator,
   Settings,
@@ -57,7 +56,7 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import {
   commerceProformaApi,
@@ -77,6 +76,24 @@ import {
 } from '../../../api';
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
+import { store } from '../../../store/store';
+import { isValidIndianPhone, normalizeIndianPhoneTo10Digits } from '../../../utils/validation';
+import {
+  commerceSaleOrderApi,
+  SaleOrderRecord,
+  mapSaleOrderRecordToPayload,
+} from '../../../api/commerce/saleOrderApi';
+import {
+  syncConvertedOrderToStorage,
+  syncConvertedInvoiceToStorage,
+  syncProformaStatusInStorage,
+  recordDocumentConversion,
+  findDocumentLineage,
+  initializeWorkflowIntegrity,
+} from '../../../utils/salesDocumentWorkflow';
+import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
+import { SearchableSelect } from '../../../components/common/SearchableSelect';
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, getFormInputCls } from '../utils/formUtils';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -147,18 +164,57 @@ const TAX_RATE_OPTIONS = [
 ];
 
 const PERIOD_FILTER_OPTIONS = [
-  { label: 'This Month', value: 'This Month' },
-  { label: 'Last 30 Days', value: 'Last 30 Days' },
-  { label: 'This Quarter', value: 'This Quarter' },
-  { label: 'This Financial Year', value: 'This Financial Year' },
-  { label: 'All Time', value: 'All Time' },
+  { label: 'All Time', value: 'all' },
+  { label: 'Today', value: 'today' },
+  { label: 'This Week', value: 'this_week' },
+  { label: 'This Month', value: 'this_month' },
+  { label: 'Last Month', value: 'last_month' },
+  { label: 'This Quarter', value: 'this_quarter' },
+  { label: 'This Year', value: 'this_year' },
 ];
+
+const checkDateMatchesPeriod = (dateStr?: string, period?: string): boolean => {
+  if (!period || period === 'all' || period === 'All Time') return true;
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return true;
+
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  switch (period) {
+    case 'today':
+      return itemDay.getTime() === startOfDay.getTime();
+    case 'this_week': {
+      const dayOfWeek = now.getDay();
+      const firstDayOfWeek = new Date(startOfDay);
+      firstDayOfWeek.setDate(startOfDay.getDate() - dayOfWeek);
+      return itemDay >= firstDayOfWeek && itemDay <= now;
+    }
+    case 'this_month':
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    case 'last_month': {
+      const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+      const lastMonthYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+      return d.getFullYear() === lastMonthYear && d.getMonth() === lastMonth;
+    }
+    case 'this_quarter': {
+      const currentQuarter = Math.floor(now.getMonth() / 3);
+      const itemQuarter = Math.floor(d.getMonth() / 3);
+      return d.getFullYear() === now.getFullYear() && currentQuarter === itemQuarter;
+    }
+    case 'this_year':
+      return d.getFullYear() === now.getFullYear();
+    default:
+      return true;
+  }
+};
 
 const STATUS_FILTER_OPTIONS = [
   { label: 'All Statuses', value: 'ALL' },
   { label: 'Open', value: 'Open', dotColor: '#f59e0b' },
   { label: 'Converted', value: 'Converted', dotColor: '#10b981' },
-  { label: 'Expired', value: 'Expired', dotColor: '#64748b' },
   { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
 ];
 
@@ -258,26 +314,47 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   }, [initialMode]);
 
   // Search & Filters
+  const [searchParams] = useSearchParams();
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingPeriod, setPendingPeriod] = useState('This Month');
-  const [appliedPeriod, setAppliedPeriod] = useState('This Month');
+  const [pendingPeriod, setPendingPeriod] = useState('all');
+  const [appliedPeriod, setAppliedPeriod] = useState('all');
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  useEffect(() => {
+    const q = searchParams.get('search');
+    if (q) {
+      setPendingSearch(q);
+      setAppliedSearch(q);
+    }
+  }, [searchParams]);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
+
   // Helper to map UI period names to OpenAPI period values
   const mapPeriodToApiPeriod = (periodStr: string): string => {
     const norm = periodStr.toLowerCase().replace(/\s+/g, '_');
-    if (norm.includes('month') && norm.includes('last')) return 'last_month';
+    if (norm.includes('last') && norm.includes('month')) return 'last_month';
     if (norm.includes('month')) return 'this_month';
     if (norm.includes('week')) return 'this_week';
     if (norm.includes('today')) return 'today';
     if (norm.includes('quarter')) return 'this_quarter';
     if (norm.includes('year')) return 'this_year';
     if (norm.includes('all')) return 'all';
-    return 'this_month';
+    return norm || 'all';
   };
 
   // Dropdowns & Action Menu
@@ -319,6 +396,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [newCustomerCompany, setNewCustomerCompany] = useState('');
+  const [newCustomerType, setNewCustomerType] = useState<'Business' | 'Individual'>('Business');
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [customerNameError, setCustomerNameError] = useState('');
+  const [customerPhoneError, setCustomerPhoneError] = useState('');
 
   // Form State
   const [editingProforma, setEditingProforma] = useState<SaleProformaInvoice | null>(null);
@@ -375,15 +456,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         console.warn('Commerce Proformas API notice:', err);
         setIsApiConnected(false);
         setApiErrorMessage(err.message || 'Commerce API not reachable');
-        setLiveProformas(proformaList);
-        setTotalApiRecords(proformaList.length);
-        setTotalApiPages(Math.max(1, Math.ceil(proformaList.length / size)));
+        setLiveProformas(proformaListRef.current);
+        setTotalApiRecords(proformaListRef.current.length);
+        setTotalApiPages(Math.max(1, Math.ceil(proformaListRef.current.length / size)));
       } finally {
         setIsApiLoading(false);
         isFetchingRef.current = false;
       }
     },
-    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize, proformaList]
+    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize]
   );
 
   // Trigger API fetch on filter/page change
@@ -391,8 +472,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
   }, [fetchProformas, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
 
-  // Purge legacy mock data from storage on mount
+  // Keep proformaListRef synced
+  const proformaListRef = useRef(proformaList);
   useEffect(() => {
+    proformaListRef.current = proformaList;
+  }, [proformaList]);
+
+  // Initialize workflow integrity & purge mock data on mount
+  useEffect(() => {
+    initializeWorkflowIntegrity();
     try {
       const raw = localStorage.getItem('yaa_crm_proforma_invoices');
       if (raw) {
@@ -402,7 +490,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             (p) =>
               p.id !== 'pro_1' &&
               p.id !== 'pro_2' &&
-              !String(p.id).startsWith('pro_') &&
               !String(p.partyName || '').includes('Keerthivasan') &&
               !String(p.partyName || '').includes('Royal Spice')
           );
@@ -417,8 +504,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
   }, []);
 
-  // Prefetch live customers and stocks for party selector & item selector (Runs ONCE)
+  // Load live customers, products, and stocks on-demand ONLY when Form Mode is active
+  const hasLoadedMasterDataRef = useRef(false);
   useEffect(() => {
+    if (viewMode !== 'form' || hasLoadedMasterDataRef.current) return;
+    hasLoadedMasterDataRef.current = true;
     let isMounted = true;
 
     customerApi
@@ -429,17 +519,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           setLiveCustomers(mapped);
         }
       })
-      .catch((err) => console.warn('Customer prefetch:', err));
-
-    productApi
-      .getProducts({ pagination_required: false, page_size: 100 })
-      .then((res) => {
-        if (isMounted && res.data && Array.isArray(res.data)) {
-          const mapped = res.data.map(mapApiProductToProductItem);
-          setLiveProducts(mapped);
-        }
-      })
-      .catch((err) => console.warn('Product prefetch:', err));
+      .catch((err) => console.warn('Customer load:', err));
 
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -449,11 +529,40 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           setLiveStocks(mapped);
         }
       })
-      .catch((err) => console.warn('Stock prefetch:', err));
+      .catch((err) => console.warn('Stock load:', err));
 
     return () => {
       isMounted = false;
     };
+  }, [viewMode]);
+
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+
+  // On-demand product search: only calls products API when user is actively searching
+  const handleProductSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setIsSearchingProducts(true);
+    try {
+      const res = await productApi.getProducts({
+        search: trimmed,
+        page_size: 30,
+        pagination_required: false,
+      });
+      if (res && res.data && Array.isArray(res.data)) {
+        const mapped = res.data.map(mapApiProductToProductItem);
+        setLiveProducts((prev) => {
+          const map = new Map<string, ProductItemModel>();
+          prev.forEach((p) => map.set(p.id, p));
+          mapped.forEach((p) => map.set(p.id, p));
+          return Array.from(map.values());
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to search products in ProformaInvoiceView:', err);
+    } finally {
+      setIsSearchingProducts(false);
+    }
   }, []);
 
   // Live products and live customers for selectors (strictly excluding mock customers)
@@ -477,23 +586,34 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       unitPrice: number;
       category?: string;
       unit?: string;
+      taxPercent?: number;
+      hsnCode?: string;
     }> = [];
 
     const seenIds = new Set<string>();
 
+    const extractTaxPercent = (rateStr?: string | number): number => {
+      if (typeof rateStr === 'number') return rateStr;
+      if (!rateStr) return 0;
+      const numMatch = String(rateStr).match(/(\d+(\.\d+)?)/);
+      return numMatch ? parseFloat(numMatch[1]) : 0;
+    };
+
     // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
       const pid = String(p.id || '');
-      if (pid && UUID_REGEX.test(pid) && !seenIds.has(pid)) {
+      if (pid && !seenIds.has(pid)) {
         seenIds.add(pid);
         list.push({
           productId: pid,
           id: pid,
           productName: p.productName || 'Unnamed Product',
-          sku: p.productCode || '',
-          unitPrice: Number(p.salePrice) || 0,
+          sku: p.productCode || (p as any).sku || '',
+          unitPrice: Number(p.salePrice) || Number((p as any).unitPrice) || 0,
           category: p.category || '',
           unit: p.unit || 'PCS',
+          taxPercent: extractTaxPercent((p as any).taxRate ?? (p as any).taxPercent),
+          hsnCode: p.hsnCode || '',
         });
       }
     });
@@ -501,7 +621,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     // 2. Live Stocks from /commerce/stocks
     liveStocks.forEach((s) => {
       const pid = String(s.productId || s.id || '');
-      if (pid && UUID_REGEX.test(pid) && !seenIds.has(pid)) {
+      if (pid && !seenIds.has(pid)) {
         seenIds.add(pid);
         list.push({
           productId: pid,
@@ -511,12 +631,44 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           unitPrice: Number(s.unitPrice) || 0,
           category: s.category || '',
           unit: s.unit || 'PCS',
+          taxPercent: extractTaxPercent((s as any).taxRate ?? (s as any).taxPercent),
+          hsnCode: (s as any).hsnCode || '',
         });
       }
     });
 
+    // 3. Fallback from store stocks if both lists are empty
+    if (list.length === 0 && Array.isArray(stocks)) {
+      stocks.forEach((s) => {
+        const pid = String(s.productId || s.id || '');
+        if (pid && !seenIds.has(pid)) {
+          seenIds.add(pid);
+          list.push({
+            productId: pid,
+            id: pid,
+            productName: s.productName || 'Unnamed Product',
+            sku: s.sku || '',
+            unitPrice: Number(s.unitPrice) || 0,
+            category: s.category || '',
+            unit: s.unit || 'PCS',
+            taxPercent: extractTaxPercent((s as any).taxRate ?? (s as any).taxPercent),
+            hsnCode: (s as any).hsnCode || '',
+          });
+        }
+      });
+    }
+
     return list;
-  }, [liveProducts, liveStocks]);
+  }, [liveProducts, liveStocks, stocks]);
+
+  const productOptions = useMemo(() => {
+    return availableProducts.map((s) => ({
+      value: s.productId || s.id,
+      label: s.productName,
+      subLabel: s.sku ? `SKU: ${s.sku} • ₹${s.unitPrice}` : `₹${s.unitPrice}`,
+      badge: s.sku || undefined,
+    }));
+  }, [availableProducts]);
 
   // Helper to build fresh clean proforma formData (no mock items)
   const createDefaultFormData = (num: number = 1) => {
@@ -556,7 +708,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     };
   };
 
-  // Initial Form Data (starts with Ref No. 1)
+  // Initial Form Data
   const [formData, setFormData] = useState(() => createDefaultFormData(1));
 
   // Multi-tab support for proforma invoices
@@ -564,7 +716,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [tabs, setTabs] = useState<ProformaTabItem[]>([
     {
       id: 'tab_1',
-      title: 'Proforma Invoice #1',
+      title: 'New Proforma Invoice',
       num: 1,
       formData: createDefaultFormData(1),
       editingProforma: null,
@@ -593,12 +745,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     );
   }, [availableCustomers, partySearchQuery]);
 
-  // Form Initializer (Opens Proforma Invoice #1)
+  // Form Initializer (Opens New Proforma Invoice)
   const handleOpenCreateForm = () => {
     const initialData = createDefaultFormData(1);
     const firstTab: ProformaTabItem = {
       id: 'tab_1',
-      title: 'Proforma Invoice #1',
+      title: 'New Proforma Invoice',
       num: 1,
       formData: initialData,
       editingProforma: null,
@@ -629,7 +781,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     const newFormData = createDefaultFormData(nextNum);
     const newTab: ProformaTabItem = {
       id: newTabId,
-      title: `Proforma Invoice #${nextNum}`,
+      title: tabs.length === 0 ? 'New Proforma Invoice' : `New Proforma Invoice ${tabs.length + 1}`,
       num: nextNum,
       formData: newFormData,
       editingProforma: null,
@@ -725,8 +877,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     setTabs([
       {
         id: 'tab_1',
-        title: `Proforma #${proforma.referenceNo || '1'}`,
-        num: Number(proforma.referenceNo) || 1,
+        title: proforma.proformaNo ? `Proforma ${proforma.proformaNo}` : 'Edit Proforma',
+        num: 1,
         formData: editData,
         editingProforma: proforma,
         enableRoundOff: proforma.roundOff !== undefined && proforma.roundOff !== 0,
@@ -780,25 +932,85 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       const item = { ...newItems[index], [field]: value };
 
       if (field === 'productId') {
-        const prod = availableProducts.find((s) => s.productId === value || s.id === value);
+        const query = String(value).trim().toLowerCase();
+        const prod = availableProducts.find(
+          (s) =>
+            s.productId === value ||
+            s.id === value ||
+            s.productName.toLowerCase() === query ||
+            (s.sku && s.sku.toLowerCase() === query)
+        );
         if (prod) {
+          item.productId = prod.productId || prod.id;
           item.productName = prod.productName;
           item.sku = prod.sku;
           item.itemCode = prod.sku;
           item.category = (prod as any).category || (prod as any).categoryName || item.category || '';
-          item.unitPrice = prod.unitPrice || 0;
-          item.unit = item.unit === 'NONE' ? 'PCS' : item.unit;
-          item.taxPercent = 5;
+          item.unitPrice = Number(prod.unitPrice) || 0;
+          if (prod.unit && prod.unit !== 'NONE') {
+            item.unit = prod.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if (prod.taxPercent !== undefined && prod.taxPercent !== null) {
+            item.taxPercent = prod.taxPercent;
+          }
+          if (prod.hsnCode) {
+            item.hsnCode = prod.hsnCode;
+          }
         }
       } else if (field === 'productName') {
-        const matched = availableProducts.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
+        const query = String(value).trim().toLowerCase();
+        const matched = availableProducts.find(
+          (s) =>
+            s.productName.toLowerCase() === query ||
+            (s.sku && s.sku.toLowerCase() === query) ||
+            s.productId === value ||
+            s.id === value
+        );
         if (matched) {
-          item.productId = matched.productId || matched.id || '';
+          item.productId = matched.productId || matched.id || item.productId || '';
+          item.productName = matched.productName;
           item.sku = matched.sku;
           item.itemCode = matched.sku;
           item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
-          if (!item.unitPrice || item.unitPrice === 0) {
-            item.unitPrice = matched.unitPrice || 0;
+          item.unitPrice = Number(matched.unitPrice) || 0;
+          if (matched.unit && matched.unit !== 'NONE') {
+            item.unit = matched.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if (matched.taxPercent !== undefined && matched.taxPercent !== null) {
+            item.taxPercent = matched.taxPercent;
+          }
+          if (matched.hsnCode) {
+            item.hsnCode = matched.hsnCode;
+          }
+        }
+      } else if (field === 'itemCode' || field === 'sku') {
+        const query = String(value).trim().toLowerCase();
+        const matched = availableProducts.find(
+          (s) =>
+            (s.sku && s.sku.toLowerCase() === query) ||
+            s.productName.toLowerCase() === query
+        );
+        if (matched) {
+          item.productId = matched.productId || matched.id || item.productId || '';
+          item.productName = matched.productName;
+          item.sku = matched.sku;
+          item.itemCode = matched.sku;
+          item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
+          item.unitPrice = Number(matched.unitPrice) || 0;
+          if (matched.unit && matched.unit !== 'NONE') {
+            item.unit = matched.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if (matched.taxPercent !== undefined && matched.taxPercent !== null) {
+            item.taxPercent = matched.taxPercent;
+          }
+          if (matched.hsnCode) {
+            item.hsnCode = matched.hsnCode;
           }
         }
       }
@@ -817,8 +1029,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         discPct = baseSub > 0 ? Math.round(((discAmt / baseSub) * 100) * 100) / 100 : 0;
         item.discountPercent = discPct;
       } else {
-        discAmt = Math.round(((baseSub * discPct) / 100) * 100) / 100;
-        item.discountAmount = discAmt;
+        if (discPct > 0) {
+          discAmt = Math.round(((baseSub * discPct) / 100) * 100) / 100;
+          item.discountAmount = discAmt;
+        } else if (discAmt > 0 && baseSub > 0) {
+          discAmt = Math.min(discAmt, baseSub);
+          discPct = Math.round(((discAmt / baseSub) * 100) * 100) / 100;
+          item.discountAmount = discAmt;
+          item.discountPercent = discPct;
+        } else {
+          discAmt = 0;
+          item.discountAmount = 0;
+        }
       }
 
       const taxable = Math.max(0, baseSub - discAmt);
@@ -873,55 +1095,111 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   }, [formData.items, enableRoundOff, manualRoundOff]);
 
   // Quick Customer Creation
-  const handleCreateQuickCustomer = () => {
-    if (!newCustomerName.trim()) {
-      toast.error('Customer name is required');
+  const handleCreateQuickCustomer = async () => {
+    setCustomerNameError('');
+    setCustomerPhoneError('');
+
+    const trimmedName = newCustomerName.trim();
+    const trimmedPhone = newCustomerPhone.trim();
+    const trimmedCompany = newCustomerCompany.trim();
+
+    const nameErr = !trimmedName ? 'Customer Name is required' : '';
+    let phoneErr = '';
+    if (!trimmedPhone) {
+      phoneErr = 'Phone number is required';
+    } else if (!/^[6-9]\d{9}$/.test(trimmedPhone)) {
+      phoneErr = 'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)';
+    }
+
+    if (nameErr) setCustomerNameError(nameErr);
+    if (phoneErr) setCustomerPhoneError(phoneErr);
+
+    if (nameErr) {
+      toast.error(nameErr);
       return;
     }
-    const newCust: SalesCustomer = {
-      id: `cust_${Date.now()}`,
-      customerCode: `CUST-${String(customers.length + 1).padStart(3, '0')}`,
-      name: newCustomerName.trim(),
-      company: newCustomerCompany.trim(),
-      customerType: 'Business',
-      phone: newCustomerPhone.trim(),
-      email: '',
-      address: 'Chennai, Tamil Nadu',
-      city: 'Chennai',
-      state: 'Tamil Nadu',
-      country: 'India',
-      pincode: '600001',
-      billingAddress: 'Chennai, Tamil Nadu',
-      shippingAddress: 'Chennai, Tamil Nadu',
-      creditLimit: 50000,
-      paymentTerms: 'Net 30 Days',
-      openingBalance: 0,
-      outstandingAmount: 0,
-      status: 'Active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    saveCustomer(newCust);
-    setFormData((prev) => ({
-      ...prev,
-      customerId: newCust.id,
-      partyName: newCust.name,
-      customerCompany: newCust.company,
-      customerPhone: newCust.phone,
-      billingAddress: newCust.address,
-    }));
-    setIsQuickCustomerModalOpen(false);
-    setPartySearchOpen(false);
-    setNewCustomerName('');
-    setNewCustomerPhone('');
-    setNewCustomerCompany('');
-    toast.success(`Customer "${newCust.name}" added successfully!`);
+    if (phoneErr) {
+      toast.error(phoneErr);
+      return;
+    }
+
+    const cleanPhone = normalizeIndianPhoneTo10Digits(trimmedPhone);
+    setIsSavingCustomer(true);
+
+    try {
+      const res = await customerApi.createCustomer({
+        name: trimmedName,
+        phone: cleanPhone,
+        company: trimmedCompany || undefined,
+        customerType: newCustomerType,
+        address: 'Chennai, Tamil Nadu',
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        country: 'India',
+        status: 'Active',
+      });
+
+      const rawData = res?.data || (res as any)?.customer || res;
+      const created = mapApiCustomerToSalesCustomer(rawData && rawData.id ? rawData : (res?.data || rawData));
+
+      // Save to local store so customer is reflected immediately across the app
+      saveCustomer(created);
+
+      // Update live customers in Proforma Invoice so party selector dropdown sees it immediately
+      setLiveCustomers((prev) => [created, ...prev.filter((c) => c.id !== created.id)]);
+
+      // Invalidate RTK cache so Customer module and others automatically refetch fresh data
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'Customer', id: 'LIST' },
+          { type: 'Customer', id: created.id },
+          'Dashboard',
+        ])
+      );
+
+      // Select newly created party into current proforma form
+      setFormData((prev) => ({
+        ...prev,
+        customerId: created.id,
+        partyName: created.name,
+        customerCompany: created.company || '',
+        customerPhone: created.phone || '',
+        billingAddress: created.billingAddress || created.address || '',
+      }));
+
+      setIsQuickCustomerModalOpen(false);
+      setPartySearchOpen(false);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setNewCustomerCompany('');
+      setNewCustomerType('Business');
+      setCustomerNameError('');
+      setCustomerPhoneError('');
+
+      toast.success(`Customer "${created.name}" created successfully!`);
+    } catch (err: any) {
+      console.error('Failed to create customer:', err);
+      const errData = err?.response?.data;
+      const errorCode = errData?.error?.code || errData?.code;
+      const errorMsg =
+        errData?.error?.message ||
+        errData?.message ||
+        err?.message ||
+        'Failed to add customer. Please try again.';
+
+      if (errorCode === 'DUPLICATE_PHONE' || errorMsg.toLowerCase().includes('phone')) {
+        setCustomerPhoneError(errorMsg);
+      }
+      toast.error(errorMsg);
+    } finally {
+      setIsSavingCustomer(false);
+    }
   };
 
   // Save Proforma Invoice Handler
   const handleSaveProforma = async (andConvert = false) => {
     if (!formData.partyName.trim()) {
-      toast.error('Please select or enter Party / Customer name');
+      toast.error('Please select or enter Customer name');
       return;
     }
     const validItems = formData.items.filter((it) => it.productName.trim() || Number(it.unitPrice) > 0);
@@ -1017,7 +1295,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     setIsSubmitting(true);
     try {
-      const payload = mapSaleProformaToPayload(newProforma);
+      const isEditing = Boolean(editingProforma && editingProforma.id);
+      const payload = mapSaleProformaToPayload(newProforma, !isEditing);
       let targetProformaId = proformaId;
 
       if (editingProforma) {
@@ -1026,10 +1305,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         toast.success(`Proforma Invoice ${newProforma.proformaNo} updated successfully!`);
       } else {
         const res = await commerceProformaApi.createProforma(payload);
+        const backendDocNo =
+          res.data?.proformaNo ||
+          (res.data as any)?.proformaNumber ||
+          (res.data as any)?.proformaCode ||
+          (res.data as any)?.code ||
+          (res.data as any)?.documentNo;
         if (res.data?.id) {
           targetProformaId = res.data.id;
           newProforma.id = res.data.id;
-          if (res.data.proformaNo) newProforma.proformaNo = res.data.proformaNo;
+        }
+        if (backendDocNo) {
+          newProforma.proformaNo = backendDocNo;
         }
         toast.success(`Proforma Invoice ${newProforma.proformaNo} created successfully!`);
       }
@@ -1109,40 +1396,38 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       return;
     }
     try {
-      const res = await commerceProformaApi.convertProforma(proforma.id, {
-        targetType: 'Invoice',
-        dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-      });
-      const convertedNo = res.data?.convertedTo?.documentNo || `INV-${new Date().getFullYear()}-0101`;
-      toast.success(`Proforma ${proforma.proformaNo} converted to Invoice ${convertedNo}!`);
+      const currentLineage = findDocumentLineage(proforma.proformaNo);
+      const upstreamQuotationNo = currentLineage?.estimateNo;
 
-      dispatch(baseApi.util.invalidateTags([
-        { type: 'Proforma', id: proforma.id },
-        { type: 'Proforma', id: 'LIST' },
-        { type: 'SalesInvoice', id: 'LIST' },
-      ]));
+      let convertedNo = currentLineage?.invoiceNo || `INV-${new Date().getFullYear()}-${String(100 + proformaList.length + 1).padStart(4, '0')}`;
 
-      const updated = proformaList.map((p) =>
-        p.id === proforma.id ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo } : p
-      );
-      persistProformas(updated);
-      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-    } catch (err: any) {
-      console.warn('API convert fallback:', err);
-      const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(100 + proformaList.length + 1).padStart(4, '0')}`;
+      if (UUID_REGEX.test(proforma.id)) {
+        try {
+          const res = await commerceProformaApi.convertProforma(proforma.id, {
+            targetType: 'Invoice',
+            dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+          });
+          if (res.data?.convertedTo?.documentNo) {
+            convertedNo = res.data.convertedTo.documentNo;
+          }
+        } catch (apiErr) {
+          console.warn('API convert notice:', apiErr);
+        }
+      }
+
       const newSale: SaleTransaction = {
         id: `sale_${Date.now()}`,
-        invoiceNo: saleInvoiceNo,
+        invoiceNo: convertedNo,
         referenceNo: proforma.proformaNo,
         saleDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+        dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
         customerId: proforma.customerId,
         customerName: proforma.partyName,
         customerCompany: proforma.customerCompany,
         customerPhone: proforma.customerPhone,
         customerEmail: proforma.customerEmail,
         billingAddress: proforma.billingAddress,
-        shippingAddress: proforma.billingAddress,
+        shippingAddress: proforma.shippingAddress || proforma.billingAddress,
         items: proforma.items,
         subtotal: proforma.subtotal,
         withGst: proforma.withGst,
@@ -1163,17 +1448,173 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         saleStatus: 'Confirmed',
         createdBy: 'Current User',
         salesperson: 'Sales Rep',
-        notes: `Converted from Proforma Invoice ${proforma.proformaNo}`,
+        notes: `Converted from Proforma Invoice ${proforma.proformaNo}${upstreamQuotationNo ? ` (Origin: ${upstreamQuotationNo})` : ''}`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+
       saveSale(newSale);
+      syncConvertedInvoiceToStorage(newSale);
+
+      recordDocumentConversion({
+        fromType: 'Proforma',
+        fromNo: proforma.proformaNo,
+        toType: 'Invoice',
+        toNo: convertedNo,
+      });
+
+      syncProformaStatusInStorage(proforma.proformaNo, 'Converted', convertedNo);
+
+      dispatch(baseApi.util.invalidateTags([
+        { type: 'Proforma', id: proforma.id },
+        { type: 'Proforma', id: 'LIST' },
+        { type: 'SalesInvoice', id: 'LIST' },
+      ]));
+
       const updated = proformaList.map((p) =>
-        p.id === proforma.id ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: saleInvoiceNo } : p
+        p.id === proforma.id || p.proformaNo === proforma.proformaNo
+          ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo }
+          : p
+      );
+      setLiveProformas((prev) =>
+        prev.map((p) =>
+          p.id === proforma.id || p.proformaNo === proforma.proformaNo
+            ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo }
+            : p
+        )
       );
       persistProformas(updated);
-      toast.success(`Proforma ${proforma.proformaNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+
+      toast.success(`Proforma ${proforma.proformaNo} converted to Sale Invoice ${convertedNo}!`);
       fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } catch (err: any) {
+      console.error('API convert fallback error:', err);
+    } finally {
+      setActiveConvertDropdownId(null);
+      setConvertDropdownPos(null);
+    }
+  };
+
+  // Convert Existing Proforma to Sale Order (POST /commerce/proformas/{id}/convert)
+  const handleConvertExistingToOrder = async (proforma: SaleProformaInvoice) => {
+    if (proforma.status === 'Converted') {
+      toast.info(`Proforma ${proforma.proformaNo} has already been converted.`);
+      return;
+    }
+    try {
+      const currentLineage = findDocumentLineage(proforma.proformaNo);
+      const upstreamQuotationNo = currentLineage?.estimateNo;
+
+      const existingOrders: SaleOrderRecord[] = JSON.parse(localStorage.getItem('yaa_crm_sale_orders') || '[]');
+      let convertedNo = currentLineage?.orderNo || `SO-${new Date().getFullYear()}-${String(existingOrders.length + 1).padStart(4, '0')}`;
+
+      if (UUID_REGEX.test(proforma.id)) {
+        try {
+          const res = await commerceProformaApi.convertProforma(proforma.id, {
+            targetType: 'Order',
+            dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+          });
+          if (res.data?.convertedTo?.documentNo) {
+            convertedNo = res.data.convertedTo.documentNo;
+          }
+        } catch (apiErr) {
+          console.warn('API convert notice:', apiErr);
+        }
+      }
+
+      const newOrder: SaleOrderRecord = {
+        id: `so_${Date.now()}`,
+        orderNo: convertedNo,
+        referenceNo: proforma.proformaNo,
+        orderDate: new Date().toISOString().split('T')[0],
+        dueDate: proforma.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+        customerId: proforma.customerId,
+        partyName: proforma.partyName,
+        customerPhone: proforma.customerPhone,
+        customerEmail: proforma.customerEmail,
+        customerCompany: proforma.customerCompany,
+        billingAddress: proforma.billingAddress,
+        shippingAddress: proforma.shippingAddress || proforma.billingAddress,
+        stateOfSupply: proforma.stateOfSupply,
+        paymentType: 'Credit',
+        items: proforma.items.map((it) => ({
+          id: it.id || `item_${Date.now()}_${Math.random()}`,
+          productId: it.productId,
+          productName: it.productName,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          taxPercent: it.taxPercent || 0,
+          discountPercent: it.discountPercent || 0,
+          discountAmount: it.discountAmount || 0,
+          taxAmount: it.taxAmount || 0,
+          total: it.total,
+          unit: it.unit || 'pcs',
+        })),
+        subtotal: proforma.subtotal,
+        withGst: proforma.withGst,
+        gstType: proforma.gstType,
+        cgst: proforma.cgst,
+        sgst: proforma.sgst,
+        igst: proforma.igst,
+        discount: proforma.discount || 0,
+        taxAmount: proforma.taxAmount || 0,
+        amount: proforma.amount,
+        advanceAmount: 0,
+        balance: proforma.amount,
+        status: 'Open',
+        notes: `Converted from Proforma Invoice ${proforma.proformaNo}${upstreamQuotationNo ? ` (Origin: ${upstreamQuotationNo})` : ''}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      try {
+        const payload = mapSaleOrderRecordToPayload(newOrder);
+        const orderRes = await commerceSaleOrderApi.createOrder(payload);
+        if (orderRes.data?.orderNo) {
+          convertedNo = orderRes.data.orderNo;
+          newOrder.orderNo = convertedNo;
+          if (orderRes.data.id) newOrder.id = orderRes.data.id;
+        }
+      } catch (orderApiErr) {
+        console.warn('API order creation notice:', orderApiErr);
+      }
+
+      syncConvertedOrderToStorage(newOrder);
+
+      recordDocumentConversion({
+        fromType: 'Proforma',
+        fromNo: proforma.proformaNo,
+        toType: 'Order',
+        toNo: convertedNo,
+      });
+
+      syncProformaStatusInStorage(proforma.proformaNo, 'Converted', convertedNo);
+
+      dispatch(baseApi.util.invalidateTags([
+        { type: 'Proforma', id: proforma.id },
+        { type: 'Proforma', id: 'LIST' },
+        { type: 'SalesOrder', id: 'LIST' },
+      ]));
+
+      const updated = proformaList.map((p) =>
+        p.id === proforma.id || p.proformaNo === proforma.proformaNo
+          ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo }
+          : p
+      );
+      setLiveProformas((prev) =>
+        prev.map((p) =>
+          p.id === proforma.id || p.proformaNo === proforma.proformaNo
+            ? { ...p, status: 'Converted' as const, convertedToInvoiceNo: convertedNo }
+            : p
+        )
+      );
+      persistProformas(updated);
+
+      toast.success(`Proforma ${proforma.proformaNo} converted to Sale Order ${convertedNo}!`);
+      fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } catch (err: any) {
+      console.error('API convert to order fallback error:', err);
+      toast.error('Failed to convert proforma to sale order');
     } finally {
       setActiveConvertDropdownId(null);
       setConvertDropdownPos(null);
@@ -1213,11 +1654,22 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     duplicated.items = resolvedItems;
 
     try {
-      const payload = mapSaleProformaToPayload(duplicated);
+      const payload = mapSaleProformaToPayload(duplicated, true);
       const res = await commerceProformaApi.createProforma(payload);
-      if (res.data?.id) duplicated.id = res.data.id;
+      const backendDocNo =
+        res.data?.proformaNo ||
+        (res.data as any)?.proformaNumber ||
+        (res.data as any)?.proformaCode ||
+        (res.data as any)?.code ||
+        (res.data as any)?.documentNo;
+      if (res.data?.id) {
+        duplicated.id = res.data.id;
+      }
+      if (backendDocNo) {
+        duplicated.proformaNo = backendDocNo;
+      }
       dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id: 'LIST' }]));
-      toast.success(`Duplicated ${proforma.proformaNo} as new Proforma ${newProformaNo}!`);
+      toast.success(`Duplicated ${proforma.proformaNo} as new Proforma ${duplicated.proformaNo || newProformaNo}!`);
     } catch (err: any) {
       console.warn('Duplicate API notice:', err);
       toast.info(`Duplicated ${proforma.proformaNo} locally.`);
@@ -1266,25 +1718,51 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
   };
 
-  // Displayed Proforma Invoices: Live API data when connected, store fallback otherwise
+  // Displayed Proforma Invoices: Live API data merged with local cache and cross-module lineage
   const displayProformas = useMemo(() => {
-    if (isApiConnected) {
-      return liveProformas;
-    }
-    return proformaList.filter((p) => {
+    const baseList = isApiConnected ? liveProformas : proformaList;
+    const mergedList = baseList.map((item) => {
+      const localMatch = proformaList.find((p) => p.id === item.id || p.proformaNo === item.proformaNo);
+      const lineage = findDocumentLineage(item.proformaNo);
+      const isConvertedInLineage = Boolean(lineage && (lineage.orderNo || lineage.invoiceNo));
+      const effectiveStatus = (isConvertedInLineage || localMatch?.status === 'Converted' || item.status === 'Converted')
+        ? ('Converted' as const)
+        : item.status;
+      return {
+        ...item,
+        status: effectiveStatus,
+        convertedToInvoiceNo: localMatch?.convertedToInvoiceNo || lineage?.orderNo || lineage?.invoiceNo || item.convertedToInvoiceNo,
+      };
+    });
+
+    const seenNos = new Set(mergedList.map((p) => p.proformaNo));
+    const extraLocals = proformaList.filter((p) => !seenNos.has(p.proformaNo)).map((item) => {
+      const lineage = findDocumentLineage(item.proformaNo);
+      const isConvertedInLineage = Boolean(lineage && (lineage.orderNo || lineage.invoiceNo));
+      return {
+        ...item,
+        status: (isConvertedInLineage || item.status === 'Converted') ? ('Converted' as const) : item.status,
+        convertedToInvoiceNo: item.convertedToInvoiceNo || lineage?.orderNo || lineage?.invoiceNo,
+      };
+    });
+
+    const combined = [...extraLocals, ...mergedList];
+
+    return combined.filter((p) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
         !q ||
         p.proformaNo.toLowerCase().includes(q) ||
         p.partyName.toLowerCase().includes(q) ||
-        (p.referenceNo && p.referenceNo.toLowerCase().includes(q)) ||
         (p.customerPhone && p.customerPhone.toLowerCase().includes(q)) ||
+        (p.customerCompany && p.customerCompany.toLowerCase().includes(q)) ||
         p.items.some((it) => it.productName.toLowerCase().includes(q));
 
       const matchesStatus = appliedStatus === 'ALL' || p.status === appliedStatus;
-      return matchesSearch && matchesStatus;
+      const matchesPeriod = checkDateMatchesPeriod(p.date, appliedPeriod);
+      return matchesSearch && matchesStatus && matchesPeriod;
     });
-  }, [isApiConnected, liveProformas, proformaList, appliedSearch, appliedStatus]);
+  }, [isApiConnected, liveProformas, proformaList, appliedSearch, appliedStatus, appliedPeriod]);
 
   // Metrics Calculation
   const metrics = useMemo(() => {
@@ -1432,26 +1910,22 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           <div>
             {/* Top Meta Details (Party + Ref/Date/State) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
-              {/* Left Column: Party Floating Box (CRM Theme) */}
+              {/* Left Column: Party (CRM Theme) */}
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
+                <FormLabel required>Customer</FormLabel>
                 <div className="relative">
-                  {/* Floating Box Input */}
+                  {/* Select Box Input */}
                   <div
                     onClick={() => setPartySearchOpen(!partySearchOpen)}
-                    className={`relative w-full min-h-[46px] px-3.5 py-2 bg-white border-2 rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
+                    className={`relative w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
                       partySearchOpen
-                        ? 'border-[#33077C] ring-4 ring-purple-100'
+                        ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10'
                         : formData.partyName
-                        ? 'border-purple-300 hover:border-[#33077C]'
-                        : 'border-slate-300 hover:border-[#33077C]'
+                        ? 'border-slate-300 hover:border-slate-400'
+                        : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    {/* Floating Label Badge */}
-                    <span className="absolute -top-2.5 left-3 bg-white px-1.5 text-[11px] font-bold text-[#33077C]">
-                      Party <span className="text-rose-500">*</span>
-                    </span>
-
-                    {/* Display Party Name or Placeholder */}
+                    {/* Display Customer Name or Placeholder */}
                     <div className="truncate pr-2">
                       {formData.partyName ? (
                         <div className="flex items-center gap-2">
@@ -1461,14 +1935,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           )}
                         </div>
                       ) : (
-                        <span className="text-slate-400">Select or search customer party...</span>
+                        <span className="text-slate-400">Select or search customer...</span>
                       )}
                     </div>
 
                     <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
                   </div>
 
-                  {/* Dropdown Menu for Party Selection */}
+                  {/* Dropdown Menu for Customer Selection */}
                   {partySearchOpen && (
                     <div className="absolute left-0 top-full mt-1.5 w-full bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
                       {/* Search Bar */}
@@ -1477,7 +1951,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
                           <input
                             type="text"
-                            placeholder="Search Party by name, phone or code..."
+                            placeholder="Search Customer by name, phone or code..."
                             value={partySearchQuery}
                             onChange={(e) => setPartySearchQuery(e.target.value)}
                             autoFocus
@@ -1505,14 +1979,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                         className="w-full px-3 py-2 text-left text-xs font-bold text-[#33077C] bg-purple-50/70 hover:bg-purple-100 rounded-xl flex items-center gap-2 transition-colors cursor-pointer mb-2"
                       >
                         <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-                        <span>+ Add New Party / Customer</span>
+                        <span>+ Add New Customer</span>
                       </button>
 
                       {/* Customer List */}
                       <div className="max-h-56 overflow-y-auto space-y-1">
                         {filteredCustomers.length === 0 ? (
                           <div className="py-4 text-center text-xs text-slate-400 font-medium">
-                            No customers found. Click "+ Add New Party" above.
+                            No customers found. Click "+ Add New Customer" above.
                           </div>
                         ) : (
                           filteredCustomers.map((c) => {
@@ -1571,19 +2045,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 )}
               </div>
 
-              {/* Right Column: Ref No, Invoice Date, State of supply */}
+              {/* Right Column: Invoice Date, State of supply */}
               <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
-                {/* Ref No. */}
-                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
-                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">Ref No.</span>
-                  <input
-                    type="text"
-                    value={formData.referenceNo}
-                    onChange={(e) => setFormData({ ...formData, referenceNo: e.target.value })}
-                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none text-right transition-colors"
-                  />
-                </div>
-
                 {/* Invoice Date */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">Invoice Date</span>
@@ -1772,24 +2235,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       </td>
 
                       {/* ITEM (Product Selector / Input) */}
-                      <td className="p-1.5 border-r border-slate-200">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            value={row.productName}
-                            onChange={(e) => handleRowChange(idx, 'productName', e.target.value)}
-                            placeholder="Type or select product item..."
-                            list={`product-list-${idx}`}
-                            className="w-full h-8 px-2 bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
-                          />
-                          <datalist id={`product-list-${idx}`}>
-                            {availableProducts.map((s) => (
-                              <option key={s.productId || s.id} value={s.productName}>
-                                SKU: {s.sku} • ₹{s.unitPrice}
-                              </option>
-                            ))}
-                          </datalist>
-                        </div>
+                      <td className="p-1.5 border-r border-slate-200 min-w-[200px]">
+                        <SearchableSelect
+                          value={row.productId || ''}
+                          onChange={(val) => handleRowChange(idx, 'productId', val)}
+                          onSearch={handleProductSearch}
+                          isLoading={isSearchingProducts}
+                          options={productOptions}
+                          placeholder="Select Product..."
+                          searchPlaceholder="Search product by name or SKU..."
+                          emptyText="Type to search products..."
+                          allowClear
+                          size="sm"
+                        />
                       </td>
 
                       {/* ITEM CATEGORY (optional column) */}
@@ -2089,33 +2547,33 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 {/* Expandable Sections */}
                 {showTermsSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
-                    <label className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">Terms & Conditions</label>
+                    <FormLabel>Terms & Conditions</FormLabel>
                     <textarea
                       rows={3}
                       value={formData.terms}
                       onChange={(e) => setFormData({ ...formData, terms: e.target.value })}
                       placeholder="Enter proforma invoice terms and conditions..."
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
+                      className={FORM_TEXTAREA_CLS}
                     />
                   </div>
                 )}
 
                 {showDescriptionSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
-                    <label className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">Proforma Description / Notes</label>
+                    <FormLabel>Proforma Description / Notes</FormLabel>
                     <textarea
                       rows={2}
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       placeholder="Add custom notes or delivery remarks for this proforma invoice..."
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
+                      className={FORM_TEXTAREA_CLS}
                     />
                   </div>
                 )}
 
                 {showImageSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="font-bold text-[#33077C] uppercase text-[11px] tracking-wider">Attach Image</label>
+                    <FormLabel>Attach Image</FormLabel>
                     <div className="flex items-center gap-3">
                       <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
                         <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
@@ -2141,7 +2599,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
                 {showDocumentSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="font-bold text-[#33077C] uppercase text-[11px] tracking-wider">Attach Document / PDF</label>
+                    <FormLabel>Attach Document / PDF</FormLabel>
                     <div className="flex items-center gap-3">
                       <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
                         <FileUp className="w-3.5 h-3.5 text-[#33077C]" />
@@ -2237,7 +2695,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       onClick={() => {
                         setShowShareFooterMenu(false);
                         const text = encodeURIComponent(
-                          `Proforma Invoice from YAA Mart\nProforma No: ${formData.proformaNo}\nParty: ${formData.partyName}\nAmount: ₹${formCalculations.grandTotal}`
+                          `Proforma Invoice from YAA Mart\nProforma No: ${formData.proformaNo}\nCustomer: ${formData.partyName}\nAmount: ₹${formCalculations.grandTotal}`
                         );
                         window.open(`https://wa.me/?text=${text}`, '_blank');
                       }}
@@ -2261,18 +2719,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 )}
               </div>
 
-              {/* Save & Convert to Sale Button */}
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleSaveProforma(true)}
-                icon={<ShoppingCart className="w-4 h-4 text-[#33077C]" />}
-              >
-                Save &amp; Convert to Sale
-              </Button>
-
               {/* Save Button (CRM Primary Theme #33077C) */}
               <Button
                 variant="primary"
@@ -2292,9 +2738,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         {isQuickCustomerModalOpen && (
           <Modal
             isOpen={isQuickCustomerModalOpen}
-            onClose={() => setIsQuickCustomerModalOpen(false)}
-            title="Add New Party / Customer"
+            onClose={() => {
+              if (!isSavingCustomer) {
+                setIsQuickCustomerModalOpen(false);
+                setCustomerNameError('');
+                setCustomerPhoneError('');
+                setNewCustomerType('Business');
+              }
+            }}
+            title="Add New Customer"
+            subtitle="Register customer profile, type and contact information"
             maxWidth="md"
+            headerGradient={true}
           >
             <form
               noValidate
@@ -2302,51 +2757,110 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 e.preventDefault();
                 handleCreateQuickCustomer();
               }}
-              className="p-5 space-y-4 text-xs pt-6"
+              className="p-5 space-y-4 text-xs"
             >
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Customer / Party Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerName}
-                    onChange={(e) => setNewCustomerName(e.target.value)}
-                    placeholder="e.g. Anand Supermarket"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel required>Customer Name</FormLabel>
+                <input
+                  type="text"
+                  value={newCustomerName}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => {
+                    setNewCustomerName(e.target.value);
+                    if (customerNameError) setCustomerNameError('');
+                  }}
+                  placeholder="e.g. Anand Supermarket"
+                  className={getFormInputCls(Boolean(customerNameError))}
+                />
+                {customerNameError && (
+                  <p className="text-[11px] text-rose-500 mt-1 pl-1 font-medium">{customerNameError}</p>
+                )}
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Company / Store Name
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerCompany}
-                    onChange={(e) => setNewCustomerCompany(e.target.value)}
-                    placeholder="e.g. Anand Mart Pvt Ltd"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel>Company / Store Name</FormLabel>
+                <input
+                  type="text"
+                  value={newCustomerCompany}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => setNewCustomerCompany(e.target.value)}
+                  placeholder="e.g. Anand Mart Pvt Ltd"
+                  className={FORM_INPUT_CLS}
+                />
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Phone Number
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerPhone}
-                    onChange={(e) => setNewCustomerPhone(e.target.value)}
-                    placeholder="e.g. +91 98400 55667"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel>Customer Type</FormLabel>
+                <select
+                  value={newCustomerType}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => setNewCustomerType(e.target.value as 'Business' | 'Individual')}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Business">Business (B2B)</option>
+                  <option value="Individual">Individual (B2C)</option>
+                </select>
+              </div>
+
+              <div>
+                <FormLabel required>Phone Number</FormLabel>
+                <input
+                  type="tel"
+                  maxLength={10}
+                  value={newCustomerPhone}
+                  disabled={isSavingCustomer}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === 'Backspace' ||
+                      e.key === 'Delete' ||
+                      e.key === 'ArrowLeft' ||
+                      e.key === 'ArrowRight' ||
+                      e.key === 'Tab' ||
+                      e.key === 'Enter' ||
+                      e.ctrlKey ||
+                      e.metaKey
+                    ) {
+                      return;
+                    }
+                    if (!/^[0-9]$/.test(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setNewCustomerPhone(raw);
+                    if (!raw) {
+                      setCustomerPhoneError('');
+                    } else if (!/^[6-9]/.test(raw) || raw.length === 10) {
+                      setCustomerPhoneError(
+                        /^[6-9]\d{9}$/.test(raw)
+                          ? ''
+                          : 'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)'
+                      );
+                    } else {
+                      setCustomerPhoneError('');
+                    }
+                  }}
+                  onBlur={() => {
+                    if (newCustomerPhone) {
+                      if (!/^[6-9]\d{9}$/.test(newCustomerPhone)) {
+                        setCustomerPhoneError(
+                          'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)'
+                        );
+                      } else {
+                        setCustomerPhoneError('');
+                      }
+                    }
+                  }}
+                  placeholder="e.g. 98400 55667"
+                  className={getFormInputCls(Boolean(customerPhoneError))}
+                />
+                {customerPhoneError && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1 pl-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{customerPhoneError}</span>
+                  </p>
+                )}
               </div>
 
               <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
@@ -2354,7 +2868,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   variant="secondary"
                   size="sm"
                   type="button"
-                  onClick={() => setIsQuickCustomerModalOpen(false)}
+                  disabled={isSavingCustomer}
+                  onClick={() => {
+                    setIsQuickCustomerModalOpen(false);
+                    setCustomerNameError('');
+                    setCustomerPhoneError('');
+                    setNewCustomerType('Business');
+                  }}
                 >
                   Cancel
                 </Button>
@@ -2362,8 +2882,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   variant="primary"
                   size="sm"
                   type="submit"
+                  disabled={isSavingCustomer}
                 >
-                  Save Party
+                  {isSavingCustomer ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Saving Customer...
+                    </span>
+                  ) : (
+                    'Save Customer'
+                  )}
                 </Button>
               </div>
             </form>
@@ -2402,7 +2930,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         { header: 'Proforma Date', key: 'date', align: 'center', width: 15 },
         { header: 'Valid Until', key: 'validUntil', align: 'center', width: 15 },
         { header: 'Proforma No.', key: 'proformaNo', align: 'center', width: 18 },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: 28 },
         { header: 'Phone', key: 'customerPhone', align: 'left', width: 18 },
         { header: 'Total (₹)', key: 'amount', align: 'right', type: 'currency', width: 20 },
         { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: 20 },
@@ -2443,19 +2971,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
               Create, track, and convert commercial proforma invoices into confirmed sales.
             </p>
-            <div className="flex items-center gap-2.5 mt-2 flex-wrap">
-
-              <button
-                type="button"
-                onClick={() => fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod)}
-                disabled={isApiLoading}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-[#33077C] transition-colors px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
-                title="Sync from API"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isApiLoading ? 'animate-spin text-[#33077C]' : ''}`} />
-                <span>Sync</span>
-              </button>
-            </div>
           </div>
         </div>
 
@@ -2482,75 +2997,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         </div>
       </div>
 
-      {/* Filter Row: Filter by : [ This Month ⌄ ] [ 📅 01/10/2026 To 31/10/2026 ] [ All Firms ⌄ ] [ Status ⌄ ] */}
-      <div className="flex items-center gap-3 flex-wrap text-xs sm:text-[13px] text-slate-600">
-        <span className="font-bold text-slate-600">Filter by :</span>
-
-        {/* Period Selector */}
-        <div className="relative inline-block">
-          <select
-            value={appliedPeriod}
-            onChange={(e) => {
-              setPendingPeriod(e.target.value);
-              setAppliedPeriod(e.target.value);
-              setPage(1);
-            }}
-            className="h-9 px-3.5 pr-8 bg-white border border-slate-200 hover:border-slate-300 rounded-xl font-bold text-slate-700 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/10 shadow-2xs appearance-none cursor-pointer"
-          >
-            {PERIOD_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none stroke-[2.5]" />
-        </div>
-
-        {/* Date Range Badge / Picker */}
-        <div className="h-9 px-3.5 bg-white border border-slate-200 rounded-xl font-semibold text-slate-700 flex items-center gap-2 shadow-2xs">
-          <Calendar className="w-3.5 h-3.5 text-[#33077C]" />
-          <span>01/10/2026 To 31/10/2026</span>
-        </div>
-
-        {/* All Firms Filter */}
-        <div className="relative inline-block">
-          <select
-            className="h-9 px-3.5 pr-8 bg-white border border-slate-200 hover:border-slate-300 rounded-xl font-bold text-slate-700 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/10 shadow-2xs appearance-none cursor-pointer"
-          >
-            <option value="All Firms">All Firms</option>
-            <option value="Firm 1">YAA Creations Chennai</option>
-            <option value="Firm 2">YAA Logistics Salem</option>
-          </select>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none stroke-[2.5]" />
-        </div>
-
-        {/* Status Filter */}
-        <div className="relative inline-block ml-auto sm:ml-0">
-          <select
-            value={appliedStatus}
-            onChange={(e) => {
-              setPendingStatus(e.target.value);
-              setAppliedStatus(e.target.value);
-              setPage(1);
-            }}
-            className="h-9 px-3.5 pr-8 bg-white border border-slate-200 hover:border-slate-300 rounded-xl font-bold text-slate-700 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/10 shadow-2xs appearance-none cursor-pointer"
-          >
-            {STATUS_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none stroke-[2.5]" />
-        </div>
-      </div>
-
       {/* 2. SUMMARY KPI CARD (Themed matching CRM design) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs max-w-sm">
         <div className="flex items-start justify-between">
           <div>
             <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Total Quotations
+              Total Proformas
             </div>
             <div className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-1">
               <span>₹</span>
@@ -2576,26 +3028,58 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         </div>
       </div>
 
-      {/* 3. TRANSACTIONS SECTION HEADER */}
-      <div className="flex items-center justify-between pt-2">
-        <h2 className="text-base font-bold text-slate-800">Transactions</h2>
-
-        {/* Search Icon / Input */}
-        <div className="relative">
-          <input
-            type="text"
-            placeholder="Search transactions..."
-            value={appliedSearch}
-            onChange={(e) => {
-              setPendingSearch(e.target.value);
-              setAppliedSearch(e.target.value);
-              setPage(1);
-            }}
-            className="w-48 sm:w-64 h-9 pl-9 pr-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/10 transition-all shadow-2xs"
-          />
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none stroke-[2.2]" />
-        </div>
-      </div>
+      {/* 3. Unified SearchBar with FilterDropdown matching Image 1 */}
+      <SearchBar
+        value={pendingSearch}
+        onChange={(val) => {
+          setPendingSearch(val);
+        }}
+        onSubmit={() => {
+          setAppliedSearch(pendingSearch);
+          setPage(1);
+        }}
+        onReset={() => {
+          setPendingSearch('');
+          setAppliedSearch('');
+          setPendingPeriod('all');
+          setAppliedPeriod('all');
+          setPendingStatus('ALL');
+          setAppliedStatus('ALL');
+          setPage(1);
+        }}
+        placeholder="Search by customer name, proforma #..."
+        filterSlot={
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <FilterDropdown
+              options={PERIOD_FILTER_OPTIONS}
+              value={appliedPeriod}
+              onChange={(val) => {
+                setPendingPeriod(val);
+                setAppliedPeriod(val);
+                setPage(1);
+              }}
+              placeholder="Period : All Time"
+            />
+            <FilterDropdown
+              options={STATUS_FILTER_OPTIONS}
+              value={appliedStatus}
+              onChange={(val) => {
+                setPendingStatus(val);
+                setAppliedStatus(val);
+                setPage(1);
+              }}
+              placeholder="Status : All"
+            />
+          </div>
+        }
+        rightSlot={
+          <div className="flex items-center gap-3 pr-1">
+            <span className="text-xs font-semibold text-slate-500">
+              Total Proformas : <span className="text-[#33077C] font-bold">{metrics.totalCount}</span>
+            </span>
+          </div>
+        }
+      />
 
       {/* 4. PROFORMA INVOICES TABLE (Standardized Royal Purple Themed Header) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -2623,46 +3107,31 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[760px]">
-              {/* Header: Date, Reference no, Party Name, Amount, Balance, Status, Actions in Royal Purple */}
+              {/* Table Purple Themed Header */}
               <thead>
-                <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider">
-                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-white">
+                <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider select-none">
+                  <th className="py-3.5 px-3 sm:px-5 border-r border-[#4309A2]/60 min-w-[180px] text-white">
+                    Customer Name
+                  </th>
+                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-center text-white min-w-[140px]">
+                    PROFORMA NO.
+                  </th>
+                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-white min-w-[110px]">
                     <div className="flex items-center gap-1.5">
                       <span>Date</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
+                      <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-white text-center">
-                    <div className="flex items-center justify-center gap-1.5">
-                      <span>Reference no</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
+                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap text-white min-w-[120px]">
+                    Amount
                   </th>
-                  <th className="py-3.5 px-3 sm:px-5 border-r border-[#4309A2]/60 min-w-[180px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>Party Name</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
+                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap text-white min-w-[120px]">
+                    Balance
                   </th>
-                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap text-white">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span>Amount</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
+                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap text-white min-w-[110px]">
+                    Status
                   </th>
-                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap text-white">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span>Balance</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap text-white">
-                    <div className="flex items-center justify-center gap-1.5">
-                      <span>Status</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap w-28 text-white">
+                  <th className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap min-w-[130px] w-36 text-white">
                     Actions
                   </th>
                 </tr>
@@ -2677,19 +3146,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       key={item.id}
                       className="hover:bg-purple-50/40 transition-colors border-b border-slate-200"
                     >
-                      {/* 1. Date */}
-                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.date)}
-                      </td>
-
-                      {/* 2. Reference no */}
-                      <td className="py-3.5 px-3 sm:px-4 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.referenceNo || '1'}
-                      </td>
-
-                      {/* 3. Party Name */}
-                      <td className="py-3.5 px-3 sm:px-5 font-semibold text-slate-900 border-r border-slate-200">
-                        <div>{item.partyName}</div>
+                      {/* 1. Party Name */}
+                      <td className="py-3.5 px-3 sm:px-5 font-semibold text-slate-900 border-r border-slate-200 align-middle">
+                        <div className="font-bold text-slate-900">{item.partyName}</div>
                         {item.customerPhone && (
                           <div className="text-[11px] text-slate-400 font-normal mt-0.5">
                             {item.customerPhone}
@@ -2697,38 +3156,55 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                         )}
                       </td>
 
+                      {/* 2. Proforma Invoice Code (from backend) */}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-[#33077C] border border-purple-200/80 font-mono text-xs font-bold">
+                            {item.proformaNo || '—'}
+                          </span>
+                          <DocumentLineageBadges docRef={item.proformaNo} currentType="Proforma" className="justify-center" />
+                        </div>
+                      </td>
+
+                      {/* 3. Date */}
+                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                        {isoToDdmmyyyy(item.date)}
+                      </td>
+
                       {/* 4. Amount */}
-                      <td className="py-3.5 px-3 sm:px-4 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 5. Balance */}
-                      <td className="py-3.5 px-3 sm:px-4 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 6. Status */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.status === 'Open' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                            Open
-                          </span>
-                        ) : item.status === 'Converted' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Converted
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                            {item.status}
-                          </span>
-                        )}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex items-center justify-center">
+                          {item.status === 'Open' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Open
+                            </span>
+                          ) : item.status === 'Converted' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              {item.status}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 7. Actions Column: Convert ⌄ button + 3-dots actions menu */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                         <div className="inline-flex items-center justify-center gap-1.5">
                           {/* Convert ⌄ Dropdown Button */}
                           <div className="relative inline-block text-left">
@@ -2786,6 +3262,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                 >
                                   <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
                                   <span>Convert to Sale Invoice</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveConvertDropdownId(null);
+                                    setConvertDropdownPos(null);
+                                    handleConvertExistingToOrder(item);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                >
+                                  <ShoppingBag className="w-3.5 h-3.5 text-slate-500" />
+                                  <span>Convert to Sale Order</span>
                                 </button>
                               </div>
                             )}
@@ -2847,30 +3335,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                     setDropdownPos(null);
                                     handleOpenEditForm(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                 >
                                   View/Edit
                                 </button>
-
-                                {/* Status actions: PATCH /commerce/proformas/{id}/status */}
-                                {item.status !== 'Converted' && item.status !== 'Cancelled' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateStatus(item.id, 'Cancelled')}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-amber-700 hover:bg-amber-50 transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Cancelled
-                                  </button>
-                                )}
-                                {item.status === 'Cancelled' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateStatus(item.id, 'Open')}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Open
-                                  </button>
-                                )}
 
                                 {/* 2. Delete */}
                                 <button
@@ -2880,7 +3348,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                     setDropdownPos(null);
                                     handleDeleteProforma(item.id);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
                                 >
                                   Delete
                                 </button>
@@ -2893,51 +3361,39 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                     setDropdownPos(null);
                                     handleDuplicateProforma(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
 
-                                {/* 4. Open PDF */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setPreviewProforma(item);
-                                    toast.info(`Opening PDF preview for ${item.proformaNo}`);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
 
-                                {/* 5. Preview */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setPreviewProforma(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Preview
-                                </button>
-
-                                {/* 6. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setPreviewProforma(item);
-                                    setTimeout(() => window.print(), 300);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
+                                {/* 5. Mark as Cancelled (Last Option) */}
+                                {item.status !== 'Converted' && item.status !== 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setDropdownPos(null);
+                                      handleUpdateStatus(item.id, 'Cancelled');
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Cancelled
+                                  </button>
+                                )}
+                                {item.status === 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveDropdownId(null);
+                                      setDropdownPos(null);
+                                      handleUpdateStatus(item.id, 'Open');
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
+                                  >
+                                    Mark as Open
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -3010,8 +3466,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               </div>
               <div>
                 <p className="text-[11px] font-bold text-slate-400 uppercase">Proforma Details:</p>
-                <p className="mt-0.5"><strong className="text-slate-700">Ref No:</strong> {previewProforma.referenceNo || '-'}</p>
-                <p><strong className="text-slate-700">State of Supply:</strong> {previewProforma.stateOfSupply || 'Tamil Nadu'}</p>
+                <p className="mt-0.5"><strong className="text-slate-700">State of Supply:</strong> {previewProforma.stateOfSupply || 'Tamil Nadu'}</p>
                 <p><strong className="text-slate-700">Status:</strong> {previewProforma.status}</p>
               </div>
             </div>

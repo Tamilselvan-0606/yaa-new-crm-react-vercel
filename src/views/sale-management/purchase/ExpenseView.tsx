@@ -42,6 +42,7 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatExpenseShare } from '../../../utils/shareUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
 import { toast } from 'sonner';
 import {
   workExpenseApi,
@@ -313,14 +314,17 @@ export const ExpenseView: React.FC = () => {
     fetchExpenses();
   }, [fetchExpenses]);
 
-  // Debounced Search (450ms)
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      setAppliedSearch(pendingSearch);
-      setCurrentPage(1);
-    }, 450);
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setCurrentPage(1);
+      }
+    }, 600);
     return () => clearTimeout(timer);
-  }, [pendingSearch]);
+  }, [pendingSearch, appliedSearch]);
 
   // 3-Dots Action dropdown & Share Popover
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -1228,9 +1232,9 @@ export const ExpenseView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenEditModal(exp);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                               >
-                                <Edit2 className="w-3.5 h-3.5 text-slate-400" />
+                                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>View/Edit</span>
                               </button>
 
@@ -1241,9 +1245,9 @@ export const ExpenseView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenDetailModal(exp);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                               >
-                                <Eye className="w-3.5 h-3.5 text-slate-400" />
+                                <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Preview</span>
                               </button>
 
@@ -1254,9 +1258,9 @@ export const ExpenseView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDuplicateExpense(exp);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                               >
-                                <Layers className="w-3.5 h-3.5 text-slate-400" />
+                                <Layers className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Duplicate</span>
                               </button>
 
@@ -1269,9 +1273,9 @@ export const ExpenseView: React.FC = () => {
                                   toast.info(`Preparing print for ${exp.expenseNo}...`);
                                   window.print();
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                               >
-                                <Printer className="w-3.5 h-3.5 text-slate-400" />
+                                <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
                                 <span>Print</span>
                               </button>
 
@@ -1282,9 +1286,9 @@ export const ExpenseView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDeleteExpense(exp.id, exp.expenseNo);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2 border-t border-slate-100"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 border-t border-slate-100 group"
                               >
-                                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                <Trash2 className="w-3.5 h-3.5 text-rose-500 group-hover:text-white transition-colors" />
                                 <span>Delete</span>
                               </button>
                             </div>
@@ -1330,71 +1334,61 @@ export const ExpenseView: React.FC = () => {
         <form noValidate onSubmit={handleSubmit(onSubmitExpense)} className="space-y-6 p-2 sm:p-4">
           {/* Row 1: 3 Fields (Expense Voucher No, Expense Category, Expense Date) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-slate-50 border border-slate-200 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Expense Voucher No
-                </span>
-                <input
-                  type="text"
-                  {...register('expenseNo')}
-                  disabled
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-mono font-bold text-slate-600 cursor-not-allowed outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Expense Voucher No</FormLabel>
+              <input
+                type="text"
+                {...register('expenseNo')}
+                disabled
+                className={FORM_INPUT_DISABLED_CLS}
+              />
               <FormError message={errors.expenseNo?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full">
-                <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-                  <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
-                    Expense Category <span className="text-rose-500">*</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsCategoryModalOpen(true)}
-                    className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] hover:underline cursor-pointer flex items-center gap-1 pointer-events-auto rounded-sm"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>Manage</span>
-                  </button>
-                </div>
-                <Controller
-                  control={control}
-                  name="categoryId"
-                  render={({ field }) => (
-                    <CustomSelect
-                      options={categories.map((c) => ({ label: c.name, value: c.id }))}
-                      value={field.value || ''}
-                      onChange={(val) => {
-                        field.onChange(val);
-                        const found = categories.find((c) => c.id === val);
-                        if (found) {
-                          setValue('category', found.name);
-                        }
-                      }}
-                      placeholder={
-                        isCategoriesLoading ? 'Loading categories...' : 'Select expense category'
-                      }
-                    />
-                  )}
-                />
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <FormLabel required className="mb-0">
+                  Expense Category
+                </FormLabel>
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryModalOpen(true)}
+                  className="text-xs font-semibold text-[#4309A2] hover:underline cursor-pointer flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Manage</span>
+                </button>
               </div>
+              <Controller
+                control={control}
+                name="categoryId"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={categories.map((c) => ({ label: c.name, value: c.id }))}
+                    value={field.value || ''}
+                    onChange={(val) => {
+                      field.onChange(val);
+                      const found = categories.find((c) => c.id === val);
+                      if (found) {
+                        setValue('category', found.name);
+                      }
+                    }}
+                    placeholder={
+                      isCategoriesLoading ? 'Loading categories...' : 'Select expense category'
+                    }
+                  />
+                )}
+              />
               <FormError message={errors.category?.message || errors.categoryId?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Expense Date <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="date"
-                  {...register('expenseDate')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
-                />
-              </div>
+            <div>
+              <FormLabel required>Expense Date</FormLabel>
+              <input
+                type="date"
+                {...register('expenseDate')}
+                className={getFormInputCls(!!errors.expenseDate)}
+              />
               <FormError message={errors.expenseDate?.message} />
             </div>
           </div>
@@ -1402,59 +1396,55 @@ export const ExpenseView: React.FC = () => {
           {/* Row 2: 3 Fields (Paid To / Payee Vendor, Expense Title / Description, Payment Mode) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             <div className="relative">
+              <div className="flex items-center justify-between mb-1.5">
+                <FormLabel className="mb-0">Paid To / Payee Vendor</FormLabel>
+                {watchSupplierId && (
+                  <span className="px-2 py-0.5 bg-emerald-50 text-[10px] font-bold text-emerald-700 border border-emerald-200 rounded-full flex items-center gap-1">
+                    <Check className="w-2.5 h-2.5" />
+                    <span>Linked Supplier</span>
+                  </span>
+                )}
+              </div>
               <div className="relative" ref={payeeContainerRef}>
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <div className="absolute -top-2.5 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-                    <span className="px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm tracking-tight">
-                      Paid To / Payee Vendor
-                    </span>
-                    {watchSupplierId && (
-                      <span className="px-1.5 bg-white text-[10px] font-bold text-emerald-700 border border-emerald-200 rounded-full flex items-center gap-1">
-                        <Check className="w-2.5 h-2.5" />
-                        <span>Linked Supplier</span>
-                      </span>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={watchPayee || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setValue('payee', val);
-                      setValue('supplierId', '');
-                      setIsPayeeDropdownOpen(true);
-                    }}
-                    onFocus={() => setIsPayeeDropdownOpen(true)}
-                    placeholder="Type manual vendor or select supplier..."
-                    className="w-full h-full pl-4 pr-16 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                  />
-                  <div className="absolute right-2 flex items-center gap-0.5">
-                    {watchPayee && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setValue('payee', '');
-                          setValue('supplierId', '');
-                        }}
-                        className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                        title="Clear"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                <input
+                  type="text"
+                  value={watchPayee || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setValue('payee', val);
+                    setValue('supplierId', '');
+                    setIsPayeeDropdownOpen(true);
+                  }}
+                  onFocus={() => setIsPayeeDropdownOpen(true)}
+                  placeholder="Type manual vendor or select supplier..."
+                  className={`${FORM_INPUT_CLS} pr-16`}
+                />
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                  {watchPayee && (
                     <button
                       type="button"
-                      onClick={() => setIsPayeeDropdownOpen((prev) => !prev)}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                      title="Show suppliers"
+                      onClick={() => {
+                        setValue('payee', '');
+                        setValue('supplierId', '');
+                      }}
+                      className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                      title="Clear"
                     >
-                      <ChevronDown
-                        className={`w-4 h-4 transition-transform ${
-                          isPayeeDropdownOpen ? 'rotate-180' : ''
-                        }`}
-                      />
+                      <X className="w-3.5 h-3.5" />
                     </button>
-                  </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsPayeeDropdownOpen((prev) => !prev)}
+                    className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                    title="Show suppliers"
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 transition-transform ${
+                        isPayeeDropdownOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
 
                 {/* Dropdown Suggestions */}
@@ -1528,101 +1518,83 @@ export const ExpenseView: React.FC = () => {
               <FormError message={errors.payee?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Expense Title / Description <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('title')}
-                  placeholder="e.g. Office rent for October"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel required>Expense Title / Description</FormLabel>
+              <input
+                type="text"
+                {...register('title')}
+                placeholder="e.g. Office rent for October"
+                className={FORM_INPUT_CLS}
+              />
               <FormError message={errors.title?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Mode <span className="text-rose-500">*</span>
-                </span>
-                <Controller
-                  control={control}
-                  name="paymentMode"
-                  render={({ field }) => (
-                    <CustomSelect
-                      options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
-                      value={field.value}
-                      onChange={field.onChange}
-                      placeholder="Select payment mode"
-                    />
-                  )}
-                />
-              </div>
+            <div>
+              <FormLabel required>Payment Mode</FormLabel>
+              <Controller
+                control={control}
+                name="paymentMode"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={PAYMENT_MODES.map((m) => ({ label: m, value: m }))}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Select payment mode"
+                  />
+                )}
+              />
               <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
 
           {/* Row 3: 3 Fields (Base Amount, Tax / GST Rate, Reference No / Transaction ID) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Base Amount (₹) <span className="text-rose-500">*</span>
-                </span>
-                <span className="pl-4 text-slate-400 font-medium text-sm">₹</span>
+            <div>
+              <FormLabel required>Base Amount (₹)</FormLabel>
+              <div className="relative flex items-center">
+                <span className="absolute left-3.5 text-slate-400 font-medium text-xs sm:text-[13px] pointer-events-none">₹</span>
                 <input
                   type="number"
                   step="any"
                   placeholder="0.00"
                   {...register('amount')}
-                  className="w-full h-full pl-2 pr-4 bg-transparent text-xs sm:text-[13px] font-bold text-slate-900 outline-none"
+                  className={`${FORM_INPUT_CLS} pl-7 font-bold`}
                 />
               </div>
               <FormError message={errors.amount?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Tax / GST Rate
-                </span>
-                <Controller
-                  control={control}
-                  name="taxPercent"
-                  render={({ field }) => (
-                    <CustomSelect
-                      options={[
-                        { label: '0% (No Tax)', value: '0' },
-                        { label: '5% GST', value: '5' },
-                        { label: '12% GST', value: '12' },
-                        { label: '18% GST', value: '18' },
-                        { label: '28% GST', value: '28' },
-                      ]}
-                      value={field.value ? String(field.value) : '0'}
-                      onChange={field.onChange}
-                      placeholder="Select GST Rate"
-                    />
-                  )}
-                />
-              </div>
+            <div>
+              <FormLabel>Tax / GST Rate</FormLabel>
+              <Controller
+                control={control}
+                name="taxPercent"
+                render={({ field }) => (
+                  <CustomSelect
+                    options={[
+                      { label: '0% (No Tax)', value: '0' },
+                      { label: '5% GST', value: '5' },
+                      { label: '12% GST', value: '12' },
+                      { label: '18% GST', value: '18' },
+                      { label: '28% GST', value: '28' },
+                    ]}
+                    value={field.value ? String(field.value) : '0'}
+                    onChange={field.onChange}
+                    placeholder="Select GST Rate"
+                  />
+                )}
+              />
               <FormError message={errors.taxPercent?.message} />
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Reference No / Transaction ID
-                </span>
-                <input
-                  type="text"
-                  placeholder="e.g. TXN-RENT-1008 or Cheque #"
-                  {...register('referenceNo')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Reference No / Transaction ID</FormLabel>
+              <input
+                type="text"
+                placeholder="e.g. TXN-RENT-1008 or Cheque #"
+                {...register('referenceNo')}
+                className={FORM_INPUT_CLS}
+              />
               <FormError message={errors.referenceNo?.message} />
             </div>
           </div>
@@ -1660,16 +1632,14 @@ export const ExpenseView: React.FC = () => {
 
           {/* Row 4: Upload Receipt in 1 column, Notes spanning 2 columns */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
-            <div className="relative">
-              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                Upload Receipt / Proof
-              </span>
+            <div>
+              <FormLabel>Upload Receipt / Proof</FormLabel>
               {receiptImageState ? (
-                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-300 bg-slate-50">
+                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
                   <img
                     src={receiptImageState}
                     alt="Receipt"
-                    className="w-7 h-7 rounded-lg object-cover border border-slate-300"
+                    className="w-7 h-7 rounded-lg object-cover border border-slate-200"
                   />
                   <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
                     Receipt Attached
@@ -1700,18 +1670,14 @@ export const ExpenseView: React.FC = () => {
               )}
             </div>
 
-            <div className="md:col-span-2 relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Notes / Remarks
-                </span>
-                <input
-                  type="text"
-                  placeholder="Optional notes or disbursement comments"
-                  {...register('notes')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+            <div className="md:col-span-2">
+              <FormLabel>Notes / Remarks</FormLabel>
+              <input
+                type="text"
+                placeholder="Optional notes or disbursement comments"
+                {...register('notes')}
+                className={FORM_INPUT_CLS}
+              />
               <FormError message={errors.notes?.message} />
             </div>
           </div>
@@ -1869,33 +1835,25 @@ export const ExpenseView: React.FC = () => {
               <span>Add New Category</span>
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              <div className="relative">
-                <div className="relative w-full h-10 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Category Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Courier & Logistics"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    className="w-full h-full px-3 bg-transparent text-xs font-medium text-slate-800 outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel required>Category Name</FormLabel>
+                <input
+                  type="text"
+                  placeholder="e.g. Courier & Logistics"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
-              <div className="relative">
-                <div className="relative w-full h-10 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Description
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Courier and shipping costs"
-                    value={newCategoryDesc}
-                    onChange={(e) => setNewCategoryDesc(e.target.value)}
-                    className="w-full h-full px-3 bg-transparent text-xs font-medium text-slate-800 outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel>Description</FormLabel>
+                <input
+                  type="text"
+                  placeholder="e.g. Courier and shipping costs"
+                  value={newCategoryDesc}
+                  onChange={(e) => setNewCategoryDesc(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
             </div>
             <div className="flex justify-end pt-1">

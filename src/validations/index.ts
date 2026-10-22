@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidIndianPhone, INDIAN_PHONE_ERROR_MESSAGE } from '../utils/validation';
 
 // ==========================================
 // 1. AUTHENTICATION SCHEMAS
@@ -52,7 +53,12 @@ export const OrganizationSchema = z.object({
   subscriptionPlan: z.string().trim().optional(),
   contactPerson: z.string().trim().optional(),
   email: z.string().trim().email('Invalid email address').or(z.literal('')).optional(),
-  phone: z.string().trim().min(5, 'Phone number is required').optional().or(z.literal('')),
+  phone: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
   whatsapp: z.string().trim().optional(),
   logo: z.string().optional(),
   gstNumber: z.string().trim().optional(),
@@ -70,7 +76,12 @@ export const BranchSchema = z.object({
   name: z.string().trim().min(2, 'Branch name is required'),
   code: z.string().trim().optional(),
   contactPerson: z.string().trim().optional(),
-  mobileNumber: z.string().trim().min(5, 'Mobile number is required').optional().or(z.literal('')),
+  mobileNumber: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
   whatsapp: z.string().trim().optional(),
   email: z.string().trim().email('Invalid email format').or(z.literal('')).optional(),
   location: z.string().trim().optional(),
@@ -87,7 +98,12 @@ export const EmployeeSchema = z.object({
   role: z.string().min(1, 'Role is required'),
   title: z.string().trim().min(1, 'Job title is required'),
   department: z.string().trim().optional(),
-  phone: z.string().trim().min(5, 'Phone number is required').optional().or(z.literal('')),
+  phone: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
   status: z.enum(['Active', 'Inactive']).optional(),
   avatar: z.string().optional(),
 });
@@ -102,10 +118,28 @@ export const LeadSchema = z.object({
   name: z.string().trim().min(2, 'Contact Person Name is required'),
   company: z.string().trim().min(2, 'Lead / Business Name is required'),
   designation: z.string().trim().optional(),
-  phone: z.string().trim().min(5, 'Phone number must be at least 5 digits'),
-  whatsapp: z.string().trim().optional(),
+  phone: z
+    .string()
+    .trim()
+    .min(1, 'Phone number is required')
+    .refine((val) => isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
+  whatsapp: z
+    .string()
+    .trim()
+    .optional()
+    .refine(
+      (val) => !val || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian WhatsApp number'
+    ),
   email: z.string().trim().email('Invalid email format').or(z.literal('')).optional(),
-  alternatePhone: z.string().trim().optional(),
+  alternatePhone: z
+    .string()
+    .trim()
+    .optional()
+    .refine(
+      (val) => !val || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian alternate phone number'
+    ),
   address: z.string().trim().optional(),
   city: z.string().trim().optional(),
   state: z.string().trim().optional(),
@@ -184,10 +218,28 @@ export const CustomerSchema = z.object({
   clientName: z.string().trim().min(2, 'Client / Party Name is required'),
   businessName: z.string().trim().min(2, 'Business / Company Name is required'),
   contactPerson: z.string().trim().min(2, 'Contact Person Name is required'),
-  phone: z.string().trim().min(5, 'Phone number is required'),
-  whatsapp: z.string().trim().optional(),
+  phone: z
+    .string()
+    .trim()
+    .min(1, 'Phone number is required')
+    .refine((val) => isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
+  whatsapp: z
+    .string()
+    .trim()
+    .optional()
+    .refine(
+      (val) => !val || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian WhatsApp number'
+    ),
   email: z.string().trim().email('Invalid email address').or(z.literal('')).optional(),
-  alternatePhone: z.string().trim().optional(),
+  alternatePhone: z
+    .string()
+    .trim()
+    .optional()
+    .refine(
+      (val) => !val || isValidIndianPhone(val),
+      'Enter a valid 10-digit Indian alternate phone number'
+    ),
   address: z.string().trim().min(2, 'Address is required'),
   city: z.string().trim().min(2, 'City is required'),
   state: z.string().trim().min(2, 'State is required'),
@@ -203,7 +255,12 @@ export type CustomerFormData = z.infer<typeof CustomerSchema>;
 
 export const QuickCustomerSchema = z.object({
   name: z.string().trim().min(2, 'Customer / Party name is required'),
-  phone: z.string().trim().min(5, 'Phone number is required').optional().or(z.literal('')),
+  phone: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
   company: z.string().trim().optional(),
   email: z.string().trim().email('Invalid email address').or(z.literal('')).optional(),
 });
@@ -281,7 +338,11 @@ export const SupplierSchema = z.object({
   supplierCode: z.string().optional(),
   name: z.string().trim().min(2, 'Supplier / Company name is required'),
   contactPerson: z.string().trim().optional(),
-  phone: z.string().trim().min(1, 'Phone number is required'),
+  phone: z
+    .string()
+    .trim()
+    .min(1, 'Phone number is required')
+    .refine((val) => isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
   email: z.string().trim().email('Invalid email address').or(z.literal('')).optional(),
   address: z.string().trim().min(1, 'Address is required'),
   city: z.string().trim().min(1, 'City is required'),
@@ -341,6 +402,8 @@ export const PurchaseRequestSchema = z.object({
   requestedBy: z.string().trim().min(2, 'Requester name is required'),
   department: z.string().min(1, 'Department is required'),
   priority: z.enum(['Low', 'Medium', 'High', 'Urgent']),
+  supplierId: z.string().trim().optional(),
+  supplierName: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
 export type PurchaseRequestFormData = z.infer<typeof PurchaseRequestSchema>;
@@ -435,13 +498,35 @@ export type CollectionFollowUpFormData = z.infer<typeof CollectionFollowUpSchema
 // 10. SUBSCRIPTION & PLAN SCHEMAS
 // ==========================================
 export const PlanSchema = z.object({
-  name: z.string().trim().min(2, 'Plan name is required'),
-  price: z.number().nonnegative('Price must be a positive number'),
-  gstRate: z.union([z.number(), z.string()]).optional(),
+  name: z.string().trim().min(1, 'Plan Name is required'),
+  price: z.number({ message: 'Price is required' }).positive('Price must be greater than 0'),
+  gstRate: z
+    .union([z.number(), z.string()])
+    .refine((val) => val !== '' && val !== undefined && val !== null, {
+      message: 'GST Rate is required',
+    }),
   currency: z.string().optional(),
-  billingCycle: z.enum(['Monthly', 'Quarterly', 'Annually', 'One-Time', 'Custom']).optional().or(z.literal('')),
-  planType: z.enum(['Fixed', 'Per-User', 'Usage-Based', 'Custom Quote', 'Tiered']).optional().or(z.literal('')),
-  status: z.enum(['Active', 'Inactive']).optional().or(z.literal('')),
+  billingCycle: z
+    .string()
+    .trim()
+    .min(1, 'Billing Cycle is required')
+    .refine((val) => ['Monthly', 'Quarterly', 'Annually', 'One-Time', 'Custom'].includes(val), {
+      message: 'Billing Cycle is required',
+    }),
+  planType: z
+    .string()
+    .trim()
+    .min(1, 'Plan Type is required')
+    .refine((val) => ['Fixed', 'Per-User', 'Usage-Based', 'Custom Quote', 'Tiered'].includes(val), {
+      message: 'Plan Type is required',
+    }),
+  status: z
+    .string()
+    .trim()
+    .min(1, 'Status is required')
+    .refine((val) => ['Active', 'Inactive'].includes(val), {
+      message: 'Status is required',
+    }),
   maxBranchLimit: z.union([z.number(), z.string()]).optional(),
   description: z.string().trim().optional(),
   isPopular: z.boolean().optional(),

@@ -82,6 +82,7 @@ export interface AvailableClient {
   id: string;
   name: string;
   company: string;
+  contactPerson?: string;
   email: string;
   phone: string;
   location: string;
@@ -93,7 +94,7 @@ interface QuotesViewProps {
 }
 
 export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = false }) => {
-  const { showToast, isSuperAdmin, currentUser } = useAuth();
+  const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
   const singularTerm = 'Quotation';
   const pluralTerm = 'Quotations';
   const lowerSingularTerm = 'quotation';
@@ -126,7 +127,37 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     const loadClientsAndProducts = async () => {
       const orgId = currentUser?.organizationId || getStoredOrganizationId();
 
-      // 1. Fetch active organization details for Seller info
+      // For Platform Administrator (Super Admin):
+      // Only fetch registered organizations (for the Select Organization dropdown).
+      // Do NOT fetch seller org details, sub-organizations, leads, or products.
+      if (isSuperAdmin && !isOrgSuperAdmin) {
+        setLoadingClients(true);
+        try {
+          const orgsRes = await organizationApi.getOrganizations(1, 100);
+          if (isMounted && orgsRes && Array.isArray(orgsRes.data)) {
+            const orgClients: AvailableClient[] = orgsRes.data
+              .filter((o) => !!o.id)
+              .map((o) => ({
+                id: o.id,
+                name: o.contactPerson || o.user?.name || o.name,
+                company: o.name,
+                contactPerson: o.contactPerson || o.user?.name || '',
+                email: o.email || '',
+                phone: o.phone || '',
+                location: o.address || o.location || '',
+                type: 'Organization',
+              }));
+            setAvailableClients(orgClients);
+          }
+        } catch (e) {
+          console.warn('Notice: Could not load organizations for platform administrator:', e);
+        } finally {
+          if (isMounted) setLoadingClients(false);
+        }
+        return;
+      }
+
+      // 1. Fetch active organization details for Seller info (Org Admin / Tenant only)
       if (orgId) {
         try {
           const orgRes = await organizationApi.getOrganizationById(orgId);
@@ -181,11 +212,12 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             if (o.id && !clientsMap.has(o.id) && o.id !== orgId) {
               clientsMap.set(o.id, {
                 id: o.id,
-                name: o.name,
+                name: o.contactPerson || o.user?.name || o.name,
                 company: o.name,
+                contactPerson: o.contactPerson || o.user?.name || '',
                 email: o.email || '',
                 phone: o.phone || '',
-                location: '',
+                location: o.address || o.location || '',
                 type: 'Organization',
               });
             }
@@ -242,7 +274,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isSuperAdmin, isOrgSuperAdmin]);
 
   // Real backend quotes state
   const [quotes, setQuotes] = useState<Quotation[]>([]);
@@ -336,6 +368,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Table item organization dropdown state
+  const [openItemOrgDropdownId, setOpenItemOrgDropdownId] = useState<string | null>(null);
+  const [itemOrgDropdownRect, setItemOrgDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const itemOrgTriggerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
     e.stopPropagation();
     if (!text) return;
@@ -357,6 +394,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         setActiveStatusDropdownId(null);
         setStatusDropdownPos(null);
       }
+      if (!target.closest('.item-org-dropdown-trigger') && !target.closest('.item-org-dropdown-popup')) {
+        setOpenItemOrgDropdownId(null);
+        setItemOrgDropdownRect(null);
+      }
     };
     const handleScrollOrResize = () => {
       if (openActionMenuId) {
@@ -366,6 +407,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (activeStatusDropdownId) {
         setActiveStatusDropdownId(null);
         setStatusDropdownPos(null);
+      }
+      if (openItemOrgDropdownId) {
+        setOpenItemOrgDropdownId(null);
+        setItemOrgDropdownRect(null);
       }
     };
 
@@ -377,7 +422,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       window.removeEventListener('scroll', handleScrollOrResize, true);
       window.removeEventListener('resize', handleScrollOrResize);
     };
-  }, [openActionMenuId, activeStatusDropdownId]);
+  }, [openActionMenuId, activeStatusDropdownId, openItemOrgDropdownId]);
 
   useEffect(() => {
     if (location.pathname === '/quotes/new') {
@@ -388,11 +433,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   }, [location.pathname, initialCreateOpen]);
 
   const handleOpenCreate = () => {
+    setFormErrors({});
     setIsCreateModalOpen(true);
     navigate('/quotes/new');
   };
 
   const handleCloseCreate = () => {
+    setFormErrors({});
     setIsCreateModalOpen(false);
     navigate('/quotes');
   };
@@ -414,7 +461,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         sortOrder: 'desc' as const,
       };
 
-      if (orgId) {
+      // Only filter by organization_id for tenant / organization admins, NOT platform administrator
+      if (orgId && (!isSuperAdmin || isOrgSuperAdmin)) {
         params.organization_id = orgId;
       }
       if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
@@ -546,6 +594,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerGstId, setCustomerGstId] = useState('');
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Quotation From (seller) details
   const [quotationFromCompany, setQuotationFromCompany] = useState('Yaa Creations');
@@ -659,7 +708,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setSelectedClientId(clientId);
     const client = availableClients.find((c) => c.id === clientId);
     if (client) {
-      setCustomerName(client.name || '');
+      setCustomerName(client.contactPerson || client.name || '');
       setCustomerCompany(client.company || '');
       setCustomerLocation(client.location || '');
       setCustomerEmail(client.email || '');
@@ -753,10 +802,51 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const handleCreateQuote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName.trim() && !customerCompany.trim()) {
-      showToast('error', 'Select Client / Customer', 'Please select or enter a client company name.');
-      return;
+
+    if (isSuperAdmin) {
+      const errors: Record<string, string> = {};
+
+      if (!selectedClientId) {
+        errors.organization = 'Select Organization is required';
+      }
+      if (!customerName.trim()) {
+        errors.customerName = 'Customer Name is required';
+      }
+      if (!newEstimateNumber.trim()) {
+        errors.estimateNumber = 'Quotation Number is required';
+      }
+      if (!newReferenceNumber.trim()) {
+        errors.referenceNumber = 'Reference Number is required';
+      }
+      if (!estimateDate.trim()) {
+        errors.estimateDate = 'Date is required';
+      }
+      if (!expiryDate.trim()) {
+        errors.expiryDate = 'Expiry Date is required';
+      }
+      if (!customerEmail.trim()) {
+        errors.customerEmail = 'Email Communications is required';
+      }
+      if (!customerPhone.trim()) {
+        errors.customerPhone = 'Contact Number is required';
+      } else if (customerPhone.trim().length !== 10) {
+        errors.customerPhone = 'Contact Number must be exactly 10 digits';
+      }
+      if (!customerLocation.trim()) {
+        errors.customerLocation = 'Address is required';
+      }
+
+      if (Object.keys(errors).length > 0) {
+        setFormErrors(errors);
+        return;
+      }
+    } else {
+      if (!customerName.trim() && !customerCompany.trim()) {
+        showToast('error', 'Select Client / Customer', 'Please select or enter a client company name.');
+        return;
+      }
     }
+
     if (itemsList.length === 0) {
       showToast('error', 'Add Items', 'Please add at least one line item.');
       return;
@@ -1334,17 +1424,20 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 {/* Row 1, Col 1: Select Organization */}
                 <div className="relative" ref={companyProductDropdownRef}>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Select Organization <span className="text-slate-500">*</span>
+                    Select Organization <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <div
                     onClick={() => {
                       setIsCompanyProductDropdownOpen(!isCompanyProductDropdownOpen);
                       setIsProjectDropdownOpen(false);
                     }}
-                    className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${isCompanyProductDropdownOpen
+                    className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
+                      formErrors.organization
+                        ? 'border-red-500 ring-4 ring-red-500/10'
+                        : isCompanyProductDropdownOpen
                         ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 text-slate-900'
                         : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                      }`}
+                    }`}
                   >
                     <span className={selectedClientId ? 'text-slate-800 font-semibold truncate' : 'text-slate-400 font-medium truncate'}>
                       {selectedClientId
@@ -1359,6 +1452,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         }`}
                     />
                   </div>
+                  {formErrors.organization && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organization}</p>
+                  )}
 
                   {isCompanyProductDropdownOpen && (
                     <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-xl shadow-xl border border-slate-200/90 z-40 overflow-hidden animate-in fade-in zoom-in-95 duration-100 max-h-60 overflow-y-auto p-1 space-y-0.5">
@@ -1370,6 +1466,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             type="button"
                             onClick={() => {
                               handleClientSelect(client.id);
+                              if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
                               setIsCompanyProductDropdownOpen(false);
                             }}
                             className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs sm:text-[13px] transition-colors cursor-pointer flex items-center justify-between ${isSelected
@@ -1389,59 +1486,94 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 {/* Row 1, Col 2: Customer Name */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Customer Name <span className="text-slate-500">*</span>
+                    Customer Name <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="text"
                     value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    required
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setCustomerName(e.target.value);
+                      if (formErrors.customerName) setFormErrors((prev) => ({ ...prev, customerName: '' }));
+                    }}
+                    placeholder="Enter customer name"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.customerName
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.customerName && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.customerName}</p>
+                  )}
                 </div>
 
-
-                {/* Row 2, Col 1: Quotation Number */}
+                {/* Row 1, Col 3: Quotation Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    {singularTerm} Number <span className="text-slate-500">*</span>
+                    {singularTerm} Number <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="text"
                     value={newEstimateNumber}
-                    onChange={(e) => setNewEstimateNumber(e.target.value)}
-                    required
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setNewEstimateNumber(e.target.value);
+                      if (formErrors.estimateNumber) setFormErrors((prev) => ({ ...prev, estimateNumber: '' }));
+                    }}
+                    placeholder="e.g. EST-12345"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.estimateNumber
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.estimateNumber && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.estimateNumber}</p>
+                  )}
                 </div>
 
-                {/* Row 2, Col 2: Reference Number */}
+                {/* Row 2, Col 1: Reference Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Reference Number <span className="text-slate-500">*</span>
+                    Reference Number <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="text"
                     value={newReferenceNumber}
-                    onChange={(e) => setNewReferenceNumber(e.target.value)}
-                    required
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setNewReferenceNumber(e.target.value);
+                      if (formErrors.referenceNumber) setFormErrors((prev) => ({ ...prev, referenceNumber: '' }));
+                    }}
+                    placeholder="e.g. REF-1234"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.referenceNumber
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.referenceNumber && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.referenceNumber}</p>
+                  )}
                 </div>
 
-                {/* Row 3, Col 1: Date */}
+                {/* Row 2, Col 2: Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Date <span className="text-slate-500">*</span>
+                    Date <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <div className="relative flex items-center">
                     <input
                       type="text"
                       placeholder="dd/mm/yyyy"
                       value={estimateDate}
-                      onChange={(e) => setEstimateDate(e.target.value)}
-                      required
-                      className="w-full h-11 pl-4 pr-11 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                      onChange={(e) => {
+                        setEstimateDate(e.target.value);
+                        if (formErrors.estimateDate) setFormErrors((prev) => ({ ...prev, estimateDate: '' }));
+                      }}
+                      className={`w-full h-11 pl-4 pr-11 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                        formErrors.estimateDate
+                          ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                          : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                      }`}
                     />
                     <label className="absolute right-3 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
                       <Calendar className="w-4 h-4" />
@@ -1451,27 +1583,37 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         onChange={(e) => {
                           if (e.target.value) {
                             setEstimateDate(isoToDdmmyyyy(e.target.value));
+                            if (formErrors.estimateDate) setFormErrors((prev) => ({ ...prev, estimateDate: '' }));
                           }
                         }}
                         className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                       />
                     </label>
                   </div>
+                  {formErrors.estimateDate && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.estimateDate}</p>
+                  )}
                 </div>
 
-                {/* Row 3, Col 2: Expiry Date */}
+                {/* Row 2, Col 3: Expiry Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Expiry Date <span className="text-slate-500">*</span>
+                    Expiry Date <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <div className="relative flex items-center">
                     <input
                       type="text"
                       placeholder="dd/mm/yyyy"
                       value={expiryDate}
-                      onChange={(e) => setExpiryDate(e.target.value)}
-                      required
-                      className="w-full h-11 pl-4 pr-11 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                      onChange={(e) => {
+                        setExpiryDate(e.target.value);
+                        if (formErrors.expiryDate) setFormErrors((prev) => ({ ...prev, expiryDate: '' }));
+                      }}
+                      className={`w-full h-11 pl-4 pr-11 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                        formErrors.expiryDate
+                          ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                          : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                      }`}
                     />
                     <label className="absolute right-3 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
                       <Calendar className="w-4 h-4" />
@@ -1481,52 +1623,91 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         onChange={(e) => {
                           if (e.target.value) {
                             setExpiryDate(isoToDdmmyyyy(e.target.value));
+                            if (formErrors.expiryDate) setFormErrors((prev) => ({ ...prev, expiryDate: '' }));
                           }
                         }}
                         className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                       />
                     </label>
                   </div>
+                  {formErrors.expiryDate && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.expiryDate}</p>
+                  )}
                 </div>
 
-                {/* Row 3, Col 3: Email Communications */}
+                {/* Row 3, Col 1: Email Communications */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Email Communications <span className="text-slate-500">*</span>
+                    Email Communications <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="email"
                     value={customerEmail}
-                    onChange={(e) => setCustomerEmail(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setCustomerEmail(e.target.value);
+                      if (formErrors.customerEmail) setFormErrors((prev) => ({ ...prev, customerEmail: '' }));
+                    }}
+                    placeholder="e.g. client@example.com"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.customerEmail
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.customerEmail && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.customerEmail}</p>
+                  )}
                 </div>
 
-                {/* Row 4, Col 1: Contact Number */}
+                {/* Row 3, Col 2: Contact Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Contact Number
+                    Contact Number <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
-                    type="tel"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
                     value={customerPhone}
-                    onChange={(e) => setCustomerPhone(e.target.value)}
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setCustomerPhone(val);
+                      if (formErrors.customerPhone) setFormErrors((prev) => ({ ...prev, customerPhone: '' }));
+                    }}
+                    placeholder="e.g. 9876543210"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.customerPhone
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.customerPhone && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.customerPhone}</p>
+                  )}
                 </div>
 
-                {/* Row 4, Col 2: Address */}
+                {/* Row 3, Col 3: Address */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Address <span className="text-slate-500">*</span>
+                    Address <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="text"
                     value={customerLocation}
-                    onChange={(e) => setCustomerLocation(e.target.value)}
-                    placeholder=""
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    onChange={(e) => {
+                      setCustomerLocation(e.target.value);
+                      if (formErrors.customerLocation) setFormErrors((prev) => ({ ...prev, customerLocation: '' }));
+                    }}
+                    placeholder="Enter complete address"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                      formErrors.customerLocation
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
+                  {formErrors.customerLocation && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.customerLocation}</p>
+                  )}
                 </div>
 
                 {/* Super Admin: Note */}
@@ -1560,63 +1741,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                       <h2 className="text-base font-bold text-white tracking-tight whitespace-nowrap">
                         Sale Configuration
                       </h2>
-
-                      {/* Product Suite / Brand Dropdown next to Sale Configuration (Admin only) */}
-                      <div className="relative" ref={productSuiteDropdownRef}>
-                        <button
-                          type="button"
-                          onClick={() => setIsProductSuiteDropdownOpen(!isProductSuiteDropdownOpen)}
-                          className="inline-flex items-center gap-2 h-8 px-3 bg-white/15 hover:bg-white/25 active:scale-[0.98] rounded-xl text-xs font-semibold text-white transition-all duration-150 cursor-pointer select-none shadow-xs"
-                          title="Select Product / Brand"
-                        >
-                          <span className="max-w-[140px] sm:max-w-[170px] truncate font-bold">
-                            {selectedProductSuiteName || 'Select Product / Suite'}
-                          </span>
-                          <ChevronDown
-                            className={`w-3.5 h-3.5 text-white/80 shrink-0 transition-transform duration-150 ${
-                              isProductSuiteDropdownOpen ? 'rotate-180 text-white' : ''
-                            }`}
-                          />
-                        </button>
-
-                        {isProductSuiteDropdownOpen && (
-                          <div className="absolute top-full left-0 mt-2 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 p-1.5 z-50 overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
-                            <div className="max-h-60 overflow-y-auto space-y-0.5">
-                              {loadingProducts ? (
-                                <div className="py-4 text-center text-xs text-slate-400">Loading products...</div>
-                              ) : platformProducts.length === 0 ? (
-                                <div className="py-4 text-center text-xs text-slate-400">No products available</div>
-                              ) : (
-                                platformProducts.map((prod) => {
-                                  const isSelected = selectedProductSuiteName.toLowerCase() === prod.name.toLowerCase();
-                                  return (
-                                    <button
-                                      key={prod.id}
-                                      type="button"
-                                      onClick={() => {
-                                        setSelectedProductSuiteName(prod.name);
-                                        setProjectName(prod.name);
-                                        setIsProductSuiteDropdownOpen(false);
-                                        showToast('success', 'Product Selected', `Selected product: ${prod.name}`);
-                                      }}
-                                      className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
-                                        isSelected
-                                          ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                          : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
-                                      }`}
-                                    >
-                                      <span className="truncate">{prod.name}</span>
-                                      {isSelected && (
-                                        <Check className="w-3.5 h-3.5 text-[#33077C] shrink-0 stroke-[2.5]" />
-                                      )}
-                                    </button>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
                     </div>
                     <button
                       type="button"
@@ -2067,7 +2191,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                     >
                                       <div className="truncate">
                                         <div className="font-semibold text-slate-900 truncate">{displayName}</div>
-                                        {client.email && <div className="text-[11px] text-slate-400 truncate">{client.email}</div>}
                                       </div>
                                       {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
                                     </button>
@@ -2179,18 +2302,94 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             key={item.id}
                             className={`hover:bg-slate-50/70 transition-colors ${idx % 2 === 1 ? 'bg-slate-50/40' : 'bg-white'}`}
                           >
-                            {/* 1. Projects / Item Name & Description */}
+                            {/* 1. Projects / Item Name & Description (Organization Dropdown) */}
                             <td className="px-5 py-4 align-top border border-slate-200">
                               <div className="space-y-1.5">
-                                <input
-                                  type="text"
-                                  placeholder="Item name / title..."
-                                  value={item.description}
-                                  onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
-                                  required
-                                  style={{ borderRadius: '4px' }}
-                                  className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-bold text-slate-900 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
-                                />
+                                <div
+                                  ref={(el) => {
+                                    itemOrgTriggerRefs.current[item.id] = el;
+                                  }}
+                                  className="relative"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (openItemOrgDropdownId === item.id) {
+                                        setOpenItemOrgDropdownId(null);
+                                        setItemOrgDropdownRect(null);
+                                      } else {
+                                        const rect = itemOrgTriggerRefs.current[item.id]?.getBoundingClientRect();
+                                        if (rect) {
+                                          setItemOrgDropdownRect({
+                                            top: rect.bottom + window.scrollY,
+                                            left: rect.left + window.scrollX,
+                                            width: rect.width,
+                                          });
+                                        }
+                                        setOpenItemOrgDropdownId(item.id);
+                                      }
+                                    }}
+                                    style={{ borderRadius: '4px' }}
+                                    className={`item-org-dropdown-trigger w-full h-10 px-3.5 bg-white border rounded-xl text-xs font-semibold text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs ${
+                                      openItemOrgDropdownId === item.id
+                                        ? 'border-[#4309A2] ring-3 ring-[#4309A2]/10 text-slate-900'
+                                        : 'border-slate-200 hover:border-slate-300 text-slate-800'
+                                    }`}
+                                  >
+                                    <span className="truncate block font-semibold text-slate-800">
+                                      {item.description || <span className="text-slate-400 font-normal">Select Organization...</span>}
+                                    </span>
+                                    <ChevronDown
+                                      className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-1.5 ${
+                                        openItemOrgDropdownId === item.id ? 'rotate-180 text-[#4309A2]' : ''
+                                      }`}
+                                    />
+                                  </button>
+
+                                  {/* Custom Floating Dropdown Menu */}
+                                  {openItemOrgDropdownId === item.id && itemOrgDropdownRect && (
+                                    <div
+                                      style={{
+                                        top: `${itemOrgDropdownRect.top + 6}px`,
+                                        left: `${itemOrgDropdownRect.left}px`,
+                                        width: `${Math.max(280, itemOrgDropdownRect.width)}px`,
+                                      }}
+                                      className="item-org-dropdown-popup fixed z-[999] bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100"
+                                    >
+                                      <div className="max-h-60 overflow-y-auto space-y-0.5">
+                                        {availableClients.length === 0 ? (
+                                          <div className="py-3 text-center text-xs text-slate-400 font-medium">
+                                            No organizations found
+                                          </div>
+                                        ) : (
+                                          availableClients.map((org) => {
+                                            const orgName = org.company || org.name;
+                                            const isSelected = item.description === orgName;
+                                            return (
+                                              <button
+                                                key={org.id}
+                                                type="button"
+                                                onClick={() => {
+                                                  handleItemChange(item.id, 'description', orgName);
+                                                  setOpenItemOrgDropdownId(null);
+                                                  setItemOrgDropdownRect(null);
+                                                }}
+                                                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                                  isSelected
+                                                    ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                                                    : 'hover:bg-slate-50 text-slate-700 font-medium'
+                                                }`}
+                                              >
+                                                <span className="truncate">{orgName}</span>
+                                                {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
+                                              </button>
+                                            );
+                                          })
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                                 <input
                                   type="text"
                                   placeholder="+ Add Description (optional)..."

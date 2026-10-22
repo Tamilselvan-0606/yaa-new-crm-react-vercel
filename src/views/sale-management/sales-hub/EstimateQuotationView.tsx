@@ -69,6 +69,35 @@ import {
   stockApi,
   mapApiStockToInventoryStockItem,
 } from '../../../api';
+import {
+  commerceProformaApi,
+  mapSaleProformaToPayload,
+  SaleProformaInvoice,
+} from '../../../api/commerce/proformaApi';
+import {
+  commerceSaleOrderApi,
+  mapSaleOrderRecordToPayload,
+  SaleOrderRecord,
+} from '../../../api/commerce/saleOrderApi';
+import {
+  commerceInvoiceApi,
+  mapSaleTransactionToInvoicePayload,
+} from '../../../api/commerce/invoiceApi';
+import {
+  recordDocumentConversion,
+  syncConvertedProformaToStorage,
+  syncConvertedOrderToStorage,
+  syncConvertedInvoiceToStorage,
+  syncQuotationStatusInStorage,
+  initializeWorkflowIntegrity,
+  findDocumentLineage,
+} from '../../../utils/salesDocumentWorkflow';
+import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
+import { SaleTransaction } from '../../../store/useSalesManagementStore';
+import { isValidIndianPhone, normalizeIndianPhoneTo10Digits } from '../../../utils/validation';
+import { store } from '../../../store/store';
+import { baseApi } from '../../../api/baseApi';
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, getFormInputCls } from '../utils/formUtils';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -148,6 +177,44 @@ const PERIOD_FILTER_OPTIONS = [
   { label: 'This Year', value: 'this_year' },
 ];
 
+const checkDateMatchesPeriod = (dateStr?: string, period?: string): boolean => {
+  if (!period || period === 'all' || period === 'All Time') return true;
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return true;
+
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  switch (period) {
+    case 'today':
+      return itemDay.getTime() === startOfDay.getTime();
+    case 'this_week': {
+      const dayOfWeek = now.getDay();
+      const firstDayOfWeek = new Date(startOfDay);
+      firstDayOfWeek.setDate(startOfDay.getDate() - dayOfWeek);
+      return itemDay >= firstDayOfWeek && itemDay <= now;
+    }
+    case 'this_month':
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    case 'last_month': {
+      const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+      const lastMonthYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+      return d.getFullYear() === lastMonthYear && d.getMonth() === lastMonth;
+    }
+    case 'this_quarter': {
+      const currentQuarter = Math.floor(now.getMonth() / 3);
+      const itemQuarter = Math.floor(d.getMonth() / 3);
+      return d.getFullYear() === now.getFullYear() && currentQuarter === itemQuarter;
+    }
+    case 'this_year':
+      return d.getFullYear() === now.getFullYear();
+    default:
+      return true;
+  }
+};
+
 const STATUS_FILTER_OPTIONS = [
   { label: 'All Statuses', value: 'ALL' },
   { label: 'Open', value: 'Open', dotColor: '#f59e0b' },
@@ -210,10 +277,15 @@ export const EstimateQuotationView: React.FC = () => {
     deleteQuotation,
     updateQuotationStatus,
     convertQuotationToSale,
+    saveSale,
     saveCustomer,
     setCustomersList,
     setStocksList,
   } = useSalesManagementStore();
+
+  useEffect(() => {
+    initializeWorkflowIntegrity();
+  }, []);
 
   // View Mode: 'list' (table) vs 'form' (create/edit screen as in reference image)
   const [viewMode, setViewMode] = useState<'list' | 'form'>('list');
@@ -293,6 +365,10 @@ export const EstimateQuotationView: React.FC = () => {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [newCustomerCompany, setNewCustomerCompany] = useState('');
+  const [newCustomerType, setNewCustomerType] = useState<'Business' | 'Individual'>('Business');
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
+  const [customerNameError, setCustomerNameError] = useState('');
+  const [customerPhoneError, setCustomerPhoneError] = useState('');
 
   // Form State
   const [editingQuotation, setEditingQuotation] = useState<SaleQuotation | null>(null);
@@ -415,7 +491,7 @@ export const EstimateQuotationView: React.FC = () => {
   }, []);
 
   // Fetch Quotations from Live Commerce API
-  const isFetchingRef = useRef(false);
+  const fetchRequestIdRef = useRef(0);
   const fetchQuotations = useCallback(
     async (
       pageNo: number = page,
@@ -424,8 +500,7 @@ export const EstimateQuotationView: React.FC = () => {
       statusVal: string = appliedStatus,
       periodVal: string = appliedPeriod
     ) => {
-      if (isFetchingRef.current) return;
-      isFetchingRef.current = true;
+      const currentRequestId = ++fetchRequestIdRef.current;
       setIsApiLoading(true);
       setApiErrorMessage(null);
 
@@ -448,6 +523,8 @@ export const EstimateQuotationView: React.FC = () => {
 
       try {
         const response = await quotationApi.getQuotations(params);
+        if (currentRequestId !== fetchRequestIdRef.current) return;
+
         if (response && (response.success || response.data)) {
           const list = Array.isArray(response.data) ? response.data : [];
           const mapped = list.map(mapApiQuotationToSaleQuotation);
@@ -459,6 +536,7 @@ export const EstimateQuotationView: React.FC = () => {
           throw new Error(response?.message || 'Failed to fetch quotations');
         }
       } catch (err: any) {
+        if (currentRequestId !== fetchRequestIdRef.current) return;
         console.warn('Commerce Quotations API notice:', err);
         setIsApiConnected(false);
         setApiErrorMessage(err.message || 'Commerce API not reachable');
@@ -466,12 +544,31 @@ export const EstimateQuotationView: React.FC = () => {
         setTotalApiRecords(quotations.length);
         setTotalApiPages(Math.max(1, Math.ceil(quotations.length / size)));
       } finally {
-        setIsApiLoading(false);
-        isFetchingRef.current = false;
+        if (currentRequestId === fetchRequestIdRef.current) {
+          setIsApiLoading(false);
+        }
       }
     },
-    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize, quotations]
+    [appliedSearch, appliedStatus, appliedPeriod, page, pageSize]
   );
+
+  // Keep quotationsRef synced
+  const quotationsRef = useRef(quotations);
+  useEffect(() => {
+    quotationsRef.current = quotations;
+  }, [quotations]);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   // Trigger API fetch on filter/page change
   useEffect(() => {
@@ -521,8 +618,11 @@ export const EstimateQuotationView: React.FC = () => {
     }
   }, []);
 
-  // Prefetch live customers and stocks for party selector & item selector (Runs ONCE)
+  // Load live customers and stocks for party selector & item selector ONLY when form mode is open
+  const hasLoadedMasterDataRef = useRef(false);
   useEffect(() => {
+    if (viewMode !== 'form' || hasLoadedMasterDataRef.current) return;
+    hasLoadedMasterDataRef.current = true;
     let isMounted = true;
 
     customerApi
@@ -533,7 +633,7 @@ export const EstimateQuotationView: React.FC = () => {
           setCustomersList(mapped);
         }
       })
-      .catch((err) => console.warn('Customer prefetch:', err));
+      .catch((err) => console.warn('Customer load error:', err));
 
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
@@ -543,12 +643,12 @@ export const EstimateQuotationView: React.FC = () => {
           setLiveStocks(mapped);
         }
       })
-      .catch((err) => console.warn('Stock prefetch:', err));
+      .catch((err) => console.warn('Stock load error:', err));
 
     return () => {
       isMounted = false;
     };
-  }, [setCustomersList]);
+  }, [viewMode, setCustomersList]);
 
   // Clean products list: only live products from Commerce API or real inventory items (filter out mock data)
   const availableProducts = useMemo(() => {
@@ -571,25 +671,29 @@ export const EstimateQuotationView: React.FC = () => {
     });
   }, [liveStocks, stocks]);
 
-  // Displayed quotations: Live API data when connected, store fallback otherwise
+  // Displayed quotations: Instant filtering for search, status, and period across live or local data
   const displayQuotations = useMemo(() => {
-    if (isApiConnected) {
-      return liveQuotations;
-    }
-    return quotations.filter((item) => {
+    const list = isApiConnected ? liveQuotations : quotations;
+    return list.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
         q === '' ||
         item.partyName.toLowerCase().includes(q) ||
-        (item.referenceNo && item.referenceNo.toLowerCase().includes(q)) ||
+        (item.referenceNo && String(item.referenceNo).toLowerCase().includes(q)) ||
         item.quotationNo.toLowerCase().includes(q) ||
         (item.customerPhone && item.customerPhone.includes(q)) ||
-        item.items.some((it) => it.productName.toLowerCase().includes(q));
+        (item.customerCompany && item.customerCompany.toLowerCase().includes(q)) ||
+        (item.items && item.items.some((it) => it.productName.toLowerCase().includes(q)));
 
-      const matchesStatus = appliedStatus === 'ALL' || item.status === appliedStatus;
-      return matchesSearch && matchesStatus;
+      const matchesStatus =
+        appliedStatus === 'ALL' ||
+        item.status?.toLowerCase() === appliedStatus.toLowerCase();
+
+      const matchesPeriod = checkDateMatchesPeriod(item.date, appliedPeriod);
+
+      return matchesSearch && matchesStatus && matchesPeriod;
     });
-  }, [isApiConnected, liveQuotations, quotations, appliedSearch, appliedStatus]);
+  }, [isApiConnected, liveQuotations, quotations, appliedSearch, appliedStatus, appliedPeriod]);
 
   // Summary Metrics (List view)
   const metrics = useMemo(() => {
@@ -610,22 +714,41 @@ export const EstimateQuotationView: React.FC = () => {
       openAmount,
       openCount,
       convertedCount,
-      totalCount: isApiConnected && totalApiRecords !== null ? totalApiRecords : list.length,
+      totalCount: displayQuotations.length,
     };
-  }, [displayQuotations, isApiConnected, totalApiRecords]);
+  }, [displayQuotations]);
 
   // Pagination calculation
-  const totalPages = isApiConnected && totalApiPages !== null
-    ? Math.max(1, totalApiPages)
-    : Math.max(1, Math.ceil(displayQuotations.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(displayQuotations.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pagedQuotations = isApiConnected
-    ? displayQuotations
-    : displayQuotations.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const pagedQuotations = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return displayQuotations.slice(start, start + pageSize);
+  }, [displayQuotations, safePage, pageSize]);
+
+  // Helper to calculate the next auto-increasing reference number based on existing records
+  const getNextReferenceNo = useCallback(() => {
+    const allExisting = liveQuotations.length > 0 ? liveQuotations : quotations;
+    let maxRef = 0;
+    allExisting.forEach((q) => {
+      if (q.referenceNo) {
+        const numMatch = String(q.referenceNo).match(/\d+/g);
+        if (numMatch && numMatch.length > 0) {
+          const parsed = parseInt(numMatch[numMatch.length - 1], 10);
+          if (!isNaN(parsed) && parsed > maxRef) {
+            maxRef = parsed;
+          }
+        }
+      }
+    });
+    // Ensure the new ref no is also strictly greater than total count of existing quotations
+    const count = typeof totalApiRecords === 'number' && totalApiRecords > 0 ? totalApiRecords : allExisting.length;
+    return Math.max(maxRef + 1, count + 1);
+  }, [liveQuotations, quotations, totalApiRecords]);
 
   // Helper to build fresh estimate formData (NO MOCK DATA)
-  const createDefaultFormData = (num: number = 1) => {
-    const nextCode = `EST-${new Date().getFullYear()}-${String(num).padStart(4, '0')}`;
+  const createDefaultFormData = (num?: number) => {
+    const assignedRef = num !== undefined ? num : getNextReferenceNo();
     const initialRows: ExtendedEstimateItem[] = [
       {
         id: `row_${Date.now()}_1`,
@@ -649,8 +772,8 @@ export const EstimateQuotationView: React.FC = () => {
       customerEmail: '',
       customerCompany: '',
       billingAddress: '',
-      quotationNo: nextCode,
-      referenceNo: String(num),
+      quotationNo: '',
+      referenceNo: String(assignedRef),
       date: new Date().toISOString().split('T')[0],
       validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       stateOfSupply: '33-Tamil Nadu',
@@ -660,12 +783,13 @@ export const EstimateQuotationView: React.FC = () => {
     };
   };
 
-  // Form Initializer (Opens Estimate #1)
+  // Form Initializer (Opens Estimate #...)
   const handleOpenCreateForm = () => {
-    const initialData = createDefaultFormData(1);
+    const nextRef = getNextReferenceNo();
+    const initialData = createDefaultFormData(nextRef);
     const firstTab: EstimateTabItem = {
       id: 'tab_1',
-      title: 'Estimate #1',
+      title: 'New Estimate',
       num: 1,
       formData: initialData,
       editingQuotation: null,
@@ -690,14 +814,19 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Add New Estimate Tab (clicks + button in tab bar)
   const handleAddNewTab = () => {
-    const maxNum = tabs.reduce((max, t) => Math.max(max, t.num || 1), 0);
-    const nextNum = Math.max(1, maxNum + 1);
+    const existingTabRefs = tabs.map((t) => {
+      const parsed = parseInt(t.formData.referenceNo, 10);
+      return !isNaN(parsed) ? parsed : t.num || 0;
+    });
+    const maxTabRef = existingTabRefs.length > 0 ? Math.max(...existingTabRefs) : getNextReferenceNo() - 1;
+    const nextRef = Math.max(getNextReferenceNo(), maxTabRef + 1);
+
     const newTabId = `tab_${Date.now()}`;
-    const newFormData = createDefaultFormData(nextNum);
+    const newFormData = createDefaultFormData(nextRef);
     const newTab: EstimateTabItem = {
       id: newTabId,
-      title: `Estimate #${nextNum}`,
-      num: nextNum,
+      title: `New Estimate ${tabs.length + 1}`,
+      num: tabs.length + 1,
       formData: newFormData,
       editingQuotation: null,
       enableRoundOff: true,
@@ -817,8 +946,8 @@ export const EstimateQuotationView: React.FC = () => {
     setTabs([
       {
         id: 'tab_1',
-        title: `Estimate #${targetQuot.referenceNo || '1'}`,
-        num: Number(targetQuot.referenceNo) || 1,
+        title: targetQuot.quotationNo ? `Estimate ${targetQuot.quotationNo}` : 'Edit Estimate',
+        num: 1,
         formData: editData,
         editingQuotation: targetQuot,
         enableRoundOff: true,
@@ -869,25 +998,85 @@ export const EstimateQuotationView: React.FC = () => {
       const item = { ...newItems[index], [field]: value };
 
       if (field === 'productId') {
-        const prod = availableProducts.find((s) => s.productId === value);
+        const query = String(value).trim().toLowerCase();
+        const prod = availableProducts.find(
+          (s) =>
+            s.productId === value ||
+            s.id === value ||
+            s.productName.toLowerCase() === query ||
+            (s.sku && s.sku.toLowerCase() === query)
+        );
         if (prod) {
+          item.productId = prod.productId || prod.id;
           item.productName = prod.productName;
           item.sku = prod.sku;
           item.itemCode = prod.sku;
           item.category = (prod as any).category || (prod as any).categoryName || item.category || '';
-          item.unitPrice = prod.unitPrice || 0;
-          item.unit = item.unit === 'NONE' ? 'PCS' : item.unit;
-          item.taxPercent = 5;
+          item.unitPrice = Number(prod.unitPrice) || 0;
+          if (prod.unit && prod.unit !== 'NONE') {
+            item.unit = prod.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if ((prod as any).taxPercent !== undefined && (prod as any).taxPercent !== null) {
+            item.taxPercent = (prod as any).taxPercent;
+          }
+          if ((prod as any).hsnCode) {
+            item.hsnCode = (prod as any).hsnCode;
+          }
         }
       } else if (field === 'productName') {
-        const matched = availableProducts.find((s) => s.productName.toLowerCase() === String(value).toLowerCase());
+        const query = String(value).trim().toLowerCase();
+        const matched = availableProducts.find(
+          (s) =>
+            s.productName.toLowerCase() === query ||
+            (s.sku && s.sku.toLowerCase() === query) ||
+            s.productId === value ||
+            s.id === value
+        );
         if (matched) {
-          item.productId = matched.productId;
+          item.productId = matched.productId || matched.id || item.productId || '';
+          item.productName = matched.productName;
           item.sku = matched.sku;
           item.itemCode = matched.sku;
           item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
-          if (!item.unitPrice || item.unitPrice === 0) {
-            item.unitPrice = matched.unitPrice || 0;
+          item.unitPrice = Number(matched.unitPrice) || 0;
+          if (matched.unit && matched.unit !== 'NONE') {
+            item.unit = matched.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if ((matched as any).taxPercent !== undefined && (matched as any).taxPercent !== null) {
+            item.taxPercent = (matched as any).taxPercent;
+          }
+          if ((matched as any).hsnCode) {
+            item.hsnCode = (matched as any).hsnCode;
+          }
+        }
+      } else if (field === 'itemCode' || field === 'sku') {
+        const query = String(value).trim().toLowerCase();
+        const matched = availableProducts.find(
+          (s) =>
+            (s.sku && s.sku.toLowerCase() === query) ||
+            s.productName.toLowerCase() === query
+        );
+        if (matched) {
+          item.productId = matched.productId || matched.id || item.productId || '';
+          item.productName = matched.productName;
+          item.sku = matched.sku;
+          item.itemCode = matched.sku;
+          item.category = (matched as any).category || (matched as any).categoryName || item.category || '';
+          item.unitPrice = Number(matched.unitPrice) || 0;
+          if (matched.unit && matched.unit !== 'NONE') {
+            item.unit = matched.unit;
+          } else if (!item.unit || item.unit === 'NONE') {
+            item.unit = 'PCS';
+          }
+          if ((matched as any).taxPercent !== undefined && (matched as any).taxPercent !== null) {
+            item.taxPercent = (matched as any).taxPercent;
+          }
+          if ((matched as any).hsnCode) {
+            item.hsnCode = (matched as any).hsnCode;
           }
         }
       }
@@ -906,8 +1095,18 @@ export const EstimateQuotationView: React.FC = () => {
         discPct = baseSub > 0 ? Math.round(((discAmt / baseSub) * 100) * 100) / 100 : 0;
         item.discountPercent = discPct;
       } else {
-        discAmt = Math.round(((baseSub * discPct) / 100) * 100) / 100;
-        item.discountAmount = discAmt;
+        if (discPct > 0) {
+          discAmt = Math.round(((baseSub * discPct) / 100) * 100) / 100;
+          item.discountAmount = discAmt;
+        } else if (discAmt > 0 && baseSub > 0) {
+          discAmt = Math.min(discAmt, baseSub);
+          discPct = Math.round(((discAmt / baseSub) * 100) * 100) / 100;
+          item.discountAmount = discAmt;
+          item.discountPercent = discPct;
+        } else {
+          discAmt = 0;
+          item.discountAmount = 0;
+        }
       }
 
       const taxable = Math.max(0, baseSub - discAmt);
@@ -962,84 +1161,109 @@ export const EstimateQuotationView: React.FC = () => {
   }, [formData.items, enableRoundOff, manualRoundOff]);
 
   // Quick Customer Creation
-  const handleCreateQuickCustomer = () => {
-    if (!newCustomerName.trim()) {
-      toast.error('Customer name is required');
+  const handleCreateQuickCustomer = async () => {
+    setCustomerNameError('');
+    setCustomerPhoneError('');
+
+    const trimmedName = newCustomerName.trim();
+    const trimmedPhone = newCustomerPhone.trim();
+    const trimmedCompany = newCustomerCompany.trim();
+
+    const nameErr = !trimmedName ? 'Customer Name is required' : '';
+    let phoneErr = '';
+    if (!trimmedPhone) {
+      phoneErr = 'Phone number is required';
+    } else if (!/^[6-9]\d{9}$/.test(trimmedPhone)) {
+      phoneErr = 'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)';
+    }
+
+    if (nameErr) setCustomerNameError(nameErr);
+    if (phoneErr) setCustomerPhoneError(phoneErr);
+
+    if (nameErr) {
+      toast.error(nameErr);
       return;
     }
-    const newCust: SalesCustomer = {
-      id: `cust_${Date.now()}`,
-      customerCode: `CUST-${String(customers.length + 1).padStart(3, '0')}`,
-      name: newCustomerName.trim(),
-      company: newCustomerCompany.trim(),
-      customerType: 'Business',
-      phone: newCustomerPhone.trim(),
-      email: '',
-      address: 'Chennai, Tamil Nadu',
-      city: 'Chennai',
-      state: 'Tamil Nadu',
-      country: 'India',
-      pincode: '600001',
-      billingAddress: 'Chennai, Tamil Nadu',
-      shippingAddress: 'Chennai, Tamil Nadu',
-      creditLimit: 50000,
-      paymentTerms: 'Net 30 Days',
-      openingBalance: 0,
-      outstandingAmount: 0,
-      status: 'Active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    saveCustomer(newCust);
-    setFormData((prev) => ({
-      ...prev,
-      customerId: newCust.id,
-      partyName: newCust.name,
-      customerCompany: newCust.company,
-      customerPhone: newCust.phone,
-      billingAddress: newCust.address,
-    }));
-    setIsQuickCustomerModalOpen(false);
-    setPartySearchOpen(false);
-    setNewCustomerName('');
-    setNewCustomerPhone('');
-    setNewCustomerCompany('');
+    if (phoneErr) {
+      toast.error(phoneErr);
+      return;
+    }
 
-    // Attempt live API customer creation
-    customerApi
-      .createCustomer({
-        name: newCust.name,
-        company: newCust.company || undefined,
-        phone: newCust.phone,
-        customerType: 'Business',
-        address: newCust.address,
-      })
-      .then((res) => {
-        if (res.data) {
-          const created = mapApiCustomerToSalesCustomer(res.data);
-          saveCustomer(created);
-          setFormData((prev) => ({
-            ...prev,
-            customerId: created.id,
-            partyName: created.name,
-            customerCompany: created.company || '',
-            customerPhone: created.phone || '',
-            billingAddress: created.billingAddress || created.address || '',
-          }));
-        }
-      })
-      .catch((err) => {
-        console.warn('Live customer create warning:', err);
+    const cleanPhone = normalizeIndianPhoneTo10Digits(trimmedPhone);
+    setIsSavingCustomer(true);
+
+    try {
+      const res = await customerApi.createCustomer({
+        name: trimmedName,
+        phone: cleanPhone,
+        company: trimmedCompany || undefined,
+        customerType: newCustomerType,
+        address: 'Chennai, Tamil Nadu',
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        country: 'India',
+        status: 'Active',
       });
 
-    toast.success(`Customer "${newCust.name}" added successfully!`);
+      const rawData = res?.data || (res as any)?.customer || res;
+      const created = mapApiCustomerToSalesCustomer(rawData && rawData.id ? rawData : (res?.data || rawData));
+
+      // Save to local store so customer is reflected immediately across the app
+      saveCustomer(created);
+
+      // Invalidate RTK cache so Customer module and others automatically refetch fresh data
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'Customer', id: 'LIST' },
+          { type: 'Customer', id: created.id },
+          'Dashboard',
+        ])
+      );
+
+      // Select newly created party into current estimation form
+      setFormData((prev) => ({
+        ...prev,
+        customerId: created.id,
+        partyName: created.name,
+        customerCompany: created.company || '',
+        customerPhone: created.phone || '',
+        billingAddress: created.billingAddress || created.address || '',
+      }));
+
+      setIsQuickCustomerModalOpen(false);
+      setPartySearchOpen(false);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setNewCustomerCompany('');
+      setNewCustomerType('Business');
+      setCustomerNameError('');
+      setCustomerPhoneError('');
+
+      toast.success(`Customer "${created.name}" created successfully!`);
+    } catch (err: any) {
+      console.error('Failed to create customer:', err);
+      const errData = err?.response?.data;
+      const errorCode = errData?.error?.code || errData?.code;
+      const errorMsg =
+        errData?.error?.message ||
+        errData?.message ||
+        err?.message ||
+        'Failed to add customer. Please try again.';
+
+      if (errorCode === 'DUPLICATE_PHONE' || errorMsg.toLowerCase().includes('phone')) {
+        setCustomerPhoneError(errorMsg);
+      }
+      toast.error(errorMsg);
+    } finally {
+      setIsSavingCustomer(false);
+    }
   };
 
   // Save Estimate via Commerce API
   const handleSaveEstimate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!formData.partyName.trim()) {
-      toast.error('Please select or enter Party / Customer name');
+      toast.error('Please select or enter Customer name');
       return;
     }
     const validItems = formData.items.filter((it) => it.productName.trim() || Number(it.unitPrice) > 0);
@@ -1049,25 +1273,29 @@ export const EstimateQuotationView: React.FC = () => {
     }
 
     const { rawSubtotal, totalTax, totalDiscount, grandTotal } = formCalculations;
+    const isEditing = Boolean(editingQuotation && editingQuotation.id);
 
-    const payload = mapSaleQuotationToPayload({
-      quotationNo: formData.quotationNo ? formData.quotationNo.trim() : undefined,
-      referenceNo: formData.referenceNo ? formData.referenceNo.trim() : undefined,
-      date: formData.date,
-      validUntil: formData.validUntil,
-      customerId: formData.customerId || undefined,
-      partyName: formData.partyName,
-      customerPhone: formData.customerPhone,
-      customerEmail: formData.customerEmail,
-      customerCompany: formData.customerCompany,
-      billingAddress: formData.billingAddress,
-      items: validItems as any,
-      withGst: true,
-      gstType: 'intra_state',
-      notes: formData.notes,
-      terms: formData.terms,
-      stateOfSupply: formData.stateOfSupply,
-    });
+    const payload = mapSaleQuotationToPayload(
+      {
+        quotationNo: isEditing && formData.quotationNo ? formData.quotationNo.trim() : undefined,
+        referenceNo: formData.referenceNo ? formData.referenceNo.trim() : undefined,
+        date: formData.date,
+        validUntil: formData.validUntil,
+        customerId: formData.customerId || undefined,
+        partyName: formData.partyName,
+        customerPhone: formData.customerPhone,
+        customerEmail: formData.customerEmail,
+        customerCompany: formData.customerCompany,
+        billingAddress: formData.billingAddress,
+        items: validItems as any,
+        withGst: true,
+        gstType: 'intra_state',
+        notes: formData.notes,
+        terms: formData.terms,
+        stateOfSupply: formData.stateOfSupply,
+      },
+      !isEditing
+    );
 
     setIsSubmitting(true);
     try {
@@ -1100,7 +1328,12 @@ export const EstimateQuotationView: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Save estimate error:', err);
-      toast.error(err.message || 'Failed to save estimate');
+      const errorMsg =
+        err.response?.data?.error?.message ||
+        err.response?.data?.message ||
+        err.message ||
+        'Failed to save estimate';
+      toast.error(errorMsg);
       // Local fallback
       const fallbackQuotation: SaleQuotation = {
         id: editingQuotation ? editingQuotation.id : `quot_${Date.now()}`,
@@ -1156,41 +1389,281 @@ export const EstimateQuotationView: React.FC = () => {
   const handleExecuteConvert = async () => {
     if (!convertTargetQuotation) return;
     setIsConverting(true);
-    try {
-      const res = await quotationApi.convertQuotation(convertTargetQuotation.id, {
-        targetType: convertType,
-        dueDate: convertDueDate || undefined,
-      });
+    const quot = convertTargetQuotation;
 
-      const convertedDocNo = res.data?.convertedTo?.documentNo || '';
-      toast.success(
-        res.message ||
-          `Quotation ${convertTargetQuotation.quotationNo} successfully converted to ${convertType} ${convertedDocNo}!`
-      );
+    try {
+      let apiConvertedDocNo = '';
+      try {
+        const res = await quotationApi.convertQuotation(quot.id, {
+          targetType: convertType,
+          dueDate: convertDueDate || undefined,
+        });
+        apiConvertedDocNo = res.data?.convertedTo?.documentNo || '';
+      } catch (apiErr) {
+        console.warn('Backend convertQuotation returned notice:', apiErr);
+      }
+
+      if (convertType === 'Proforma') {
+        const year = new Date().getFullYear();
+        const finalDocNo = apiConvertedDocNo || `PRO-${year}-${String(Date.now()).slice(-4)}`;
+        const newProforma: SaleProformaInvoice = {
+          id: `pro_conv_${Date.now()}`,
+          proformaNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          date: new Date().toISOString().split('T')[0],
+          validUntil: convertDueDate || quot.validUntil || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+          customerId: quot.customerId,
+          partyName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          stateOfSupply: quot.stateOfSupply || '33-Tamil Nadu',
+          items: quot.items.map((it, idx) => ({
+            id: `row_${idx}_${Date.now()}`,
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            taxPercent: it.taxPercent || 0,
+            discountPercent: it.discountPercent || 0,
+            total: it.total,
+            unit: (it as any).unit || 'PCS',
+          })),
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          discount: quot.discount || 0,
+          taxAmount: quot.taxAmount || 0,
+          roundOff: quot.roundOff || 0,
+          amount: quot.amount,
+          balance: quot.amount,
+          status: 'Open',
+          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ''}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        try {
+          const payload = mapSaleProformaToPayload(newProforma, true);
+          const pRes = await commerceProformaApi.createProforma(payload);
+          if (pRes?.data?.id) newProforma.id = pRes.data.id;
+          const backendNo = pRes?.data?.proformaNo || (pRes?.data as any)?.documentNo;
+          if (backendNo) newProforma.proformaNo = backendNo;
+        } catch (createErr) {
+          console.warn('createProforma fallback:', createErr);
+        }
+
+        syncConvertedProformaToStorage(newProforma);
+        recordDocumentConversion({
+          fromType: 'Estimate',
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: 'Proforma',
+          toId: newProforma.id,
+          toNo: newProforma.proformaNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, 'Converted', {
+          type: 'Proforma',
+          documentNo: newProforma.proformaNo,
+          id: newProforma.id,
+        });
+        updateQuotationStatus(quot.id, 'Converted');
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: 'Quotation', id: 'LIST' },
+            { type: 'Proforma', id: 'LIST' },
+          ])
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice ${newProforma.proformaNo}!`
+        );
+      } else if (convertType === 'Order') {
+        const year = new Date().getFullYear();
+        const finalDocNo = apiConvertedDocNo || `SO-${year}-${String(Date.now()).slice(-4)}`;
+        const newOrder: SaleOrderRecord = {
+          id: `order_conv_${Date.now()}`,
+          orderNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          orderDate: new Date().toISOString().split('T')[0],
+          dueDate: convertDueDate || quot.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+          customerId: quot.customerId,
+          partyName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          stateOfSupply: quot.stateOfSupply || '33-Tamil Nadu',
+          paymentType: 'Credit',
+          items: quot.items.map((it, idx) => ({
+            id: `row_${idx}_${Date.now()}`,
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            taxPercent: it.taxPercent || 0,
+            discountPercent: it.discountPercent || 0,
+            total: it.total,
+            unit: (it as any).unit || 'PCS',
+          })),
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          discount: quot.discount || 0,
+          taxAmount: quot.taxAmount || 0,
+          roundOff: quot.roundOff || 0,
+          amount: quot.amount,
+          balance: quot.amount,
+          advanceAmount: 0,
+          status: 'Open',
+          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ''}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        try {
+          const payload = mapSaleOrderRecordToPayload(newOrder, true);
+          const oRes = await commerceSaleOrderApi.createOrder(payload);
+          if (oRes?.data?.id) newOrder.id = oRes.data.id;
+          const backendNo = oRes?.data?.orderNo || (oRes?.data as any)?.documentNo;
+          if (backendNo) newOrder.orderNo = backendNo;
+        } catch (createErr) {
+          console.warn('createOrder fallback:', createErr);
+        }
+
+        syncConvertedOrderToStorage(newOrder);
+        recordDocumentConversion({
+          fromType: 'Estimate',
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: 'Order',
+          toId: newOrder.id,
+          toNo: newOrder.orderNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, 'Converted', {
+          type: 'Order',
+          documentNo: newOrder.orderNo,
+          id: newOrder.id,
+        });
+        updateQuotationStatus(quot.id, 'Converted');
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: 'Quotation', id: 'LIST' },
+            { type: 'SalesOrder', id: 'LIST' },
+          ])
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Sale Order ${newOrder.orderNo}!`
+        );
+      } else if (convertType === 'Invoice') {
+        const year = new Date().getFullYear();
+        const finalDocNo = apiConvertedDocNo || `INV-${year}-${String(Date.now()).slice(-4)}`;
+        const newSale: SaleTransaction = {
+          id: `sale_conv_${Date.now()}`,
+          invoiceNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          saleDate: new Date().toISOString().split('T')[0],
+          dueDate: convertDueDate || quot.validUntil || new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+          customerId: quot.customerId,
+          customerName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          items: quot.items,
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          totalDiscount: quot.discount || 0,
+          totalTax: quot.taxAmount || 0,
+          shippingCharges: 0,
+          otherCharges: 0,
+          grandTotal: quot.amount,
+          paidAmount: 0,
+          balance: quot.amount,
+          paymentMethod: 'Cash',
+          paymentTerms: '15 Days',
+          paymentStatus: 'Unpaid',
+          saleStatus: 'Confirmed',
+          createdBy: 'Sales Representative',
+          salesperson: 'Sales Rep',
+          notes: `Converted directly from Estimate ${quot.quotationNo}. ${quot.notes || ''}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        try {
+          const payload = mapSaleTransactionToInvoicePayload(newSale);
+          const invRes = await commerceInvoiceApi.createInvoice(payload);
+          if (invRes?.data?.id) newSale.id = invRes.data.id;
+          if (invRes?.data?.invoiceNo) newSale.invoiceNo = invRes.data.invoiceNo;
+        } catch (invErr) {
+          console.warn('createInvoice fallback:', invErr);
+        }
+
+        saveSale(newSale);
+        syncConvertedInvoiceToStorage(newSale);
+        recordDocumentConversion({
+          fromType: 'Estimate',
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: 'Invoice',
+          toId: newSale.id,
+          toNo: newSale.invoiceNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, 'Converted', {
+          type: 'Invoice',
+          documentNo: newSale.invoiceNo,
+          id: newSale.id,
+        });
+        updateQuotationStatus(quot.id, 'Converted');
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: 'Quotation', id: 'LIST' },
+            { type: 'SalesInvoice', id: 'LIST' },
+          ])
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Sales Invoice ${newSale.invoiceNo}!`
+        );
+        setIsConvertModalOpen(false);
+        setConvertTargetQuotation(null);
+        navigate(`/sale-management/sales/sale?search=${encodeURIComponent(newSale.invoiceNo)}`);
+        return;
+      }
+
       setIsConvertModalOpen(false);
       setConvertTargetQuotation(null);
       await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-
-      if (convertType === 'Invoice') {
-        convertQuotationToSale(convertTargetQuotation.id);
-        navigate('/sale-management/sales/sale');
-      } else {
-        updateQuotationStatus(convertTargetQuotation.id, 'Converted');
-      }
     } catch (err: any) {
       console.error('Convert API call error:', err);
       toast.error(err.message || `Failed to convert quotation to ${convertType}`);
-      // Fallback
-      if (convertType === 'Invoice') {
-        const sale = convertQuotationToSale(convertTargetQuotation.id);
-        if (sale) {
-          toast.success(`Quotation converted to Sale Invoice ${sale.invoiceNo} (Local)!`);
-          navigate('/sale-management/sales/sale');
-        }
-      } else {
-        updateQuotationStatus(convertTargetQuotation.id, 'Converted');
-        toast.success(`Quotation marked Converted to ${convertType}!`);
-      }
       setIsConvertModalOpen(false);
       setConvertTargetQuotation(null);
     } finally {
@@ -1200,18 +1673,16 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Delete via Live API
   const handleDelete = async (id: string, no: string) => {
-    if (confirm(`Are you sure you want to delete estimate / quotation ${no}?`)) {
-      try {
-        await quotationApi.deleteQuotation(id);
-        toast.success(`Quotation ${no} deleted successfully.`);
-        deleteQuotation(id);
-        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-      } catch (err: any) {
-        toast.error(err.message || 'Failed to delete quotation');
-        deleteQuotation(id);
-      } finally {
-        setActiveDropdownId(null);
-      }
+    try {
+      await quotationApi.deleteQuotation(id);
+      toast.success(`Quotation ${no} deleted successfully.`);
+      deleteQuotation(id);
+      await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete quotation');
+      deleteQuotation(id);
+    } finally {
+      setActiveDropdownId(null);
     }
   };
 
@@ -1219,14 +1690,18 @@ export const EstimateQuotationView: React.FC = () => {
   const handleDuplicate = async (item: SaleQuotation) => {
     setActiveDropdownId(null);
     try {
-      const duplicatedPayload = mapSaleQuotationToPayload({
-        ...item,
-        quotationNo: undefined, // Let server auto-generate unique number
-        referenceNo: item.referenceNo ? `${item.referenceNo}-COPY` : 'COPY',
-        date: new Date().toISOString().split('T')[0],
-        validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-        status: 'Open',
-      });
+      const nextRef = getNextReferenceNo();
+      const duplicatedPayload = mapSaleQuotationToPayload(
+        {
+          ...item,
+          quotationNo: undefined, // Let server auto-generate unique number
+          referenceNo: String(nextRef),
+          date: new Date().toISOString().split('T')[0],
+          validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+          status: 'Open',
+        },
+        true
+      );
       const res = await quotationApi.createQuotation(duplicatedPayload);
       const mapped = mapApiQuotationToSaleQuotation(res.data);
       saveQuotation(mapped);
@@ -1260,9 +1735,8 @@ export const EstimateQuotationView: React.FC = () => {
     }
 
     const excelRows = displayQuotations.map((q) => ({
+      estimateNo: q.quotationNo,
       date: isoToDdmmyyyy(q.date),
-      referenceNo: q.referenceNo || '1',
-      quotationNo: q.quotationNo,
       partyName: q.partyName,
       customerPhone: q.customerPhone || '-',
       amount: Number(q.amount || 0),
@@ -1276,10 +1750,9 @@ export const EstimateQuotationView: React.FC = () => {
       title: 'YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT',
       subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
+        { header: 'Estimate No.', key: 'estimateNo', align: 'center', width: 18 },
         { header: 'Date', key: 'date', align: 'center', width: 15 },
-        { header: 'Ref No.', key: 'referenceNo', align: 'center', width: 14 },
-        { header: 'Quotation No', key: 'quotationNo', align: 'center', width: 18 },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: 28 },
         { header: 'Contact', key: 'customerPhone', align: 'left', width: 18 },
         { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: 20 },
         { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: 20 },
@@ -1287,7 +1760,7 @@ export const EstimateQuotationView: React.FC = () => {
       ],
       data: excelRows,
       summaryRow: {
-        date: 'TOTAL',
+        estimateNo: 'TOTAL',
         partyName: `${displayQuotations.length} Quotations`,
         amount: metrics.totalAmount,
         balance: metrics.openAmount,
@@ -1349,7 +1822,7 @@ export const EstimateQuotationView: React.FC = () => {
             <div>
               <div class="doc-title">ESTIMATE / QUOTATION</div>
               <div style="font-size: 12px; color: #64748b; text-align: right; margin-top: 4px;">
-                Quotation #: <strong>${quot.quotationNo}</strong> (Ref: ${quot.referenceNo || '1'})
+                Quotation #: <strong>${quot.quotationNo}</strong>
               </div>
               <div style="text-align: right; margin-top: 4px;">
                 <span class="badge">${quot.status.toUpperCase()}</span>
@@ -1375,10 +1848,6 @@ export const EstimateQuotationView: React.FC = () => {
               <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                 <span style="color: #64748b;">Valid Until:</span>
                 <strong>${isoToDdmmyyyy(quot.validUntil)}</strong>
-              </div>
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="color: #64748b;">Reference No:</span>
-                <strong>${quot.referenceNo || '1'}</strong>
               </div>
               <div style="display: flex; justify-content: space-between;">
                 <span style="color: #64748b;">Status:</span>
@@ -1574,25 +2043,21 @@ export const EstimateQuotationView: React.FC = () => {
           <div>
             {/* Top Meta Details (Party + Ref/Date/State) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
-              {/* Left Column: Party Floating Box (CRM Theme) */}
+              {/* Left Column: Party (CRM Theme) */}
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
+                <FormLabel required>Customer</FormLabel>
                 <div className="relative">
-                  {/* Floating Box Input */}
+                  {/* Select Box Input */}
                   <div
                     onClick={() => setPartySearchOpen(!partySearchOpen)}
-                    className={`relative w-full min-h-[46px] px-3.5 py-2 bg-white border-2 rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
+                    className={`relative w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium flex items-center justify-between cursor-pointer transition-all ${
                       partySearchOpen
-                        ? 'border-[#33077C] ring-4 ring-purple-100'
+                        ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10'
                         : formData.partyName
-                        ? 'border-purple-300 hover:border-[#33077C]'
-                        : 'border-slate-300 hover:border-[#33077C]'
+                        ? 'border-slate-300 hover:border-slate-400'
+                        : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    {/* Floating Label Badge */}
-                    <span className="absolute -top-2.5 left-3 bg-white px-1.5 text-[11px] font-bold text-[#33077C]">
-                      Party <span className="text-rose-500">*</span>
-                    </span>
-
                     {/* Display Party Name or Placeholder */}
                     <div className="truncate pr-2">
                       {formData.partyName ? (
@@ -1603,7 +2068,7 @@ export const EstimateQuotationView: React.FC = () => {
                           )}
                         </div>
                       ) : (
-                        <span className="text-slate-400">Select or search customer party...</span>
+                        <span className="text-slate-400">Select or search customer...</span>
                       )}
                     </div>
 
@@ -1619,7 +2084,7 @@ export const EstimateQuotationView: React.FC = () => {
                           <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
                           <input
                             type="text"
-                            placeholder="Search Party by name, phone or code..."
+                            placeholder="Search Customer by name, phone or code..."
                             value={partySearchQuery}
                             onChange={(e) => setPartySearchQuery(e.target.value)}
                             autoFocus
@@ -1647,14 +2112,14 @@ export const EstimateQuotationView: React.FC = () => {
                         className="w-full px-3 py-2 text-left text-xs font-bold text-[#33077C] bg-purple-50/70 hover:bg-purple-100 rounded-xl flex items-center gap-2 transition-colors cursor-pointer mb-2"
                       >
                         <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-                        <span>+ Add New Party / Customer</span>
+                        <span>+ Add New Customer</span>
                       </button>
 
                       {/* Customer List */}
                       <div className="max-h-56 overflow-y-auto space-y-1">
                         {filteredCustomers.length === 0 ? (
                           <div className="py-4 text-center text-xs text-slate-400 font-medium">
-                            No customers found. Click "+ Add New Party" above.
+                            No customers found. Click "+ Add New Customer" above.
                           </div>
                         ) : (
                           filteredCustomers.map((c) => {
@@ -1713,19 +2178,8 @@ export const EstimateQuotationView: React.FC = () => {
                 )}
               </div>
 
-              {/* Right Column: Ref No, Invoice Date, State of supply */}
+              {/* Right Column: Invoice Date, State of supply */}
               <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
-                {/* Ref No. */}
-                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
-                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">Ref No.</span>
-                  <input
-                    type="text"
-                    value={formData.referenceNo}
-                    onChange={(e) => setFormData({ ...formData, referenceNo: e.target.value })}
-                    className="w-40 sm:w-48 h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none text-right transition-colors"
-                  />
-                </div>
-
                 {/* Invoice Date */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">Invoice Date</span>
@@ -2231,33 +2685,33 @@ export const EstimateQuotationView: React.FC = () => {
                 {/* Expandable Sections */}
                 {showTermsSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
-                    <label className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">Terms & Conditions</label>
+                    <FormLabel>Terms & Conditions</FormLabel>
                     <textarea
                       rows={3}
                       value={formData.terms}
                       onChange={(e) => setFormData({ ...formData, terms: e.target.value })}
                       placeholder="Enter quotation terms and conditions..."
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
+                      className={FORM_TEXTAREA_CLS}
                     />
                   </div>
                 )}
 
                 {showDescriptionSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
-                    <label className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">Quotation Description / Notes</label>
+                    <FormLabel>Quotation Description / Notes</FormLabel>
                     <textarea
                       rows={2}
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       placeholder="Add custom notes or delivery remarks for this estimate..."
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 outline-none focus:border-[#33077C]"
+                      className={FORM_TEXTAREA_CLS}
                     />
                   </div>
                 )}
 
                 {showImageSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="font-bold text-[#33077C] uppercase text-[11px] tracking-wider">Attach Image</label>
+                    <FormLabel>Attach Image</FormLabel>
                     <div className="flex items-center gap-3">
                       <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
                         <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
@@ -2283,7 +2737,7 @@ export const EstimateQuotationView: React.FC = () => {
 
                 {showDocumentSection && (
                   <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
-                    <label className="font-bold text-[#33077C] uppercase text-[11px] tracking-wider">Attach Document / PDF</label>
+                    <FormLabel>Attach Document / PDF</FormLabel>
                     <div className="flex items-center gap-3">
                       <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
                         <FileUp className="w-3.5 h-3.5 text-[#33077C]" />
@@ -2421,9 +2875,18 @@ export const EstimateQuotationView: React.FC = () => {
         {isQuickCustomerModalOpen && (
           <Modal
             isOpen={isQuickCustomerModalOpen}
-            onClose={() => setIsQuickCustomerModalOpen(false)}
-            title="Add New Party / Customer"
+            onClose={() => {
+              if (!isSavingCustomer) {
+                setIsQuickCustomerModalOpen(false);
+                setCustomerNameError('');
+                setCustomerPhoneError('');
+                setNewCustomerType('Business');
+              }
+            }}
+            title="Add New Customer"
+            subtitle="Register customer profile, type and contact information"
             maxWidth="md"
+            headerGradient={true}
           >
             <form
               noValidate
@@ -2431,51 +2894,110 @@ export const EstimateQuotationView: React.FC = () => {
                 e.preventDefault();
                 handleCreateQuickCustomer();
               }}
-              className="p-5 space-y-4 text-xs pt-6"
+              className="p-5 space-y-4 text-xs"
             >
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Customer / Party Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerName}
-                    onChange={(e) => setNewCustomerName(e.target.value)}
-                    placeholder="e.g. Anand Supermarket"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel required>Customer Name</FormLabel>
+                <input
+                  type="text"
+                  value={newCustomerName}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => {
+                    setNewCustomerName(e.target.value);
+                    if (customerNameError) setCustomerNameError('');
+                  }}
+                  placeholder="e.g. Anand Supermarket"
+                  className={getFormInputCls(Boolean(customerNameError))}
+                />
+                {customerNameError && (
+                  <p className="text-[11px] text-rose-500 mt-1 pl-1 font-medium">{customerNameError}</p>
+                )}
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Company / Store Name
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerCompany}
-                    onChange={(e) => setNewCustomerCompany(e.target.value)}
-                    placeholder="e.g. Anand Mart Pvt Ltd"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel>Company / Store Name</FormLabel>
+                <input
+                  type="text"
+                  value={newCustomerCompany}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => setNewCustomerCompany(e.target.value)}
+                  placeholder="e.g. Anand Mart Pvt Ltd"
+                  className={FORM_INPUT_CLS}
+                />
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Phone Number
-                  </span>
-                  <input
-                    type="text"
-                    value={newCustomerPhone}
-                    onChange={(e) => setNewCustomerPhone(e.target.value)}
-                    placeholder="e.g. +91 98400 55667"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel>Customer Type</FormLabel>
+                <select
+                  value={newCustomerType}
+                  disabled={isSavingCustomer}
+                  onChange={(e) => setNewCustomerType(e.target.value as 'Business' | 'Individual')}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Business">Business (B2B)</option>
+                  <option value="Individual">Individual (B2C)</option>
+                </select>
+              </div>
+
+              <div>
+                <FormLabel required>Phone Number</FormLabel>
+                <input
+                  type="tel"
+                  maxLength={10}
+                  value={newCustomerPhone}
+                  disabled={isSavingCustomer}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === 'Backspace' ||
+                      e.key === 'Delete' ||
+                      e.key === 'ArrowLeft' ||
+                      e.key === 'ArrowRight' ||
+                      e.key === 'Tab' ||
+                      e.key === 'Enter' ||
+                      e.ctrlKey ||
+                      e.metaKey
+                    ) {
+                      return;
+                    }
+                    if (!/^[0-9]$/.test(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setNewCustomerPhone(raw);
+                    if (!raw) {
+                      setCustomerPhoneError('');
+                    } else if (!/^[6-9]/.test(raw) || raw.length === 10) {
+                      setCustomerPhoneError(
+                        /^[6-9]\d{9}$/.test(raw)
+                          ? ''
+                          : 'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)'
+                      );
+                    } else {
+                      setCustomerPhoneError('');
+                    }
+                  }}
+                  onBlur={() => {
+                    if (newCustomerPhone) {
+                      if (!/^[6-9]\d{9}$/.test(newCustomerPhone)) {
+                        setCustomerPhoneError(
+                          'Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)'
+                        );
+                      } else {
+                        setCustomerPhoneError('');
+                      }
+                    }
+                  }}
+                  placeholder="e.g. 98400 55667"
+                  className={getFormInputCls(Boolean(customerPhoneError))}
+                />
+                {customerPhoneError && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1 pl-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{customerPhoneError}</span>
+                  </p>
+                )}
               </div>
 
               <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
@@ -2483,7 +3005,13 @@ export const EstimateQuotationView: React.FC = () => {
                   variant="secondary"
                   size="sm"
                   type="button"
-                  onClick={() => setIsQuickCustomerModalOpen(false)}
+                  disabled={isSavingCustomer}
+                  onClick={() => {
+                    setIsQuickCustomerModalOpen(false);
+                    setCustomerNameError('');
+                    setCustomerPhoneError('');
+                    setNewCustomerType('Business');
+                  }}
                 >
                   Cancel
                 </Button>
@@ -2491,8 +3019,16 @@ export const EstimateQuotationView: React.FC = () => {
                   variant="primary"
                   size="sm"
                   type="submit"
+                  disabled={isSavingCustomer}
                 >
-                  Save Party
+                  {isSavingCustomer ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Saving Customer...
+                    </span>
+                  ) : (
+                    'Save Customer'
+                  )}
                 </Button>
               </div>
             </form>
@@ -2628,8 +3164,6 @@ export const EstimateQuotationView: React.FC = () => {
         value={pendingSearch}
         onChange={(val) => {
           setPendingSearch(val);
-          setAppliedSearch(val);
-          setPage(1);
         }}
         onSubmit={() => {
           setAppliedSearch(pendingSearch);
@@ -2638,11 +3172,13 @@ export const EstimateQuotationView: React.FC = () => {
         onReset={() => {
           setPendingSearch('');
           setAppliedSearch('');
+          setPendingPeriod('all');
           setAppliedPeriod('all');
+          setPendingStatus('ALL');
           setAppliedStatus('ALL');
           setPage(1);
         }}
-        placeholder="Search by party name, quotation #, ref no..."
+        placeholder="Search by customer name, estimate #..."
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
@@ -2682,30 +3218,30 @@ export const EstimateQuotationView: React.FC = () => {
           <table className="w-full text-left border-collapse min-w-[760px]">
             {/* Table Purple Themed Header */}
             <thead>
-              <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider">
-                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap">
+              <tr className="bg-[#33077C] text-white text-xs font-bold uppercase tracking-wider select-none">
+                <th className="py-3.5 px-3 sm:px-5 border-r border-[#4309A2]/60 min-w-[180px]">
+                  CUSTOMER NAME
+                </th>
+                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-center min-w-[140px]">
+                  ESTIMATE NO.
+                </th>
+                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap min-w-[110px]">
                   <div className="flex items-center gap-1.5">
                     <span>DATE</span>
-                    <Calendar className="w-3 h-3 text-purple-200 opacity-80" />
+                    <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
                   </div>
                 </th>
-                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 whitespace-nowrap text-center">
-                  REF NO.
-                </th>
-                <th className="py-3.5 px-3 sm:px-5 border-r border-[#4309A2]/60 min-w-[180px]">
-                  PARTY NAME
-                </th>
-                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap">
+                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap min-w-[120px]">
                   AMOUNT
                 </th>
-                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap">
+                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-right whitespace-nowrap min-w-[120px]">
                   BALANCE
                 </th>
-                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap">
+                <th className="py-3.5 px-3 sm:px-4 border-r border-[#4309A2]/60 text-center whitespace-nowrap min-w-[110px]">
                   STATUS
                 </th>
-                <th className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap w-28">
-                  Actions
+                <th className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap min-w-[130px] w-36">
+                  ACTIONS
                 </th>
               </tr>
             </thead>
@@ -2735,19 +3271,9 @@ export const EstimateQuotationView: React.FC = () => {
                       key={item.id}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200"
                     >
-                      {/* 1. Date */}
-                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.date)}
-                      </td>
-
-                      {/* 2. Reference no */}
-                      <td className="py-3.5 px-3 sm:px-4 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.referenceNo || '1'}
-                      </td>
-
-                      {/* 3. Party Name */}
-                      <td className="py-3.5 px-3 sm:px-5 font-semibold text-slate-900 border-r border-slate-200 break-words">
-                        <div>{item.partyName}</div>
+                      {/* 1. Party Name */}
+                      <td className="py-3.5 px-3 sm:px-5 font-semibold text-slate-900 border-r border-slate-200 break-words align-middle">
+                        <div className="font-bold text-slate-900">{item.partyName}</div>
                         {item.customerPhone && (
                           <div className="text-[11px] text-slate-400 font-normal mt-0.5">
                             {item.customerPhone}
@@ -2755,38 +3281,55 @@ export const EstimateQuotationView: React.FC = () => {
                         )}
                       </td>
 
+                      {/* 2. Estimate / Quotation Code (from backend) */}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-[#33077C] border border-purple-200/80 font-mono text-xs font-bold">
+                            {item.quotationNo || '—'}
+                          </span>
+                          <DocumentLineageBadges docRef={item.quotationNo} currentType="Estimate" className="justify-center" />
+                        </div>
+                      </td>
+
+                      {/* 3. Date */}
+                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                        {isoToDdmmyyyy(item.date)}
+                      </td>
+
                       {/* 4. Amount */}
-                      <td className="py-3.5 px-3 sm:px-4 text-right font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-right font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 5. Balance */}
-                      <td className="py-3.5 px-3 sm:px-4 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-right font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {item.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 6. Status Pill with Dot */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.status === 'Open' ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                            Open
-                          </span>
-                        ) : item.status === 'Converted' ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Converted
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                            {item.status}
-                          </span>
-                        )}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex items-center justify-center">
+                          {item.status === 'Open' ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Open
+                            </span>
+                          ) : item.status === 'Converted' ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              {item.status}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 7. Actions */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap">
+                      <td className="py-3.5 px-3 sm:px-4 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                         <div className="inline-flex items-center justify-center gap-1.5">
                           {/* Convert Action Button with Dropdown */}
                           <div className="quotation-convert-dropdown-container relative inline-block text-left">
@@ -2897,7 +3440,7 @@ export const EstimateQuotationView: React.FC = () => {
                                   right: `${dropdownPos.right}px`,
                                   zIndex: 9999,
                                 }}
-                                className="quotation-action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                className="quotation-action-dropdown-menu w-48 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {/* 1. View/Edit */}
@@ -2907,63 +3450,46 @@ export const EstimateQuotationView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleOpenEditForm(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                 >
                                   View/Edit
                                 </button>
 
-                                {/* 2. Delete */}
+                                {/* 2. Direct Convert to Sales Invoice */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveDropdownId(null);
+                                    handleOpenConvertModal(item, 'Invoice');
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
+                                >
+                                  Convert to Sales Invoice
+                                </button>
+
+                                {/* 3. Delete */}
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setActiveDropdownId(null);
                                     handleDelete(item.id, item.quotationNo);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
                                 >
                                   Delete
                                 </button>
 
-                                {/* 3. Duplicate */}
+                                {/* 4. Duplicate */}
                                 <button
                                   type="button"
                                   onClick={() => handleDuplicate(item)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
 
-                                {/* 4. Open PDF */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenPreview(item)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
 
-                                {/* 5. Preview */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenPreview(item)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Preview
-                                </button>
-
-                                {/* 6. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handlePrintQuotation(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
-
-                                {/* 7. Status Actions via Live API */}
+                                {/* 5. Mark as Cancelled (Last Option) */}
                                 {item.status === 'Open' && (
                                   <button
                                     type="button"
@@ -2978,9 +3504,9 @@ export const EstimateQuotationView: React.FC = () => {
                                         toast.error(err.message || 'Failed to cancel quotation');
                                       }
                                     }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block border-t border-slate-100"
+                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                   >
-                                    Cancel Quotation
+                                    Mark as Cancelled
                                   </button>
                                 )}
 
@@ -2998,9 +3524,9 @@ export const EstimateQuotationView: React.FC = () => {
                                         toast.error(err.message || 'Failed to reopen quotation');
                                       }
                                     }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer block border-t border-slate-100"
+                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
                                   >
-                                    Reopen (Mark Open)
+                                    Mark as Open
                                   </button>
                                 )}
                               </div>
@@ -3050,8 +3576,7 @@ export const EstimateQuotationView: React.FC = () => {
               </div>
               <div className="text-right text-xs">
                 <div className="font-bold text-slate-900">#{previewQuotation.quotationNo}</div>
-                <div className="text-slate-500 mt-1">Ref: {previewQuotation.referenceNo || '1'}</div>
-                <div className="text-slate-500">Date: {isoToDdmmyyyy(previewQuotation.date)}</div>
+                <div className="text-slate-500 mt-1">Date: {isoToDdmmyyyy(previewQuotation.date)}</div>
                 <div className="mt-1">
                   <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-bold text-[11px]">
                     {previewQuotation.status}
@@ -3194,18 +3719,14 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
 
             {/* Due Date Picker */}
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment / Document Due Date
-                </span>
-                <input
-                  type="date"
-                  value={convertDueDate}
-                  onChange={(e) => setConvertDueDate(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                />
-              </div>
+            <div>
+              <FormLabel>Payment / Document Due Date</FormLabel>
+              <input
+                type="date"
+                value={convertDueDate}
+                onChange={(e) => setConvertDueDate(e.target.value)}
+                className={FORM_INPUT_CLS}
+              />
               <p className="text-[11px] text-slate-500 mt-1 pl-1">
                 Specifies the settlement due date for the generated {convertType}.
               </p>

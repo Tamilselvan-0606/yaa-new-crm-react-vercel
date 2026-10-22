@@ -40,22 +40,79 @@ export const mapApiStockBatchToStockBatch = (b: ApiStockBatch): StockBatch => {
  * Mapper: ApiStockItem -> InventoryStockItem
  */
 export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventoryStockItem => {
+  const anyItem = item as any;
+  const rawStock = item.inStock ?? anyItem.currentStock ?? anyItem.availableQty ?? anyItem.quantity ?? anyItem.availableQuantity;
+  
+  // Discover batches across possible array properties
+  const rawBatches: any[] =
+    Array.isArray(item.batches) && item.batches.length > 0
+      ? item.batches
+      : Array.isArray(anyItem.stockBatches) && anyItem.stockBatches.length > 0
+      ? anyItem.stockBatches
+      : Array.isArray(anyItem.stock_batches) && anyItem.stock_batches.length > 0
+      ? anyItem.stock_batches
+      : Array.isArray(anyItem.product?.stockBatches) && anyItem.product?.stockBatches.length > 0
+      ? anyItem.product.stockBatches
+      : Array.isArray(anyItem.product?.batches) && anyItem.product?.batches.length > 0
+      ? anyItem.product.batches
+      : [];
+
+  let mappedBatches: StockBatch[] = rawBatches.map(mapApiStockBatchToStockBatch);
+
+  // If no batch array is returned, check if the item has batch tracking properties
+  const hasBatchTracking = Boolean(anyItem.isBatchTracking ?? anyItem.is_batch_tracking ?? anyItem.product?.isBatchTracking);
+  const fallbackBatchNo = (
+    anyItem.batchNo ||
+    anyItem.initialBatchNo ||
+    anyItem.product?.batchNo ||
+    anyItem.product?.initialBatchNo ||
+    ''
+  ).trim();
+
+  if (mappedBatches.length === 0 && (hasBatchTracking || fallbackBatchNo)) {
+    if (fallbackBatchNo) {
+      const fallbackQty = Number(
+        rawStock !== null && rawStock !== undefined
+          ? rawStock
+          : (anyItem.openingStock ?? anyItem.product?.openingStock ?? 0)
+      );
+      mappedBatches = [
+        {
+          id: `bat_${item.productId || item.id}_${fallbackBatchNo}`,
+          batchNo: fallbackBatchNo,
+          productId: item.productId || item.id,
+          quantity: fallbackQty,
+          costPrice: Number(item.unitCost ?? anyItem.purchasePrice ?? anyItem.costPrice ?? 0),
+          sellingPrice: Number(item.unitPrice ?? anyItem.salePrice ?? anyItem.sellingPrice ?? 0),
+          mfgDate: anyItem.mfgDate || anyItem.product?.mfgDate || undefined,
+          expDate: anyItem.expDate || anyItem.product?.expDate || undefined,
+          status: fallbackQty > 0 ? 'Active' : 'Depleted',
+          receivedDate: anyItem.createdAt ? anyItem.createdAt.split('T')[0] : undefined,
+        },
+      ];
+    }
+  }
+
+  const batchSum = mappedBatches.length > 0
+    ? mappedBatches.reduce((sum, b) => sum + Number(b.quantity || 0), 0)
+    : undefined;
+  const finalStock = Number(rawStock !== null && rawStock !== undefined ? rawStock : (batchSum ?? 0));
+
   return {
     id: item.id || item.productId,
     productId: item.productId || item.id,
-    productName: item.productName || 'Unnamed Product',
-    sku: item.sku || 'N/A',
-    category: item.category || 'General',
-    subcategory: item.subcategory || 'General',
-    unit: item.unit || 'Units',
-    inStock: Number(item.inStock ?? 0),
-    reorderLevel: Number(item.reorderLevel ?? 0),
-    unitCost: Number(item.unitCost ?? 0),
-    unitPrice: Number(item.unitPrice ?? 0),
-    lastUpdated: item.lastUpdated || new Date().toISOString(),
-    batches: Array.isArray(item.batches)
-      ? item.batches.map(mapApiStockBatchToStockBatch)
-      : [],
+    productName: item.productName || anyItem.name || anyItem.product?.name || 'Unnamed Product',
+    sku: item.sku || anyItem.productCode || anyItem.product?.sku || 'N/A',
+    category: item.category || anyItem.product?.category || 'General',
+    subcategory: item.subcategory || anyItem.product?.subcategory || 'General',
+    unit: item.unit || anyItem.product?.unit || 'Units',
+    inStock: finalStock,
+    reorderLevel: Number(item.reorderLevel ?? anyItem.minStockAlert ?? 0),
+    unitCost: Number(item.unitCost ?? anyItem.purchasePrice ?? 0),
+    unitPrice: Number(item.unitPrice ?? anyItem.salePrice ?? 0),
+    lastUpdated: item.lastUpdated || anyItem.updatedAt || new Date().toISOString(),
+    batches: mappedBatches,
+    itemImage: anyItem.itemImage || anyItem.image || anyItem.item_image || anyItem.product?.itemImage || anyItem.product?.image || anyItem.product?.item_image || undefined,
   };
 };
 
@@ -92,7 +149,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/stocks',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: [{ type: 'Stock', id: 'LIST' }],
@@ -104,7 +161,13 @@ export const stockEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Stock', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
+      invalidatesTags: [
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Stock', id: 'LEDGER' },
+        { type: 'Stock', id: 'BATCHES' },
+        { type: 'Stock', id: 'LOW' },
+        { type: 'Product', id: 'LIST' },
+      ],
     }),
 
     getCommerceStockLedger: builder.query<StockLedgerResponse, StockLedgerParams | void>({
@@ -134,7 +197,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/stocks/ledger',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: [{ type: 'Stock', id: 'LEDGER' }],
@@ -155,7 +218,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
           if (params.productId) queryParams.productId = params.productId;
           if (params.branchId) queryParams.branchId = params.branchId;
-          if (params.status && params.status !== 'ALL') {
+          if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
           if (typeof params.expiringWithinDays === 'number') {
@@ -164,7 +227,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/stocks/batches',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: [{ type: 'Stock', id: 'BATCHES' }],
@@ -186,7 +249,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/stocks/low-stock',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: [{ type: 'Stock', id: 'LOW' }],
@@ -238,7 +301,7 @@ export const stockApi = {
     }
 
     const response = await baseClient.get<StockListResponse>('/commerce/stocks', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -272,18 +335,18 @@ export const stockApi = {
       if (params.productId) queryParams.productId = params.productId;
       if (params.batchNo) queryParams.batchNo = params.batchNo;
       if (params.branchId) queryParams.branchId = params.branchId;
-      if (params.movementType && params.movementType !== 'ALL') {
+      if (params.movementType && params.movementType.toUpperCase() !== 'ALL') {
         queryParams.movementType = params.movementType;
       }
       if (params.from) queryParams.from = params.from;
       if (params.to) queryParams.to = params.to;
-      if (params.period && params.period !== 'all') {
+      if (params.period && params.period.toLowerCase() !== 'all') {
         queryParams.period = params.period;
       }
     }
 
     const response = await baseClient.get<StockLedgerResponse>('/commerce/stocks/ledger', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -307,7 +370,7 @@ export const stockApi = {
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
       if (params.productId) queryParams.productId = params.productId;
       if (params.branchId) queryParams.branchId = params.branchId;
-      if (params.status && params.status !== 'ALL') {
+      if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
       if (typeof params.expiringWithinDays === 'number') {
@@ -316,7 +379,7 @@ export const stockApi = {
     }
 
     const response = await baseClient.get<StockBatchesResponse>('/commerce/stocks/batches', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -341,7 +404,7 @@ export const stockApi = {
     }
 
     const response = await baseClient.get<LowStockResponse>('/commerce/stocks/low-stock', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },

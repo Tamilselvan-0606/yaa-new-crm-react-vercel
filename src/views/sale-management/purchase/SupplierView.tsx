@@ -57,6 +57,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatSupplierShare } from '../../../utils/shareUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
 import { toast } from 'sonner';
 
 export const SupplierView: React.FC = () => {
@@ -86,6 +87,18 @@ export const SupplierView: React.FC = () => {
   const [appliedStatus, setAppliedStatus] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setCurrentPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   // Fetch tracking refs to prevent duplicate concurrent calls
   const lastFetchKeyRef = useRef<string>('');
@@ -391,17 +404,11 @@ export const SupplierView: React.FC = () => {
         if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
 
         const res = await supplierApi.updateSupplier(editingSupplier.id, payload);
-        if (res && res.data) {
-          const updated = mapApiSupplierToSupplier(res.data);
-          saveSupplier(updated);
-        } else {
-          saveSupplier({
-            ...editingSupplier,
-            ...data,
-            creditLimit: Number(data.creditLimit) || 0,
-            updatedAt: new Date().toISOString(),
-          });
+        if (!res || !res.data) {
+          throw new Error((res as any)?.error?.message || 'Failed to update supplier.');
         }
+        const updated = mapApiSupplierToSupplier(res.data);
+        saveSupplier(updated);
         toast.success(`Supplier "${data.name}" updated successfully.`);
       } else {
         const payload: CreateSupplierPayload = {
@@ -421,40 +428,11 @@ export const SupplierView: React.FC = () => {
         if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
 
         const res = await supplierApi.createSupplier(payload);
-        if (res && res.data) {
-          const created = mapApiSupplierToSupplier(res.data);
-          saveSupplier(created);
-        } else {
-          const newSup: Supplier = {
-            id: `sup_${Date.now()}`,
-            supplierCode: data.supplierCode || `SUP-${Date.now()}`,
-            name: data.name,
-            contactPerson: data.contactPerson || data.name,
-            phone: data.phone || '',
-            email: data.email || '',
-            address: data.address || '',
-            city: data.city || '',
-            state: data.state || '',
-            country: data.country || 'India',
-            pincode: data.pincode || '',
-            gstNumber: data.gstNumber || '',
-            panNumber: data.panNumber || '',
-            paymentTerms: data.paymentTerms || 'Net 30 Days',
-            creditLimit: Number(data.creditLimit) || 0,
-            bankName: data.bankName || '',
-            accountNumber: data.accountNumber || '',
-            ifscCode: data.ifscCode || '',
-            branchName: data.branchName || '',
-            status: data.status || 'Active',
-            notes: data.notes || '',
-            totalPurchase: 0,
-            paid: 0,
-            payable: 0,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          saveSupplier(newSup);
+        if (!res || !res.data) {
+          throw new Error((res as any)?.error?.message || 'Failed to create supplier.');
         }
+        const created = mapApiSupplierToSupplier(res.data);
+        saveSupplier(created);
         toast.success(`Supplier "${data.name}" added successfully.`);
       }
 
@@ -479,10 +457,6 @@ export const SupplierView: React.FC = () => {
 
   // Delete Supplier
   const handleDeleteSupplier = async (sup: Supplier) => {
-    if (!window.confirm(`Are you sure you want to delete supplier "${sup.name}" (${sup.supplierCode})?`)) {
-      return;
-    }
-
     try {
       setIsDeletingId(sup.id);
       await supplierApi.deleteSupplier(sup.id);
@@ -705,8 +679,12 @@ export const SupplierView: React.FC = () => {
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Status : All"
-              value={pendingStatus}
-              onChange={(val) => setPendingStatus(val)}
+              value={appliedStatus}
+              onChange={(val) => {
+                setPendingStatus(val);
+                setAppliedStatus(val);
+                setCurrentPage(1);
+              }}
               options={[
                 { label: 'Status : All', value: 'All' },
                 { label: 'Active', value: 'Active', dotColor: '#10b981' },
@@ -961,7 +939,7 @@ export const SupplierView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenEditModal(sup);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 View/Edit
                               </button>
@@ -973,7 +951,7 @@ export const SupplierView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDuplicateSupplier(sup);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Duplicate
                               </button>
@@ -985,7 +963,7 @@ export const SupplierView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDeleteSupplier(sup);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                               >
                                 Delete
                               </button>
@@ -998,7 +976,7 @@ export const SupplierView: React.FC = () => {
                                   toast.info(`Opening PDF for ${sup.name}...`);
                                   window.print();
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Open PDF
                               </button>
@@ -1010,7 +988,7 @@ export const SupplierView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenDetailModal(sup);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Preview
                               </button>
@@ -1023,7 +1001,7 @@ export const SupplierView: React.FC = () => {
                                   toast.info(`Preparing print for ${sup.name}...`);
                                   window.print();
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Print
                               </button>
@@ -1037,7 +1015,7 @@ export const SupplierView: React.FC = () => {
                                   setActiveTab('purchases');
                                   setIsDetailModalOpen(true);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 View History
                               </button>
@@ -1087,54 +1065,34 @@ export const SupplierView: React.FC = () => {
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className="relative w-full h-11 bg-slate-100/80 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Supplier Code <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  readOnly
-                  disabled
-                  {...register('supplierCode')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-semibold text-slate-700 outline-none cursor-not-allowed select-none"
-                />
-              </div>
+              <FormLabel required>Supplier Code</FormLabel>
+              <input
+                type="text"
+                readOnly
+                disabled
+                {...register('supplierCode')}
+                className={FORM_INPUT_DISABLED_CLS}
+              />
               <FormError message={errors.supplierCode?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.name
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Supplier / Company Name <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('name')}
-                  placeholder="e.g. Agarwal Components Pvt Ltd"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>Supplier / Company Name</FormLabel>
+              <input
+                type="text"
+                {...register('name')}
+                placeholder="e.g. Agarwal Components Pvt Ltd"
+                className={getFormInputCls(!!errors.name)}
+              />
               <FormError message={errors.name?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.contactPerson
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Contact Person Name <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('contactPerson')}
-                  placeholder="e.g. Ramesh Agarwal"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>Contact Person Name</FormLabel>
+              <input
+                type="text"
+                {...register('contactPerson')}
+                placeholder="e.g. Ramesh Agarwal"
+                className={getFormInputCls(!!errors.contactPerson)}
+              />
               <FormError message={errors.contactPerson?.message} />
             </div>
           </div>
@@ -1142,57 +1100,33 @@ export const SupplierView: React.FC = () => {
           {/* Row 2: Phone Number | Email Address | Street Address */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.phone
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Phone Number <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('phone')}
-                  placeholder="e.g. 9988776655"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>Phone Number</FormLabel>
+              <input
+                type="text"
+                {...register('phone')}
+                placeholder="e.g. 9988776655"
+                className={getFormInputCls(!!errors.phone)}
+              />
               <FormError message={errors.phone?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.email
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Email Address
-                </span>
-                <input
-                  type="email"
-                  {...register('email')}
-                  placeholder="e.g. procurement@agarwal.in"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Email Address</FormLabel>
+              <input
+                type="email"
+                {...register('email')}
+                placeholder="e.g. procurement@agarwal.in"
+                className={getFormInputCls(!!errors.email)}
+              />
               <FormError message={errors.email?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.address
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Street Address <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('address')}
-                  placeholder="e.g. 45 Industrial Area, Phase 2"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>Street Address</FormLabel>
+              <input
+                type="text"
+                {...register('address')}
+                placeholder="e.g. 45 Industrial Area, Phase 2"
+                className={getFormInputCls(!!errors.address)}
+              />
               <FormError message={errors.address?.message} />
             </div>
           </div>
@@ -1200,57 +1134,33 @@ export const SupplierView: React.FC = () => {
           {/* Row 3: City | State | Pincode */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.city
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  City <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('city')}
-                  placeholder="e.g. Delhi"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>City</FormLabel>
+              <input
+                type="text"
+                {...register('city')}
+                placeholder="e.g. Delhi"
+                className={getFormInputCls(!!errors.city)}
+              />
               <FormError message={errors.city?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.state
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  State <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('state')}
-                  placeholder="e.g. Delhi"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>State</FormLabel>
+              <input
+                type="text"
+                {...register('state')}
+                placeholder="e.g. Delhi"
+                className={getFormInputCls(!!errors.state)}
+              />
               <FormError message={errors.state?.message} />
             </div>
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.pincode
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Pincode <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('pincode')}
-                  placeholder="e.g. 110041"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel required>Pincode</FormLabel>
+              <input
+                type="text"
+                {...register('pincode')}
+                placeholder="e.g. 110041"
+                className={getFormInputCls(!!errors.pincode)}
+              />
               <FormError message={errors.pincode?.message} />
             </div>
           </div>
@@ -1258,44 +1168,32 @@ export const SupplierView: React.FC = () => {
           {/* Row 4: Country | GST/VAT Number | PAN Number */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Country
-                </span>
-                <input
-                  type="text"
-                  {...register('country')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Country</FormLabel>
+              <input
+                type="text"
+                {...register('country')}
+                className={getFormInputCls(!!errors.country)}
+              />
               <FormError message={errors.country?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  GST Number
-                </span>
-                <input
-                  type="text"
-                  {...register('gstNumber')}
-                  placeholder="e.g. 07AAACA1234A1ZV"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>GST Number</FormLabel>
+              <input
+                type="text"
+                {...register('gstNumber')}
+                placeholder="e.g. 07AAACA1234A1ZV"
+                className={getFormInputCls(!!errors.gstNumber)}
+              />
               <FormError message={errors.gstNumber?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  PAN Number
-                </span>
-                <input
-                  type="text"
-                  {...register('panNumber')}
-                  placeholder="e.g. AAACA1234A"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>PAN Number</FormLabel>
+              <input
+                type="text"
+                {...register('panNumber')}
+                placeholder="e.g. AAACA1234A"
+                className={getFormInputCls(!!errors.panNumber)}
+              />
               <FormError message={errors.panNumber?.message} />
             </div>
           </div>
@@ -1303,47 +1201,35 @@ export const SupplierView: React.FC = () => {
           {/* Row 5: Payment Terms | Credit Limit | Status */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Terms
-                </span>
-                <input
-                  type="text"
-                  {...register('paymentTerms')}
-                  placeholder="e.g. Net 30"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Payment Terms</FormLabel>
+              <input
+                type="text"
+                {...register('paymentTerms')}
+                placeholder="e.g. Net 30"
+                className={getFormInputCls(!!errors.paymentTerms)}
+              />
               <FormError message={errors.paymentTerms?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Credit Limit (₹)
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  {...register('creditLimit', { valueAsNumber: true })}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Credit Limit (₹)</FormLabel>
+              <input
+                type="number"
+                min="0"
+                {...register('creditLimit', { valueAsNumber: true })}
+                className={getFormInputCls(!!errors.creditLimit)}
+              />
               <FormError message={errors.creditLimit?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Status
-                </span>
-                <select
-                  {...register('status')}
-                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="Blocked">Blocked</option>
-                </select>
-              </div>
+              <FormLabel>Status</FormLabel>
+              <select
+                {...register('status')}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+                <option value="Blocked">Blocked</option>
+              </select>
               <FormError message={errors.status?.message} />
             </div>
           </div>
@@ -1351,45 +1237,33 @@ export const SupplierView: React.FC = () => {
           {/* Row 6: Bank Name | Account Number | IFSC Code */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Bank Name
-                </span>
-                <input
-                  type="text"
-                  {...register('bankName')}
-                  placeholder="e.g. HDFC Bank"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Bank Name</FormLabel>
+              <input
+                type="text"
+                {...register('bankName')}
+                placeholder="e.g. HDFC Bank"
+                className={getFormInputCls(!!errors.bankName)}
+              />
               <FormError message={errors.bankName?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Account Number
-                </span>
-                <input
-                  type="text"
-                  {...register('accountNumber')}
-                  placeholder="e.g. 50200012345678"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Account Number</FormLabel>
+              <input
+                type="text"
+                {...register('accountNumber')}
+                placeholder="e.g. 50200012345678"
+                className={getFormInputCls(!!errors.accountNumber)}
+              />
               <FormError message={errors.accountNumber?.message} />
             </div>
             <div>
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  IFSC Code
-                </span>
-                <input
-                  type="text"
-                  {...register('ifscCode')}
-                  placeholder="e.g. HDFC0000123"
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>IFSC Code</FormLabel>
+              <input
+                type="text"
+                {...register('ifscCode')}
+                placeholder="e.g. HDFC0000123"
+                className={getFormInputCls(!!errors.ifscCode)}
+              />
               <FormError message={errors.ifscCode?.message} />
             </div>
           </div>

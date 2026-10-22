@@ -333,7 +333,7 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/orders',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -427,7 +427,9 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'SalesOrder', id },
         { type: 'SalesOrder', id: 'LIST' },
+        { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
       ],
     }),
 
@@ -442,7 +444,9 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
       }),
       invalidatesTags: [
         { type: 'SalesOrder', id: 'LIST' },
+        { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
       ],
     }),
   }),
@@ -500,7 +504,7 @@ export const commerceSaleOrderApi = {
     }
 
     const response = await baseClient.get<SaleOrderListResponse>('/commerce/orders', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },

@@ -19,6 +19,9 @@ export const organizationSubscriptionEndpoints = baseApi.injectEndpoints({
       query: (params) => ({
         url: '/platform/organization-subscriptions',
         params: params || {},
+        headers: {
+          'x-organization-id': (params && typeof params === 'object' && 'organizationId' in params) ? params.organizationId || '' : '',
+        },
       }),
       providesTags: (result) =>
         result?.data
@@ -42,6 +45,9 @@ export const organizationSubscriptionEndpoints = baseApi.injectEndpoints({
         url: '/platform/organization-subscriptions',
         method: 'POST',
         body: payload,
+        headers: {
+          'x-organization-id': payload?.organizationId || '',
+        },
       }),
       invalidatesTags: [{ type: 'OrgSubscription', id: 'LIST' }],
     }),
@@ -54,6 +60,9 @@ export const organizationSubscriptionEndpoints = baseApi.injectEndpoints({
         url: `/platform/organization-subscriptions/${id}/renew`,
         method: 'POST',
         body: payload || {},
+        headers: {
+          'x-organization-id': '',
+        },
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'OrgSubscription', id },
@@ -69,6 +78,9 @@ export const organizationSubscriptionEndpoints = baseApi.injectEndpoints({
         url: `/platform/organization-subscriptions/${id}/cancel`,
         method: 'POST',
         body: payload || {},
+        headers: {
+          'x-organization-id': '',
+        },
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'OrgSubscription', id },
@@ -95,6 +107,9 @@ export const organizationSubscriptionApi = {
       '/platform/organization-subscriptions',
       {
         params,
+        headers: {
+          'x-organization-id': params?.organizationId || '',
+        },
       }
     );
     return res.data;

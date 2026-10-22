@@ -47,6 +47,7 @@ import {
   baseClient,
   productApi,
   mapApiProductToProductItem,
+  cleanProductImage,
   ApiProduct,
   categoryApi,
   subcategoryApi,
@@ -60,6 +61,7 @@ import {
   BulkProductItemInfoRow,
   BulkUpdateProductsPayload,
 } from '../../../api';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
 
 // Standard Industry Master Units (empty - units strictly loaded from live API)
 export const DEFAULT_COMMERCE_UNITS: Array<{ id: string; name: string; shortCode: string; status: number }> = [];
@@ -169,6 +171,8 @@ export interface ProductItem {
   
   // Stock
   openingStock: number;
+  currentStock?: number;
+  inStock?: number;
   atPrice: number;
   asOfDate: string;
   minStockAlert: number;
@@ -214,6 +218,197 @@ const COMMON_HSN_CODES = [
   { code: '2501', desc: 'Iodized Cooking Salt & Rock Salt' },
   { code: '3402', desc: 'Washing Powder, Liquid Detergent & Soaps' },
 ];
+
+// =========================================================================
+// PRODUCT THUMBNAIL WITH RESILIENT FALLBACK COMPONENT & PERSISTENT CACHE
+// =========================================================================
+const PRODUCT_IMAGE_CACHE_PREFIX = 'crm_prod_img_';
+
+export const saveProductImageToCache = (key?: string | null, dataUrl?: string | null) => {
+  if (!key || !dataUrl || !dataUrl.startsWith('data:')) return;
+  try {
+    const cleanKey = key.trim();
+    if (!cleanKey) return;
+    localStorage.setItem(`${PRODUCT_IMAGE_CACHE_PREFIX}${cleanKey}`, dataUrl);
+  } catch (e) {
+    // Quota exceeded or storage restricted
+  }
+};
+
+export const getProductImageFromCache = (
+  ...keys: Array<string | null | undefined>
+): string | undefined => {
+  for (const key of keys) {
+    if (!key || typeof key !== 'string') continue;
+    const cleanKey = key.trim();
+    if (!cleanKey) continue;
+    try {
+      const cached = localStorage.getItem(`${PRODUCT_IMAGE_CACHE_PREFIX}${cleanKey}`);
+      if (cached && cached.startsWith('data:')) {
+        return cached;
+      }
+    } catch (e) {
+      // Storage access error
+    }
+  }
+  return undefined;
+};
+
+interface ProductThumbnailProps {
+  src?: string | null;
+  fallbackSrc?: string | null;
+  alt: string;
+  size?: 'sm' | 'md' | 'lg';
+  className?: string;
+  productId?: string;
+  productCode?: string;
+}
+
+const ProductThumbnail: React.FC<ProductThumbnailProps> = ({
+  src,
+  fallbackSrc,
+  alt,
+  size = 'sm',
+  className,
+  productId,
+  productCode,
+}) => {
+  const [currentSrc, setCurrentSrc] = useState<string | null>(src || null);
+  const [triedFallback, setTriedFallback] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    // If src is an S3 URL or external URL, check if we have a locally cached data URI first
+    const cached = getProductImageFromCache(productId, productCode, src);
+    if (cached && src && !src.startsWith('data:')) {
+      setCurrentSrc(cached);
+      setTriedFallback(true);
+      setHasError(false);
+      return;
+    }
+    setCurrentSrc(src || null);
+    setTriedFallback(false);
+    setHasError(false);
+  }, [src, productId, productCode]);
+
+  const handleImageError = () => {
+    // 1. If we have fallbackSrc that is different, try that
+    if (!triedFallback && fallbackSrc && fallbackSrc !== currentSrc && fallbackSrc.trim() !== '') {
+      setTriedFallback(true);
+      setCurrentSrc(fallbackSrc);
+      return;
+    }
+
+    // 2. Check local persistent image cache
+    const cached = getProductImageFromCache(productId, productCode, src, currentSrc);
+    if (!triedFallback && cached && cached !== currentSrc) {
+      setTriedFallback(true);
+      setCurrentSrc(cached);
+      return;
+    }
+
+    setHasError(true);
+  };
+
+  const isValid = Boolean(
+    currentSrc &&
+    typeof currentSrc === 'string' &&
+    currentSrc.trim() !== '' &&
+    currentSrc !== 'null' &&
+    currentSrc !== 'undefined' &&
+    currentSrc !== '[object Object]' &&
+    currentSrc !== 'None' &&
+    currentSrc !== 'none'
+  );
+
+  const sizeClasses = {
+    sm: 'w-8 h-8 rounded-lg',
+    md: 'w-11 h-11 rounded-xl',
+    lg: 'w-16 h-16 rounded-xl',
+  };
+
+  const iconSizes = {
+    sm: 'w-4 h-4',
+    md: 'w-5 h-5',
+    lg: 'w-8 h-8',
+  };
+
+  if (!isValid || hasError) {
+    return (
+      <div
+        className={`${sizeClasses[size]} bg-[#33077C]/10 flex items-center justify-center text-[#33077C] shrink-0 font-bold border border-[#33077C]/10 select-none`}
+        title={alt}
+      >
+        <Package className={`${iconSizes[size]} text-[#33077C]`} />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={currentSrc!}
+      alt={alt}
+      onError={handleImageError}
+      loading="lazy"
+      className={className || `${sizeClasses[size]} object-cover border border-slate-200 shrink-0`}
+    />
+  );
+};
+
+/**
+ * Automatically downsizes and compresses large image files to prevent 413 Payload Too Large,
+ * reduce base64 footprint and ensure fast upload and rendering.
+ */
+const compressImageFile = (file: File, maxWidth = 1024, maxHeight = 1024, quality = 0.85): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    if (file.type === 'image/svg+xml') {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        const compressedBase64 = canvas.toDataURL(outputType, quality);
+        resolve(compressedBase64);
+      };
+      img.onerror = () => {
+        resolve(reader.result as string);
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
 
 // =========================================================================
 // CUSTOM CATEGORY SELECT COMPONENT
@@ -281,24 +476,19 @@ const CategorySelectField: React.FC<CategorySelectProps> = ({
 
   return (
     <div ref={dropdownRef} className="relative w-full">
-      {/* Floating Notch Select Box */}
+      <FormLabel>Category</FormLabel>
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative w-full h-11 px-3.5 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all shadow-2xs ${
+        className={`relative w-full h-11 px-4 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
           isOpen
-            ? 'border-[#33077C] ring-2 ring-[#33077C]/15'
+            ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10'
             : value
-            ? 'border-[#33077C]/60 hover:border-[#33077C]'
-            : 'border-slate-300 hover:border-slate-400'
+            ? 'border-slate-300 hover:border-slate-400'
+            : 'border-slate-200 hover:border-slate-300'
         }`}
       >
-        {/* Floating notch label */}
-        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
-          Category
-        </span>
-
         {/* Selected value or placeholder */}
-        <span className={`text-xs sm:text-sm font-medium truncate ${value ? 'text-slate-900 font-semibold' : 'text-slate-400'}`}>
+        <span className={`text-xs sm:text-[13px] font-medium truncate ${value ? 'text-slate-900 font-semibold' : 'text-slate-400'}`}>
           {value || 'Select Category'}
         </span>
 
@@ -497,24 +687,19 @@ const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
 
   return (
     <div ref={dropdownRef} className="relative w-full">
-      {/* Floating Notch Select Box */}
+      <FormLabel>Subcategory</FormLabel>
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative w-full h-11 px-3.5 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all shadow-2xs ${
+        className={`relative w-full h-11 px-4 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
           isOpen
-            ? 'border-[#33077C] ring-2 ring-[#33077C]/15'
+            ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10'
             : value
-            ? 'border-[#33077C]/60 hover:border-[#33077C]'
-            : 'border-slate-300 hover:border-slate-400'
+            ? 'border-slate-300 hover:border-slate-400'
+            : 'border-slate-200 hover:border-slate-300'
         }`}
       >
-        {/* Floating notch label */}
-        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
-          Subcategory
-        </span>
-
         {/* Selected value or placeholder */}
-        <span className={`text-xs sm:text-sm font-medium truncate ${value ? 'text-slate-900 font-semibold' : 'text-slate-400'}`}>
+        <span className={`text-xs sm:text-[13px] font-medium truncate ${value ? 'text-slate-900 font-semibold' : 'text-slate-400'}`}>
           {value || 'Select Subcategory'}
         </span>
 
@@ -709,6 +894,7 @@ export const InventoryProductsView: React.FC = () => {
   const [batchTaxDropdownOpen, setBatchTaxDropdownOpen] = useState(false);
   const [isBulkStatusLoading, setIsBulkStatusLoading] = useState(false);
   const [isSavingBulkUpdate, setIsSavingBulkUpdate] = useState(false);
+  const [bulkRowErrors, setBulkRowErrors] = useState<Record<string, { productCode?: string; field?: string; message: string }>>({});
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
@@ -739,7 +925,7 @@ export const InventoryProductsView: React.FC = () => {
       setIsLoading(true);
 
       try {
-        const res = await productApi.getProducts({
+        const prodResult = await productApi.getProducts({
           page_no: page,
           page_size: pageSize,
           pagination_required: true,
@@ -750,15 +936,15 @@ export const InventoryProductsView: React.FC = () => {
           itemType: appliedType !== 'ALL' ? (appliedType as 'Product' | 'Service') : undefined,
         });
 
-        if (res && res.success && Array.isArray(res.data)) {
-          const mapped = res.data.map((item, idx) =>
-            mapApiProductToProductItem(item, (page - 1) * pageSize + idx)
-          );
+        if (prodResult?.success && Array.isArray(prodResult.data)) {
+          const mapped = prodResult.data.map((item, idx) => {
+            return mapApiProductToProductItem(item, (page - 1) * pageSize + idx);
+          });
           setProducts(mapped);
           setIsApiConnected(true);
-          if (res.pagination) {
-            setTotalApiRecords(res.pagination.totalRecords);
-            setTotalApiPages(res.pagination.totalPages);
+          if (prodResult.pagination) {
+            setTotalApiRecords(prodResult.pagination.totalRecords);
+            setTotalApiPages(prodResult.pagination.totalPages);
           }
         } else {
           setIsApiConnected(false);
@@ -777,6 +963,18 @@ export const InventoryProductsView: React.FC = () => {
   useEffect(() => {
     loadProducts();
   }, [loadProducts]);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   /**
    * Fetch live categories to populate dropdowns in Add/Edit modal and filter
@@ -819,8 +1017,7 @@ export const InventoryProductsView: React.FC = () => {
 
   useEffect(() => {
     fetchLiveCategories();
-    fetchLiveSubcategories();
-  }, [fetchLiveCategories, fetchLiveSubcategories]);
+  }, [fetchLiveCategories]);
 
   // Open Details Modal (GET /commerce/products/:id)
   const handleOpenDetailModal = async (prod: ProductItem) => {
@@ -833,7 +1030,14 @@ export const InventoryProductsView: React.FC = () => {
     try {
       const res = await productApi.getProductById(prod.id);
       if (res?.success && res.data) {
-        setSelectedProductDetail(res.data);
+        const d = res.data;
+        const effImg = d.itemImage || d.image || d.imageBase64 || prod.itemImage || prod.image || prod.imageBase64;
+        setSelectedProductDetail({
+          ...d,
+          itemImage: effImg,
+          image: effImg,
+          imageBase64: effImg,
+        });
         return;
       }
     } catch (apiErr: any) {
@@ -843,6 +1047,7 @@ export const InventoryProductsView: React.FC = () => {
     }
 
     // Local fallback for details
+    const effImg = prod.itemImage || prod.image || prod.imageBase64;
     setSelectedProductDetail({
       id: prod.id,
       organizationId: '',
@@ -854,7 +1059,9 @@ export const InventoryProductsView: React.FC = () => {
       unit: prod.unit,
       category: prod.category,
       subcategory: prod.subcategory,
-      itemImage: prod.itemImage,
+      itemImage: effImg,
+      image: effImg,
+      imageBase64: effImg,
       salePrice: prod.salePrice,
       salePriceTaxType: prod.salePriceTaxType,
       discountValue: prod.discountValue,
@@ -937,6 +1144,7 @@ export const InventoryProductsView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
   const [activeTab, setActiveTab] = useState<'Pricing' | 'Stock'>('Pricing');
+  const isAtPriceManuallyEdited = useRef(false);
 
   // Secondary sub-modals for Unit & HSN search
   const [isUnitModalOpen, setIsUnitModalOpen] = useState(false);
@@ -1002,9 +1210,6 @@ export const InventoryProductsView: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => {
-    loadUnits();
-  }, [loadUnits]);
 
   // State for creating a new custom unit inside the Unit dialog
   const [newUnitFullName, setNewUnitFullName] = useState('');
@@ -1149,8 +1354,10 @@ export const InventoryProductsView: React.FC = () => {
     }
   };
 
-  // Image Upload reference
+  // Image Upload reference & reactive local state
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [itemImageState, setItemImageState] = useState<string>('');
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
 
   // React Hook Form instance for Add / Edit Item Modal
   const {
@@ -1165,6 +1372,11 @@ export const InventoryProductsView: React.FC = () => {
     mode: 'onChange',
     defaultValues: defaultProductFormValues,
   });
+
+  // Explicitly register itemImage so React Hook Form tracks it
+  useEffect(() => {
+    register('itemImage');
+  }, [register]);
 
   const formData = watch();
 
@@ -1244,6 +1456,21 @@ export const InventoryProductsView: React.FC = () => {
     };
   }, [activeDropdownId, activeShareId, isBulkMenuOpen]);
 
+  // Auto-fetch salePrice (or purchasePrice) into atPrice when Stock tab is activated
+  useEffect(() => {
+    if (activeTab === 'Stock' && isModalOpen) {
+      const currentAtPrice = getValues('atPrice');
+      const currentSalePrice = getValues('salePrice');
+      const currentPurchasePrice = getValues('purchasePrice');
+      if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
+        const fallbackPrice = currentSalePrice || currentPurchasePrice || '';
+        if (fallbackPrice) {
+          setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
+        }
+      }
+    }
+  }, [activeTab, isModalOpen, getValues, setValue]);
+
   // Generate Unique Code
   const generateNewCode = (type: 'Product' | 'Service') => {
     const prefix = type === 'Product' ? 'PRD' : 'SRV';
@@ -1252,13 +1479,16 @@ export const InventoryProductsView: React.FC = () => {
   };
 
   const handleOpenAddModal = (defaultType?: 'Product' | 'Service' | React.MouseEvent) => {
-    fetchLiveCategories();
-    fetchLiveSubcategories();
+    if (allAvailableUnits.length === 0) loadUnits();
+    if (categories.length === 0) fetchLiveCategories();
+    if (masterSubcategories.length === 0) fetchLiveSubcategories();
     const type = typeof defaultType === 'string' ? defaultType : 'Product';
     setEditingProduct(null);
     setActiveTab('Pricing');
+    isAtPriceManuallyEdited.current = false;
     setSelectedBaseUnit('');
     setSelectedSecondaryUnit('None');
+    setItemImageState('');
     reset({
       ...defaultProductFormValues,
       itemType: type,
@@ -1269,15 +1499,19 @@ export const InventoryProductsView: React.FC = () => {
       secondaryUnit: undefined,
       category: categories[0] || 'General',
       subcategory: '',
+      itemImage: '',
     });
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (prod: ProductItem) => {
-    fetchLiveCategories();
-    fetchLiveSubcategories();
+    if (allAvailableUnits.length === 0) loadUnits();
+    if (categories.length === 0) fetchLiveCategories();
+    if (masterSubcategories.length === 0) fetchLiveSubcategories();
     setEditingProduct(prod);
     setActiveTab('Pricing');
+    const initialAtPrice = prod.atPrice || prod.salePrice || prod.purchasePrice || '';
+    isAtPriceManuallyEdited.current = Boolean(prod.atPrice && Number(prod.atPrice) > 0);
     const matchedBase = allAvailableUnits.find(
       (u) =>
         u.id === prod.baseUnitId ||
@@ -1307,6 +1541,11 @@ export const InventoryProductsView: React.FC = () => {
       setSelectedSecondaryUnit('None');
     }
 
+    const currentImg = prod.itemImage || prod.image || prod.imageBase64 || '';
+    const cachedImg = getProductImageFromCache(prod.id, prod.productCode, currentImg);
+    const resolvedImg = cachedImg || currentImg;
+    setItemImageState(resolvedImg);
+
     reset({
       itemType: prod.itemType,
       productCode: prod.productCode,
@@ -1318,7 +1557,7 @@ export const InventoryProductsView: React.FC = () => {
       secondaryUnit: prod.secondaryUnit || (matchedSec ? (matchedSec.shortCode || matchedSec.name) : undefined),
       category: prod.category || '',
       subcategory: prod.subcategory || '',
-      itemImage: prod.itemImage || '',
+      itemImage: resolvedImg,
       salePrice: prod.salePrice || '',
       salePriceTaxType: prod.salePriceTaxType || 'Excluded',
       discountValue: prod.discountValue || '',
@@ -1331,7 +1570,7 @@ export const InventoryProductsView: React.FC = () => {
       purchasePriceTaxType: prod.purchasePriceTaxType || 'Excluded',
       taxRate: prod.taxRate || 'None',
       openingStock: prod.openingStock || '',
-      atPrice: prod.atPrice || '',
+      atPrice: initialAtPrice,
       asOfDate: prod.asOfDate || new Date().toISOString().split('T')[0],
       minStockAlert: prod.minStockAlert || '',
       location: prod.location || '',
@@ -1343,30 +1582,34 @@ export const InventoryProductsView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith('image/')) {
-        toast.error('Please select a valid image file (PNG, JPG, JPEG, WEBP, etc.)');
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error('Image size must be less than 5MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64String = reader.result as string;
-        setValue('itemImage', base64String, { shouldValidate: true, shouldDirty: true });
-        setFormData((prev) => ({ ...prev, itemImage: base64String }));
-      };
-      reader.onerror = () => {
-        toast.error('Failed to convert image to Base64 format');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select a valid image file (PNG, JPG, JPEG, WEBP, etc.)');
+      return;
     }
-    if (e.target) {
-      e.target.value = '';
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Image size must be less than 10MB');
+      return;
+    }
+
+    try {
+      setIsUploadingImage(true);
+      const base64String = await compressImageFile(file);
+      setItemImageState(base64String);
+      setValue('itemImage', base64String, { shouldValidate: true, shouldDirty: true });
+      setFormData((prev) => ({ ...prev, itemImage: base64String }));
+      toast.success('Image selected successfully');
+    } catch (err) {
+      console.error('Image upload processing failed:', err);
+      toast.error('Failed to process image');
+    } finally {
+      setIsUploadingImage(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -1387,19 +1630,14 @@ export const InventoryProductsView: React.FC = () => {
       });
       if (res?.success && res.data) {
         setMasterSubcategories((prev) => [res.data, ...prev]);
+        toast.success(`Subcategory "${trimmed}" created successfully.`);
         return;
       }
-    } catch (err) {
-      console.warn('Subcategory creation in master API failed, saving locally:', err);
+    } catch (err: any) {
+      console.warn('Subcategory creation in master API failed:', err);
+      const errMsg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || 'Failed to create subcategory';
+      toast.error(errMsg);
     }
-    const localSub: ApiSubcategory = {
-      id: `sub-${Date.now()}`,
-      organizationId: '',
-      category: formData.category || 'General',
-      subcategory: trimmed,
-      status: 'Active',
-    };
-    setMasterSubcategories((prev) => [localSub, ...prev]);
   };
 
   const availableSubcategories = useMemo(() => {
@@ -1440,9 +1678,17 @@ export const InventoryProductsView: React.FC = () => {
     const openingStockNum = Number(data.openingStock) || 0;
     const atPriceNum = Number(data.atPrice) || purchasePriceNum;
     const minStockAlertNum = Number(data.minStockAlert) || 0;
+    if (data.discountType === 'Amount' && discountValNum > salePriceNum) {
+      toast.error(`Discount amount (₹${discountValNum}) exceeds the sale price (₹${salePriceNum})`);
+      return;
+    }
+    if (data.discountType === 'Percentage' && discountValNum > 100) {
+      toast.error('Discount percentage cannot exceed 100%');
+      return;
+    }
     const finalStatus = (editingProduct ? editingProduct.status : 'Active') as 'Active' | 'Inactive';
 
-    const imageBase64Data = (data.itemImage || formData.itemImage || '').trim();
+    const imageBase64Data = (itemImageState || data.itemImage || formData.itemImage || '').trim();
     let finalImageUrl: string | null = null;
     if (imageBase64Data) {
       if (imageBase64Data.startsWith('data:')) {
@@ -1452,8 +1698,21 @@ export const InventoryProductsView: React.FC = () => {
             folder: 'items',
             fileName: `item_${Date.now()}.png`,
           });
-          if (uploadRes.data?.data?.url) {
-            finalImageUrl = uploadRes.data.data.url;
+          const returnedUrl =
+            (typeof uploadRes.data?.data === 'string' ? uploadRes.data.data : null) ||
+            uploadRes.data?.data?.url ||
+            uploadRes.data?.data?.fileUrl ||
+            uploadRes.data?.data?.imageUrl ||
+            uploadRes.data?.data?.location ||
+            uploadRes.data?.data?.path ||
+            (typeof uploadRes.data === 'string' ? uploadRes.data : null) ||
+            uploadRes.data?.url ||
+            uploadRes.data?.fileUrl ||
+            uploadRes.data?.imageUrl ||
+            uploadRes.data?.location;
+
+          if (returnedUrl && typeof returnedUrl === 'string') {
+            finalImageUrl = returnedUrl;
           } else {
             finalImageUrl = imageBase64Data;
           }
@@ -1478,7 +1737,9 @@ export const InventoryProductsView: React.FC = () => {
       secondaryUnitId: data.secondaryUnitId !== undefined ? data.secondaryUnitId : null,
       category: data.category || 'General',
       subcategory: data.subcategory?.trim() || undefined,
-      itemImage: finalImageUrl,
+      itemImage: finalImageUrl || imageBase64Data || undefined,
+      image: finalImageUrl || imageBase64Data || undefined,
+      imageBase64: imageBase64Data || finalImageUrl || undefined,
       salePrice: salePriceNum,
       salePriceTaxType: data.salePriceTaxType,
       discountValue: discountValNum,
@@ -1511,15 +1772,40 @@ export const InventoryProductsView: React.FC = () => {
           const res = await productApi.updateProduct(editingProduct.id, payload);
           if (res?.success && res.data) {
             const updated = mapApiProductToProductItem(res.data);
+            const effImage =
+              cleanProductImage(res.data.itemImage) ||
+              cleanProductImage(res.data.image) ||
+              cleanProductImage(res.data.imageBase64) ||
+              cleanProductImage(updated.itemImage) ||
+              finalImageUrl ||
+              undefined;
+
+            const effBase64 =
+              (imageBase64Data && imageBase64Data.startsWith('data:') ? imageBase64Data : '') ||
+              cleanProductImage(res.data.imageBase64) ||
+              cleanProductImage(updated.imageBase64) ||
+              effImage;
+
+            if (effBase64 && effBase64.startsWith('data:')) {
+              saveProductImageToCache(editingProduct.id, effBase64);
+              if (finalCode) saveProductImageToCache(finalCode, effBase64);
+              if (res.data.id) saveProductImageToCache(res.data.id, effBase64);
+              if (res.data.productCode) saveProductImageToCache(res.data.productCode, effBase64);
+              if (res.data.sku) saveProductImageToCache(res.data.sku, effBase64);
+              if (res.data.itemImage) saveProductImageToCache(res.data.itemImage, effBase64);
+            }
+
             setProducts((prev) =>
               prev.map((p) =>
-                p.id === editingProduct.id
+                p.id === editingProduct.id ||
+                p.id === res.data.id ||
+                (p.productCode && (p.productCode === finalCode || p.productCode === res.data.productCode || p.productCode === res.data.sku))
                   ? {
                       ...p,
                       ...updated,
-                      itemImage: finalImageUrl || undefined,
-                      image: finalImageUrl || undefined,
-                      imageBase64: finalImageUrl || undefined,
+                      itemImage: effImage,
+                      image: effImage,
+                      imageBase64: effBase64,
                     }
                   : p
               )
@@ -1529,42 +1815,45 @@ export const InventoryProductsView: React.FC = () => {
             return;
           }
         } catch (apiErr: any) {
-          console.warn('Remote product update failed, updating locally:', apiErr);
+          console.error('Remote product update failed:', apiErr);
+          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to update product';
+          toast.error(errMsg);
+          return;
         }
-
-        // Local fallback
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editingProduct.id
-              ? {
-                  ...p,
-                  ...payload,
-                  itemImage: finalImageUrl || undefined,
-                  image: finalImageUrl || undefined,
-                  imageBase64: finalImageUrl || undefined,
-                  subcategory: data.subcategory?.trim() || undefined,
-                  baseUnitId: data.baseUnitId,
-                  secondaryUnitId: data.secondaryUnitId,
-                  secondaryUnit: data.secondaryUnit,
-                  location: data.location,
-                  status: finalStatus,
-                }
-              : p
-          )
-        );
-        toast.success(`Item "${data.productName}" updated!`);
       } else {
         // POST /commerce/products
         try {
           const res = await productApi.createProduct(payload);
           if (res?.success && res.data) {
             const created = mapApiProductToProductItem(res.data);
+            const effImage =
+              cleanProductImage(res.data.itemImage) ||
+              cleanProductImage(res.data.image) ||
+              cleanProductImage(res.data.imageBase64) ||
+              cleanProductImage(created.itemImage) ||
+              finalImageUrl ||
+              undefined;
+
+            const effBase64 =
+              (imageBase64Data && imageBase64Data.startsWith('data:') ? imageBase64Data : '') ||
+              cleanProductImage(res.data.imageBase64) ||
+              cleanProductImage(created.imageBase64) ||
+              effImage;
+
+            if (effBase64 && effBase64.startsWith('data:')) {
+              if (res.data.id) saveProductImageToCache(res.data.id, effBase64);
+              if (res.data.productCode) saveProductImageToCache(res.data.productCode, effBase64);
+              if (res.data.sku) saveProductImageToCache(res.data.sku, effBase64);
+              if (finalCode) saveProductImageToCache(finalCode, effBase64);
+              if (res.data.itemImage) saveProductImageToCache(res.data.itemImage, effBase64);
+            }
+
             setProducts((prev) => [
               {
                 ...created,
-                itemImage: finalImageUrl || undefined,
-                image: finalImageUrl || undefined,
-                imageBase64: finalImageUrl || undefined,
+                itemImage: effImage,
+                image: effImage,
+                imageBase64: effBase64,
               },
               ...prev,
             ]);
@@ -1574,30 +1863,16 @@ export const InventoryProductsView: React.FC = () => {
             return;
           }
         } catch (apiErr: any) {
-          console.warn('Remote product create failed, adding locally:', apiErr);
+          console.error('Remote product create failed:', apiErr);
+          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to create product';
+          toast.error(errMsg);
+          return;
         }
-
-        // Local fallback
-        const newItem: ProductItem = {
-          id: `prod-${Date.now()}`,
-          sNo: (totalApiRecords || products.length) + 1,
-          ...payload,
-          itemImage: finalImageUrl || undefined,
-          image: finalImageUrl || undefined,
-          imageBase64: finalImageUrl || undefined,
-          subcategory: data.subcategory?.trim() || undefined,
-          baseUnitId: data.baseUnitId,
-          secondaryUnitId: data.secondaryUnitId,
-          secondaryUnit: data.secondaryUnit,
-          location: data.location,
-          status: 'Active',
-        };
-        setProducts((prev) => [newItem, ...prev]);
-        toast.success(`Item "${data.productName}" added!`);
       }
     } finally {
       setIsSubmitting(false);
       if (keepOpenAfterSave) {
+        setItemImageState('');
         setEditingProduct(null);
         reset({
           ...defaultProductFormValues,
@@ -1609,9 +1884,11 @@ export const InventoryProductsView: React.FC = () => {
           baseUnitId: data.baseUnitId,
           secondaryUnitId: null,
           secondaryUnit: undefined,
+          itemImage: '',
         });
         setActiveTab('Pricing');
       } else {
+        setItemImageState('');
         setIsModalOpen(false);
       }
     }
@@ -1737,18 +2014,40 @@ export const InventoryProductsView: React.FC = () => {
 
   // Open Full "Bulk Update Items" screen
   const handleOpenBulkUpdateModal = () => {
+    loadUnits();
     setIsBulkMenuOpen(false);
     setBulkItems(JSON.parse(JSON.stringify(products)));
     setBulkSelectedIds([]);
     setBulkSearch('');
     setBulkTab('Pricing');
+    setBulkRowErrors({});
     setIsBulkUpdateModalOpen(true);
   };
 
   // Update specific field in bulkItems
+  // Update specific field in bulkItems with dynamic validation clearing
   const handleBulkItemChange = (id: string, field: keyof ProductItem, value: any) => {
     setBulkItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const updated = { ...item, [field]: value };
+        if (bulkRowErrors[id]) {
+          const discVal = Number(field === 'discountValue' ? value : updated.discountValue) || 0;
+          const salePrc = Number(field === 'salePrice' ? value : updated.salePrice) || 0;
+          const discType = field === 'discountType' ? value : updated.discountType;
+          let isValid = true;
+          if (discType === 'Amount' && discVal > salePrc) isValid = false;
+          if (discType === 'Percentage' && discVal > 100) isValid = false;
+          if (isValid) {
+            setBulkRowErrors((errs) => {
+              const next = { ...errs };
+              delete next[id];
+              return next;
+            });
+          }
+        }
+        return updated;
+      })
     );
   };
 
@@ -1916,6 +2215,48 @@ export const InventoryProductsView: React.FC = () => {
       return;
     }
 
+    // Client-side validation: ensure discounts do not exceed sale prices
+    const validationErrors: Record<string, { productCode: string; field: string; message: string }> = {};
+    pricingRows.forEach((row) => {
+      const salePrc = Number(row.salePrice) || 0;
+      const discVal = Number(row.discountValue) || 0;
+      const discType = row.discountType || 'Percentage';
+      const originalItem = bulkItems.find((b) => b.id === row.id);
+      const prodCode = originalItem?.productCode || originalItem?.productName || row.id;
+
+      if (discType === 'Amount' && discVal > salePrc) {
+        validationErrors[row.id] = {
+          productCode: prodCode,
+          field: 'discountValue',
+          message: `Discount amount ${discVal} exceeds the sale price ${salePrc}`,
+        };
+      } else if (discType === 'Percentage' && discVal > 100) {
+        validationErrors[row.id] = {
+          productCode: prodCode,
+          field: 'discountValue',
+          message: `Discount percentage (${discVal}%) exceeds 100%`,
+        };
+      } else if (salePrc < 0 || discVal < 0 || Number(row.purchasePrice || 0) < 0) {
+        validationErrors[row.id] = {
+          productCode: prodCode,
+          field: 'salePrice',
+          message: 'Price and discount values cannot be negative',
+        };
+      }
+    });
+
+    if (Object.keys(validationErrors).length > 0) {
+      setBulkRowErrors(validationErrors);
+      setBulkTab('Pricing');
+      const count = Object.keys(validationErrors).length;
+      const firstErrMsg = Object.values(validationErrors)[0].message;
+      toast.error(
+        count === 1
+          ? `Validation error: ${firstErrMsg}`
+          : `${count} items failed validation. Discount amounts cannot exceed the sale price.`
+      );
+      return;
+    }
     const payload: BulkUpdateProductsPayload = {
       common: commonRows,
       pricing: pricingRows,
@@ -1938,13 +2279,24 @@ export const InventoryProductsView: React.FC = () => {
       const errData = err?.response?.data;
       const failedList = errData?.data?.failed;
       if (Array.isArray(failedList) && failedList.length > 0) {
+        const errorsMap: Record<string, { productCode: string; field: string; message: string }> = {};
+        failedList.forEach((f: any) => {
+          const firstErr = f.errors?.[0];
+          errorsMap[f.id] = {
+            productCode: f.productCode || f.id,
+            field: firstErr?.field || 'discountValue',
+            message: firstErr?.message || 'Validation error',
+          };
+        });
+        setBulkRowErrors(errorsMap);
+        setBulkTab('Pricing');
         const errorDetails = failedList
           .map((f: any) => {
             const itemMsg = f.errors?.map((e: any) => e.message).join(', ');
             return `${f.productCode || f.id}: ${itemMsg || 'Validation error'}`;
           })
-          .join('\n');
-        toast.error(`Bulk update validation failed:\n${errorDetails}`);
+          .join('; ');
+        toast.error(`Bulk update failed (422): ${errorDetails}`);
       } else {
         const errMsg =
           errData?.error?.message ||
@@ -2023,9 +2375,12 @@ export const InventoryProductsView: React.FC = () => {
     const totalItems = products.length;
     const totalProducts = products.filter((p) => p.itemType === 'Product').length;
     const lowStockCount = products.filter(
-      (p) => p.openingStock <= (p.minStockAlert || 5)
+      (p) => (p.currentStock !== undefined ? p.currentStock : p.openingStock) <= (p.minStockAlert || 5)
     ).length;
-    const totalStockVal = products.reduce((sum, p) => sum + (p.openingStock * (p.purchasePrice || p.salePrice || 0)), 0);
+    const totalStockVal = products.reduce((sum, p) => {
+      const stock = p.currentStock !== undefined ? p.currentStock : p.openingStock;
+      return sum + (stock * (p.purchasePrice || p.salePrice || 0));
+    }, 0);
 
     return { totalItems, totalProducts, lowStockCount, totalStockVal };
   }, [products]);
@@ -2085,11 +2440,12 @@ export const InventoryProductsView: React.FC = () => {
       hsnCode: p.hsnCode || '-',
       unit: p.unit,
       category: p.category,
+      subcategory: p.subcategory || '-',
       salePrice: Number(p.salePrice || 0),
       salePriceTaxType: p.salePriceTaxType,
       purchasePrice: Number(p.purchasePrice || 0),
       taxRate: Number(p.taxRate || 0),
-      openingStock: Number(p.openingStock || 0),
+      openingStock: Number((p.currentStock !== undefined ? p.currentStock : p.openingStock) || 0),
       status: p.status,
     }));
 
@@ -2108,6 +2464,7 @@ export const InventoryProductsView: React.FC = () => {
         { header: 'HSN/SAC', key: 'hsnCode', align: 'center', width: 12 },
         { header: 'Unit', key: 'unit', align: 'center', width: 12 },
         { header: 'Category', key: 'category', align: 'left', width: 20 },
+        { header: 'Subcategory', key: 'subcategory', align: 'left', width: 20 },
         { header: 'Sale Price (₹)', key: 'salePrice', align: 'right', type: 'currency', width: 16 },
         { header: 'Tax Type', key: 'salePriceTaxType', align: 'center', width: 12 },
         { header: 'Purchase Price (₹)', key: 'purchasePrice', align: 'right', type: 'currency', width: 16 },
@@ -2380,6 +2737,9 @@ export const InventoryProductsView: React.FC = () => {
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
                   CATEGORY
                 </th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
+                  SUBCATEGORY
+                </th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap text-right">
                   SALE PRICE
                 </th>
@@ -2400,7 +2760,7 @@ export const InventoryProductsView: React.FC = () => {
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
               {isLoading ? (
                 <tr>
-                  <td colSpan={10} className="py-16 text-center text-slate-400 font-medium">
+                  <td colSpan={11} className="py-16 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
                       <span className="text-xs text-slate-500 font-semibold">Loading products &amp; services...</span>
@@ -2409,7 +2769,7 @@ export const InventoryProductsView: React.FC = () => {
                 </tr>
               ) : pagedProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={11} className="py-12 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-1.5">
                       <Package className="w-8 h-8 text-slate-300 stroke-[1.5]" />
                       <span className="text-sm font-semibold text-slate-600">No products or services found</span>
@@ -2425,7 +2785,11 @@ export const InventoryProductsView: React.FC = () => {
                 pagedProducts.map((item, index) => {
                   const sNo = (safePage - 1) * pageSize + index + 1;
                   const isDropdownOpen = activeDropdownId === item.id;
-                  const isLowStock = item.openingStock <= (item.minStockAlert || 5);
+                  const hasLiveStock = item.currentStock !== undefined || item.inStock !== undefined;
+                  const liveStock = item.currentStock !== undefined ? item.currentStock : item.inStock;
+                  const displayStock = hasLiveStock ? (liveStock ?? 0) : item.openingStock;
+                  const isOutOfStock = hasLiveStock && displayStock === 0;
+                  const isLowStock = displayStock <= (item.minStockAlert || 5);
                   const isSelected = selectedIds.includes(item.id);
 
                   return (
@@ -2465,17 +2829,14 @@ export const InventoryProductsView: React.FC = () => {
                       {/* ITEM NAME */}
                       <td className="py-4 px-5 font-semibold text-slate-800 border-r border-slate-200">
                         <div className="flex items-center gap-3">
-                          {item.itemImage ? (
-                            <img
-                              src={item.itemImage}
-                              alt={item.productName}
-                              className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 flex items-center justify-center text-[#33077C] shrink-0 font-bold">
-                              <Package className="w-4 h-4 text-[#33077C]" />
-                            </div>
-                          )}
+                          <ProductThumbnail
+                            src={item.itemImage || item.image || item.imageBase64}
+                            fallbackSrc={item.imageBase64 || item.image}
+                            productId={item.id}
+                            productCode={item.productCode}
+                            alt={item.productName}
+                            size="sm"
+                          />
                           <div>
                             <div className="font-bold text-slate-900 leading-snug">{item.productName}</div>
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2498,6 +2859,17 @@ export const InventoryProductsView: React.FC = () => {
                       {/* CATEGORY */}
                       <td className="py-4 px-5 font-medium text-slate-700 border-r border-slate-200">
                         {item.category || '-'}
+                      </td>
+
+                      {/* SUBCATEGORY */}
+                      <td className="py-4 px-5 font-medium text-slate-700 border-r border-slate-200">
+                        {item.subcategory ? (
+                          <span className="px-2.5 py-1 rounded-md bg-purple-50/60 text-[#33077C] font-semibold text-xs border border-purple-200/60 inline-block">
+                            {item.subcategory}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 font-normal italic">-</span>
+                        )}
                       </td>
 
                       {/* SALE PRICE */}
@@ -2527,15 +2899,27 @@ export const InventoryProductsView: React.FC = () => {
                         <div className="inline-flex flex-col items-center">
                           <span
                             className={`font-bold px-2 py-0.5 rounded-md text-xs ${
-                              isLowStock
-                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              isOutOfStock
+                                ? 'bg-rose-100 text-rose-700 border border-rose-300'
+                                : isLowStock
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
                                 : 'text-slate-800'
                             }`}
                           >
-                            {item.openingStock} {item.unit}
+                            {displayStock} {item.unit}
                           </span>
-                          {isLowStock && (
-                            <span className="text-[10px] font-bold text-rose-500">Low Stock</span>
+                          {isOutOfStock ? (
+                            <span className="text-[10px] font-bold text-rose-600 mt-0.5">Out of Stock</span>
+                          ) : isLowStock ? (
+                            <span className="text-[10px] font-bold text-amber-600 mt-0.5">Low Stock</span>
+                          ) : null}
+                          {hasLiveStock && item.openingStock !== undefined && item.openingStock !== displayStock && (
+                            <span
+                              className="text-[10px] text-slate-400 font-medium mt-0.5"
+                              title="Opening stock registered during product creation"
+                            >
+                              Opening: {item.openingStock}
+                            </span>
                           )}
                         </div>
                       </td>
@@ -2635,9 +3019,9 @@ export const InventoryProductsView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenDetailModal(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Eye className="w-4 h-4 text-slate-400" />
+                                  <Eye className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
                                   <span>View Details</span>
                                 </button>
 
@@ -2649,9 +3033,9 @@ export const InventoryProductsView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Pencil className="w-4 h-4 text-slate-400" />
+                                  <Pencil className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
                                   <span>Edit</span>
                                 </button>
 
@@ -2659,16 +3043,16 @@ export const InventoryProductsView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleToggleStatus(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-purple-50/50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
                                   {item.status === 'Active' ? (
                                     <>
-                                      <Ban className="w-4 h-4 text-slate-400" />
+                                      <Ban className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
                                       <span>Deactivate</span>
                                     </>
                                   ) : (
                                     <>
-                                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                                      <CheckCircle2 className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
                                       <span>Activate</span>
                                     </>
                                   )}
@@ -2684,9 +3068,9 @@ export const InventoryProductsView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Trash2 className="w-4 h-4 text-rose-500" />
+                                  <Trash2 className="w-4 h-4 text-rose-500 group-hover:text-white transition-colors" />
                                   <span>Delete</span>
                                 </button>
                               </div>
@@ -2800,33 +3184,25 @@ export const InventoryProductsView: React.FC = () => {
                   />
                 </div>
 
-                {/* 1.3 Item Name with Floating Notch Label */}
+                {/* 1.3 Item Name */}
                 <div className="md:col-span-6">
-                  <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                    errors.productName
-                      ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                      : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                  }`}>
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
-                      Item Name <span className="text-rose-500">*</span>
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="Enter Item Name"
-                      disabled={isSubmitting}
-                      {...register('productName', {
-                        required: 'Item name is required',
-                        minLength: { value: 2, message: 'Item name must be at least 2 characters' },
-                        validate: (val) =>
-                          /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
-                      })}
-                      onKeyDown={handleTextOnlyKeyDown}
-                      onInput={(e) => {
-                        e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
-                      }}
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                    />
-                  </div>
+                  <FormLabel required>Item Name</FormLabel>
+                  <input
+                    type="text"
+                    placeholder="Enter Item Name"
+                    disabled={isSubmitting}
+                    {...register('productName', {
+                      required: 'Item name is required',
+                      minLength: { value: 2, message: 'Item name must be at least 2 characters' },
+                      validate: (val) =>
+                        /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                    })}
+                    onKeyDown={handleTextOnlyKeyDown}
+                    onInput={(e) => {
+                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                    }}
+                    className={errors.productName ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                  />
                   {errors.productName && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -2838,23 +3214,21 @@ export const InventoryProductsView: React.FC = () => {
 
               {/* Row 2: Item HSN, Select Unit, Add Item Image */}
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-                {/* 2.1 Item HSN with Floating Notch Label */}
+                {/* 2.1 Item HSN */}
                 <div className="md:col-span-4">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight">
-                      Item HSN
-                    </span>
+                  <FormLabel>Item HSN</FormLabel>
+                  <div className="relative">
                     <input
                       type="text"
                       placeholder="Enter Item HSN"
                       value={formData.hsnCode}
                       onChange={(e) => setFormData({ ...formData, hsnCode: e.target.value })}
-                      className="w-full h-full pl-4 pr-10 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                      className={`${FORM_INPUT_CLS} pr-10`}
                     />
                     <button
                       type="button"
                       onClick={() => setIsHsnModalOpen(true)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#33077C] transition-colors cursor-pointer"
                       title="Search HSN / SAC Codes"
                     >
                       <Search className="w-4 h-4" />
@@ -2911,26 +3285,38 @@ export const InventoryProductsView: React.FC = () => {
                     type="file"
                     ref={fileInputRef}
                     accept="image/*"
+                    onClick={(e) => {
+                      (e.currentTarget as HTMLInputElement).value = '';
+                    }}
                     onChange={handleImageUpload}
                     className="hidden"
                   />
-                  {formData.itemImage ? (
+                  {isUploadingImage ? (
+                    <div className="w-full h-11 px-3 bg-[#33077C]/5 border border-[#33077C]/20 rounded-xl flex items-center justify-center gap-2 text-xs font-bold text-[#33077C]">
+                      <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                      <span>Processing image...</span>
+                    </div>
+                  ) : (itemImageState || formData.itemImage) ? (
                     <div className="flex items-center gap-2">
-                      <img
-                        src={formData.itemImage}
+                      <ProductThumbnail
+                        src={itemImageState || formData.itemImage}
+                        fallbackSrc={itemImageState}
+                        productId={editingProduct?.id}
+                        productCode={editingProduct?.productCode}
                         alt="Preview"
-                        className="w-11 h-11 rounded-xl object-cover border border-slate-300"
+                        size="md"
                       />
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="text-xs text-[#33077C] hover:underline font-bold"
+                        className="text-xs text-[#33077C] hover:underline font-bold cursor-pointer"
                       >
                         Change Image
                       </button>
                       <button
                         type="button"
                         onClick={() => {
+                          setItemImageState('');
                           setValue('itemImage', '', { shouldValidate: true, shouldDirty: true });
                           setFormData({ ...formData, itemImage: '' });
                           if (fileInputRef.current) fileInputRef.current.value = '';
@@ -2971,7 +3357,18 @@ export const InventoryProductsView: React.FC = () => {
                 {formData.itemType === 'Product' && (
                   <button
                     type="button"
-                    onClick={() => setActiveTab('Stock')}
+                    onClick={() => {
+                      setActiveTab('Stock');
+                      const currentAtPrice = getValues('atPrice');
+                      const currentSalePrice = getValues('salePrice');
+                      const currentPurchasePrice = getValues('purchasePrice');
+                      if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
+                        const fallbackPrice = currentSalePrice || currentPurchasePrice || '';
+                        if (fallbackPrice) {
+                          setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
+                        }
+                      }
+                    }}
                     className={`pb-3 text-sm font-bold tracking-tight transition-all relative cursor-pointer ${
                       activeTab === 'Stock'
                         ? 'text-[#33077C] border-b-2 border-[#33077C] font-black'
@@ -2991,16 +3388,14 @@ export const InventoryProductsView: React.FC = () => {
                     {/* 1.1 Sale Price Row */}
                     <div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* Sale Price + Tax Type with Floating Notch Label */}
-                        <div className="flex flex-col relative pt-1">
-                          <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        {/* Sale Price + Tax Type */}
+                        <div className="flex flex-col">
+                          <FormLabel>Sale Price</FormLabel>
+                          <div className={`relative flex items-center h-11 bg-white rounded-xl transition-all ${
                             errors.salePrice
-                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10'
+                              : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10'
                           }`}>
-                            <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                              Sale Price
-                            </span>
                             <input
                               type="text"
                               inputMode="decimal"
@@ -3009,13 +3404,19 @@ export const InventoryProductsView: React.FC = () => {
                                 validate: (val) =>
                                   val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
                               })}
+                              value={formData.salePrice ?? ''}
                               onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
                               onInput={(e) => {
-                                e.currentTarget.value = e.currentTarget.value
+                                const sanitized = e.currentTarget.value
                                   .replace(/[^0-9.]/g, '')
                                   .replace(/(\..*?)\..*/g, '$1');
+                                e.currentTarget.value = sanitized;
+                                setValue('salePrice', sanitized as any, { shouldValidate: true });
+                                if (!isAtPriceManuallyEdited.current || !getValues('atPrice') || Number(getValues('atPrice')) === 0) {
+                                  setValue('atPrice', sanitized as any, { shouldValidate: true });
+                                }
                               }}
-                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                             />
                             <select
                               value={formData.salePriceTaxType}
@@ -3036,16 +3437,14 @@ export const InventoryProductsView: React.FC = () => {
                           )}
                         </div>
 
-                        {/* Disc. On Sale Price + Disc Type with Floating Notch Label */}
-                        <div className="flex flex-col relative pt-1">
-                          <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                        {/* Disc. On Sale Price + Disc Type */}
+                        <div className="flex flex-col">
+                          <FormLabel>Disc. On Sale Price</FormLabel>
+                          <div className={`relative flex items-center h-11 bg-white rounded-xl transition-all ${
                             errors.discountValue
-                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                              : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                              ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10'
+                              : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10'
                           }`}>
-                            <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                              Disc. On Sale Price
-                            </span>
                             <input
                               type="text"
                               inputMode="decimal"
@@ -3060,7 +3459,7 @@ export const InventoryProductsView: React.FC = () => {
                                   .replace(/[^0-9.]/g, '')
                                   .replace(/(\..*?)\..*/g, '$1');
                               }}
-                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                              className="flex-1 h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                             />
                             <select
                               value={formData.discountType}
@@ -3115,16 +3514,14 @@ export const InventoryProductsView: React.FC = () => {
 
                         {formData.hasWholesale && (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 animate-in fade-in duration-100">
-                            {/* Wholesale Price + Tax Type with Floating Notch Label */}
-                            <div className="flex flex-col relative pt-1">
-                              <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                            {/* Wholesale Price + Tax Type */}
+                            <div className="flex flex-col">
+                              <FormLabel>Wholesale Price</FormLabel>
+                              <div className={`relative flex items-center h-11 bg-white rounded-xl transition-all ${
                                 errors.wholesalePrice
-                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10'
+                                  : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10'
                               }`}>
-                                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                                  Wholesale Price
-                                </span>
                                 <input
                                   type="text"
                                   inputMode="decimal"
@@ -3139,7 +3536,7 @@ export const InventoryProductsView: React.FC = () => {
                                       .replace(/[^0-9.]/g, '')
                                       .replace(/(\..*?)\..*/g, '$1');
                                   }}
-                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                                 />
                                 <select
                                   value={formData.wholesaleTaxType}
@@ -3160,16 +3557,14 @@ export const InventoryProductsView: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Minimum Wholesale Qty with Floating Notch Label */}
-                            <div className="flex flex-col relative pt-1">
-                              <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs pr-3 transition-all ${
+                            {/* Minimum Wholesale Qty */}
+                            <div className="flex flex-col">
+                              <FormLabel>Min Wholesale Qty</FormLabel>
+                              <div className={`relative flex items-center h-11 bg-white rounded-xl pr-3 transition-all ${
                                 errors.minWholesaleQty
-                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10'
+                                  : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10'
                               }`}>
-                                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                                  Min Wholesale Qty
-                                </span>
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -3182,7 +3577,7 @@ export const InventoryProductsView: React.FC = () => {
                                   onInput={(e) => {
                                     e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
                                   }}
-                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                  className="flex-1 h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                                 />
                                 <div
                                   title="Minimum order quantity for wholesale pricing to apply"
@@ -3208,15 +3603,13 @@ export const InventoryProductsView: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* Purchase Price Card */}
                     <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                      <div className="flex flex-col relative pt-1">
-                        <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
+                      <div className="flex flex-col">
+                        <FormLabel>Purchase Price</FormLabel>
+                        <div className={`relative flex items-center h-11 bg-white rounded-xl transition-all ${
                           errors.purchasePrice
-                            ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                            : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
+                            ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-4 focus-within:ring-rose-500/10'
+                            : 'border border-slate-200 hover:border-slate-300 focus-within:border-[#4309A2] focus-within:ring-4 focus-within:ring-[#4309A2]/10'
                         }`}>
-                          <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                            Purchase Price
-                          </span>
                           <input
                             type="text"
                             inputMode="decimal"
@@ -3225,13 +3618,19 @@ export const InventoryProductsView: React.FC = () => {
                               validate: (val) =>
                                 val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
                             })}
+                            value={formData.purchasePrice ?? ''}
                             onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
                             onInput={(e) => {
-                              e.currentTarget.value = e.currentTarget.value
+                              const sanitized = e.currentTarget.value
                                 .replace(/[^0-9.]/g, '')
                                 .replace(/(\..*?)\..*/g, '$1');
+                              e.currentTarget.value = sanitized;
+                              setValue('purchasePrice', sanitized as any, { shouldValidate: true });
+                              if ((!isAtPriceManuallyEdited.current || !getValues('atPrice') || Number(getValues('atPrice')) === 0) && !getValues('salePrice')) {
+                                setValue('atPrice', sanitized as any, { shouldValidate: true });
+                              }
                             }}
-                            className="flex-1 h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                            className="flex-1 h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                           />
                           <select
                             value={formData.purchasePriceTaxType}
@@ -3255,23 +3654,19 @@ export const InventoryProductsView: React.FC = () => {
 
                     {/* Taxes Card */}
                     <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                      <div className="relative pt-1">
-                        <div className="relative flex items-center h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                          <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                            Taxes
-                          </span>
-                          <select
-                            value={formData.taxRate}
-                            onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })}
-                            className="w-full h-full px-4 bg-transparent rounded-xl text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                          >
-                            {TAX_RATE_OPTIONS.map((tax) => (
-                              <option key={tax.value} value={tax.value}>
-                                {tax.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                      <div>
+                        <FormLabel>Taxes</FormLabel>
+                        <select
+                          value={formData.taxRate}
+                          onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })}
+                          className={FORM_SELECT_CLS}
+                        >
+                          {TAX_RATE_OPTIONS.map((tax) => (
+                            <option key={tax.value} value={tax.value}>
+                              {tax.label}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </div>
                   </div>
@@ -3283,33 +3678,35 @@ export const InventoryProductsView: React.FC = () => {
                 <div className="space-y-4 pt-1 animate-in fade-in duration-100">
                   {/* Row 1: Opening Quantity | At Price | As Of Date */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* 1. Opening Quantity with Floating Notch Label */}
-                    <div className="flex flex-col relative pt-1">
-                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
-                        errors.openingStock
-                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                      }`}>
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          Opening Quantity
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          placeholder="0"
-                          {...register('openingStock', {
-                            validate: (val) =>
-                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                          })}
-                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                          onInput={(e) => {
-                            e.currentTarget.value = e.currentTarget.value
-                              .replace(/[^0-9.]/g, '')
-                              .replace(/(\..*?)\..*/g, '$1');
-                          }}
-                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                      </div>
+                    {/* 1. Opening Quantity */}
+                    <div>
+                      <FormLabel>Opening Quantity</FormLabel>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="0"
+                        {...register('openingStock', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                        })}
+                        value={formData.openingStock ?? ''}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                        onInput={(e) => {
+                          const sanitized = e.currentTarget.value
+                            .replace(/[^0-9.]/g, '')
+                            .replace(/(\..*?)\..*/g, '$1');
+                          e.currentTarget.value = sanitized;
+                          setValue('openingStock', sanitized as any, { shouldValidate: true });
+                          const currentAtPrice = getValues('atPrice');
+                          if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
+                            const fallbackPrice = getValues('salePrice') || getValues('purchasePrice') || '';
+                            if (fallbackPrice) {
+                              setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
+                            }
+                          }
+                        }}
+                        className={errors.openingStock ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                      />
                       {errors.openingStock && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -3318,33 +3715,29 @@ export const InventoryProductsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 2. At Price with Floating Notch Label */}
-                    <div className="flex flex-col relative pt-1">
-                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
-                        errors.atPrice
-                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                      }`}>
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          At Price
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          placeholder="0.00"
-                          {...register('atPrice', {
-                            validate: (val) =>
-                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                          })}
-                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                          onInput={(e) => {
-                            e.currentTarget.value = e.currentTarget.value
-                              .replace(/[^0-9.]/g, '')
-                              .replace(/(\..*?)\..*/g, '$1');
-                          }}
-                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                      </div>
+                    {/* 2. At Price */}
+                    <div>
+                      <FormLabel>At Price</FormLabel>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        {...register('atPrice', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
+                        })}
+                        value={formData.atPrice ?? ''}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
+                        onInput={(e) => {
+                          const sanitized = e.currentTarget.value
+                            .replace(/[^0-9.]/g, '')
+                            .replace(/(\..*?)\..*/g, '$1');
+                          e.currentTarget.value = sanitized;
+                          setValue('atPrice', sanitized as any, { shouldValidate: true });
+                          isAtPriceManuallyEdited.current = sanitized.trim() !== '' && Number(sanitized) > 0;
+                        }}
+                        className={errors.atPrice ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                      />
                       {errors.atPrice && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -3353,49 +3746,37 @@ export const InventoryProductsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 3. As Of Date with Floating Notch Label */}
-                    <div className="relative pt-1">
-                      <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          As Of Date
-                        </span>
-                        <input
-                          type="date"
-                          value={formData.asOfDate}
-                          onChange={(e) => setValue('asOfDate', e.target.value)}
-                          className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                        />
-                      </div>
+                    {/* 3. As Of Date */}
+                    <div>
+                      <FormLabel>As Of Date</FormLabel>
+                      <input
+                        type="date"
+                        value={formData.asOfDate}
+                        onChange={(e) => setValue('asOfDate', e.target.value)}
+                        className={`${FORM_INPUT_CLS} cursor-pointer`}
+                      />
                     </div>
                   </div>
 
                   {/* Row 2: Min Stock To Maintain | Location */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* 1. Min Stock To Maintain with Floating Notch Label */}
-                    <div className="flex flex-col relative pt-1">
-                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
-                        errors.minStockAlert
-                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                      }`}>
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          Min Stock To Maintain
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          placeholder="0"
-                          {...register('minStockAlert', {
-                            validate: (val) =>
-                              val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
-                          })}
-                          onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
-                          onInput={(e) => {
-                            e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
-                          }}
-                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                      </div>
+                    {/* 1. Min Stock To Maintain */}
+                    <div>
+                      <FormLabel>Min Stock To Maintain</FormLabel>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="0"
+                        {...register('minStockAlert', {
+                          validate: (val) =>
+                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive integer',
+                        })}
+                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value.replace(/[^0-9]/g, '');
+                        }}
+                        className={errors.minStockAlert ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                      />
                       {errors.minStockAlert && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -3404,30 +3785,22 @@ export const InventoryProductsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 2. Location with Floating Notch Label */}
-                    <div className="flex flex-col relative pt-1">
-                      <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
-                        errors.location
-                          ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20'
-                          : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                      }`}>
-                        <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                          Location
-                        </span>
-                        <input
-                          type="text"
-                          placeholder="e.g. Warehouse A"
-                          {...register('location', {
-                            validate: (val) =>
-                              !val || /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
-                          })}
-                          onKeyDown={handleTextOnlyKeyDown}
-                          onInput={(e) => {
-                            e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
-                          }}
-                          className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                        />
-                      </div>
+                    {/* 2. Location */}
+                    <div>
+                      <FormLabel>Location</FormLabel>
+                      <input
+                        type="text"
+                        placeholder="e.g. Warehouse A"
+                        {...register('location', {
+                          validate: (val) =>
+                            !val || /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) || 'Only text characters (letters and spaces) are allowed',
+                        })}
+                        onKeyDown={handleTextOnlyKeyDown}
+                        onInput={(e) => {
+                          e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'.-]/g, '');
+                        }}
+                        className={errors.location ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                      />
                       {errors.location && (
                         <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -3485,51 +3858,39 @@ export const InventoryProductsView: React.FC = () => {
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           {/* 1. Initial Batch Number */}
-                          <div className="flex flex-col relative pt-1">
-                            <div className="relative flex items-center h-11 bg-white rounded-xl border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 shadow-2xs transition-all">
-                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                                Initial Batch No
-                              </span>
-                              <input
-                                type="text"
-                                placeholder="e.g. BAT-2026-001"
-                                {...register('batchNo')}
-                                className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium font-mono text-slate-800 placeholder:text-slate-400 outline-none"
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400 mt-1">Batch code for opening quantity</span>
+                          <div>
+                            <FormLabel>Initial Batch No</FormLabel>
+                            <input
+                              type="text"
+                              placeholder="e.g. BAT-2026-001"
+                              {...register('batchNo')}
+                              className={`${FORM_INPUT_CLS} font-mono`}
+                            />
+                            <span className="text-[10px] text-slate-400 mt-1 block">Batch code for opening quantity</span>
                           </div>
 
                           {/* 2. Manufacturing Date (MFG) */}
-                          <div className="relative pt-1">
-                            <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
-                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                                Mfg Date
-                              </span>
-                              <input
-                                type="date"
-                                value={formData.mfgDate || ''}
-                                onChange={(e) => setValue('mfgDate', e.target.value)}
-                                className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400 mt-1">Manufacturing date</span>
+                          <div>
+                            <FormLabel>Mfg Date</FormLabel>
+                            <input
+                              type="date"
+                              value={formData.mfgDate || ''}
+                              onChange={(e) => setValue('mfgDate', e.target.value)}
+                              className={`${FORM_INPUT_CLS} cursor-pointer`}
+                            />
+                            <span className="text-[10px] text-slate-400 mt-1 block">Manufacturing date</span>
                           </div>
 
                           {/* 3. Expiry Date (EXP) */}
-                          <div className="relative pt-1">
-                            <div className="relative w-full h-11 px-3.5 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl flex items-center justify-between transition-all shadow-2xs">
-                              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                                Expiry Date
-                              </span>
-                              <input
-                                type="date"
-                                value={formData.expDate || ''}
-                                onChange={(e) => setValue('expDate', e.target.value)}
-                                className="w-full h-full bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400 mt-1">Expiry / Best before date</span>
+                          <div>
+                            <FormLabel>Expiry Date</FormLabel>
+                            <input
+                              type="date"
+                              value={formData.expDate || ''}
+                              onChange={(e) => setValue('expDate', e.target.value)}
+                              className={`${FORM_INPUT_CLS} cursor-pointer`}
+                            />
+                            <span className="text-[10px] text-slate-400 mt-1 block">Expiry / Best before date</span>
                           </div>
                         </div>
                       </div>
@@ -4096,6 +4457,34 @@ export const InventoryProductsView: React.FC = () => {
               </div>
             </div>
 
+            {/* Validation Error Banner */}
+            {Object.keys(bulkRowErrors).length > 0 && (
+              <div className="mx-6 my-2.5 p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-3 text-rose-800 shrink-0 shadow-xs animate-in fade-in">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="text-xs min-w-0">
+                    <span className="font-bold text-rose-900">
+                      Validation Error ({Object.keys(bulkRowErrors).length} item(s) need correction):
+                    </span>
+                    <ul className="list-disc list-inside mt-1 space-y-0.5 text-[11px] text-rose-700">
+                      {Object.entries(bulkRowErrors).map(([id, err]) => (
+                        <li key={id} className="truncate">
+                          <span className="font-semibold text-rose-900">{err.productCode || id}:</span> {err.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBulkRowErrors({})}
+                  className="text-rose-400 hover:text-rose-600 p-1 cursor-pointer shrink-0 rounded-lg hover:bg-rose-100 transition-colors"
+                  title="Dismiss"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             {/* 10.3 Editable Data Grid - Follows Application Table Format & Theme */}
             <div className="flex-1 overflow-auto bg-white">
               <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
@@ -4383,7 +4772,7 @@ export const InventoryProductsView: React.FC = () => {
                               </td>
 
                               {/* DISCOUNT ON SALE */}
-                              <td className="py-2.5 px-3 border-r border-slate-200">
+                              <td className={`py-2.5 px-3 border-r border-slate-200 ${bulkRowErrors[item.id] ? 'bg-rose-50/50' : ''}`}>
                                 <input
                                   type="number"
                                   min="0"
@@ -4391,8 +4780,18 @@ export const InventoryProductsView: React.FC = () => {
                                   onChange={(e) =>
                                     handleBulkItemChange(item.id, 'discountValue', Number(e.target.value))
                                   }
-                                  className="w-20 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-slate-800 outline-none transition-all"
+                                  className={`w-20 h-8 px-1.5 bg-transparent hover:bg-slate-50 focus:bg-white border rounded-lg text-slate-800 outline-none transition-all ${
+                                    bulkRowErrors[item.id]?.field === 'discountValue'
+                                      ? 'border-rose-500 bg-rose-50 text-rose-700 ring-2 ring-rose-500/20 font-bold'
+                                      : 'border-slate-200 hover:border-slate-300 focus:border-[#33077C]'
+                                  }`}
+                                  title={bulkRowErrors[item.id]?.message || ''}
                                 />
+                                {bulkRowErrors[item.id]?.field === 'discountValue' && (
+                                  <span className="text-[10px] text-rose-600 font-bold block truncate max-w-[120px] mt-0.5" title={bulkRowErrors[item.id].message}>
+                                    Exceeds price
+                                  </span>
+                                )}
                               </td>
 
                               {/* DISCOUNT TYPE */}
@@ -4619,17 +5018,14 @@ export const InventoryProductsView: React.FC = () => {
                 <>
                   {/* Header info card */}
                   <div className="p-4 rounded-xl bg-white border border-slate-200 flex items-start gap-4">
-                    {selectedProductDetail.itemImage ? (
-                      <img
-                        src={selectedProductDetail.itemImage}
-                        alt={selectedProductDetail.productName}
-                        className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0"
-                      />
-                    ) : (
-                      <div className="w-16 h-16 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center shrink-0">
-                        <Package className="w-8 h-8" />
-                      </div>
-                    )}
+                    <ProductThumbnail
+                      src={selectedProductDetail.itemImage || selectedProductDetail.image || selectedProductDetail.imageBase64}
+                      fallbackSrc={selectedProductDetail.imageBase64 || selectedProductDetail.image}
+                      productId={selectedProductDetail.id}
+                      productCode={selectedProductDetail.productCode}
+                      alt={selectedProductDetail.productName}
+                      size="lg"
+                    />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
                         <span className="font-bold text-[#33077C] text-xs">
@@ -4695,10 +5091,19 @@ export const InventoryProductsView: React.FC = () => {
                       </span>
                     </div>
                     <div className="p-3 bg-white rounded-xl border border-slate-200">
-                      <span className="text-[11px] text-slate-400 block mb-0.5">Current Stock</span>
+                      <span className="text-[11px] text-slate-400 block mb-0.5">Available Stock</span>
                       <span className="text-sm font-black text-slate-800">
-                        {selectedProductDetail.openingStock ?? 0} {selectedProductDetail.unit}
+                        {selectedProductDetail.currentStock !== undefined
+                          ? selectedProductDetail.currentStock
+                          : (selectedProductDetail.openingStock ?? 0)} {selectedProductDetail.unit}
                       </span>
+                      {selectedProductDetail.openingStock !== undefined &&
+                        selectedProductDetail.currentStock !== undefined &&
+                        selectedProductDetail.openingStock !== selectedProductDetail.currentStock && (
+                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                            Opening: {selectedProductDetail.openingStock} {selectedProductDetail.unit}
+                          </span>
+                      )}
                       <span className="text-[10px] text-slate-400 block mt-0.5">
                         Min Alert: {selectedProductDetail.minStockAlert ?? 0}
                       </span>

@@ -44,40 +44,66 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     status: (apiCust.status as CustomerStatus) || 'Active',
     totalSales: (apiCust as any).totalSales ?? 0,
     paidAmount: (apiCust as any).paidAmount ?? 0,
-    outstandingAmount: (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance || 0),
+    outstandingAmount: (() => {
+      const openingBal = Number(apiCust.openingBalance) || 0;
+      const raw = (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance);
+      const parsed = raw !== undefined && raw !== null ? Number(raw) : NaN;
+      return !isNaN(parsed) && parsed > 0 ? parsed : openingBal;
+    })(),
+    salesRepresentativeId: apiCust.salesRepresentativeId || (apiCust as any).salesRepresentative?.id || undefined,
+    salesRepresentativeName: apiCust.salesRepresentativeName || (apiCust as any).salesRepresentative?.name || undefined,
+    salesRepresentativeType: (apiCust.salesRepresentativeType as 'Primary' | 'Temporary') || undefined,
     activities: [],
     createdAt: apiCust.createdAt || new Date().toISOString(),
     updatedAt: apiCust.updatedAt || new Date().toISOString(),
   };
 };
 
+/**
+ * Strips fields unrecognized by the backend /commerce/customers endpoint.
+ * (e.g. salesRepresentativeId, salesRepresentativeType which belong to /commerce/collections/assign-customer).
+ */
+export const sanitizeCommerceCustomerPayload = <T extends Record<string, any>>(payload: T): T => {
+  const sanitized = { ...payload };
+  delete (sanitized as any).salesRepresentativeId;
+  delete (sanitized as any).salesRepresentativeType;
+  delete (sanitized as any).salesRepresentativeName;
+  delete (sanitized as any).salesRepresentative;
+  if (!sanitized.customerCode || !String(sanitized.customerCode).trim()) {
+    delete (sanitized as any).customerCode;
+  }
+  return sanitized;
+};
+
 export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPayload => {
+  const cleanStr = (val?: string | null) => (val && val.trim() ? val.trim() : undefined);
+
   return {
-    customerCode: cust.customerCode || undefined,
-    name: cust.name,
-    company: cust.company || undefined,
+    customerCode: cleanStr(cust.customerCode),
+    name: cust.name.trim(),
+    company: cleanStr(cust.company),
     customerType: cust.customerType === 'Individual' ? 'Individual' : 'Business',
-    phone: cust.phone,
-    alternatePhone: cust.alternatePhone || undefined,
-    email: cust.email || undefined,
-    gender: cust.gender || undefined,
-    dateOfBirth: cust.dateOfBirth || undefined,
-    address: cust.address || undefined,
-    city: cust.city || undefined,
-    state: cust.state || undefined,
-    country: cust.country || 'India',
-    pincode: cust.pincode || undefined,
-    gstNumber: cust.gstNumber || undefined,
-    panNumber: cust.panNumber || undefined,
-    billingAddress: cust.billingAddress || cust.address || undefined,
-    shippingAddress: cust.shippingAddress || cust.address || undefined,
+    phone: cust.phone.trim(),
+    alternatePhone: cleanStr(cust.alternatePhone),
+    email: cleanStr(cust.email),
+    gender: cleanStr(cust.gender),
+    dateOfBirth: cleanStr(cust.dateOfBirth),
+    address: cleanStr(cust.address),
+    city: cleanStr(cust.city),
+    state: cleanStr(cust.state),
+    country: cleanStr(cust.country) || 'India',
+    pincode: cleanStr(cust.pincode),
+    gstNumber: cleanStr(cust.gstNumber)?.toUpperCase(),
+    panNumber: cleanStr(cust.panNumber)?.toUpperCase(),
+    billingAddress: cleanStr(cust.billingAddress) || cleanStr(cust.address),
+    shippingAddress: cleanStr(cust.shippingAddress) || cleanStr(cust.address),
     sameAsBilling: cust.sameAsBilling ?? true,
-    creditLimit: cust.creditLimit ?? 0,
-    paymentTerms: cust.paymentTerms || 'Net 30 Days',
-    openingBalance: cust.openingBalance ?? 0,
-    preferredPaymentMethod: cust.preferredPaymentMethod || 'Bank Transfer',
-    notes: cust.notes || undefined,
-    tags: cust.tags || [],
+    creditLimit: typeof cust.creditLimit === 'number' ? cust.creditLimit : Number(cust.creditLimit) || 0,
+    paymentTerms: cleanStr(cust.paymentTerms) || 'Net 30 Days',
+    openingBalance: typeof cust.openingBalance === 'number' ? cust.openingBalance : Number(cust.openingBalance) || 0,
+    preferredPaymentMethod: cleanStr(cust.preferredPaymentMethod) || 'Bank Transfer',
+    notes: cleanStr(cust.notes),
+    tags: Array.isArray(cust.tags) ? cust.tags : [],
     status: cust.status || 'Active',
   };
 };
@@ -93,7 +119,9 @@ export const customerEndpoints = baseApi.injectEndpoints({
         const queryParams: Record<string, any> = {};
         if (params) {
           if (params.page_no !== undefined) queryParams.page_no = params.page_no;
-          if (params.page_size !== undefined) queryParams.page_size = params.page_size;
+          if (params.page_size !== undefined) {
+            queryParams.page_size = Math.min(params.page_size, 200);
+          }
           if (params.pagination_required !== undefined) {
             queryParams.pagination_required = String(params.pagination_required);
           }
@@ -101,17 +129,17 @@ export const customerEndpoints = baseApi.injectEndpoints({
             queryParams.search = params.search.trim();
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.status && params.status !== 'All') {
+          if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
-          if (params.customerType && params.customerType !== 'All') {
+          if (params.customerType && params.customerType.toUpperCase() !== 'ALL') {
             queryParams.customerType = params.customerType;
           }
           if (params.branchId) queryParams.branchId = params.branchId;
         }
         return {
           url: '/commerce/customers',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -132,7 +160,7 @@ export const customerEndpoints = baseApi.injectEndpoints({
       query: (payload) => ({
         url: '/commerce/customers',
         method: 'POST',
-        body: payload,
+        body: sanitizeCommerceCustomerPayload(payload),
       }),
       invalidatesTags: [{ type: 'Customer', id: 'LIST' }, 'Dashboard'],
     }),
@@ -141,7 +169,7 @@ export const customerEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/customers/${encodeURIComponent(id)}`,
         method: 'PUT',
-        body: payload,
+        body: sanitizeCommerceCustomerPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Customer', id },
@@ -154,7 +182,7 @@ export const customerEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/customers/${encodeURIComponent(id)}`,
         method: 'PATCH',
-        body: payload,
+        body: sanitizeCommerceCustomerPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Customer', id },
@@ -198,7 +226,9 @@ export const customerApi = {
 
     if (params) {
       if (params.page_no !== undefined) queryParams.page_no = params.page_no;
-      if (params.page_size !== undefined) queryParams.page_size = params.page_size;
+      if (params.page_size !== undefined) {
+        queryParams.page_size = Math.min(params.page_size, 200);
+      }
       if (params.pagination_required !== undefined) {
         queryParams.pagination_required = String(params.pagination_required);
       }
@@ -206,17 +236,17 @@ export const customerApi = {
         queryParams.search = params.search.trim();
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-      if (params.status && params.status !== 'All') {
+      if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
-      if (params.customerType && params.customerType !== 'All') {
+      if (params.customerType && params.customerType.toUpperCase() !== 'ALL') {
         queryParams.customerType = params.customerType;
       }
       if (params.branchId) queryParams.branchId = params.branchId;
     }
 
     const response = await baseClient.get<CustomerListResponse>('/commerce/customers', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -227,17 +257,20 @@ export const customerApi = {
   },
 
   createCustomer: async (payload: CreateCustomerPayload): Promise<CustomerSingleResponse> => {
-    const response = await baseClient.post<CustomerSingleResponse>('/commerce/customers', payload);
+    const cleanPayload = sanitizeCommerceCustomerPayload(payload);
+    const response = await baseClient.post<CustomerSingleResponse>('/commerce/customers', cleanPayload);
     return response.data;
   },
 
   updateCustomer: async (id: string, payload: UpdateCustomerPayload): Promise<CustomerSingleResponse> => {
-    const response = await baseClient.put<CustomerSingleResponse>(`/commerce/customers/${encodeURIComponent(id)}`, payload);
+    const cleanPayload = sanitizeCommerceCustomerPayload(payload);
+    const response = await baseClient.put<CustomerSingleResponse>(`/commerce/customers/${encodeURIComponent(id)}`, cleanPayload);
     return response.data;
   },
 
   patchCustomer: async (id: string, payload: Partial<UpdateCustomerPayload>): Promise<CustomerSingleResponse> => {
-    const response = await baseClient.patch<CustomerSingleResponse>(`/commerce/customers/${encodeURIComponent(id)}`, payload);
+    const cleanPayload = sanitizeCommerceCustomerPayload(payload);
+    const response = await baseClient.patch<CustomerSingleResponse>(`/commerce/customers/${encodeURIComponent(id)}`, cleanPayload);
     return response.data;
   },
 

@@ -143,7 +143,7 @@ export const collectionApi = {
       }
       if (params.status && params.status !== 'ALL') queryParams.status = params.status;
       if (typeof params.page === 'number') queryParams.page = params.page;
-      if (typeof params.limit === 'number') queryParams.limit = params.limit;
+      if (typeof params.limit === 'number') queryParams.limit = Math.min(params.limit, 200);
     }
 
     const response = await baseClient.get<CommerceCustomerAssignmentsResponse>(

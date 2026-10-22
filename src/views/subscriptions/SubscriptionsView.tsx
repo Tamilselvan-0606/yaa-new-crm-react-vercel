@@ -270,6 +270,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [orgSubEndDate, setOrgSubEndDate] = useState('');
   const [orgSubAutoRenew, setOrgSubAutoRenew] = useState(true);
   const [orgSubNotes, setOrgSubNotes] = useState('');
+  const [orgSubErrors, setOrgSubErrors] = useState<Record<string, string>>({});
 
   // -------------------------------------------------------------
   // CLIENT SUBSCRIPTIONS: Live API State (Platform /subscriptions)
@@ -905,6 +906,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setOrgSubEndDate('');
     setOrgSubAutoRenew(false);
     setOrgSubNotes('');
+    setOrgSubErrors({});
     setIsOrgSubModalOpen(true);
   };
 
@@ -929,6 +931,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setOrgSubEndDate(sub.endDate);
     setOrgSubAutoRenew(sub.autoRenew);
     setOrgSubNotes(sub.notes || '');
+    setOrgSubErrors({});
     setIsOrgSubModalOpen(true);
   };
 
@@ -1017,21 +1020,49 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   const handleSaveOrgSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
+    const errors: Record<string, string> = {};
+
     if (!orgSubOrgId || orgSubOrgId === 'org_custom') {
-      showToast('error', 'Validation Error', 'Please select a registered organization from the system.');
+      errors.organization = 'Select Organization is required';
+    }
+    if (!orgSubPlan) {
+      errors.plan = 'Subscription Plan is required';
+    }
+    if (!orgSubBillingCycle) {
+      errors.billingCycle = 'Billing Cycle is required';
+    }
+    if (!orgSubAmount || Number(orgSubAmount) <= 0) {
+      errors.amount = 'Fee Amount is required';
+    }
+    if (!orgSubStartDate) {
+      errors.startDate = 'Start Date is required';
+    }
+    if (!orgSubEndDate) {
+      errors.endDate = 'Next Renewal Date is required';
+    }
+    if (!orgSubContactPerson.trim()) {
+      errors.contactPerson = 'Contact Person is required';
+    }
+    if (!orgSubEmail.trim()) {
+      errors.email = 'Email Address is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orgSubEmail.trim())) {
+      errors.email = 'Please enter a valid email address';
+    }
+    if (!orgSubPhone.trim()) {
+      errors.phone = 'Phone Number is required';
+    } else if (orgSubPhone.trim().length !== 10) {
+      errors.phone = 'Phone Number must be exactly 10 digits';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setOrgSubErrors(errors);
       return;
     }
+    setOrgSubErrors({});
+
     const resolvedPlan = apiPlans.find((p) => p.name === orgSubPlan || p.id === orgSubPlanId);
     if (!resolvedPlan) {
       showToast('error', 'Validation Error', 'Please select a valid subscription plan.');
-      return;
-    }
-    if (!orgSubBillingCycle) {
-      showToast('error', 'Validation Error', 'Please select a billing cycle.');
-      return;
-    }
-    if (!orgSubStartDate) {
-      showToast('error', 'Validation Error', 'Please select a start date.');
       return;
     }
 
@@ -2820,43 +2851,60 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Select Organization <span className="text-slate-500">*</span>
+                  Select Organization <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={orgSubOrgId}
-                  onChange={(val) => handleSelectOrgInModal(val)}
+                  onChange={(val) => {
+                    handleSelectOrgInModal(val);
+                    if (orgSubErrors.organization) setOrgSubErrors((prev) => ({ ...prev, organization: '' }));
+                  }}
                   options={availableOrgs.map((org: any) => ({
                     value: org.id,
                     label: org.name,
                   }))}
                   placeholder="Select Organization"
                   activeColor="brand"
+                  error={!!orgSubErrors.organization}
                 />
+                {orgSubErrors.organization && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.organization}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Subscription Plan <span className="text-slate-500">*</span>
+                  Subscription Plan <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={orgSubPlan}
-                  onChange={(val) => handlePlanChangeInOrgModal(val)}
+                  onChange={(val) => {
+                    handlePlanChangeInOrgModal(val);
+                    if (orgSubErrors.plan) setOrgSubErrors((prev) => ({ ...prev, plan: '' }));
+                  }}
                   options={orgPlans.map((p) => ({
                     value: p.name,
                     label: p.name,
                   }))}
                   placeholder="Select Subscription Plan"
                   activeColor="brand"
+                  error={!!orgSubErrors.plan}
                 />
+                {orgSubErrors.plan && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.plan}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Billing Cycle <span className="text-slate-500">*</span>
+                  Billing Cycle <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={orgSubBillingCycle}
-                  onChange={(val) => handleBillingCycleChangeInOrgModal(val as any)}
+                  onChange={(val) => {
+                    handleBillingCycleChangeInOrgModal(val as any);
+                    if (orgSubErrors.billingCycle) setOrgSubErrors((prev) => ({ ...prev, billingCycle: '' }));
+                  }}
                   options={[
                     { value: 'Monthly', label: 'Monthly' },
                     { value: 'Quarterly', label: 'Quarterly' },
@@ -2864,7 +2912,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   ]}
                   placeholder="Select Billing Cycle"
                   activeColor="brand"
+                  error={!!orgSubErrors.billingCycle}
                 />
+                {orgSubErrors.billingCycle && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.billingCycle}</p>
+                )}
               </div>
             </div>
 
@@ -2873,7 +2925,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Organization Name <span className="text-slate-500">*</span>
+                    Organization Name <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <input
                     type="text"
@@ -2913,22 +2965,31 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Fee Amount (₹) <span className="text-slate-500">*</span>
+                  Fee Amount (₹) <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="number"
                   min="0"
                   step="any"
-                  required
                   value={orgSubAmount === 0 ? '' : orgSubAmount}
-                  onChange={(e) => setOrgSubAmount(Number(e.target.value))}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
+                  onChange={(e) => {
+                    setOrgSubAmount(Number(e.target.value));
+                    if (orgSubErrors.amount) setOrgSubErrors((prev) => ({ ...prev, amount: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.amount
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.amount && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.amount}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Start Date <span className="text-slate-500">*</span>
+                  Start Date <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type={orgSubStartDate ? "date" : "text"}
@@ -2937,21 +2998,29 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     if (!e.currentTarget.value) e.currentTarget.type = "text";
                   }}
                   placeholder="dd/mm/yyyy"
-                  required
                   value={orgSubStartDate}
                   onChange={(e) => {
                     setOrgSubStartDate(e.target.value);
                     if (orgSubBillingCycle) {
                       setOrgSubEndDate(computeEndDate(e.target.value, orgSubBillingCycle));
                     }
+                    if (orgSubErrors.startDate) setOrgSubErrors((prev) => ({ ...prev, startDate: '' }));
+                    if (orgSubErrors.endDate) setOrgSubErrors((prev) => ({ ...prev, endDate: '' }));
                   }}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
+                    orgSubErrors.startDate
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.startDate && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.startDate}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Next Renewal Date <span className="text-slate-500">*</span>
+                  Next Renewal Date <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type={orgSubEndDate ? "date" : "text"}
@@ -2960,11 +3029,20 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     if (!e.currentTarget.value) e.currentTarget.type = "text";
                   }}
                   placeholder="dd/mm/yyyy"
-                  required
                   value={orgSubEndDate}
-                  onChange={(e) => setOrgSubEndDate(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
+                  onChange={(e) => {
+                    setOrgSubEndDate(e.target.value);
+                    if (orgSubErrors.endDate) setOrgSubErrors((prev) => ({ ...prev, endDate: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
+                    orgSubErrors.endDate
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.endDate && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.endDate}</p>
+                )}
               </div>
             </div>
 
@@ -2972,38 +3050,74 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Contact Person
+                  Contact Person <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
                   value={orgSubContactPerson}
-                  onChange={(e) => setOrgSubContactPerson(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
+                  onChange={(e) => {
+                    setOrgSubContactPerson(e.target.value);
+                    if (orgSubErrors.contactPerson) setOrgSubErrors((prev) => ({ ...prev, contactPerson: '' }));
+                  }}
+                  placeholder="Enter contact person"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.contactPerson
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.contactPerson && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.contactPerson}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Email Address
+                  Email Address <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="email"
                   value={orgSubEmail}
-                  onChange={(e) => setOrgSubEmail(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
+                  onChange={(e) => {
+                    setOrgSubEmail(e.target.value);
+                    if (orgSubErrors.email) setOrgSubErrors((prev) => ({ ...prev, email: '' }));
+                  }}
+                  placeholder="e.g. contact@domain.com"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.email
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.email && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.email}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Phone Number
+                  Phone Number <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={orgSubPhone}
-                  onChange={(e) => setOrgSubPhone(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setOrgSubPhone(val);
+                    if (orgSubErrors.phone) setOrgSubErrors((prev) => ({ ...prev, phone: '' }));
+                  }}
+                  placeholder="e.g. 9876543210"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.phone
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {orgSubErrors.phone && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.phone}</p>
+                )}
               </div>
             </div>
 

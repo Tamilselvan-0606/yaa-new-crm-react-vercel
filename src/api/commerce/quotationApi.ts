@@ -8,6 +8,7 @@ import {
   QuotationSingleResponse,
   QuotationDeleteResponse,
   ConvertQuotationResponse,
+  CreateQuotationItemPayload,
   CreateQuotationPayload,
   UpdateQuotationPayload,
   PatchQuotationPayload,
@@ -129,24 +130,39 @@ export const mapSaleQuotationToPayload = (
     items: any[];
     partyName: string;
     stateOfSupply?: string;
-  }
+  },
+  isCreate: boolean = false
 ): CreateQuotationPayload => {
   const payload: CreateQuotationPayload = {
     partyName: quotation.partyName.trim(),
-    items: (quotation.items || []).map((it: any) => ({
-      productId: it.productId || '',
-      productName: it.productName || 'Item',
-      sku: it.sku || it.itemCode || undefined,
-      batch: it.batch || undefined,
-      quantity: Number(it.quantity) || 1,
-      unitPrice: Number(it.unitPrice) || 0,
-      discountPercent: Number(it.discountPercent) || 0,
-      taxPercent: Number(it.taxPercent) || 0,
-      unit: it.unit || undefined,
-    })),
+    items: (quotation.items || []).map((it: any) => {
+      const item: CreateQuotationItemPayload = {
+        productId: it.productId || '',
+        productName: it.productName || 'Item',
+        quantity: Math.max(1, Number(it.quantity) || 1),
+        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+      };
+      if (it.sku && String(it.sku).trim()) {
+        item.sku = String(it.sku).trim();
+      } else if (it.itemCode && String(it.itemCode).trim()) {
+        item.sku = String(it.itemCode).trim();
+      }
+      if (it.batch && String(it.batch).trim()) {
+        item.batch = String(it.batch).trim();
+      }
+      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
+        item.discountPercent = Number(it.discountPercent);
+      }
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+        item.taxPercent = Number(it.taxPercent);
+      }
+      // Strictly omit 'unit' or any unrecognized fields
+      return item;
+    }),
   };
 
-  if (quotation.quotationNo && quotation.quotationNo.trim()) {
+  // On creation, omit temporary client-generated quotationNo so backend sequence assigns official unique number
+  if (!isCreate && quotation.quotationNo && quotation.quotationNo.trim()) {
     payload.quotationNo = quotation.quotationNo.trim();
   }
   if (quotation.referenceNo && quotation.referenceNo.trim()) {
@@ -196,6 +212,53 @@ export const mapSaleQuotationToPayload = (
   return payload;
 };
 
+/**
+ * Sanitizes quotation payload for POST / PUT / PATCH
+ * Strictly adheres to backend schema by stripping 'unit' and any unrecognized line item keys
+ */
+export const sanitizeCommerceQuotationPayload = <
+  T extends Partial<CreateQuotationPayload> | Partial<UpdateQuotationPayload>
+>(
+  payload: T
+): T => {
+  const sanitized = { ...payload } as any;
+
+  if (Array.isArray(sanitized.items)) {
+    sanitized.items = sanitized.items.map((it: any) => {
+      const cleanItem: CreateQuotationItemPayload = {
+        productId: it.productId || '',
+        productName: it.productName || 'Item',
+        quantity: Math.max(1, Number(it.quantity) || 1),
+        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+      };
+      if (it.sku && String(it.sku).trim()) {
+        cleanItem.sku = String(it.sku).trim();
+      } else if (it.itemCode && String(it.itemCode).trim()) {
+        cleanItem.sku = String(it.itemCode).trim();
+      }
+      if (it.batch && String(it.batch).trim()) {
+        cleanItem.batch = String(it.batch).trim();
+      }
+      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
+        cleanItem.discountPercent = Number(it.discountPercent);
+      }
+      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+        cleanItem.taxPercent = Number(it.taxPercent);
+      }
+      // Explicitly delete 'unit' if present in incoming raw item object
+      delete (cleanItem as any).unit;
+      return cleanItem;
+    });
+  }
+
+  // Validate customerId format if provided
+  if (sanitized.customerId && !UUID_REGEX.test(sanitized.customerId)) {
+    delete sanitized.customerId;
+  }
+
+  return sanitized as T;
+};
+
 // =========================================================================
 // RTK Query Injected Endpoints for Commerce Quotation
 // =========================================================================
@@ -232,7 +295,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/quotations',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -253,7 +316,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
       query: (payload) => ({
         url: '/commerce/quotations',
         method: 'POST',
-        body: payload,
+        body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, 'Dashboard'],
     }),
@@ -262,7 +325,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/quotations/${id}`,
         method: 'PUT',
-        body: payload,
+        body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Quotation', id },
@@ -274,7 +337,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/quotations/${id}`,
         method: 'PATCH',
-        body: payload,
+        body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Quotation', id },
@@ -308,8 +371,11 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: 'Quotation', id },
         { type: 'Quotation', id: 'LIST' },
+        { type: 'Proforma', id: 'LIST' },
+        { type: 'SalesOrder', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         'Dashboard',
       ],
@@ -367,7 +433,7 @@ export const quotationApi = {
     }
 
     const response = await baseClient.get<QuotationListResponse>('/commerce/quotations', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -386,7 +452,8 @@ export const quotationApi = {
    * POST /commerce/quotations
    */
   createQuotation: async (payload: CreateQuotationPayload): Promise<QuotationSingleResponse> => {
-    const response = await baseClient.post<QuotationSingleResponse>('/commerce/quotations', payload);
+    const cleanPayload = sanitizeCommerceQuotationPayload(payload);
+    const response = await baseClient.post<QuotationSingleResponse>('/commerce/quotations', cleanPayload);
     return response.data;
   },
 
@@ -398,9 +465,10 @@ export const quotationApi = {
     id: string,
     payload: UpdateQuotationPayload
   ): Promise<QuotationSingleResponse> => {
+    const cleanPayload = sanitizeCommerceQuotationPayload(payload);
     const response = await baseClient.put<QuotationSingleResponse>(
       `/commerce/quotations/${id}`,
-      payload
+      cleanPayload
     );
     return response.data;
   },
@@ -413,9 +481,10 @@ export const quotationApi = {
     id: string,
     payload: PatchQuotationPayload
   ): Promise<QuotationSingleResponse> => {
+    const cleanPayload = sanitizeCommerceQuotationPayload(payload);
     const response = await baseClient.patch<QuotationSingleResponse>(
       `/commerce/quotations/${id}`,
-      payload
+      cleanPayload
     );
     return response.data;
   },

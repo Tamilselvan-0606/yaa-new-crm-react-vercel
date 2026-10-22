@@ -239,6 +239,9 @@ export const commerceSalesReturnEndpoints = baseApi.injectEndpoints({
         { type: 'SalesReturn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -255,6 +258,9 @@ export const commerceSalesReturnEndpoints = baseApi.injectEndpoints({
         { type: 'SalesReturn', id },
         { type: 'SalesReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -270,6 +276,9 @@ export const commerceSalesReturnEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'SalesReturn', id },
         { type: 'SalesReturn', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -282,6 +291,9 @@ export const commerceSalesReturnEndpoints = baseApi.injectEndpoints({
         { type: 'SalesReturn', id },
         { type: 'SalesReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
 
@@ -298,6 +310,9 @@ export const commerceSalesReturnEndpoints = baseApi.injectEndpoints({
         { type: 'SalesReturn', id },
         { type: 'SalesReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+        'Dashboard',
       ],
     }),
   }),

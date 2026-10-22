@@ -34,6 +34,7 @@ import {
   CategoryItemModel,
   ApiCategory,
 } from '../../../api/commerce/categoryApi';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUtils';
 
 export type CategoryItem = CategoryItemModel;
 
@@ -196,6 +197,18 @@ export const CategoryView: React.FC = () => {
     loadCategories();
   }, [loadCategories]);
 
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
+
   // Filter categories in local fallback mode
   const filteredCategories = useMemo(() => {
     return categories.filter((item) => {
@@ -318,22 +331,11 @@ export const CategoryView: React.FC = () => {
             return;
           }
         } catch (apiErr: any) {
-          console.warn('Remote update failed, falling back to local store:', apiErr);
+          console.error('Remote category update failed:', apiErr);
+          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to update category.';
+          toast.error(errMsg);
+          return;
         }
-
-        // Local fallback
-        setCategories((prev) =>
-          prev.map((c) =>
-            c.id === editingCategory.id
-              ? {
-                  ...c,
-                  categoryName: data.categoryName.trim(),
-                  status: finalStatus,
-                }
-              : c
-          )
-        );
-        toast.success(`Category "${data.categoryName}" updated.`);
       } else {
         // POST /commerce/categories
         try {
@@ -351,22 +353,14 @@ export const CategoryView: React.FC = () => {
             return;
           }
         } catch (apiErr: any) {
-          console.warn('Remote create failed, falling back to local store:', apiErr);
+          console.error('Remote category create failed:', apiErr);
+          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to create category.';
+          toast.error(errMsg);
+          return;
         }
-
-        // Local fallback
-        const newCat: CategoryItem = {
-          id: `cat-${Date.now()}`,
-          sNo: (totalApiRecords || categories.length) + 1,
-          categoryName: data.categoryName.trim(),
-          status: finalStatus,
-        };
-        setCategories((prev) => [newCat, ...prev]);
-        toast.success(`Category "${data.categoryName}" added.`);
       }
     } finally {
       setIsSubmitting(false);
-      setIsModalOpen(false);
     }
   };
 
@@ -709,9 +703,9 @@ export const CategoryView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenDetailModal(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Eye className="w-3.5 h-3.5 text-slate-500" />
+                                  <Eye className="w-3.5 h-3.5 text-slate-500 group-hover:text-white transition-colors" />
                                   <span>View Details</span>
                                 </button>
 
@@ -723,9 +717,9 @@ export const CategoryView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     setDropdownPos(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                                  <Pencil className="w-3.5 h-3.5 text-slate-500 group-hover:text-white transition-colors" />
                                   <span>Edit</span>
                                 </button>
 
@@ -733,16 +727,16 @@ export const CategoryView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleToggleStatus(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
                                   {item.status === 'Active' ? (
                                     <>
-                                      <Ban className="w-3.5 h-3.5 text-amber-600" />
+                                      <Ban className="w-3.5 h-3.5 text-slate-500 group-hover:text-white transition-colors" />
                                       <span>Deactivate</span>
                                     </>
                                   ) : (
                                     <>
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-slate-500 group-hover:text-white transition-colors" />
                                       <span>Activate</span>
                                     </>
                                   )}
@@ -752,9 +746,9 @@ export const CategoryView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteCategory(item.id, item.categoryName)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-2"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-500 group-hover:text-white transition-colors" />
                                   <span>Delete</span>
                                 </button>
                               </div>
@@ -906,32 +900,24 @@ export const CategoryView: React.FC = () => {
         >
           <form noValidate onSubmit={handleSubmit(handleSaveCategory)} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-              <div className="flex flex-col relative">
-                <div className={`relative flex items-center h-11 bg-white rounded-xl shadow-2xs transition-all ${
-                  errors.categoryName
-                    ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                    : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-                }`}>
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Category Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    disabled={isSubmitting}
-                    {...register('categoryName', {
-                      required: 'Category name is required',
-                      minLength: { value: 2, message: 'Category name must be at least 2 characters' },
-                      validate: (val) =>
-                        /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
-                    })}
-                    onKeyDown={handleTextOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
-                    }}
-                    placeholder="Enter category name"
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-700 placeholder:text-slate-400 outline-none"
-                  />
-                </div>
+              <div className="flex flex-col">
+                <FormLabel required>Category Name</FormLabel>
+                <input
+                  type="text"
+                  disabled={isSubmitting}
+                  {...register('categoryName', {
+                    required: 'Category name is required',
+                    minLength: { value: 2, message: 'Category name must be at least 2 characters' },
+                    validate: (val) =>
+                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                  })}
+                  onKeyDown={handleTextOnlyKeyDown}
+                  onInput={(e) => {
+                    e.currentTarget.value = e.currentTarget.value.replace(/[^A-Za-z\s&'-]/g, '');
+                  }}
+                  placeholder="Enter category name"
+                  className={errors.categoryName ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                />
                 {errors.categoryName && (
                   <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -940,22 +926,18 @@ export const CategoryView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex flex-col relative">
-                <div className="relative">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Status <span className="text-rose-500">*</span>
-                  </span>
-                  <CustomSelect
-                    options={[
-                      { label: 'Active', value: 'Active' },
-                      { label: 'Inactive', value: 'Inactive' },
-                    ]}
-                    value={watchStatus || 'Active'}
-                    onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
-                    placeholder="Select status"
-                    activeColor="brand"
-                  />
-                </div>
+              <div className="flex flex-col">
+                <FormLabel required>Status</FormLabel>
+                <CustomSelect
+                  options={[
+                    { label: 'Active', value: 'Active' },
+                    { label: 'Inactive', value: 'Inactive' },
+                  ]}
+                  value={watchStatus || 'Active'}
+                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+                  placeholder="Select status"
+                  activeColor="brand"
+                />
               </div>
             </div>
 

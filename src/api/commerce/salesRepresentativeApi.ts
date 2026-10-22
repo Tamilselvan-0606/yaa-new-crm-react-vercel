@@ -1,4 +1,5 @@
 import { baseClient } from '../baseApi';
+import { getStoredOrganizationId } from '../config';
 import {
   ApiSalesRepresentative,
   ApiRepPortfolio,
@@ -80,9 +81,46 @@ export const salesRepresentativeApi = {
    * Update an existing sales representative
    * PUT /commerce/sales-representatives/{id}
    */
-  update: async (id: string, payload: UpdateSalesRepPayload): Promise<SalesRepSingleResponse> => {
-    const response = await baseClient.put<SalesRepSingleResponse>(
-      `/commerce/sales-representatives/${id}`,
+  update: async (
+    id: string,
+    payload: UpdateSalesRepPayload,
+    organizationId?: string
+  ): Promise<SalesRepSingleResponse> => {
+    const cleanId = encodeURIComponent(id);
+    const orgId = organizationId || getStoredOrganizationId();
+    const config: any = {};
+    if (orgId) {
+      config.headers = { 'x-organization-id': orgId };
+    }
+    const endpoints = [
+      { method: 'put', url: `/commerce/sales-representatives/${cleanId}` },
+      { method: 'patch', url: `/commerce/sales-representatives/${cleanId}` },
+    ];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const response = ep.method === 'put'
+          ? await baseClient.put<SalesRepSingleResponse>(ep.url, payload, config)
+          : await baseClient.patch<SalesRepSingleResponse>(ep.url, payload, config);
+        return response.data;
+      } catch (err: any) {
+        lastError = err;
+        if (err?.response?.status === 404 || err?.response?.status === 405) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  },
+
+  /**
+   * Partially update a sales representative
+   * PATCH /commerce/sales-representatives/{id}
+   */
+  patch: async (id: string, payload: Partial<UpdateSalesRepPayload>): Promise<SalesRepSingleResponse> => {
+    const response = await baseClient.patch<SalesRepSingleResponse>(
+      `/commerce/sales-representatives/${encodeURIComponent(id)}`,
       payload
     );
     return response.data;

@@ -84,6 +84,17 @@ export interface CreateOrganizationRequest {
   email?: string;
   phone?: string;
   password?: string;
+  logo?: string;
+  status?: string;
+  subscriptionPlan?: string;
+  location?: string;
+  contactPerson?: string;
+  address?: string;
+  registrationType?: string;
+  industry?: string;
+  whatsapp?: string;
+  subOrganizationSupport?: boolean;
+  [key: string]: any;
 }
 
 export interface UpdateOrganizationRequest {

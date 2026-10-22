@@ -37,8 +37,12 @@ baseClient.interceptors.request.use(
       config.headers['x-user-id'] = currentUserId;
     }
     const orgId = getStoredOrganizationId();
-    if (orgId) {
+    if (orgId && config.headers['x-organization-id'] === undefined) {
       config.headers['x-organization-id'] = orgId;
+    }
+    // If explicitly passed as empty string or null, remove the header entirely
+    if (config.headers['x-organization-id'] === '' || config.headers['x-organization-id'] === null) {
+      delete config.headers['x-organization-id'];
     }
     return config;
   },
@@ -89,8 +93,11 @@ const rawBaseQuery = fetchBaseQuery({
       headers.set('x-user-id', currentUserId);
     }
     const orgId = getStoredOrganizationId();
-    if (orgId) {
+    if (orgId && !headers.has('x-organization-id')) {
       headers.set('x-organization-id', orgId);
+    }
+    if (headers.get('x-organization-id') === '') {
+      headers.delete('x-organization-id');
     }
     return headers;
   },
@@ -182,6 +189,8 @@ export const baseApi = createApi({
     'OrgSubscription',
     'ProductPlan',
     'ClientProduct',
+    'PlatformClient',
+    'SalesRepresentative',
   ],
   endpoints: () => ({}),
 });

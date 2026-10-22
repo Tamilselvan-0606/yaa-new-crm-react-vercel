@@ -58,8 +58,10 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { useAppDispatch } from '../../../hooks/redux';
+import { baseApi } from '../../../api/baseApi';
 import {
   commerceDeliveryChallanApi,
   mapApiDeliveryChallanToRecord,
@@ -72,6 +74,15 @@ import { customerApi } from '../../../api/commerce/customerApi';
 import { productApi } from '../../../api/commerce/productApi';
 import { ApiCustomer } from '../../../api/commerce/customerTypes';
 import { ApiProduct } from '../../../api/commerce/productTypes';
+import {
+  syncConvertedInvoiceToStorage,
+  recordDocumentConversion,
+  findDocumentLineage,
+  initializeWorkflowIntegrity,
+} from '../../../utils/salesDocumentWorkflow';
+import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
+import { SearchableSelect } from '../../../components/common/SearchableSelect';
+import { FormLabel, FORM_INPUT_CLS } from '../utils/formUtils';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -226,12 +237,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   initialMode = 'list',
 }) => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const dispatch = useAppDispatch();
   const {
     customers: localCustomers,
     stocks: localStocks,
     saveCustomer: saveCustomerLocal,
     saveSale,
   } = useSalesManagementStore();
+
+  useEffect(() => {
+    initializeWorkflowIntegrity();
+  }, []);
 
   // Delivery Challan State with LocalStorage Cache
   const [challans, setChallans] = useState<DeliveryChallanRecord[]>(() => {
@@ -279,6 +296,26 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  useEffect(() => {
+    const q = searchParams.get('search');
+    if (q) {
+      setPendingSearch(q);
+      setAppliedSearch(q);
+    }
+  }, [searchParams]);
+
+  // Debounced Search (600ms) - waits until typing completes before triggering API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setPage(1);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [pendingSearch, appliedSearch]);
 
   // Party Dropdown
   const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
@@ -353,8 +390,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     };
   }, [activeDropdownId]);
 
-  // Load Customers and Products masters from Live Commerce API
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  const hasLoadedMasterDataRef = useRef(false);
+
+  // Load Customers master data (products are searched on demand)
   const loadMasterData = useCallback(async () => {
+    if (hasLoadedMasterDataRef.current) return;
+    hasLoadedMasterDataRef.current = true;
     try {
       const custRes = await customerApi.getCustomers({ pagination_required: false });
       if (custRes?.data && Array.isArray(custRes.data)) {
@@ -363,23 +405,45 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     } catch (e) {
       console.warn('Using local fallback for customers master', e);
     }
+  }, []);
 
+  // On-demand product search: only calls products API when user is actively searching
+  const handleProductSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setIsSearchingProducts(true);
     try {
-      const prodRes = await productApi.getProducts({ pagination_required: false });
-      if (prodRes?.data && Array.isArray(prodRes.data)) {
-        setLiveProducts(prodRes.data);
+      const res = await productApi.getProducts({
+        search: trimmed,
+        page_size: 30,
+        pagination_required: false,
+      });
+      if (res?.data && Array.isArray(res.data)) {
+        setLiveProducts((prev) => {
+          const map = new Map<string, ApiProduct>();
+          prev.forEach((p) => map.set(p.id, p));
+          res.data.forEach((p) => map.set(p.id, p));
+          return Array.from(map.values());
+        });
       }
-    } catch (e) {
-      console.warn('Using local fallback for products master', e);
+    } catch (err) {
+      console.warn('Failed to search products in DeliveryChallanView:', err);
+    } finally {
+      setIsSearchingProducts(false);
     }
   }, []);
 
   useEffect(() => {
-    loadMasterData();
-  }, [loadMasterData]);
+    if (viewMode === 'form') {
+      loadMasterData();
+    }
+  }, [viewMode, loadMasterData]);
 
   // Fetch Delivery Challans from Live Backend API
+  const isFetchingChallansRef = useRef(false);
   const fetchDeliveryChallans = useCallback(async () => {
+    if (isFetchingChallansRef.current) return;
+    isFetchingChallansRef.current = true;
     setIsApiLoading(true);
     try {
       const apiPeriod = mapPeriodToApiPeriod(appliedPeriod);
@@ -406,6 +470,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       setIsApiConnected(false);
     } finally {
       setIsApiLoading(false);
+      isFetchingChallansRef.current = false;
     }
   }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
 
@@ -435,40 +500,59 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Combined Stock Items / Products (Live API + Local Store)
   const allStockItems = useMemo(() => {
-    if (liveProducts.length > 0) {
-      return liveProducts.map((p) => {
-        let tax = 5;
-        if (typeof (p as any).taxPercent === 'number') {
-          tax = (p as any).taxPercent;
-        } else if (p.taxRate) {
-          const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ''));
-          if (!isNaN(parsed)) tax = parsed;
-        }
-        return {
-          id: p.id,
-          productId: p.id,
-          productName: p.productName || (p as any).name || 'Unnamed Product',
-          sku: p.productCode || (p as any).sku || '',
-          unitPrice: Number(p.salePrice || (p as any).price || 0),
-          unit: p.unit || 'PCS',
-          taxPercent: tax,
-          category: p.category || '',
-          batches: (p as any).batches || (p as any).stockBatches || [],
-        };
+    const map = new Map<string, any>();
+
+    liveProducts.forEach((p) => {
+      let tax = 5;
+      if (typeof (p as any).taxPercent === 'number') {
+        tax = (p as any).taxPercent;
+      } else if (p.taxRate) {
+        const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ''));
+        if (!isNaN(parsed)) tax = parsed;
+      }
+      map.set(p.id, {
+        id: p.id,
+        productId: p.id,
+        productName: p.productName || (p as any).name || 'Unnamed Product',
+        sku: p.productCode || (p as any).sku || '',
+        unitPrice: Number(p.salePrice || (p as any).price || 0),
+        unit: p.unit || 'PCS',
+        taxPercent: tax,
+        category: p.category || '',
+        batches: (p as any).batches || (p as any).stockBatches || [],
       });
-    }
-    return localStocks.map((s) => ({
-      id: s.id,
-      productId: s.id,
-      productName: s.productName || (s as any).name || 'Unnamed Product',
-      sku: s.sku || (s as any).itemCode || '',
-      unitPrice: Number(s.unitPrice || (s as any).price || 0),
-      unit: s.unit || 'PCS',
-      taxPercent: 5,
-      category: s.category || '',
-      batches: s.batches || [],
-    }));
+    });
+
+    localStocks.forEach((s) => {
+      const pid = (s as any).productId || s.id;
+      if (!map.has(pid)) {
+        map.set(pid, {
+          id: s.id,
+          productId: pid,
+          productName: s.productName || (s as any).name || 'Unnamed Product',
+          sku: s.sku || (s as any).itemCode || '',
+          unitPrice: Number(s.unitPrice || (s as any).price || 0),
+          unit: s.unit || 'PCS',
+          taxPercent: 5,
+          category: s.category || '',
+          batches: s.batches || [],
+        });
+      }
+    });
+
+    return Array.from(map.values());
   }, [liveProducts, localStocks]);
+
+  const productOptions = useMemo(() => {
+    return allStockItems.map((s: any) => ({
+      value: s.productId || s.id,
+      label: s.productName,
+      subLabel: s.sku
+        ? `SKU: ${s.sku} • ₹${Number(s.unitPrice || 0).toLocaleString('en-IN')}`
+        : `₹${Number(s.unitPrice || 0).toLocaleString('en-IN')}`,
+      badge: s.sku || undefined,
+    }));
+  }, [allStockItems]);
 
   // Auto-generate Challan Number
   const generateNextChallanNo = () => {
@@ -662,6 +746,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       toast.error('Please enter customer name');
       return;
     }
+    if (quickCustPhone.trim()) {
+      const cleanPhone = quickCustPhone.replace(/[\s\-()]/g, '');
+      if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
+        toast.error('Please enter a valid 10-digit Indian phone number (e.g. 9876543210)');
+        return;
+      }
+    }
 
     try {
       setIsActionLoading(true);
@@ -720,7 +811,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       setQuickCustCompany('');
       setQuickCustAddress('');
       setQuickCustOpeningBal('0');
-      toast.success(`Party "${newCust.name}" registered and selected!`);
+      toast.success(`Customer "${newCust.name}" registered and selected!`);
     } catch (err: any) {
       toast.error(err?.message || 'Failed to create customer');
     } finally {
@@ -863,7 +954,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const handleSaveChallan = async (andConvert = false) => {
     const form = activeTab.formData;
     if (!form.partyName.trim()) {
-      toast.error('Please select or enter a party name');
+      toast.error('Please select or enter a customer name');
       return;
     }
     const validItems = form.items.filter((i) => i.productName.trim() || Number(i.unitPrice) > 0);
@@ -1032,60 +1123,86 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     try {
       setIsActionLoading(true);
+      const currentLineage = findDocumentLineage(challan.challanNo);
+      let invNo = currentLineage?.invoiceNo || `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
+
       if (UUID_REGEX.test(challan.id)) {
-        const res = await commerceDeliveryChallanApi.convertChallan(challan.id, {
-          targetType: 'Invoice',
-          dueDate: challan.dueDate,
-        });
-        const invNo =
-          res?.data?.convertedTo?.documentNo ||
-          res?.data?.document?.invoiceNo ||
-          `INV-${new Date().getFullYear()}-0101`;
-        toast.success(`Delivery Challan ${challan.challanNo} converted to Invoice ${invNo}!`);
-      } else {
-        // Fallback local simulated invoice
-        const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-        const newSale: SaleTransaction = {
-          id: `sale_${Date.now()}`,
-          invoiceNo: saleInvoiceNo,
-          referenceNo: challan.challanNo,
-          saleDate: new Date().toISOString().split('T')[0],
-          dueDate: challan.dueDate,
-          customerId: challan.customerId,
-          customerName: challan.partyName,
-          customerCompany: challan.customerCompany,
-          customerPhone: challan.customerPhone,
-          customerEmail: challan.customerEmail,
-          billingAddress: challan.billingAddress,
-          shippingAddress: challan.shippingAddress || challan.billingAddress,
-          items: challan.items,
-          subtotal: challan.subtotal,
-          withGst: challan.withGst,
-          gstType: challan.gstType,
-          cgst: challan.cgst,
-          sgst: challan.sgst,
-          igst: challan.igst,
-          totalDiscount: challan.discount || 0,
-          totalTax: challan.taxAmount || 0,
-          shippingCharges: 0,
-          otherCharges: 0,
-          grandTotal: challan.amount,
-          paidAmount: 0,
-          balance: challan.amount,
-          paymentMethod: 'Cash',
-          paymentTerms: '15 Days',
-          paymentStatus: 'Unpaid',
-          saleStatus: 'Confirmed',
-          createdBy: 'Sales Representative',
-          salesperson: 'Sales Rep',
-          notes: `Converted from Delivery Challan ${challan.challanNo}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        saveSale(newSale);
-        toast.success(`Delivery Challan ${challan.challanNo} converted to Sale Invoice ${saleInvoiceNo}!`);
+        try {
+          const res = await commerceDeliveryChallanApi.convertChallan(challan.id, {
+            targetType: 'Invoice',
+            dueDate: challan.dueDate,
+          });
+          const apiInvNo =
+            res?.data?.convertedTo?.documentNo ||
+            res?.data?.document?.invoiceNo;
+          if (apiInvNo) invNo = apiInvNo;
+        } catch (apiErr) {
+          console.warn('API convert notice:', apiErr);
+        }
       }
 
+      const newSale: SaleTransaction = {
+        id: `sale_${Date.now()}`,
+        invoiceNo: invNo,
+        referenceNo: challan.challanNo,
+        saleDate: new Date().toISOString().split('T')[0],
+        dueDate: challan.dueDate,
+        customerId: challan.customerId,
+        customerName: challan.partyName,
+        customerCompany: challan.customerCompany,
+        customerPhone: challan.customerPhone,
+        customerEmail: challan.customerEmail,
+        billingAddress: challan.billingAddress,
+        shippingAddress: challan.shippingAddress || challan.billingAddress,
+        items: challan.items,
+        subtotal: challan.subtotal,
+        withGst: challan.withGst,
+        gstType: challan.gstType,
+        cgst: challan.cgst,
+        sgst: challan.sgst,
+        igst: challan.igst,
+        totalDiscount: challan.discount || 0,
+        totalTax: challan.taxAmount || 0,
+        shippingCharges: 0,
+        otherCharges: 0,
+        grandTotal: challan.amount,
+        paidAmount: 0,
+        balance: challan.amount,
+        paymentMethod: 'Cash',
+        paymentTerms: '15 Days',
+        paymentStatus: 'Unpaid',
+        saleStatus: 'Confirmed',
+        createdBy: 'Sales Representative',
+        salesperson: 'Sales Rep',
+        notes: `Converted from Delivery Challan ${challan.challanNo}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveSale(newSale);
+      syncConvertedInvoiceToStorage(newSale);
+
+      recordDocumentConversion({
+        fromType: 'Challan',
+        fromNo: challan.challanNo,
+        toType: 'Invoice',
+        toNo: invNo,
+      });
+
+      const updated = challans.map((c) =>
+        c.id === challan.id || c.challanNo === challan.challanNo
+          ? { ...c, status: 'Converted' as const, convertedToInvoiceNo: invNo }
+          : c
+      );
+      persistChallans(updated);
+
+      dispatch(baseApi.util.invalidateTags([
+        { type: 'DeliveryChallan', id: challan.id },
+        { type: 'DeliveryChallan', id: 'LIST' },
+        { type: 'SalesInvoice', id: 'LIST' },
+      ]));
+
+      toast.success(`Delivery Challan ${challan.challanNo} converted to Invoice ${invNo}!`);
       await fetchDeliveryChallans();
     } catch (err: any) {
       console.error('Convert failed:', err);
@@ -1169,61 +1286,103 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       const validUuids = openChallansToConvert.map((c) => c.id).filter((id) => UUID_REGEX.test(id));
 
       if (validUuids.length > 0) {
-        const res = await commerceDeliveryChallanApi.bulkConvertChallans({ challanIds: validUuids });
-        const convertedCount = res?.data?.converted?.length ?? validUuids.length;
-        const failedCount = res?.data?.failed?.length ?? 0;
+        try {
+          const res = await commerceDeliveryChallanApi.bulkConvertChallans({ challanIds: validUuids });
+          const convertedCount = res?.data?.converted?.length ?? validUuids.length;
+          const failedCount = res?.data?.failed?.length ?? 0;
 
-        if (convertedCount > 0) {
-          toast.success(`Successfully converted ${convertedCount} delivery challan(s) to sales invoices!`);
-        }
-        if (failedCount > 0) {
-          toast.warning(`${failedCount} delivery challan(s) could not be converted.`);
+          if (convertedCount > 0) {
+            toast.success(`Successfully converted ${convertedCount} delivery challan(s) to sales invoices!`);
+          }
+          if (failedCount > 0) {
+            toast.warning(`${failedCount} delivery challan(s) could not be converted.`);
+          }
+        } catch (apiErr) {
+          console.warn('API bulkConvertChallans warning:', apiErr);
         }
       } else {
-        // Fallback simulate conversion
-        openChallansToConvert.forEach((challan) => {
-          const saleInvoiceNo = `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-          const newSale: SaleTransaction = {
-            id: `sale_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-            invoiceNo: saleInvoiceNo,
-            referenceNo: challan.challanNo,
-            saleDate: new Date().toISOString().split('T')[0],
-            dueDate: challan.dueDate,
-            customerId: challan.customerId,
-            customerName: challan.partyName,
-            customerCompany: challan.customerCompany,
-            customerPhone: challan.customerPhone,
-            customerEmail: challan.customerEmail,
-            billingAddress: challan.billingAddress,
-            shippingAddress: challan.shippingAddress || challan.billingAddress,
-            items: challan.items,
-            subtotal: challan.subtotal,
-            withGst: challan.withGst,
-            gstType: challan.gstType,
-            cgst: challan.cgst,
-            sgst: challan.sgst,
-            igst: challan.igst,
-            totalDiscount: challan.discount || 0,
-            totalTax: challan.taxAmount || 0,
-            shippingCharges: 0,
-            otherCharges: 0,
-            grandTotal: challan.amount,
-            paidAmount: 0,
-            balance: challan.amount,
-            paymentMethod: 'Cash',
-            paymentTerms: '15 Days',
-            paymentStatus: 'Unpaid',
-            saleStatus: 'Confirmed',
-            createdBy: 'Sales Representative',
-            salesperson: 'Sales Rep',
-            notes: `Bulk converted from Delivery Challan ${challan.challanNo}`,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          saveSale(newSale);
-        });
         toast.success(`Converted ${openChallansToConvert.length} delivery challans to Sales Invoices!`);
       }
+
+      const convertedChallanMap = new Map<string, string>();
+
+      openChallansToConvert.forEach((challan, idx) => {
+        const currentLineage = findDocumentLineage(challan.challanNo);
+        const invNo =
+          currentLineage?.invoiceNo ||
+          `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1 + idx).padStart(4, '0')}`;
+
+        convertedChallanMap.set(challan.id, invNo);
+        convertedChallanMap.set(challan.challanNo, invNo);
+
+        const newSale: SaleTransaction = {
+          id: `sale_${Date.now()}_${idx}`,
+          invoiceNo: invNo,
+          referenceNo: challan.challanNo,
+          saleDate: new Date().toISOString().split('T')[0],
+          dueDate: challan.dueDate,
+          customerId: challan.customerId,
+          customerName: challan.partyName,
+          customerCompany: challan.customerCompany,
+          customerPhone: challan.customerPhone,
+          customerEmail: challan.customerEmail,
+          billingAddress: challan.billingAddress,
+          shippingAddress: challan.shippingAddress || challan.billingAddress,
+          items: challan.items,
+          subtotal: challan.subtotal,
+          withGst: challan.withGst,
+          gstType: challan.gstType,
+          cgst: challan.cgst,
+          sgst: challan.sgst,
+          igst: challan.igst,
+          totalDiscount: challan.discount || 0,
+          totalTax: challan.taxAmount || 0,
+          shippingCharges: 0,
+          otherCharges: 0,
+          grandTotal: challan.amount,
+          paidAmount: 0,
+          balance: challan.amount,
+          paymentMethod: 'Cash',
+          paymentTerms: '15 Days',
+          paymentStatus: 'Unpaid',
+          saleStatus: 'Confirmed',
+          createdBy: 'Sales Representative',
+          salesperson: 'Sales Rep',
+          notes: `Bulk converted from Delivery Challan ${challan.challanNo}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        saveSale(newSale);
+        syncConvertedInvoiceToStorage(newSale);
+
+        recordDocumentConversion({
+          fromType: 'Challan',
+          fromNo: challan.challanNo,
+          toType: 'Invoice',
+          toNo: invNo,
+        });
+      });
+
+      const updated = challans.map((c) => {
+        const invNo = convertedChallanMap.get(c.id) || convertedChallanMap.get(c.challanNo);
+        if (invNo) {
+          return {
+            ...c,
+            status: 'Converted' as const,
+            convertedToInvoiceNo: invNo,
+          };
+        }
+        return c;
+      });
+      persistChallans(updated);
+
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'DeliveryChallan', id: 'LIST' },
+          { type: 'SalesInvoice', id: 'LIST' },
+        ])
+      );
 
       setIsBulkConvertModalOpen(false);
       setSelectedBulkChallanIds([]);
@@ -1274,7 +1433,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         { header: 'Due Date', key: 'dueDate', align: 'center', width: 15 },
         { header: 'Challan No.', key: 'challanNo', align: 'center', width: 18 },
         { header: 'Ref No.', key: 'referenceNo', align: 'center', width: 12 },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: 28 },
         { header: 'Phone', key: 'customerPhone', align: 'left', width: 18 },
         { header: 'Vehicle No', key: 'vehicleNo', align: 'left', width: 16 },
         { header: 'Total (₹)', key: 'amount', align: 'right', type: 'currency', width: 20 },
@@ -1478,7 +1637,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 <div className="relative" ref={partyDropdownRef}>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Party <span className="text-rose-500">*</span>
+                      Customer <span className="text-rose-500">*</span>
                     </label>
                     <button
                       type="button"
@@ -1486,7 +1645,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       className="text-xs font-bold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>Add Party</span>
+                      <span>Add Customer</span>
                     </button>
                   </div>
                   <div
@@ -1494,7 +1653,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                     className="w-full h-11 px-3.5 bg-white border border-blue-500 ring-2 ring-blue-500/15 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 flex items-center justify-between cursor-pointer shadow-2xs"
                   >
                     <span className={activeTab.formData.partyName ? 'text-slate-900' : 'text-slate-400'}>
-                      {activeTab.formData.partyName || 'Select Party'}
+                      {activeTab.formData.partyName || 'Select Customer'}
                     </span>
                     <ChevronDown className="w-4 h-4 text-slate-400" />
                   </div>
@@ -1507,7 +1666,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         <input
                           type="text"
                           autoFocus
-                          placeholder="Search party by name or phone..."
+                          placeholder="Search customer by name or phone..."
                           value={partySearchQuery}
                           onChange={(e) => setPartySearchQuery(e.target.value)}
                           className="w-full h-8 pl-8 pr-2.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#4309A2] focus:bg-white"
@@ -1696,32 +1855,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                     {activeTab.formData.items.map((rowItem, idx) => (
                       <tr key={rowItem.id || idx} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-3 px-3 text-center text-slate-400 font-semibold">{idx + 1}</td>
-                        <td className="py-2.5 px-3">
-                          <input
-                            type="text"
-                            list={`dc-items-list-${idx}`}
-                            placeholder="Enter item name or select..."
-                            value={rowItem.productName}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const matched = allStockItems.find(
-                                (s: any) =>
-                                  s.productName?.toLowerCase() === val.toLowerCase() ||
-                                  (s.sku && s.sku.toLowerCase() === val.toLowerCase())
-                              );
-                              if (matched) {
-                                handleItemChange(idx, 'productId', (matched as any).productId || matched.id);
-                              } else {
-                                handleItemChange(idx, 'productName', val);
-                              }
+                        <td className="py-2.5 px-3 min-w-[200px]">
+                          <SearchableSelect
+                            value={rowItem.productId || ''}
+                            onChange={(val) => {
+                              handleItemChange(idx, 'productId', val);
                             }}
-                            className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-1 focus:ring-[#33077C]/20"
+                            onSearch={handleProductSearch}
+                            isLoading={isSearchingProducts}
+                            options={productOptions}
+                            placeholder="Select Product..."
+                            searchPlaceholder="Search product by name or SKU..."
+                            emptyText="Type to search products..."
+                            allowClear
+                            size="sm"
                           />
-                          <datalist id={`dc-items-list-${idx}`}>
-                            {allStockItems.map((stk: any) => (
-                              <option key={stk.id} value={stk.productName} />
-                            ))}
-                          </datalist>
                         </td>
                         {/* Batch No */}
                         <td className="py-2.5 px-2">
@@ -2064,74 +2212,58 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           <Modal
             isOpen={isQuickCustomerModalOpen}
             onClose={() => setIsQuickCustomerModalOpen(false)}
-            title="Add New Party / Customer"
+            title="Add New Customer"
             subtitle="Register customer details to link with this Delivery Challan"
             maxWidth="md"
             headerGradient={true}
             showBackIcon={true}
             hideCloseButton={true}
           >
-            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4 pt-6">
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Customer / Business Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Apex Hospitality Corp"
-                    value={quickCustName}
-                    onChange={(e) => setQuickCustName(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4 pt-4">
+              <div>
+                <FormLabel required>Customer / Business Name</FormLabel>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Apex Hospitality Corp"
+                  value={quickCustName}
+                  onChange={(e) => setQuickCustName(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3 pt-1">
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Phone Number
-                    </span>
-                    <input
-                      type="tel"
-                      placeholder="9876543210"
-                      value={quickCustPhone}
-                      onChange={(e) => setQuickCustPhone(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                    />
-                  </div>
+                <div>
+                  <FormLabel>Phone Number</FormLabel>
+                  <input
+                    type="tel"
+                    placeholder="9876543210"
+                    value={quickCustPhone}
+                    onChange={(e) => setQuickCustPhone(e.target.value)}
+                    className={FORM_INPUT_CLS}
+                  />
                 </div>
-                <div className="relative">
-                  <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                    <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                      Email
-                    </span>
-                    <input
-                      type="email"
-                      placeholder="dispatch@company.com"
-                      value={quickCustEmail}
-                      onChange={(e) => setQuickCustEmail(e.target.value)}
-                      className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                    />
-                  </div>
+                <div>
+                  <FormLabel>Email</FormLabel>
+                  <input
+                    type="email"
+                    placeholder="dispatch@company.com"
+                    value={quickCustEmail}
+                    onChange={(e) => setQuickCustEmail(e.target.value)}
+                    className={FORM_INPUT_CLS}
+                  />
                 </div>
               </div>
 
-              <div className="relative pt-1">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Delivery Address
-                  </span>
-                  <input
-                    type="text"
-                    placeholder="Destination warehouse or site address"
-                    value={quickCustAddress}
-                    onChange={(e) => setQuickCustAddress(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div className="pt-1">
+                <FormLabel>Delivery Address</FormLabel>
+                <input
+                  type="text"
+                  placeholder="Destination warehouse or site address"
+                  value={quickCustAddress}
+                  onChange={(e) => setQuickCustAddress(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
@@ -2147,7 +2279,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   disabled={isActionLoading}
                   className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md disabled:opacity-50"
                 >
-                  Save Party
+                  Save Customer
                 </button>
               </div>
             </form>
@@ -2206,58 +2338,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
       </div>
 
-      {/* 2. FILTER & ACTION BAR */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Left Side: Period Filter & Date Range & Status Filter */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <FilterDropdown
-            placeholder="Period"
-            value={appliedPeriod}
-            options={PERIOD_FILTER_OPTIONS}
-            onChange={(val) => {
-              setAppliedPeriod(val);
-              setPage(1);
-            }}
-          />
-
-          <FilterDropdown
-            placeholder="Status"
-            value={appliedStatus}
-            options={STATUS_FILTER_OPTIONS}
-            onChange={(val) => {
-              setAppliedStatus(val);
-              setPage(1);
-            }}
-          />
-
-          <div className="relative">
-            <select
-              className="h-9 px-3.5 pr-8 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:border-[#33077C] cursor-pointer appearance-none uppercase tracking-wider"
-              defaultValue="ALL FIRMS"
-            >
-              <option value="ALL FIRMS">ALL FIRMS</option>
-              <option value="FIRM 1">Main Branch</option>
-              <option value="FIRM 2">Salem Depot</option>
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
-        </div>
-
-        {/* Right Side: Print Summary */}
-        <div className="flex items-center gap-2 self-end md:self-auto">
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="h-9 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-            title="Print Summary"
-          >
-            <Printer className="w-4 h-4 text-slate-600" />
-            <span>Print</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 3. SUMMARY KPI CARDS */}
+      {/* 2. SUMMARY KPI CARDS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Total Challans */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4.5 sm:p-5 shadow-xs flex items-center justify-between">
@@ -2332,52 +2413,80 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         </div>
       </div>
 
-      {/* 4. TRANSACTIONS SEARCH & ACTION BAR */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        {/* Left: Section Header & Search Input */}
-        <div className="flex items-center gap-3 flex-1 max-w-lg">
-          <span className="text-xs sm:text-sm font-bold text-slate-700 tracking-wider uppercase whitespace-nowrap">
-            TRANSACTIONS
-          </span>
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={pendingSearch}
-              onChange={(e) => {
-                setPendingSearch(e.target.value);
-                setAppliedSearch(e.target.value);
+      {/* 3. SEARCH BAR & FILTER ROW */}
+      <SearchBar
+        value={pendingSearch}
+        onChange={(val) => {
+          setPendingSearch(val);
+        }}
+        placeholder="Search by customer name, challan no, vehicle..."
+        onSubmit={() => {
+          setAppliedSearch(pendingSearch);
+          setPage(1);
+        }}
+        onReset={() => {
+          setPendingSearch('');
+          setAppliedSearch('');
+          setPendingPeriod('This Month');
+          setAppliedPeriod('This Month');
+          setPendingStatus('ALL');
+          setAppliedStatus('ALL');
+          setPage(1);
+        }}
+        filterSlot={
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <FilterDropdown
+              placeholder="Period : This Month"
+              value={appliedPeriod}
+              options={PERIOD_FILTER_OPTIONS}
+              onChange={(val) => {
+                setAppliedPeriod(val);
                 setPage(1);
               }}
-              placeholder="Search by party, challan no, vehicle..."
-              className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#33077C] focus:bg-white transition-colors"
+            />
+            <FilterDropdown
+              placeholder="Status : All"
+              value={appliedStatus}
+              options={STATUS_FILTER_OPTIONS}
+              onChange={(val) => {
+                setAppliedStatus(val);
+                setPage(1);
+              }}
             />
           </div>
-        </div>
-
-        {/* Right: Bulk Convert Button & Add Delivery Challan CTA */}
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedBulkChallanIds(challans.filter((c) => c.status === 'Open').map((c) => c.id));
-              setIsBulkConvertModalOpen(true);
-            }}
-            className="h-9 px-4 rounded-full border border-purple-300 text-[#33077C] hover:bg-purple-50 text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1.5"
-          >
-            <span>Bulk Convert To Sale</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleOpenCreateForm}
-            className="h-9 px-4 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 transition-all active:scale-[0.98] cursor-pointer"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Add Delivery Challan</span>
-          </button>
-        </div>
-      </div>
+        }
+        rightSlot={
+          <div className="flex items-center gap-3 pr-1 flex-wrap sm:flex-nowrap">
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => {
+                const openChallans = challans.filter(
+                  (c) => c.status === 'Open' || c.status === 'Delivered'
+                );
+                if (openChallans.length === 0) {
+                  toast.info(
+                    'No open or delivered challans available for bulk conversion.'
+                  );
+                  return;
+                }
+                setSelectedBulkChallanIds(openChallans.map((c) => c.id));
+                setIsBulkConvertModalOpen(true);
+              }}
+              className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:border-rose-300"
+              icon={<ShoppingCart className="w-4 h-4 text-rose-500" />}
+            >
+              Bulk Convert
+            </Button>
+            <span className="text-xs font-semibold text-slate-500 shrink-0">
+              Total Challans :{' '}
+              <span className="text-[#33077C] font-bold">
+                {totalApiRecords || filteredChallans.length}
+              </span>
+            </span>
+          </div>
+        }
+      />
 
       {/* 5. TRANSACTIONS TABLE */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -2412,43 +2521,43 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               {/* Royal Purple Header */}
               <thead>
                 <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-4 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[180px] text-white">
                     <div className="flex items-center justify-between gap-1.5">
-                      <span className="flex items-center gap-1">DATE <span className="text-purple-200">↓</span></span>
+                      <span>CUSTOMER NAME</span>
                       <Filter className="w-3 h-3 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-4 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>PARTY</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap w-28 text-white">
+                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[140px] text-white">
                     <div className="flex items-center justify-center gap-1">
                       <span>CHALLAN NO.</span>
                       <Filter className="w-3 h-3 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="flex items-center gap-1">DATE <span className="text-purple-200">↓</span></span>
+                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
+                    </div>
+                  </th>
+                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
                     <div className="flex items-center justify-between gap-1.5">
                       <span>DUE DATE</span>
                       <Filter className="w-3 h-3 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-right whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-right whitespace-nowrap min-w-[120px] text-white">
                     <div className="flex items-center justify-end gap-1.5">
                       <span>TOTAL AMOUNT</span>
                       <Filter className="w-3 h-3 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
-                    <div className="flex items-center justify-between gap-1.5">
+                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[110px] text-white">
+                    <div className="flex items-center justify-center gap-1.5">
                       <span>STATUS</span>
                       <Filter className="w-3 h-3 text-purple-200 opacity-80" />
                     </div>
                   </th>
-                  <th className="py-3.5 px-4 text-center whitespace-nowrap w-44 text-white">
+                  <th className="py-3.5 px-4 text-center whitespace-nowrap min-w-[140px] w-40 text-white">
                     ACTION
                   </th>
                 </tr>
@@ -2464,52 +2573,57 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       key={item.id}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                     >
-                      {/* 1. DATE */}
-                      <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(item.invoiceDate)}
-                      </td>
-
-                      {/* 2. PARTY */}
-                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      {/* 1. PARTY */}
+                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         <div>{item.partyName}</div>
                         {item.customerPhone && (
                           <div className="text-[11px] text-slate-400 font-normal">{item.customerPhone}</div>
                         )}
                       </td>
 
-                      {/* 3. CHALLAN NO. */}
-                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap">
-                        {item.referenceNo || item.challanNo}
+                      {/* 2. CHALLAN NO. */}
+                      <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span>{item.challanNo || item.referenceNo}</span>
+                          <DocumentLineageBadges docRef={item.challanNo} currentType="Challan" className="justify-center" />
+                        </div>
+                      </td>
+
+                      {/* 3. DATE */}
+                      <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap align-middle">
+                        {isoToDdmmyyyy(item.invoiceDate)}
                       </td>
 
                       {/* 4. DUE DATE */}
-                      <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap align-middle">
                         <span>{isoToDdmmyyyy(item.dueDate)}</span>
                       </td>
 
                       {/* 5. TOTAL AMOUNT */}
-                      <td className="py-3.5 px-3 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {Number(item.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* 6. STATUS */}
-                      <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap">
-                        {item.status === 'Converted' || item.status === 'Delivered' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Converted
-                          </span>
-                        ) : item.status === 'Cancelled' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                            Cancelled
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
-                            Open
-                          </span>
-                        )}
+                      <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap text-center align-middle">
+                        <div className="flex items-center justify-center">
+                          {item.status === 'Converted' || item.status === 'Delivered' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : item.status === 'Cancelled' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                              Cancelled
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                              Open
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 7. ACTION */}
@@ -2578,7 +2692,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                     setActiveDropdownId(null);
                                     handleOpenEditForm(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View/Edit
                                 </button>
@@ -2590,7 +2704,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                     setActiveDropdownId(null);
                                     handleDeleteChallan(item.id);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Delete / Cancel
                                 </button>
@@ -2602,45 +2716,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                     setActiveDropdownId(null);
                                     handleDuplicateChallan(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
 
-                                {/* 4. Open PDF */}
+                                {/* 4. Preview */}
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setActiveDropdownId(null);
                                     setPreviewChallan(item);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
-
-                                {/* 5. Preview */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewChallan(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Preview
-                                </button>
-
-                                {/* 6. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handlePrintChallan(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Print
                                 </button>
                               </div>
                             )}
@@ -2819,7 +2909,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-4 text-xs">
               <div>
-                <p className="text-[11px] font-bold text-slate-400 uppercase">Consignee / Party:</p>
+                <p className="text-[11px] font-bold text-slate-400 uppercase">Consignee / Customer:</p>
                 <p className="text-sm font-bold text-slate-900 mt-0.5">{previewChallan.partyName}</p>
                 {previewChallan.customerCompany && <p>{previewChallan.customerCompany}</p>}
                 {previewChallan.customerPhone && <p>Phone: {previewChallan.customerPhone}</p>}

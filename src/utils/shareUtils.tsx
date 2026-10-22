@@ -831,6 +831,58 @@ export const formatProformaInvoiceShare = (pi: any): SharePayload => {
   };
 };
 
+export const formatSalesRepShare = (rep: any): SharePayload => {
+  const name = rep.name || 'Sales Representative';
+  const mobile = rep.mobile || rep.phone || '';
+  const email = rep.email || '';
+  const designation = rep.designation || 'Sales Representative';
+  const status = rep.status || 'Active';
+  const customersCount = rep.assignedCustomersCount || 0;
+  const invoicesCount = rep.assignedInvoicesCount || 0;
+  const outstanding = Number(rep.totalOutstandingAmount || 0).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+  });
+  const collected = Number(rep.totalCollectedAmount || 0).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+  });
+
+  const emailBody =
+    `Sales Representative Profile:\n\n` +
+    `Name: ${name}\n` +
+    (designation ? `Designation: ${designation}\n` : '') +
+    (mobile ? `Mobile: ${mobile}\n` : '') +
+    (email ? `Email: ${email}\n` : '') +
+    `Status: ${status}\n\n` +
+    `Portfolio Summary:\n` +
+    `Assigned Customers: ${customersCount}\n` +
+    `Assigned Invoices: ${invoicesCount}\n` +
+    `Total Collected: ₹${collected}\n` +
+    `Total Outstanding: ₹${outstanding}\n\n` +
+    `Shared via YAA CRM.`;
+
+  const whatsAppText =
+    `*YAA CRM - Sales Representative Profile*\n` +
+    `--------------------------------\n` +
+    `*Name:* ${name}\n` +
+    (designation ? `*Designation:* ${designation}\n` : '') +
+    (mobile ? `*Mobile:* ${mobile}\n` : '') +
+    (email ? `*Email:* ${email}\n` : '') +
+    `*Status:* ${status}\n` +
+    `*Assigned Customers:* ${customersCount}\n` +
+    `*Assigned Invoices:* ${invoicesCount}\n` +
+    `*Total Collected:* ₹${collected}\n` +
+    `*Outstanding:* ₹${outstanding}`;
+
+  return {
+    title: `Sales Rep "${name}"`,
+    subject: `Sales Representative Profile: ${name}`,
+    body: emailBody,
+    recipientEmail: email,
+    recipientPhone: mobile,
+    whatsAppText,
+  };
+};
+
 // =========================================================================
 // Universal Floating Share Popover Dropdown Component
 // =========================================================================

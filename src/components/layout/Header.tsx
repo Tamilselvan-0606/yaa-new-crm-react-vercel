@@ -491,7 +491,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [productsList, setProductsList] = useState<any[]>([]);
 
   useEffect(() => {
-    if (isSuperAdmin) return;
+    if (isSuperAdmin || isSalesMode) return;
     let isMounted = true;
     const fetchApiProducts = async () => {
       try {
@@ -520,7 +520,7 @@ export const Header: React.FC<HeaderProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [currentBranchId, currentSubOrgId, currentUser, isSuperAdmin]);
+  }, [currentBranchId, currentSubOrgId, currentUser, isSuperAdmin, isSalesMode]);
 
   const productOptions = useMemo(() => {
     const list: { id: string; name: string }[] = [{ id: 'all', name: 'All' }];
@@ -859,10 +859,16 @@ export const Header: React.FC<HeaderProps> = ({
     if (path.startsWith('/sale-management/inventory/report') || currentTab === 'inventory-report') return 'Inventory Report';
 
     // Sale Management - Sales Hub
+    if (path.startsWith('/sale-management/sales/customer') || currentTab === 'sales-hub-customer') return 'Customer';
+    if (path.startsWith('/sale-management/sales/sales-representatives') || currentTab === 'sales-hub-sales-representative') return 'Sales Representatives';
     if (path.startsWith('/sale-management/sales/quotation') || path.startsWith('/sale-management/sales/estimate') || currentTab === 'sales-hub-quotation') return 'Estimate/Quotation';
+    if (path.startsWith('/sale-management/sales/proforma') || currentTab === 'sales-hub-proforma') return 'Proforma Invoice';
+    if (path.startsWith('/sale-management/sales/sale-order') || currentTab === 'sales-hub-order') return 'Sales Order';
+    if (path.startsWith('/sale-management/sales/delivery-challan') || currentTab === 'sales-hub-challan') return 'Delivery Challan';
+    if (path === '/sale-management/sales/sale' || path.startsWith('/sale-management/sales/sale/') || currentTab === 'sales-hub-sales') return 'Sales Invoice';
     if (path.startsWith('/sale-management/sales/payment-in') || path.startsWith('/sale-management/sales/payment') || currentTab === 'sales-hub-payment-in') return 'Payment-In';
-    if (path.startsWith('/sale-management/sales/sale') || currentTab === 'sales-hub-sales') return 'Sales';
     if (path.startsWith('/sale-management/sales/return') || currentTab === 'sales-hub-returns') return 'Sales Return';
+    if (path.startsWith('/sale-management/sales/collections') || currentTab === 'sales-hub-collections') return 'Collections';
     if (path.startsWith('/sale-management/sales/report') || currentTab === 'sales-hub-report') return 'Sales Report';
 
     // Sale Management - Purchase
@@ -920,33 +926,6 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Organization Selector, Branch Selector, Notification Bell & User Avatar */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 lg:gap-3 min-w-0 justify-end">
-        {/* Top Module Switcher for Organization Type 0 (ALL) - Hidden for Super Admin and Organisation Admin */}
-        {!isSuperAdmin && !isOrgAdmin && !isOrgSuperAdmin && orgCaps.isAll && (
-          <div className="hidden sm:flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/90 shadow-2xs shrink-0">
-            <button
-              type="button"
-              onClick={() => handleSelectOrgType('Client Management')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${selectedOrgType === 'Client Management'
-                  ? 'bg-white text-[#33077C] shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-                }`}
-            >
-              <UsersRound className="w-3.5 h-3.5 text-[#33077C]" />
-              <span>Client Management</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectOrgType('Sales Management')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${selectedOrgType === 'Sales Management'
-                  ? 'bg-white text-[#33077C] shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-                }`}
-            >
-              <ShoppingCart className="w-3.5 h-3.5 text-[#33077C]" />
-              <span>Sale Management</span>
-            </button>
-          </div>
-        )}
 
         {/* Organisation Admin Header Filters: Sub-Org Dropdown, Branch Dropdown, Products Dropdown (Client only) */}
         {isOrgSuperAdmin || isOrgAdmin ? (

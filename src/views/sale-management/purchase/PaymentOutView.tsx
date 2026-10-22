@@ -53,6 +53,7 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
 import { toast } from 'sonner';
 
 const PERIOD_FILTER_OPTIONS = [
@@ -247,14 +248,15 @@ export const PaymentOutView: React.FC = () => {
     fetchPaymentsOut();
   }, [fetchPaymentsOut]);
 
-  // Debounced Search (450ms)
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (pendingSearch !== appliedSearch) {
-        setAppliedSearch(pendingSearch);
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
         setCurrentPage(1);
       }
-    }, 450);
+    }, 600);
     return () => clearTimeout(timer);
   }, [pendingSearch, appliedSearch]);
 
@@ -505,46 +507,29 @@ export const PaymentOutView: React.FC = () => {
     setIsSubmittingForm(true);
     try {
       if (editingPaymentId) {
-        // PUT /work/payments-out/{id}
+        // PUT /work/payments-out/:id
         const updatePayload = mapUiToUpdatePaymentOutPayload({
-          amount: numAmount,
-          referenceNo: data.referenceNo,
           paymentType: data.paymentMode,
           paymentMode: data.paymentMode,
+          amount: numAmount,
+          referenceNo: data.referenceNo,
           notes: data.notes,
         });
 
-        let updatedItem: PaymentOut;
-        try {
-          const res = await workPaymentOutApi.updatePaymentOut(editingPaymentId, updatePayload);
-          if (res?.data) {
-            updatedItem = mapApiPaymentOutToUi(res.data);
-            if (data.purchaseId) {
-              updatedItem.purchaseId = data.purchaseId;
-              updatedItem.purchaseNo = purchaseObj?.purchaseNo;
-            }
-            if (data.receiptImage) {
-              updatedItem.receiptImage = data.receiptImage;
-            }
-            if (supplierObj?.name && (!updatedItem.supplierName || updatedItem.supplierName === 'Unknown Supplier')) {
-              updatedItem.supplierName = supplierObj.name;
-            }
-          } else {
-            throw new Error('No data returned');
-          }
-        } catch (apiErr: any) {
-          console.warn('API update failed, saving locally:', apiErr);
-          updatedItem = {
-            ...existing!,
-            amount: numAmount,
-            referenceNo: data.referenceNo || '',
-            paymentMode: data.paymentMode as PaymentOutMode,
-            notes: data.notes || '',
-            receiptImage: data.receiptImage || existing?.receiptImage,
-            purchaseId: data.purchaseId || existing?.purchaseId,
-            purchaseNo: purchaseObj?.purchaseNo || existing?.purchaseNo,
-            updatedAt: new Date().toISOString(),
-          };
+        const res = await workPaymentOutApi.updatePaymentOut(editingPaymentId, updatePayload);
+        if (!res?.data) {
+          throw new Error((res as any)?.error?.message || 'Failed to update payment voucher');
+        }
+        const updatedItem = mapApiPaymentOutToUi(res.data);
+        if (data.purchaseId) {
+          updatedItem.purchaseId = data.purchaseId;
+          updatedItem.purchaseNo = purchaseObj?.purchaseNo;
+        }
+        if (data.receiptImage) {
+          updatedItem.receiptImage = data.receiptImage;
+        }
+        if (supplierObj?.name && (!updatedItem.supplierName || updatedItem.supplierName === 'Unknown Supplier')) {
+          updatedItem.supplierName = supplierObj.name;
         }
 
         savePaymentOut(updatedItem);
@@ -561,57 +546,33 @@ export const PaymentOutView: React.FC = () => {
           notes: data.notes,
         });
 
-        let createdItem: PaymentOut;
-        try {
-          const res = await workPaymentOutApi.createPaymentOut(createPayload);
-          if (res?.data) {
-            createdItem = mapApiPaymentOutToUi(res.data);
-            if (data.purchaseId) {
-              createdItem.purchaseId = data.purchaseId;
-              createdItem.purchaseNo = purchaseObj?.purchaseNo;
-            }
-            if (data.receiptImage) {
-              createdItem.receiptImage = data.receiptImage;
-            }
-            if (supplierObj?.name && (!createdItem.supplierName || createdItem.supplierName === 'Unknown Supplier')) {
-              createdItem.supplierName = supplierObj.name;
-            }
-          } else {
-            throw new Error('No data returned');
+        const res = await workPaymentOutApi.createPaymentOut(createPayload);
+        if (!res?.data) {
+          throw new Error((res as any)?.error?.message || 'Failed to record payment voucher');
+        }
+          const createdItem = mapApiPaymentOutToUi(res.data);
+          if (data.purchaseId) {
+            createdItem.purchaseId = data.purchaseId;
+            createdItem.purchaseNo = purchaseObj?.purchaseNo;
           }
-        } catch (apiErr: any) {
-          const apiMsg = apiErr?.response?.data?.error?.message || apiErr?.message;
-          console.warn('API create payment-out failed, recording locally:', apiMsg);
-          createdItem = {
-            id: `pout_${Date.now()}`,
-            paymentNo: data.paymentNo || `VPA-${Date.now()}`,
-            paymentDate: data.paymentDate,
-            supplierId: supId,
-            supplierName: supplierObj?.name || 'Unknown Supplier',
-            supplierCode: supplierObj?.supplierCode,
-            purchaseId: data.purchaseId || undefined,
-            purchaseNo: purchaseObj?.purchaseNo,
-            amount: numAmount,
-            paymentMode: data.paymentMode as PaymentOutMode,
-            referenceNo: data.referenceNo || '',
-            receiptImage: data.receiptImage || undefined,
-            notes: data.notes || '',
-            status: 'Completed',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
+          if (data.receiptImage) {
+            createdItem.receiptImage = data.receiptImage;
+          }
+          if (supplierObj?.name && (!createdItem.supplierName || createdItem.supplierName === 'Unknown Supplier')) {
+            createdItem.supplierName = supplierObj.name;
+          }
+
+          savePaymentOut(createdItem);
+          setLivePayments((prev) => [createdItem, ...prev]);
+          toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
         }
 
-        savePaymentOut(createdItem);
-        setLivePayments((prev) => [createdItem, ...prev]);
-        toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
-      }
-
-      setEditingPaymentId(null);
-      setIsFormModalOpen(false);
-      fetchPaymentsOut(true);
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to save payment voucher');
+        setEditingPaymentId(null);
+        setIsFormModalOpen(false);
+        fetchPaymentsOut(true);
+      } catch (err: any) {
+        const errMsg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || 'Failed to save payment voucher';
+        toast.error(errMsg);
     } finally {
       setIsSubmittingForm(false);
     }
@@ -625,13 +586,8 @@ export const PaymentOutView: React.FC = () => {
       return;
     }
 
-    if (
-      window.confirm(
-        `Are you sure you want to cancel payment voucher ${paymentNo}?\n\nFinancial payments cannot be completely deleted; cancelling voids the voucher and locks it.`
-      )
-    ) {
-      try {
-        await workPaymentOutApi.deletePaymentOut(id);
+    try {
+      await workPaymentOutApi.deletePaymentOut(id);
         const cancelledPayment: PaymentOut = {
           ...(existing || {
             id,
@@ -670,7 +626,6 @@ export const PaymentOutView: React.FC = () => {
       } finally {
         setActiveDropdownId(null);
       }
-    }
   };
 
   // Filtered List based on Search, Period & Date Ranges, Payment Mode, Status
@@ -1252,7 +1207,7 @@ export const PaymentOutView: React.FC = () => {
                                       setSelectedPayment(po);
                                       setIsDetailModalOpen(true);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-500 hover:bg-slate-50 transition-colors cursor-pointer flex items-center justify-between"
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center justify-between"
                                   >
                                     <span>View Voucher</span>
                                     <span className="text-[10px] uppercase font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">
@@ -1266,7 +1221,7 @@ export const PaymentOutView: React.FC = () => {
                                       setActiveDropdownId(null);
                                       handleOpenEditModal(po);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                   >
                                     View/Edit
                                   </button>
@@ -1279,7 +1234,7 @@ export const PaymentOutView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleDuplicatePayment(po);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
@@ -1300,7 +1255,7 @@ export const PaymentOutView: React.FC = () => {
                                       setActiveDropdownId(null);
                                       handleDeletePayment(po.id, po.paymentNo);
                                     }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                                   >
                                     Cancel Voucher
                                   </button>
@@ -1315,7 +1270,7 @@ export const PaymentOutView: React.FC = () => {
                                     toast.info(`Opening PDF for ${po.paymentNo}...`);
                                     window.print();
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Open PDF
                                 </button>
@@ -1329,7 +1284,7 @@ export const PaymentOutView: React.FC = () => {
                                     toast.info(`Preparing print for ${po.paymentNo}...`);
                                     window.print();
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Print
                                 </button>
@@ -1342,7 +1297,7 @@ export const PaymentOutView: React.FC = () => {
                                     setIsHistoryModalOpen(true);
                                     setActiveDropdownId(null);
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View History
                                 </button>
@@ -1481,77 +1436,61 @@ export const PaymentOutView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 1: Supplier / Vendor */}
             <div>
-              <div className="relative">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Supplier / Vendor <span className="text-rose-500">*</span>
-                </span>
-                <Controller
-                  control={control}
-                  name="supplierId"
-                  render={({ field }) => (
-                    <CustomSelect
-                      value={field.value}
-                      onChange={(val) => {
-                        field.onChange(val);
-                        setValue('purchaseId', '');
-                        setValue('amount', '');
-                      }}
-                      placeholder="Select supplier / vendor"
-                      allowClear={true}
-                      options={mergedSuppliers.map((s) => ({
-                        value: s.id,
-                        label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
-                      }))}
-                    />
-                  )}
-                />
-              </div>
+              <FormLabel required>Supplier / Vendor</FormLabel>
+              <Controller
+                control={control}
+                name="supplierId"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value}
+                    onChange={(val) => {
+                      field.onChange(val);
+                      setValue('purchaseId', '');
+                      setValue('amount', '');
+                    }}
+                    placeholder="Select supplier / vendor"
+                    allowClear={true}
+                    options={mergedSuppliers.map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
+                    }))}
+                  />
+                )}
+              />
               <FormError message={errors.supplierId?.message} />
             </div>
 
             {/* Field 2: Bill No (Dropdown) */}
             <div>
-              <div className="relative">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Bill No
-                </span>
-                <Controller
-                  control={control}
-                  name="purchaseId"
-                  render={({ field }) => (
-                    <CustomSelect
-                      value={field.value || ''}
-                      onChange={(val) => handlePurchaseSelect(val)}
-                      placeholder="Select bill no"
-                      allowClear={true}
-                      options={supplierPurchases.map((p) => ({
-                        value: p.id,
-                        label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
-                      }))}
-                    />
-                  )}
-                />
-              </div>
+              <FormLabel>Bill No</FormLabel>
+              <Controller
+                control={control}
+                name="purchaseId"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value || ''}
+                    onChange={(val) => handlePurchaseSelect(val)}
+                    placeholder="Select bill no"
+                    allowClear={true}
+                    options={supplierPurchases.map((p) => ({
+                      value: p.id,
+                      label: `${p.purchaseInvoiceNo ? `${p.purchaseInvoiceNo} (${p.purchaseNo})` : p.purchaseNo} — Bal: ₹${p.balance.toLocaleString('en-IN')}`,
+                    }))}
+                  />
+                )}
+              />
               <FormError message={errors.purchaseId?.message} />
             </div>
 
             {/* Field 3: Voucher / Payment No */}
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.paymentNo
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Voucher / Payment No <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="text"
-                  {...register('paymentNo')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
-                  placeholder="e.g. VPA-2026-001"
-                />
-              </div>
+              <FormLabel required>Voucher / Payment No</FormLabel>
+              <input
+                type="text"
+                {...register('paymentNo')}
+                className={getFormInputCls(!!errors.paymentNo)}
+                placeholder="e.g. VPA-2026-001"
+              />
               <FormError message={errors.paymentNo?.message} />
             </div>
           </div>
@@ -1560,40 +1499,26 @@ export const PaymentOutView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 4: Payment Date */}
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.paymentDate
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Date <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="date"
-                  {...register('paymentDate')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none cursor-pointer"
-                />
-              </div>
+              <FormLabel required>Payment Date</FormLabel>
+              <input
+                type="date"
+                {...register('paymentDate')}
+                className={getFormInputCls(!!errors.paymentDate)}
+              />
               <FormError message={errors.paymentDate?.message} />
             </div>
 
             {/* Field 5: Payment Amount */}
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.amount
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Amount (₹) <span className="text-rose-500">*</span>
-                </span>
-                <span className="pl-4 text-slate-400 font-medium text-sm">₹</span>
+              <FormLabel required>Payment Amount (₹)</FormLabel>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium text-sm">₹</span>
                 <input
                   type="number"
                   step="0.01"
                   placeholder="0.00"
                   {...register('amount')}
-                  className="w-full h-full pl-2 pr-4 bg-transparent text-xs sm:text-[13px] font-bold text-slate-900 outline-none"
+                  className={`${getFormInputCls(!!errors.amount)} pl-8 font-bold text-slate-900`}
                 />
               </div>
               <FormError message={errors.amount?.message} />
@@ -1601,31 +1526,27 @@ export const PaymentOutView: React.FC = () => {
 
             {/* Field 6: Payment Mode */}
             <div>
-              <div className="relative">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Payment Mode <span className="text-rose-500">*</span>
-                </span>
-                <Controller
-                  control={control}
-                  name="paymentMode"
-                  render={({ field }) => (
-                    <CustomSelect
-                      value={field.value}
-                      onChange={(val) => field.onChange(val as PaymentOutMode)}
-                      placeholder="Select payment mode"
-                      options={[
-                        { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
-                        { value: 'UPI', label: 'UPI / QR Code' },
-                        { value: 'Cash', label: 'Cash' },
-                        { value: 'Cheque', label: 'Cheque' },
-                        { value: 'Card', label: 'Debit / Credit Card' },
-                        { value: 'Net Banking', label: 'Net Banking' },
-                        { value: 'Other', label: 'Other' },
-                      ]}
-                    />
-                  )}
-                />
-              </div>
+              <FormLabel required>Payment Mode</FormLabel>
+              <Controller
+                control={control}
+                name="paymentMode"
+                render={({ field }) => (
+                  <CustomSelect
+                    value={field.value}
+                    onChange={(val) => field.onChange(val as PaymentOutMode)}
+                    placeholder="Select payment mode"
+                    options={[
+                      { value: 'Bank Transfer', label: 'Bank Transfer (NEFT/RTGS/IMPS)' },
+                      { value: 'UPI', label: 'UPI / QR Code' },
+                      { value: 'Cash', label: 'Cash' },
+                      { value: 'Cheque', label: 'Cheque' },
+                      { value: 'Card', label: 'Debit / Credit Card' },
+                      { value: 'Net Banking', label: 'Net Banking' },
+                      { value: 'Other', label: 'Other' },
+                    ]}
+                  />
+                )}
+              />
               <FormError message={errors.paymentMode?.message} />
             </div>
           </div>
@@ -1634,89 +1555,71 @@ export const PaymentOutView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
             {/* Field 7: Attach Receipt / Image */}
             <div>
-              <div className="relative">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Upload Receipt / Proof
-                </span>
-                {watchReceiptImage ? (
-                  <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-300 bg-slate-50 shadow-2xs">
-                    <img
-                      src={watchReceiptImage}
-                      alt="Receipt"
-                      className="w-7 h-7 rounded-lg object-cover border border-slate-300"
-                    />
-                    <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
-                      Image Attached
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setValue('receiptImage', '')}
-                      className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
-                      title="Remove Image"
-                    >
-                      <X className="w-4 h-4 stroke-[2.5]" />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex items-center justify-center gap-2 w-full h-11 px-3.5 rounded-xl border border-slate-300 hover:border-[#33077C] hover:bg-[#33077C]/5 text-slate-600 hover:text-[#33077C] text-xs sm:text-[13px] font-medium cursor-pointer transition-all bg-white shadow-2xs">
-                    <Upload className="w-4 h-4 text-slate-400" />
-                    <span>Upload Image / Receipt</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            setValue('receiptImage', reader.result as string);
-                            toast.success('Receipt image attached successfully!');
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
+              <FormLabel>Upload Receipt / Proof</FormLabel>
+              {watchReceiptImage ? (
+                <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50 shadow-2xs">
+                  <img
+                    src={watchReceiptImage}
+                    alt="Receipt"
+                    className="w-7 h-7 rounded-lg object-cover border border-slate-300"
+                  />
+                  <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
+                    Image Attached
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setValue('receiptImage', '')}
+                    className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                    title="Remove Image"
+                  >
+                    <X className="w-4 h-4 stroke-[2.5]" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex items-center justify-center gap-2 w-full h-11 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-600 text-xs sm:text-[13px] font-medium cursor-pointer transition-all bg-white shadow-2xs">
+                  <Upload className="w-4 h-4 text-slate-400" />
+                  <span>Upload Image / Receipt</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          setValue('receiptImage', reader.result as string);
+                          toast.success('Receipt image attached successfully!');
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                </label>
+              )}
             </div>
 
             {/* Field 8: Reference no */}
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.referenceNo
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Reference no
-                </span>
-                <input
-                  type="text"
-                  {...register('referenceNo')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Reference no</FormLabel>
+              <input
+                type="text"
+                {...register('referenceNo')}
+                className={getFormInputCls(!!errors.referenceNo)}
+                placeholder="e.g. UTR-9821892812"
+              />
               <FormError message={errors.referenceNo?.message} />
             </div>
 
             {/* Field 9: Notes */}
             <div>
-              <div className={`relative w-full h-11 bg-white rounded-xl transition-all shadow-2xs flex items-center ${
-                errors.notes
-                  ? 'border border-rose-400 focus-within:border-rose-500 focus-within:ring-2 focus-within:ring-rose-500/20 bg-rose-50/20'
-                  : 'border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Notes
-                </span>
-                <input
-                  type="text"
-                  {...register('notes')}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 outline-none"
-                />
-              </div>
+              <FormLabel>Notes</FormLabel>
+              <input
+                type="text"
+                {...register('notes')}
+                className={getFormInputCls(!!errors.notes)}
+                placeholder="e.g. Monthly vendor clearance"
+              />
               <FormError message={errors.notes?.message} />
             </div>
           </div>

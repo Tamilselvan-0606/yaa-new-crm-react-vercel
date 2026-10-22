@@ -60,7 +60,7 @@ export const unitEndpoints = baseApi.injectEndpoints({
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
           if (params.sortBy) queryParams.sortBy = params.sortBy;
-          if (params.status !== undefined && params.status !== 'ALL') {
+          if (params.status !== undefined && String(params.status).toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
         }
@@ -89,7 +89,7 @@ export const unitEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Unit', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Unit', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
 
     updateCommerceUnit: builder.mutation<UnitSingleResponse, { id: string; payload: UpdateUnitPayload }>({
@@ -101,6 +101,7 @@ export const unitEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Unit', id },
         { type: 'Unit', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -113,6 +114,7 @@ export const unitEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Unit', id },
         { type: 'Unit', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -121,7 +123,7 @@ export const unitEndpoints = baseApi.injectEndpoints({
         url: `/commerce/units/${encodeURIComponent(id)}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Unit', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Unit', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
   }),
   overrideExisting: false,
@@ -152,7 +154,7 @@ export const unitApi = {
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
       if (params.sortBy) queryParams.sortBy = params.sortBy;
-      if (params.status !== undefined && params.status !== 'ALL') {
+      if (params.status !== undefined && String(params.status).toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
     }

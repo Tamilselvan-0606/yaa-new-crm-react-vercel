@@ -29,6 +29,8 @@ export * from './platform/clientProductApi';
 export * from './platform/clientProductTypes';
 export * from './platform/leadApi';
 export * from './platform/leadTypes';
+export * from './platform/clientApi';
+export * from './platform/clientTypes';
 
 export * from './commerce/customerTypes';
 export * from './commerce/customerApi';
@@ -213,3 +215,4 @@ export { collectionApi } from './commerce/collectionApi';
 
 export * from './commerce/salesDashboardTypes';
 export * from './commerce/salesDashboardApi';
+export * from './ai/aiApi';

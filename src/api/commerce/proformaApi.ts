@@ -143,7 +143,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
 
   return {
     id: apiP.id,
-    proformaNo: apiP.proformaNo || 'PRO-2026-0001',
+    proformaNo: apiP.proformaNo || (apiP as any).proformaNumber || (apiP as any).proformaCode || (apiP as any).code || (apiP as any).documentNo || 'PRO-2026-0001',
     referenceNo: apiP.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,
@@ -188,7 +188,8 @@ export const mapSaleProformaToPayload = (
     items: any[];
     partyName: string;
     stateOfSupply?: string;
-  }
+  },
+  isCreate: boolean = false
 ): CreateProformaPayload => {
   const payload: CreateProformaPayload = {
     partyName: proforma.partyName.trim(),
@@ -216,7 +217,8 @@ export const mapSaleProformaToPayload = (
     }),
   };
 
-  if (proforma.proformaNo && proforma.proformaNo.trim()) {
+  // On creation, omit temporary client-generated proformaNo so backend sequence assigns official unique number
+  if (!isCreate && proforma.proformaNo && proforma.proformaNo.trim()) {
     payload.proformaNo = proforma.proformaNo.trim();
   }
   if (proforma.referenceNo && proforma.referenceNo.trim()) {
@@ -311,7 +313,7 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         }
         return {
           url: '/commerce/proformas',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -329,11 +331,16 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
     }),
 
     createCommerceProformaInvoice: builder.mutation<ProformaSingleResponse, CreateProformaPayload>({
-      query: (payload) => ({
-        url: '/commerce/proformas',
-        method: 'POST',
-        body: payload,
-      }),
+      query: (payload) => {
+        const body = { ...payload };
+        // Omit client-generated proformaNo on creation to prevent 409 DUPLICATE_DOCUMENT_NO from backend sequence
+        delete body.proformaNo;
+        return {
+          url: '/commerce/proformas',
+          method: 'POST',
+          body,
+        };
+      },
       invalidatesTags: [{ type: 'Proforma', id: 'LIST' }],
     }),
 
@@ -405,6 +412,7 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Proforma', id },
         { type: 'Proforma', id: 'LIST' },
+        { type: 'SalesOrder', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
       ],
     }),
@@ -462,7 +470,7 @@ export const commerceProformaApi = {
     }
 
     const response = await baseClient.get<ProformaListResponse>('/commerce/proformas', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
@@ -481,7 +489,10 @@ export const commerceProformaApi = {
    * POST /commerce/proformas
    */
   createProforma: async (payload: CreateProformaPayload): Promise<ProformaSingleResponse> => {
-    const response = await baseClient.post<ProformaSingleResponse>('/commerce/proformas', payload);
+    const cleanPayload = { ...payload };
+    // Strictly omit proformaNo on creation so backend sequence assigns official unique document number without 409 DUPLICATE_DOCUMENT_NO
+    delete cleanPayload.proformaNo;
+    const response = await baseClient.post<ProformaSingleResponse>('/commerce/proformas', cleanPayload);
     return response.data;
   },
 

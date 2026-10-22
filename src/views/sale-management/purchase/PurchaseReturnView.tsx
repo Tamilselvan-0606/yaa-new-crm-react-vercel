@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowDownLeft,
   Plus,
@@ -43,9 +44,14 @@ import {
   ensureValidUuid,
   UUID_REGEX,
 } from '../../../api/commerce/purchaseReturnApi';
+import { workPurchaseOrderApi } from '../../../api';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
+import { SearchableSelect } from '../../../components/common/SearchableSelect';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
 
 export const PurchaseReturnView: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const {
     purchases,
     purchaseReturns,
@@ -54,7 +60,12 @@ export const PurchaseReturnView: React.FC = () => {
     savePurchaseReturn,
     setPurchaseReturnsList,
     deletePurchaseReturn,
+    updatePurchaseOrderStatus,
   } = useSalesManagementStore();
+
+  // Track converted Purchase Order ID to update its status to 'Returned' upon saving
+  const [originatingPurchaseId, setOriginatingPurchaseId] = useState<string | null>(null);
+  const hasConvertedPoRef = useRef(false);
 
   // ---------------------------------------------------------
   // Live Commerce API State
@@ -67,6 +78,7 @@ export const PurchaseReturnView: React.FC = () => {
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
 
   // Deduplication refs for fetch
   const isFetchingRef = useRef(false);
@@ -106,25 +118,133 @@ export const PurchaseReturnView: React.FC = () => {
   const [returnStatus, setReturnStatus] = useState<string>('Requested');
   const [notes, setNotes] = useState('');
 
-  // ---------------------------------------------------------
-  // 1. Fetch available products from commerce productApi
-  // ---------------------------------------------------------
-  useEffect(() => {
-    let isMounted = true;
-    productApi
-      .getProducts({ page_size: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailableProducts(res.data);
-        }
-      })
-      .catch(() => {
-        // Fallback silently to stocks in store
+  // On-demand product search: only calls products API when user is actively searching
+  const handleProductSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setIsSearchingProducts(true);
+    try {
+      const res = await productApi.getProducts({
+        search: trimmed,
+        page_size: 30,
+        pagination_required: false,
       });
-    return () => {
-      isMounted = false;
-    };
+      if (res && res.data && Array.isArray(res.data)) {
+        setAvailableProducts((prev) => {
+          const map = new Map<string, ApiProduct>();
+          prev.forEach((p) => map.set(p.id, p));
+          res.data.forEach((p) => map.set(p.id, p));
+          return Array.from(map.values());
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to search products in PurchaseReturnView:', err);
+    } finally {
+      setIsSearchingProducts(false);
+    }
   }, []);
+
+  // Product options combining searched API products, returnItems, and local stocks
+  const productOptions = useMemo(() => {
+    const map = new Map<string, { value: string; label: string; subLabel?: string; badge?: string }>();
+    availableProducts.forEach((p) => {
+      map.set(p.id, {
+        value: p.id,
+        label: p.productName || (p as any).name || 'Product',
+        subLabel: p.productCode ? `Code: ${p.productCode}` : undefined,
+        badge: p.productCode || undefined,
+      });
+    });
+    returnItems.forEach((it) => {
+      if (it.productId && !map.has(it.productId)) {
+        map.set(it.productId, {
+          value: it.productId,
+          label: it.productName || 'Product',
+        });
+      }
+    });
+    stocks.forEach((stk) => {
+      if (!map.has(stk.productId)) {
+        map.set(stk.productId, {
+          value: stk.productId,
+          label: stk.productName,
+          subLabel: stk.sku ? `SKU: ${stk.sku}` : undefined,
+          badge: stk.sku || undefined,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [availableProducts, returnItems, stocks]);
+
+  // If navigated from Purchase Bills (Convert to Return) - open creation modal with pre-filled items
+  useEffect(() => {
+    const locState = location.state as
+      | {
+          newReturn?: PurchaseReturn;
+          convertFromPo?: {
+            purchaseId: string;
+            purchaseNo: string;
+            supplierId?: string;
+            supplierName?: string;
+            items: PurchaseReturnItem[];
+            totalAmount?: number;
+            notes?: string;
+          };
+        }
+      | undefined;
+
+    if (locState?.convertFromPo && !hasConvertedPoRef.current) {
+      hasConvertedPoRef.current = true;
+      const poData = locState.convertFromPo;
+
+      setEditingReturn(null);
+      setSelectedPurchaseId(poData.purchaseId || '');
+      setManualPurchaseNo(poData.purchaseNo || '');
+      setSelectedSupplierId(poData.supplierId || '');
+      setReturnDate(new Date().toISOString().split('T')[0]);
+      setRefundStatus('Supplier Credit');
+      setReturnStatus('Requested');
+      setNotes(poData.notes || `Return from Purchase Bill ${poData.purchaseNo}`);
+      setReturnItems(
+        poData.items && poData.items.length > 0
+          ? poData.items
+          : [
+              {
+                id: `pr_ret_it_${Date.now()}_0`,
+                productId: '',
+                productName: '',
+                purchasedQuantity: 1,
+                returnQuantity: 1,
+                unitPrice: 0,
+                returnAmount: 0,
+                reason: 'Defective',
+                remarks: '',
+              },
+            ]
+      );
+      if (poData.purchaseId) {
+        setOriginatingPurchaseId(poData.purchaseId);
+      }
+
+      setIsCreateModalOpen(true);
+      // Clean up React Router state so closing/refreshing won't bounce back
+      navigate(location.pathname, { replace: true, state: {} });
+      toast.info(`Opened Purchase Return form prefilled from ${poData.purchaseNo}.`);
+      return;
+    }
+
+    if (locState?.newReturn) {
+      const incoming = locState.newReturn;
+      setLiveReturns((prev) => {
+        if (!prev.some((r) => r.id === incoming.id || r.returnNo === incoming.returnNo)) {
+          return [incoming, ...prev];
+        }
+        return prev;
+      });
+      setTotalApiRecords((prev) => (prev !== null ? prev + 1 : 1));
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, navigate, location.pathname]);
 
   // Keep store purchaseReturns in ref to avoid re-triggering fetchPurchaseReturns
   const purchaseReturnsRef = useRef(purchaseReturns);
@@ -163,14 +283,14 @@ export const PurchaseReturnView: React.FC = () => {
           setApiErrorMessage(null);
 
           if (response.pagination) {
-            setTotalApiRecords(response.pagination.totalRecords);
-            setTotalApiPages(response.pagination.totalPages);
+            setTotalApiRecords(response.pagination.totalRecords ?? mappedReturns.length);
+            setTotalApiPages(response.pagination.totalPages ?? 1);
           } else {
             setTotalApiRecords(mappedReturns.length);
             setTotalApiPages(Math.ceil(mappedReturns.length / pageSize) || 1);
           }
 
-          // Sync with local store only for default unfiltered first page
+          // Sync local store with the API records
           if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All' && appliedRefundStatus === 'All') {
             setPurchaseReturnsList(mappedReturns);
           }
@@ -179,6 +299,9 @@ export const PurchaseReturnView: React.FC = () => {
           setLiveReturns([]);
           setTotalApiRecords(0);
           setTotalApiPages(1);
+          if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All' && appliedRefundStatus === 'All') {
+            setPurchaseReturnsList([]);
+          }
         }
       } catch (err: any) {
         const errMsg =
@@ -205,14 +328,15 @@ export const PurchaseReturnView: React.FC = () => {
     fetchPurchaseReturns();
   }, [fetchPurchaseReturns]);
 
-  // Debounced Search (450ms)
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (pendingSearch !== appliedSearch) {
-        setAppliedSearch(pendingSearch);
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
         setCurrentPage(1);
       }
-    }, 450);
+    }, 600);
     return () => clearTimeout(timer);
   }, [pendingSearch, appliedSearch]);
 
@@ -396,9 +520,10 @@ export const PurchaseReturnView: React.FC = () => {
   const handleProductSelect = (index: number, productId: string) => {
     const foundApi = availableProducts.find((p) => p.id === productId);
     const foundStock = stocks.find((s) => s.id === productId || s.productId === productId);
+    const foundOption = productOptions.find((o) => o.value === productId);
 
-    const name = foundApi?.name || foundStock?.productName || '';
-    const price = foundApi?.costPrice ?? foundApi?.sellingPrice ?? foundStock?.unitCost ?? foundStock?.unitPrice ?? 0;
+    const name = foundApi?.productName || (foundApi as any)?.name || foundStock?.productName || foundOption?.label || '';
+    const price = foundApi?.purchasePrice ?? (foundApi as any)?.costPrice ?? foundStock?.unitCost ?? foundStock?.unitPrice ?? 0;
 
     setReturnItems((prev) => {
       const copy = [...prev];
@@ -537,25 +662,10 @@ export const PurchaseReturnView: React.FC = () => {
 
         let updatedReturn: PurchaseReturn;
         try {
-          let apiRes;
-          try {
-            apiRes = await commercePurchaseReturnApi.updatePurchaseReturn(
-              editingReturn.id,
-              updatePayload
-            );
-          } catch (updErr: any) {
-            // If backend rejects because purchaseId is not found in database, retry without purchaseId
-            if (updErr?.response?.data?.error?.code === 'INVALID_PURCHASE' && updatePayload.purchaseId) {
-              console.warn('Purchase order not in backend DB; retrying update without purchaseId...');
-              const { purchaseId, ...payloadWithoutPurchaseId } = updatePayload;
-              apiRes = await commercePurchaseReturnApi.updatePurchaseReturn(
-                editingReturn.id,
-                payloadWithoutPurchaseId
-              );
-            } else {
-              throw updErr;
-            }
-          }
+          const apiRes = await commercePurchaseReturnApi.updatePurchaseReturn(
+            editingReturn.id,
+            updatePayload
+          );
 
           if (apiRes?.data) {
             updatedReturn = mapApiPurchaseReturnToUi(apiRes.data);
@@ -641,6 +751,20 @@ export const PurchaseReturnView: React.FC = () => {
         }
 
         savePurchaseReturn(newReturn);
+
+        // If this return originated from a Purchase Bill, update the PO status to 'Returned' now
+        if (originatingPurchaseId) {
+          try {
+            if (UUID_REGEX.test(originatingPurchaseId)) {
+              await workPurchaseOrderApi.patchPurchaseOrderStatus(originatingPurchaseId, 'Returned' as any);
+            }
+          } catch (poStatusErr) {
+            console.warn('API purchase order status update warning:', poStatusErr);
+          }
+          updatePurchaseOrderStatus(originatingPurchaseId, 'Returned' as any);
+          setOriginatingPurchaseId(null);
+        }
+
         toast.success(`Purchase return ${newReturn.returnNo} created successfully!`);
       }
 
@@ -677,69 +801,42 @@ export const PurchaseReturnView: React.FC = () => {
     }
   };
 
-  // Duplicate Return
-  const handleDuplicateReturn = async (pret: PurchaseReturn) => {
-    try {
-      const generatedNo = `PRN-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const payload = mapUiToCreatePayload(
-        {
-          returnNo: generatedNo,
-          purchaseId:
-            pret.purchaseId && UUID_REGEX.test(pret.purchaseId) ? pret.purchaseId : undefined,
-          purchaseNo: pret.purchaseNo,
-          supplierId: ensureValidUuid(pret.supplierId),
-          supplierName: pret.supplierName,
-          returnDate: new Date().toISOString().split('T')[0],
-          refundStatus: pret.refundStatus || 'Supplier Credit',
-          returnStatus: 'Requested',
-          notes: pret.notes || '',
-        },
-        pret.items
-      );
-
-      let duplicated: PurchaseReturn;
-      try {
-        let apiRes;
-        try {
-          apiRes = await commercePurchaseReturnApi.createPurchaseReturn(payload);
-        } catch (dupErr: any) {
-          if (dupErr?.response?.data?.error?.code === 'INVALID_PURCHASE' && payload.purchaseId) {
-            const { purchaseId, ...payloadWithoutPurchaseId } = payload;
-            apiRes = await commercePurchaseReturnApi.createPurchaseReturn(payloadWithoutPurchaseId);
-          } else {
-            throw dupErr;
-          }
-        }
-        if (apiRes?.data) {
-          duplicated = mapApiPurchaseReturnToUi(apiRes.data);
-        } else {
-          throw new Error('No data returned');
-        }
-      } catch {
-        duplicated = {
-          ...pret,
-          id: ensureValidUuid(),
-          returnNo: generatedNo,
-          returnStatus: 'Requested',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-      }
-
-      savePurchaseReturn(duplicated);
-      toast.success(`Purchase return duplicated as ${duplicated.returnNo}`);
-      fetchPurchaseReturns(true);
-    } catch {
-      toast.error('Failed to duplicate purchase return');
-    }
+  // Duplicate Return into Editor
+  const handleDuplicateReturn = (pret: PurchaseReturn) => {
+    setEditingReturn(null);
+    setSelectedPurchaseId(pret.purchaseId || '');
+    setManualPurchaseNo(pret.purchaseNo || '');
+    setSelectedSupplierId(pret.supplierId || '');
+    setReturnDate(new Date().toISOString().split('T')[0]);
+    setReturnItems(
+      pret.items && pret.items.length > 0
+        ? pret.items.map((it, idx) => ({
+            ...it,
+            id: `pr_ret_it_${Date.now()}_${idx}`,
+          }))
+        : [
+            {
+              id: `pr_ret_it_${Date.now()}_0`,
+              productId: '',
+              productName: '',
+              purchasedQuantity: 1,
+              returnQuantity: 1,
+              unitPrice: 0,
+              returnAmount: 0,
+              reason: 'Damaged',
+              remarks: '',
+            },
+          ]
+    );
+    setRefundStatus((pret.refundStatus as RefundStatusType) || 'Supplier Credit');
+    setReturnStatus('Requested');
+    setNotes(pret.notes ? `Duplicated from ${pret.returnNo}. ${pret.notes}` : `Duplicated from ${pret.returnNo}`);
+    setIsCreateModalOpen(true);
+    toast.info(`Duplicated return details from ${pret.returnNo} into editor. Review and save when ready.`);
   };
 
   // Delete Return
   const handleDeleteReturn = async (pret: PurchaseReturn) => {
-    if (!window.confirm(`Are you sure you want to delete purchase return ${pret.returnNo}?`)) {
-      return;
-    }
-
     try {
       try {
         await commercePurchaseReturnApi.deletePurchaseReturn(pret.id);
@@ -1193,7 +1290,7 @@ export const PurchaseReturnView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleOpenEditModal(pret);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 View / Edit
                               </button>
@@ -1206,7 +1303,7 @@ export const PurchaseReturnView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleQuickStatusChange(pret, 'Completed');
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Mark as Completed
                                 </button>
@@ -1219,7 +1316,7 @@ export const PurchaseReturnView: React.FC = () => {
                                     setActiveDropdownId(null);
                                     handleQuickStatusChange(pret, 'Approved');
                                   }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer block"
+                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Mark as Approved
                                 </button>
@@ -1232,7 +1329,7 @@ export const PurchaseReturnView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDuplicateReturn(pret);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Duplicate
                               </button>
@@ -1244,7 +1341,7 @@ export const PurchaseReturnView: React.FC = () => {
                                   setActiveDropdownId(null);
                                   handleDeleteReturn(pret);
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                               >
                                 Delete
                               </button>
@@ -1257,7 +1354,7 @@ export const PurchaseReturnView: React.FC = () => {
                                   toast.info(`Preparing print for ${pret.returnNo}...`);
                                   window.print();
                                 }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
+                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                               >
                                 Print Voucher
                               </button>
@@ -1315,138 +1412,104 @@ export const PurchaseReturnView: React.FC = () => {
       >
         <form noValidate onSubmit={handleSubmitReturnForm} className="space-y-5 p-2 sm:p-4 animate-in fade-in duration-150">
           {/* Top Fields: 4-column Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
             {/* Purchase Order Selection */}
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Purchase Order
-                </span>
-                <select
-                  value={selectedPurchaseId}
-                  onChange={(e) => handleSelectPurchase(e.target.value)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium outline-none cursor-pointer"
-                >
-                  <option value="">-- Choose Existing PO (Optional) --</option>
-                  {purchases.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.purchaseNo} ({p.supplierName})
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <FormLabel>Purchase Order</FormLabel>
+              <select
+                value={selectedPurchaseId}
+                onChange={(e) => handleSelectPurchase(e.target.value)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="">-- Choose Existing PO (Optional) --</option>
+                {purchases.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.purchaseNo} ({p.supplierName})
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* PO Reference (Manual if not selected) */}
-            <div className="relative">
-              <div className={`relative w-full h-11 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center ${
-                chosenPurchase
-                  ? 'bg-slate-50'
-                  : 'bg-white hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  PO Reference #
-                </span>
-                <input
-                  type="text"
-                  value={chosenPurchase ? chosenPurchase.purchaseNo : manualPurchaseNo}
-                  onChange={(e) => setManualPurchaseNo(e.target.value)}
-                  readOnly={!!chosenPurchase}
-                  placeholder="e.g. PO-2026-089"
-                  className={`w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none ${
-                    chosenPurchase ? 'text-slate-600 cursor-not-allowed' : 'text-slate-800'
-                  }`}
-                />
-              </div>
+            <div>
+              <FormLabel>PO Reference #</FormLabel>
+              <input
+                type="text"
+                value={chosenPurchase ? chosenPurchase.purchaseNo : manualPurchaseNo}
+                onChange={(e) => setManualPurchaseNo(e.target.value)}
+                readOnly={!!chosenPurchase}
+                placeholder="e.g. PO-2026-089"
+                className={chosenPurchase ? FORM_INPUT_DISABLED_CLS : FORM_INPUT_CLS}
+              />
             </div>
 
             {/* Supplier Name */}
-            <div className="relative">
-              <div className={`relative w-full h-11 border border-slate-300 rounded-xl transition-all shadow-2xs flex items-center ${
-                chosenPurchase
-                  ? 'bg-slate-50'
-                  : 'bg-white hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15'
-              }`}>
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Supplier <span className="text-rose-500">*</span>
-                </span>
-                {chosenPurchase ? (
-                  <input
-                    type="text"
-                    readOnly
-                    value={chosenPurchase.supplierName}
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-600 outline-none cursor-not-allowed"
-                  />
-                ) : (
-                  <select
-                    value={selectedSupplierId}
-                    onChange={(e) => setSelectedSupplierId(e.target.value)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                  >
-                    <option value="">-- Select Supplier --</option>
-                    {suppliers.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} {s.contactPerson ? `(${s.contactPerson})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
+            <div>
+              <FormLabel required>Supplier</FormLabel>
+              {chosenPurchase ? (
+                <input
+                  type="text"
+                  readOnly
+                  value={chosenPurchase.supplierName}
+                  className={FORM_INPUT_DISABLED_CLS}
+                />
+              ) : (
+                <select
+                  value={selectedSupplierId}
+                  onChange={(e) => setSelectedSupplierId(e.target.value)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="">-- Select Supplier --</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.contactPerson ? `(${s.contactPerson})` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             {/* Return Date */}
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Return Date <span className="text-rose-500">*</span>
-                </span>
-                <input
-                  type="date"
-                  value={returnDate}
-                  onChange={(e) => setReturnDate(e.target.value)}
-                  className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                />
-              </div>
+            <div>
+              <FormLabel required>Return Date</FormLabel>
+              <input
+                type="date"
+                value={returnDate}
+                onChange={(e) => setReturnDate(e.target.value)}
+                className={FORM_INPUT_CLS}
+              />
             </div>
           </div>
 
           {/* Refund Status & Return Status Row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Refund Method / Status
-                </span>
-                <select
-                  value={refundStatus}
-                  onChange={(e) => setRefundStatus(e.target.value as RefundStatusType)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                >
-                  <option value="Supplier Credit">Supplier Credit (Debit Note Adjustment)</option>
-                  <option value="Refunded">Refunded (Bank / Cash Refund Received)</option>
-                  <option value="Pending">Pending Refund</option>
-                  <option value="Adjusted">Adjusted in Ledger</option>
-                </select>
-              </div>
+            <div>
+              <FormLabel>Refund Method / Status</FormLabel>
+              <select
+                value={refundStatus}
+                onChange={(e) => setRefundStatus(e.target.value as RefundStatusType)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Supplier Credit">Supplier Credit (Debit Note Adjustment)</option>
+                <option value="Refunded">Refunded (Bank / Cash Refund Received)</option>
+                <option value="Pending">Pending Refund</option>
+                <option value="Adjusted">Adjusted in Ledger</option>
+              </select>
             </div>
 
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Return Status
-                </span>
-                <select
-                  value={returnStatus}
-                  onChange={(e) => setReturnStatus(e.target.value)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-medium text-slate-800 outline-none cursor-pointer"
-                >
-                  <option value="Requested">Requested (Review Needed)</option>
-                  <option value="Approved">Approved (Awaiting Dispatch)</option>
-                  <option value="Dispatched">Dispatched to Vendor</option>
-                  <option value="Completed">Completed (Debit Note Settled)</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
-              </div>
+            <div>
+              <FormLabel>Return Status</FormLabel>
+              <select
+                value={returnStatus}
+                onChange={(e) => setReturnStatus(e.target.value)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Requested">Requested (Review Needed)</option>
+                <option value="Approved">Approved (Awaiting Dispatch)</option>
+                <option value="Dispatched">Dispatched to Vendor</option>
+                <option value="Completed">Completed (Debit Note Settled)</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
             </div>
           </div>
 
@@ -1485,55 +1548,20 @@ export const PurchaseReturnView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 text-xs">
                   {returnItems.map((it, idx) => (
                     <tr key={it.id || idx} className="hover:bg-slate-50/60">
-                      {/* Product Name (Dropdown or Input) */}
-                      <td className="py-2 px-3">
-                        {availableProducts.length > 0 ? (
-                          <div className="space-y-1">
-                            <select
-                              value={it.productId || ''}
-                              onChange={(e) => handleProductSelect(idx, e.target.value)}
-                              className="w-full h-8 px-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                            >
-                              <option value="">-- Select Product --</option>
-                              {availableProducts.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                            {(!it.productId || !availableProducts.some((p) => p.id === it.productId)) && (
-                              <input
-                                type="text"
-                                value={it.productName}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setReturnItems((prev) => {
-                                    const c = [...prev];
-                                    c[idx] = { ...c[idx], productName: val };
-                                    return c;
-                                  });
-                                }}
-                                placeholder="Or enter product name..."
-                                className="w-full h-7 px-2 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-700 outline-none focus:border-[#4309A2]"
-                              />
-                            )}
-                          </div>
-                        ) : (
-                          <input
-                            type="text"
-                            value={it.productName}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setReturnItems((prev) => {
-                                const c = [...prev];
-                                c[idx] = { ...c[idx], productName: val };
-                                return c;
-                              });
-                            }}
-                            placeholder="Product name..."
-                            className="w-full h-8 px-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                          />
-                        )}
+                      {/* Product Name (Searchable Product Selection) */}
+                      <td className="py-2 px-3 min-w-[200px]">
+                        <SearchableSelect
+                          value={it.productId || ''}
+                          onChange={(val) => handleProductSelect(idx, val)}
+                          onSearch={handleProductSearch}
+                          isLoading={isSearchingProducts}
+                          options={productOptions}
+                          placeholder="Select Product..."
+                          searchPlaceholder="Search product..."
+                          emptyText="Type to search products..."
+                          allowClear
+                          size="sm"
+                        />
                       </td>
 
                       {/* Batch No */}
@@ -1655,19 +1683,15 @@ export const PurchaseReturnView: React.FC = () => {
           </div>
 
           {/* Notes */}
-          <div className="relative pt-1">
-            <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-              <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                Notes / Debit Adjustment Remarks
-              </span>
-              <textarea
-                rows={2}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Adjusted in supplier pending balance ledger..."
-                className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm font-medium text-slate-700 outline-none resize-none"
-              />
-            </div>
+          <div>
+            <FormLabel>Notes / Debit Adjustment Remarks</FormLabel>
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Adjusted in supplier pending balance ledger..."
+              className={FORM_TEXTAREA_CLS}
+            />
           </div>
 
           {/* Standard Footer */}

@@ -125,14 +125,9 @@ export interface CreatePurchaseReturnPayload {
 }
 
 export interface UpdatePurchaseReturnPayload {
-  returnNo?: string;
-  purchaseId?: string;
-  purchaseNo?: string;
-  supplierId?: string;
-  supplierName?: string;
   returnDate?: string;
   items?: Array<{
-    productId: string;
+    productId?: string;
     productName: string;
     batch?: string;
     purchasedQuantity: number;
@@ -142,7 +137,6 @@ export interface UpdatePurchaseReturnPayload {
     reason: string;
     remarks?: string;
   }>;
-  returnAmount?: number;
   refundStatus?: string;
   returnStatus?: string;
   notes?: string;

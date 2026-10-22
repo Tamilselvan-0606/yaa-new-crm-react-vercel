@@ -68,6 +68,7 @@ import {
 import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
 import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
 import { productApi } from '../../../api/commerce/productApi';
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
 
 // Date format helper
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -81,18 +82,27 @@ const isoToDdmmyyyy = (iso?: string): string => {
 };
 
 const PERIOD_FILTER_OPTIONS = [
-  'This Month',
-  'Last 30 Days',
-  'This Quarter',
-  'This Financial Year',
-  'All Time',
+  { label: 'This Month', value: 'This Month' },
+  { label: 'Last 30 Days', value: 'Last 30 Days' },
+  { label: 'This Quarter', value: 'This Quarter' },
+  { label: 'This Financial Year', value: 'This Financial Year' },
+  { label: 'All Time', value: 'All Time' },
 ];
 
-const TRANSACTION_TYPES = [
-  'All Transaction',
-  'Credit Note',
-  'Sale',
-  'Payment-In',
+const STATUS_FILTER_OPTIONS = [
+  { label: 'All Statuses', value: 'All' },
+  { label: 'Approved', value: 'Approved', dotColor: '#10b981' },
+  { label: 'Received', value: 'Received', dotColor: '#3b82f6' },
+  { label: 'Refunded', value: 'Refunded', dotColor: '#8b5cf6' },
+  { label: 'Requested', value: 'Requested', dotColor: '#f59e0b' },
+  { label: 'Rejected', value: 'Rejected', dotColor: '#ef4444' },
+];
+
+const TRANSACTION_TYPE_OPTIONS = [
+  { label: 'All Transactions', value: 'All Transaction' },
+  { label: 'Credit Note', value: 'Credit Note' },
+  { label: 'Sale', value: 'Sale' },
+  { label: 'Payment-In', value: 'Payment-In' },
 ];
 
 const RETURN_REASONS: ReturnReason[] = [
@@ -157,16 +167,20 @@ export const SalesReturnView: React.FC = () => {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
 
   // Search & Pagination
-  const [searchQuery, setSearchQuery] = useState('');
-  const [appliedSearchQuery, setAppliedSearchQuery] = useState('');
+  const [pendingSearch, setPendingSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
 
-  // Debounce search
+  // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
     const timer = setTimeout(() => {
-      setAppliedSearchQuery(searchQuery.trim());
-    }, 350);
+      const trimmed = pendingSearch.trim();
+      if (trimmed !== appliedSearch) {
+        setAppliedSearch(trimmed);
+        setCurrentPage(1);
+      }
+    }, 600);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [pendingSearch, appliedSearch]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -221,8 +235,8 @@ export const SalesReturnView: React.FC = () => {
         sortOrder: 'desc',
       };
 
-      if (appliedSearchQuery) {
-        params.search = appliedSearchQuery;
+      if (appliedSearch) {
+        params.search = appliedSearch;
       }
       if (startDate) params.from = startDate;
       if (endDate) params.to = endDate;
@@ -267,7 +281,7 @@ export const SalesReturnView: React.FC = () => {
   }, [
     currentPage,
     pageSize,
-    appliedSearchQuery,
+    appliedSearch,
     startDate,
     endDate,
     selectedPeriod,
@@ -275,28 +289,41 @@ export const SalesReturnView: React.FC = () => {
     selectedFirm,
   ]);
 
-  // Load prerequisites (Sales Invoices & Customers) - Runs once on mount
+  // Load Customers for firm filter (Runs once on mount)
+  const hasLoadedCustomersRef = useRef(false);
   useEffect(() => {
-    if (hasLoadedPrereqs.current) return;
-    hasLoadedPrereqs.current = true;
-    const loadPrerequisites = async () => {
-      try {
-        const [invRes, custRes] = await Promise.all([
-          commerceInvoiceApi.getInvoices({ pagination_required: false }),
-          customerApi.getCustomers({ pagination_required: false }),
-        ]);
-        if (invRes?.success && Array.isArray(invRes.data)) {
-          setSalesList(invRes.data.map(mapApiInvoiceToSaleTransaction));
+    if (hasLoadedCustomersRef.current) return;
+    hasLoadedCustomersRef.current = true;
+    customerApi
+      .getCustomers({ pagination_required: false })
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data)) {
+          setCustomersList(res.data.map(mapApiCustomerToSalesCustomer));
         }
-        if (custRes?.success && Array.isArray(custRes.data)) {
-          setCustomersList(custRes.data.map(mapApiCustomerToSalesCustomer));
-        }
-      } catch (e) {
-        console.warn('Prerequisites fetch failed:', e);
+      })
+      .catch((e) => console.warn('Customers load notice in SalesReturn:', e));
+  }, [setCustomersList]);
+
+  // Load Sales Invoices for linking ONLY when Create Return Modal is opened
+  const hasLoadedInvoicesRef = useRef(false);
+  const loadInvoicesForModal = useCallback(async () => {
+    if (hasLoadedInvoicesRef.current) return;
+    hasLoadedInvoicesRef.current = true;
+    try {
+      const invRes = await commerceInvoiceApi.getInvoices({ pagination_required: false });
+      if (invRes?.success && Array.isArray(invRes.data)) {
+        setSalesList(invRes.data.map(mapApiInvoiceToSaleTransaction));
       }
-    };
-    loadPrerequisites();
-  }, [setSalesList, setCustomersList]);
+    } catch (e) {
+      console.warn('Invoices fetch failed in SalesReturn:', e);
+    }
+  }, [setSalesList]);
+
+  useEffect(() => {
+    if (isCreateModalOpen) {
+      loadInvoicesForModal();
+    }
+  }, [isCreateModalOpen, loadInvoicesForModal]);
 
   // Trigger fetch on filter change
   useEffect(() => {
@@ -465,7 +492,7 @@ export const SalesReturnView: React.FC = () => {
   // Filter Transactions by search and type
   const filteredTransactions = useMemo(() => {
     return allTransactions.filter((tx) => {
-      const q = searchQuery.toLowerCase().trim();
+      const q = appliedSearch.toLowerCase().trim();
       const matchesSearch =
         !q ||
         tx.partyName.toLowerCase().includes(q) ||
@@ -489,7 +516,7 @@ export const SalesReturnView: React.FC = () => {
 
       return matchesSearch && matchesType && matchesFirm;
     });
-  }, [allTransactions, searchQuery, selectedTxType, selectedFirm, customers]);
+  }, [allTransactions, appliedSearch, selectedTxType, selectedFirm, customers]);
 
   // Computed Bottom Totals
   const ledgerTotals = useMemo(() => {
@@ -535,7 +562,7 @@ export const SalesReturnView: React.FC = () => {
         { header: '#', key: 'srNo', align: 'center', width: 8 },
         { header: 'Date', key: 'date', align: 'center', width: 15 },
         { header: 'Ref No.', key: 'refNo', align: 'center', width: 15 },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: 28 },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: 28 },
         { header: 'Category Name', key: 'categoryName', align: 'left', width: 20 },
         { header: 'Type', key: 'type', align: 'left', width: 16 },
         { header: 'Total (₹)', key: 'total', align: 'right', type: 'currency', width: 18 },
@@ -586,7 +613,7 @@ export const SalesReturnView: React.FC = () => {
         { header: '#', key: 'srNo', align: 'center', width: '35px' },
         { header: 'Date', key: 'date', align: 'center', width: '85px' },
         { header: 'Ref No.', key: 'refNo', align: 'center', width: '90px' },
-        { header: 'Party Name', key: 'partyName', align: 'left', width: '180px' },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: '180px' },
         { header: 'Category', key: 'categoryName', align: 'left', width: '120px' },
         { header: 'Type', key: 'type', align: 'left', width: '100px' },
         { header: 'Total (₹)', key: 'total', align: 'right', type: 'currency', width: '100px' },
@@ -654,7 +681,7 @@ export const SalesReturnView: React.FC = () => {
   const handleSubmitCreateReturn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!partyName.trim()) {
-      toast.error('Please enter customer/party name');
+      toast.error('Please enter customer name');
       return;
     }
     const validItems = returnItems.filter((i) => i.returnQuantity > 0);
@@ -852,7 +879,7 @@ export const SalesReturnView: React.FC = () => {
       `*CREDIT NOTE / SALES RETURN ACKNOWLEDGEMENT*\n` +
       `--------------------------------\n` +
       `*Ref / Return #:* ${tx.refNo}\n` +
-      `*Party Name:* ${tx.partyName}\n` +
+      `*Customer Name:* ${tx.partyName}\n` +
       `*Date:* ${isoToDdmmyyyy(tx.date)}\n` +
       `*Transaction Type:* ${tx.type}\n` +
       `*Return Amount:* ₹${Number(tx.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n` +
@@ -871,23 +898,21 @@ export const SalesReturnView: React.FC = () => {
   const handleDeleteTransaction = async (tx: UnifiedTransactionRecord) => {
     setActiveMenuId(null);
     if (tx.originalReturn) {
-      if (window.confirm(`Are you sure you want to void / delete Sales Return #${tx.refNo}? Any stock restored by this return will be removed.`)) {
-        try {
-          if (UUID_REGEX.test(tx.originalReturn.id)) {
-            await commerceSalesReturnApi.deleteSalesReturn(tx.originalReturn.id);
-          }
-          deleteStoreSalesReturn(tx.originalReturn.id);
-          toast.success(`Sales Return #${tx.refNo} voided successfully.`);
-          fetchSalesReturns();
-        } catch (err: any) {
-          console.error('Failed to delete sales return:', err);
-          const msg =
-            err?.response?.data?.error?.message ||
-            err?.response?.data?.message ||
-            err?.message ||
-            'Failed to delete sales return';
-          toast.error(msg);
+      try {
+        if (UUID_REGEX.test(tx.originalReturn.id)) {
+          await commerceSalesReturnApi.deleteSalesReturn(tx.originalReturn.id);
         }
+        deleteStoreSalesReturn(tx.originalReturn.id);
+        toast.success(`Sales Return #${tx.refNo} voided successfully.`);
+        fetchSalesReturns();
+      } catch (err: any) {
+        console.error('Failed to delete sales return:', err);
+        const msg =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          'Failed to delete sales return';
+        toast.error(msg);
       }
     } else {
       toast.info(`Transaction #${tx.refNo} cannot be deleted from here.`);
@@ -962,129 +987,76 @@ export const SalesReturnView: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. FILTER BAR */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-xs flex flex-col gap-4">
-        {/* Row 1: Period Filter, Date Range, Firm Selector, and Print Button */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3 flex-wrap">
+      {/* 2. SEARCH BAR & FILTER ROW */}
+      <SearchBar
+        value={pendingSearch}
+        onChange={(val) => {
+          setPendingSearch(val);
+        }}
+        placeholder="Search customer name, return #, or remarks..."
+        onSubmit={() => {
+          setAppliedSearch(pendingSearch);
+          setCurrentPage(1);
+        }}
+        onReset={() => {
+          setPendingSearch('');
+          setAppliedSearch('');
+          handlePeriodChange('This Month');
+          setSelectedStatusFilter('All');
+          setSelectedTxType('All Transaction');
+          setSelectedFirm('ALL FIRMS');
+          setCurrentPage(1);
+        }}
+        filterSlot={
+          <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
-              options={PERIOD_FILTER_OPTIONS.map((p) => ({ label: p, value: p }))}
+              placeholder="Period : This Month"
               value={selectedPeriod}
-              onChange={handlePeriodChange}
-              placeholder="Period"
+              options={PERIOD_FILTER_OPTIONS}
+              onChange={(val) => {
+                handlePeriodChange(val);
+              }}
             />
-
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5 text-xs text-slate-700">
-              <span className="text-slate-400 font-medium">From:</span>
-              <span className="font-semibold text-slate-800">{isoToDdmmyyyy(startDate) || 'All'}</span>
-              <span className="text-slate-400 font-medium">To:</span>
-              <span className="font-semibold text-slate-800">{isoToDdmmyyyy(endDate) || 'All'}</span>
-            </div>
-
-            <div className="relative">
-              <select
-                value={selectedFirm}
-                onChange={(e) => {
-                  setSelectedFirm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3.5 pr-8 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:border-[#33077C] cursor-pointer appearance-none"
-              >
-                <option value="ALL FIRMS">ALL PARTIES</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-
-            <div className="relative">
-              <select
-                value={selectedStatusFilter}
-                onChange={(e) => {
-                  setSelectedStatusFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3.5 pr-8 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:border-[#33077C] cursor-pointer appearance-none"
-              >
-                <option value="All">Status: All</option>
-                <option value="Approved">Approved</option>
-                <option value="Received">Received</option>
-                <option value="Refunded">Refunded</option>
-                <option value="Requested">Requested</option>
-                <option value="Rejected">Rejected</option>
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Right Side: Print Action */}
-          <div className="flex items-center gap-2 self-end md:self-auto">
-            <button
-              type="button"
-              onClick={handlePrintTableReport}
-              className="h-9 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-              title="Print Summary"
-            >
-              <Printer className="w-4 h-4 text-slate-600" />
-              <span>Print</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Row 2: Transaction Type Filter Dropdown */}
-        <div className="flex items-center gap-3">
-          <div className="relative w-48">
-            <select
-              value={selectedTxType}
-              onChange={(e) => {
-                setSelectedTxType(e.target.value);
+            <FilterDropdown
+              placeholder="Status : All"
+              value={selectedStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+              onChange={(val) => {
+                setSelectedStatusFilter(val);
                 setCurrentPage(1);
               }}
-              className="w-full h-9 px-3 pr-8 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:border-[#33077C] cursor-pointer appearance-none"
-            >
-              {TRANSACTION_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            />
+            <FilterDropdown
+              placeholder="Type : All"
+              value={selectedTxType}
+              options={TRANSACTION_TYPE_OPTIONS}
+              onChange={(val) => {
+                setSelectedTxType(val);
+                setCurrentPage(1);
+              }}
+            />
           </div>
-        </div>
-      </div>
-
-      {/* 2. TRANSACTIONS SEARCH & ACTION BAR */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        {/* Left: Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setCurrentPage(1);
-            }}
-            placeholder="Search party, return #, or remarks..."
-            className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#33077C] focus:bg-white transition-colors"
-          />
-        </div>
-
-        {/* Right: Add Credit Note Button */}
-        <div>
-          <button
-            type="button"
-            onClick={handleOpenCreateModal}
-            className="h-9 px-4 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#33077C]/20 transition-all active:scale-[0.98] cursor-pointer"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Add Credit Note</span>
-          </button>
-        </div>
-      </div>
+        }
+        rightSlot={
+          <div className="flex items-center gap-3 pr-1 flex-wrap sm:flex-nowrap">
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={handlePrintTableReport}
+              className="hover:border-slate-300 hover:bg-slate-50 text-slate-700"
+              icon={<Printer className="w-4 h-4 text-slate-600" />}
+            >
+              Print
+            </Button>
+            <span className="text-xs font-semibold text-slate-500 shrink-0">
+              Total Returns :{' '}
+              <span className="text-[#33077C] font-bold">
+                {serverTotal || filteredTransactions.length}
+              </span>
+            </span>
+          </div>
+        }
+      />
 
       {/* 3. Main Data Table / Empty State */}
       <div className={`bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden transition-opacity duration-200 ${isFetching ? "opacity-75" : "opacity-100"}`}>
@@ -1123,38 +1095,38 @@ export const SalesReturnView: React.FC = () => {
               {/* Royal Purple Header */}
               <thead>
                 <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                  <th className="py-3 px-3 w-10 text-center border-r border-[#4309A2]/70 text-white">#</th>
-                  <th className="py-3 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
-                    <div className="flex items-center justify-between gap-1">
-                      <span>DATE</span>
-                      <Calendar className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
+                  <th className="py-3.5 px-3 w-12 text-center border-r border-[#4309A2]/70 text-white">#</th>
+                  <th className="py-3.5 px-4 min-w-[160px] border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                    <span>CUSTOMER NAME</span>
                   </th>
-                  <th className="py-3 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap w-20 text-white">
+                  <th className="py-3.5 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap min-w-[100px] text-white">
                     <span>REF NO.</span>
                   </th>
-                  <th className="py-3 px-4 min-w-[150px] border-r border-[#4309A2]/70 whitespace-nowrap text-white">
-                    <span>PARTY NAME</span>
+                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
+                    <div className="flex items-center gap-1.5">
+                      <span>DATE</span>
+                      <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
+                    </div>
                   </th>
-                  <th className="py-3 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[140px] text-white">
                     <span>CATEGORY / ITEM</span>
                   </th>
-                  <th className="py-3 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[100px] text-white">
                     <span>TYPE</span>
                   </th>
-                  <th className="py-3 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
                     <span>TOTAL</span>
                   </th>
-                  <th className="py-3 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[120px] text-white">
                     <span>REFUNDED/PAID</span>
                   </th>
-                  <th className="py-3 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
                     <span>BALANCE</span>
                   </th>
-                  <th className="py-3 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap text-white">
+                  <th className="py-3.5 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
                     <span>STATUS</span>
                   </th>
-                  <th className="py-3 px-4 text-center whitespace-nowrap w-36 text-white">
+                  <th className="py-3.5 px-4 text-center whitespace-nowrap min-w-[130px] w-36 text-white">
                     PRINT / SHARE
                   </th>
                 </tr>
@@ -1171,32 +1143,32 @@ export const SalesReturnView: React.FC = () => {
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                     >
                       {/* # */}
-                      <td className="py-3.5 px-3 text-center text-slate-400 font-bold border-r border-slate-200">
+                      <td className="py-3.5 px-3 text-center text-slate-400 font-bold border-r border-slate-200 align-middle">
                         {(safePage - 1) * pageSize + idx + 1}
                       </td>
 
-                      {/* DATE */}
-                      <td className="py-3.5 px-3.5 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap">
-                        {isoToDdmmyyyy(row.date)}
-                      </td>
-
-                      {/* REF NO. */}
-                      <td className="py-3.5 px-3 text-center text-slate-800 font-bold border-r border-slate-200 whitespace-nowrap">
-                        {row.refNo || '-'}
-                      </td>
-
                       {/* PARTY NAME */}
-                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         {row.partyName}
                       </td>
 
+                      {/* REF NO. */}
+                      <td className="py-3.5 px-3 text-center text-slate-800 font-bold border-r border-slate-200 whitespace-nowrap align-middle">
+                        {row.refNo || '-'}
+                      </td>
+
+                      {/* DATE */}
+                      <td className="py-3.5 px-3.5 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap align-middle">
+                        {isoToDdmmyyyy(row.date)}
+                      </td>
+
                       {/* CATEGORY NAME */}
-                      <td className="py-3.5 px-3.5 text-slate-500 font-medium border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3.5 text-slate-500 font-medium border-r border-slate-200 whitespace-nowrap align-middle">
                         {row.categoryName || '-'}
                       </td>
 
                       {/* TYPE */}
-                      <td className="py-3.5 px-3.5 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3.5 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold ${
                             row.type === 'Credit Note'
@@ -1211,22 +1183,22 @@ export const SalesReturnView: React.FC = () => {
                       </td>
 
                       {/* TOTAL */}
-                      <td className="py-3.5 px-3.5 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3.5 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {Number(row.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* RECEIVED/PAID */}
-                      <td className="py-3.5 px-3.5 text-right font-semibold text-slate-600 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3.5 text-right font-semibold text-slate-600 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {Number(row.receivedPaid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* BALANCE */}
-                      <td className="py-3.5 px-3.5 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3.5 text-right font-black text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
                         ₹ {Number(row.balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* STATUS */}
-                      <td className="py-3.5 px-3 text-center border-r border-slate-200 whitespace-nowrap">
+                      <td className="py-3.5 px-3 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <span
                           className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-bold ${
                             row.status === 'Approved' || row.status === 'Refunded' || row.status === 'Received' || row.status === 'Completed' || row.status === 'Confirmed'
@@ -1241,7 +1213,7 @@ export const SalesReturnView: React.FC = () => {
                       </td>
 
                       {/* PRINT / SHARE / ACTIONS */}
-                      <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                      <td className="py-3.5 px-4 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                         <div className="inline-flex items-center justify-center gap-1.5">
                           {/* 1. Direct Print Button */}
                           <button
@@ -1314,7 +1286,7 @@ export const SalesReturnView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenEdit(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View/Edit
                                 </button>
@@ -1324,7 +1296,7 @@ export const SalesReturnView: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleOpenStatusModal(row.originalReturn!)}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-[#33077C] transition-colors cursor-pointer block"
+                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                   >
                                     Change Status...
                                   </button>
@@ -1334,34 +1306,17 @@ export const SalesReturnView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleGenerateEInvoice(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Generate e-Invoice
                                 </button>
 
-                                {/* 4. Open PDF */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenPdf(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
-
-                                {/* 5. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => handlePrintRow(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
 
                                 {/* 6. Delete */}
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteTransaction(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-rose-600 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Void / Delete
                                 </button>
@@ -1370,7 +1325,7 @@ export const SalesReturnView: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleDuplicate(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   Duplicate
                                 </button>
@@ -1382,7 +1337,7 @@ export const SalesReturnView: React.FC = () => {
                                     setActiveMenuId(null);
                                     setHistoryTx(row);
                                   }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer block"
+                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
                                 >
                                   View History
                                 </button>
@@ -1447,55 +1402,43 @@ export const SalesReturnView: React.FC = () => {
         >
           <form noValidate onSubmit={handleSubmitCreateReturn} className="p-4 sm:p-6 space-y-5">
             {/* Row 1: Select Original Invoice & Party */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3">
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Original Invoice <span className="text-rose-500">*</span>
-                  </span>
-                  <select
-                    value={selectedInvoiceId}
-                    onChange={(e) => handleInvoiceChange(e.target.value)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
-                  >
-                    <option value="">Manual / Unlinked Return</option>
-                    {sales.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.invoiceNo} - {s.customerName} (₹{s.grandTotal})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+              <div>
+                <FormLabel required>Original Invoice</FormLabel>
+                <select
+                  value={selectedInvoiceId}
+                  onChange={(e) => handleInvoiceChange(e.target.value)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="">Manual / Unlinked Return</option>
+                  {sales.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.invoiceNo} - {s.customerName} (₹{s.grandTotal})
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Party Name <span className="text-rose-500">*</span>
-                  </span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Customer / Party Name"
-                    value={partyName}
-                    onChange={(e) => setPartyName(e.target.value)}
-                    className="w-full h-full px-4 bg-transparent text-xs sm:text-sm font-medium outline-none"
-                  />
-                </div>
+              <div>
+                <FormLabel required>Customer Name</FormLabel>
+                <input
+                  type="text"
+                  required
+                  placeholder="Customer Name"
+                  value={partyName}
+                  onChange={(e) => setPartyName(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Return Date
-                  </span>
-                  <input
-                    type="date"
-                    value={returnDate}
-                    onChange={(e) => setReturnDate(e.target.value)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
-                  />
-                </div>
+              <div>
+                <FormLabel>Return Date</FormLabel>
+                <input
+                  type="date"
+                  value={returnDate}
+                  onChange={(e) => setReturnDate(e.target.value)}
+                  className={FORM_INPUT_CLS}
+                />
               </div>
             </div>
 
@@ -1597,77 +1540,61 @@ export const SalesReturnView: React.FC = () => {
             </div>
 
             {/* Row 3: Refund Method, Refund Status, Return Status */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3">
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Refund Method
-                  </span>
-                  <select
-                    value={refundMethod}
-                    onChange={(e) => setRefundMethod(e.target.value as any)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
-                  >
-                    <option value="Store Credit">Store Credit (Customer Ledger)</option>
-                    <option value="Cash">Cash</option>
-                    <option value="UPI">UPI</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                  </select>
-                </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+              <div>
+                <FormLabel>Refund Method</FormLabel>
+                <select
+                  value={refundMethod}
+                  onChange={(e) => setRefundMethod(e.target.value as any)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Store Credit">Store Credit (Customer Ledger)</option>
+                  <option value="Cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                </select>
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Refund Status
-                  </span>
-                  <select
-                    value={refundStatus}
-                    onChange={(e) => setRefundStatus(e.target.value as any)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
-                  >
-                    <option value="Refunded">Refunded (Settled)</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Store Credit">Store Credit</option>
-                    <option value="Cancelled">Cancelled</option>
-                  </select>
-                </div>
+              <div>
+                <FormLabel>Refund Status</FormLabel>
+                <select
+                  value={refundStatus}
+                  onChange={(e) => setRefundStatus(e.target.value as any)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Refunded">Refunded (Settled)</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Store Credit">Store Credit</option>
+                  <option value="Cancelled">Cancelled</option>
+                </select>
               </div>
 
-              <div className="relative">
-                <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                    Return Lifecycle Status
-                  </span>
-                  <select
-                    value={returnStatus}
-                    onChange={(e) => setReturnStatus(e.target.value as any)}
-                    className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-semibold outline-none cursor-pointer"
-                  >
-                    <option value="Approved">Approved (Restores Stock)</option>
-                    <option value="Received">Received (Restores Stock)</option>
-                    <option value="Refunded">Refunded (Restores Stock)</option>
-                    <option value="Requested">Requested</option>
-                    <option value="Rejected">Rejected</option>
-                  </select>
-                </div>
+              <div>
+                <FormLabel>Return Lifecycle Status</FormLabel>
+                <select
+                  value={returnStatus}
+                  onChange={(e) => setReturnStatus(e.target.value as any)}
+                  className={FORM_SELECT_CLS}
+                >
+                  <option value="Approved">Approved (Restores Stock)</option>
+                  <option value="Received">Received (Restores Stock)</option>
+                  <option value="Refunded">Refunded (Restores Stock)</option>
+                  <option value="Requested">Requested</option>
+                  <option value="Rejected">Rejected</option>
+                </select>
               </div>
             </div>
 
             {/* Row 4: Remarks */}
-            <div className="relative pt-1">
-              <div className="relative w-full bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  Remarks / Notes
-                </span>
-                <textarea
-                  rows={2}
-                  value={generalNotes}
-                  onChange={(e) => setGeneralNotes(e.target.value)}
-                  placeholder="Reason for return, condition of packaging, inspection notes..."
-                  className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm outline-none resize-none"
-                />
-              </div>
+            <div className="pt-1">
+              <FormLabel>Remarks / Notes</FormLabel>
+              <textarea
+                rows={2}
+                value={generalNotes}
+                onChange={(e) => setGeneralNotes(e.target.value)}
+                placeholder="Reason for return, condition of packaging, inspection notes..."
+                className={FORM_TEXTAREA_CLS}
+              />
             </div>
 
             {/* Actions */}
@@ -1726,7 +1653,7 @@ export const SalesReturnView: React.FC = () => {
 
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-4 text-xs">
               <div>
-                <p className="text-[11px] font-bold text-slate-400 uppercase">Party Details:</p>
+                <p className="text-[11px] font-bold text-slate-400 uppercase">Customer Details:</p>
                 <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedReturn.customerName}</p>
                 {selectedReturn.customerCompany && <p className="text-slate-500">{selectedReturn.customerCompany}</p>}
               </div>
@@ -1807,39 +1734,31 @@ export const SalesReturnView: React.FC = () => {
           maxWidth="md"
         >
           <div className="p-4 space-y-4 pt-5 text-xs sm:text-sm font-sans">
-            <div className="relative">
-              <div className="relative w-full h-11 bg-white border border-slate-300 hover:border-slate-400 focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/15 rounded-xl transition-all shadow-2xs flex items-center">
-                <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-[#33077C] rounded-sm pointer-events-none tracking-tight z-10">
-                  New Status
-                </span>
-                <select
-                  value={newStatusValue}
-                  onChange={(e) => setNewStatusValue(e.target.value as SalesReturnStatus)}
-                  className="w-full h-full px-3.5 bg-transparent text-xs sm:text-sm font-bold outline-none cursor-pointer"
-                >
-                  <option value="Approved">Approved (Restores Stock)</option>
-                  <option value="Received">Received (Restores Stock)</option>
-                  <option value="Refunded">Refunded (Restores Stock)</option>
-                  <option value="Requested">Requested (Removes restored stock)</option>
-                  <option value="Rejected">Rejected (Removes restored stock)</option>
-                </select>
-              </div>
+            <div>
+              <FormLabel>New Status</FormLabel>
+              <select
+                value={newStatusValue}
+                onChange={(e) => setNewStatusValue(e.target.value as SalesReturnStatus)}
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Approved">Approved (Restores Stock)</option>
+                <option value="Received">Received (Restores Stock)</option>
+                <option value="Refunded">Refunded (Restores Stock)</option>
+                <option value="Requested">Requested (Removes restored stock)</option>
+                <option value="Rejected">Rejected (Removes restored stock)</option>
+              </select>
             </div>
 
             {newStatusValue === 'Rejected' && (
-              <div className="relative pt-2">
-                <div className="relative w-full bg-white border border-rose-300 hover:border-rose-400 focus-within:border-rose-600 focus-within:ring-2 focus-within:ring-rose-500/15 rounded-xl transition-all shadow-2xs">
-                  <span className="absolute -top-2.5 left-3 px-1.5 bg-white text-[11px] font-bold text-rose-600 rounded-sm pointer-events-none tracking-tight z-10">
-                    Rejection Reason <span className="text-rose-500">*</span>
-                  </span>
-                  <textarea
-                    rows={3}
-                    value={rejectionReasonText}
-                    onChange={(e) => setRejectionReasonText(e.target.value)}
-                    placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
-                    className="w-full p-3 pt-3 bg-transparent text-xs sm:text-sm outline-none resize-none"
-                  />
-                </div>
+              <div className="pt-2">
+                <FormLabel required>Rejection Reason</FormLabel>
+                <textarea
+                  rows={3}
+                  value={rejectionReasonText}
+                  onChange={(e) => setRejectionReasonText(e.target.value)}
+                  placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
+                  className={FORM_TEXTAREA_CLS}
+                />
               </div>
             )}
 

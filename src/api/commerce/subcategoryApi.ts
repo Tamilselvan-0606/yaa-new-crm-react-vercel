@@ -64,16 +64,16 @@ export const subcategoryEndpoints = baseApi.injectEndpoints({
             queryParams.search = params.search.trim();
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.status && params.status !== 'ALL') {
+          if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
-          if (params.category && params.category !== 'ALL') {
+          if (params.category && params.category.toUpperCase() !== 'ALL') {
             queryParams.category = params.category;
           }
         }
         return {
           url: '/commerce/subcategories',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -96,7 +96,7 @@ export const subcategoryEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Subcategory', id: 'LIST' }, { type: 'Category', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Subcategory', id: 'LIST' }, { type: 'Category', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
 
     updateCommerceSubcategory: builder.mutation<SubcategorySingleResponse, { id: string; payload: UpdateSubcategoryPayload }>({
@@ -109,6 +109,7 @@ export const subcategoryEndpoints = baseApi.injectEndpoints({
         { type: 'Subcategory', id },
         { type: 'Subcategory', id: 'LIST' },
         { type: 'Category', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -121,6 +122,7 @@ export const subcategoryEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Subcategory', id },
         { type: 'Subcategory', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -129,7 +131,7 @@ export const subcategoryEndpoints = baseApi.injectEndpoints({
         url: `/commerce/subcategories/${encodeURIComponent(id)}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Subcategory', id: 'LIST' }, { type: 'Category', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Subcategory', id: 'LIST' }, { type: 'Category', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
   }),
   overrideExisting: false,
@@ -162,16 +164,16 @@ export const subcategoryApi = {
         queryParams.search = params.search.trim();
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-      if (params.status && params.status !== 'ALL') {
+      if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
-      if (params.category && params.category !== 'ALL') {
+      if (params.category && params.category.toUpperCase() !== 'ALL') {
         queryParams.category = params.category;
       }
     }
 
     const response = await baseClient.get<SubcategoryListResponse>('/commerce/subcategories', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },

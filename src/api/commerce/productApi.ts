@@ -48,6 +48,8 @@ export interface ProductItemModel {
 
   // Stock
   openingStock: number;
+  currentStock?: number;
+  inStock?: number;
   atPrice: number;
   asOfDate: string;
   minStockAlert: number;
@@ -75,11 +77,36 @@ export interface ProductItemModel {
 /**
  * Maps raw API product to ProductItem format used by InventoryProductsView
  */
+export const cleanProductImage = (img?: string | null): string | undefined => {
+  if (!img || typeof img !== 'string') return undefined;
+  const trimmed = img.trim();
+  if (
+    trimmed === '' ||
+    trimmed === 'null' ||
+    trimmed === 'undefined' ||
+    trimmed === '[object Object]' ||
+    trimmed === 'None' ||
+    trimmed === 'none'
+  ) {
+    return undefined;
+  }
+  return trimmed;
+};
+
 export const mapApiProductToProductItem = (
   apiProd: ApiProduct,
   index?: number
 ): ProductItemModel => {
-  const effectiveImage = (apiProd.itemImage !== undefined && apiProd.itemImage !== null) ? (apiProd.itemImage.trim() || undefined) : (apiProd.image?.trim() || apiProd.imageBase64?.trim() || undefined);
+  const rawBase64 = cleanProductImage(apiProd.imageBase64);
+  const rawImage =
+    cleanProductImage(apiProd.itemImage) ||
+    cleanProductImage(apiProd.image) ||
+    cleanProductImage((apiProd as any).imageUrl) ||
+    cleanProductImage((apiProd as any).productImage) ||
+    cleanProductImage((apiProd as any).photo) ||
+    cleanProductImage((apiProd as any).thumbnail);
+
+  const effectiveImage = rawImage || rawBase64;
   return {
     id: apiProd.id,
     sNo: apiProd.sNo ?? (index !== undefined ? index + 1 : 1),
@@ -90,11 +117,20 @@ export const mapApiProductToProductItem = (
     unit: apiProd.unit || 'PCS',
     baseUnitId: apiProd.baseUnitId || undefined,
     secondaryUnitId: apiProd.secondaryUnitId || undefined,
-    category: apiProd.category || 'General',
-    subcategory: apiProd.subcategory || undefined,
+    category:
+      (typeof apiProd.category === 'string' && apiProd.category) ||
+      (apiProd.category as any)?.name ||
+      (apiProd as any).categoryName ||
+      'General',
+    subcategory:
+      (typeof apiProd.subcategory === 'string' && apiProd.subcategory) ||
+      (apiProd.subcategory as any)?.name ||
+      (apiProd as any).subcategoryName ||
+      (apiProd as any).subCategory ||
+      undefined,
     itemImage: effectiveImage,
     image: effectiveImage,
-    imageBase64: effectiveImage,
+    imageBase64: rawBase64 || effectiveImage,
 
     // Pricing
     salePrice: apiProd.salePrice ?? apiProd.sellingPrice ?? 0,
@@ -114,7 +150,9 @@ export const mapApiProductToProductItem = (
     taxRate: apiProd.taxRate || (apiProd.taxPercent ? `GST @ ${apiProd.taxPercent}%` : 'None'),
 
     // Stock
-    openingStock: apiProd.openingStock ?? apiProd.currentStock ?? apiProd.inStock ?? 0,
+    openingStock: Number(apiProd.openingStock ?? 0),
+    currentStock: typeof apiProd.currentStock === 'number' ? apiProd.currentStock : (typeof apiProd.inStock === 'number' ? apiProd.inStock : undefined),
+    inStock: typeof apiProd.inStock === 'number' ? apiProd.inStock : (typeof apiProd.currentStock === 'number' ? apiProd.currentStock : undefined),
     atPrice: apiProd.atPrice ?? apiProd.purchasePrice ?? 0,
     asOfDate:
       apiProd.asOfDate ||
@@ -203,22 +241,22 @@ export const productEndpoints = baseApi.injectEndpoints({
             queryParams.search = params.search.trim();
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.status && params.status !== 'ALL') {
+          if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
-          if (params.category && params.category !== 'ALL') {
+          if (params.category && params.category.toUpperCase() !== 'ALL') {
             queryParams.category = params.category;
           }
-          if (params.subcategory && params.subcategory !== 'ALL') {
+          if (params.subcategory && params.subcategory.toUpperCase() !== 'ALL') {
             queryParams.subcategory = params.subcategory;
           }
-          if (params.itemType && params.itemType !== 'ALL') {
+          if (params.itemType && params.itemType.toUpperCase() !== 'ALL') {
             queryParams.itemType = params.itemType;
           }
         }
         return {
           url: '/commerce/products',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -266,6 +304,7 @@ export const productEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Product', id },
         { type: 'Product', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
       ],
     }),
 
@@ -331,22 +370,22 @@ export const productApi = {
         queryParams.search = params.search.trim();
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-      if (params.status && params.status !== 'ALL') {
+      if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
-      if (params.category && params.category !== 'ALL') {
+      if (params.category && params.category.toUpperCase() !== 'ALL') {
         queryParams.category = params.category;
       }
-      if (params.subcategory && params.subcategory !== 'ALL') {
+      if (params.subcategory && params.subcategory.toUpperCase() !== 'ALL') {
         queryParams.subcategory = params.subcategory;
       }
-      if (params.itemType && params.itemType !== 'ALL') {
+      if (params.itemType && params.itemType.toUpperCase() !== 'ALL') {
         queryParams.itemType = params.itemType;
       }
     }
 
     const response = await baseClient.get<ProductListResponse>('/commerce/products', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },

@@ -227,12 +227,12 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
     resolver: zodResolver(PlanSchema),
     defaultValues: {
       name: '',
-      price: 0,
-      gstRate: 18,
+      price: '' as any,
+      gstRate: '' as any,
       currency: '₹',
-      billingCycle: 'Monthly',
-      planType: 'Fixed',
-      status: 'Active',
+      billingCycle: '' as any,
+      planType: '' as any,
+      status: '' as any,
       maxBranchLimit: '',
       description: '',
       isPopular: false,
@@ -335,12 +335,12 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       setCustomPlanName('');
       reset({
         name: '',
-        price: 0,
-        gstRate: '',
+        price: '' as any,
+        gstRate: '' as any,
         currency: '₹',
-        billingCycle: 'Monthly',
-        planType: 'Fixed',
-        status: 'Active',
+        billingCycle: '' as any,
+        planType: '' as any,
+        status: '' as any,
         maxBranchLimit: '',
         description: '',
         isPopular: false,
@@ -464,10 +464,6 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
 
   const onInvalid = (errors: any) => {
     console.warn('Form validation failed:', errors);
-    const firstKey = Object.keys(errors)[0];
-    if (firstKey && errors[firstKey]?.message) {
-      setSubmitError(errors[firstKey].message);
-    }
   };
 
   const currentProduct = products.find((p) => p.id === selectedProductId) || products[0];
@@ -581,19 +577,26 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className={labelClass}>
-                  Plan Name <span className="text-slate-500">*</span>
+                  Plan Name <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="text"
+                  placeholder="Enter plan name"
                   {...register('name')}
-                  className={inputClass}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.name
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
-                <FormError message={errors.name?.message} />
+                {errors.name?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.name.message}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Price ({currency}) <span className="text-slate-500">*</span>
+                  Price ({currency}) <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-sm">
@@ -602,15 +605,24 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   <input
                     type="number"
                     step="any"
+                    placeholder="0.00"
                     {...register('price', { valueAsNumber: true })}
-                    className={`${inputClass} pl-8 font-semibold text-slate-900`}
+                    className={`w-full h-11 pl-8 pr-4 bg-white rounded-xl text-xs sm:text-[13px] font-semibold text-slate-900 outline-none transition-all ${
+                      errors.price
+                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                   />
                 </div>
-                <FormError message={errors.price?.message} />
+                {errors.price?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.price.message}</p>
+                )}
               </div>
 
               <div>
-                <label className={labelClass}>GST Rate</label>
+                <label className={labelClass}>
+                  GST Rate <span className="text-rose-500 font-bold">*</span>
+                </label>
                 <Controller
                   control={control}
                   name="gstRate"
@@ -621,10 +633,13 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                       options={GST_RATE_OPTIONS}
                       placeholder="Select GST Rate"
                       activeColor="brand"
+                      error={!!errors.gstRate}
                     />
                   )}
                 />
-                <FormError message={errors.gstRate?.message} />
+                {errors.gstRate?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.gstRate.message}</p>
+                )}
               </div>
             </div>
 
@@ -639,7 +654,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                     tabIndex={-1}
                     value={hasPrice ? `${currency}${totalPriceWithGst.toLocaleString()}` : ''}
                     placeholder=""
-                    className={`${inputClass} font-bold text-xs sm:text-[13px] text-[#33077C] cursor-default select-none pr-28`}
+                    className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-bold text-[#33077C] cursor-default select-none pr-28 outline-none"
                     style={{ borderRadius: '0.75rem' }}
                   />
                   {hasPrice && gstRate !== '' && (
@@ -652,7 +667,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
 
               <div>
                 <label className={labelClass}>
-                  Billing Cycle <span className="text-slate-500">*</span>
+                  Billing Cycle <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <Controller
                   control={control}
@@ -664,15 +679,18 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                       options={BILLING_CYCLE_OPTIONS}
                       placeholder="Select Billing Cycle"
                       activeColor="brand"
+                      error={!!errors.billingCycle}
                     />
                   )}
                 />
-                <FormError message={errors.billingCycle?.message} />
+                {errors.billingCycle?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.billingCycle.message}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Plan Type <span className="text-slate-500">*</span>
+                  Plan Type <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <Controller
                   control={control}
@@ -684,10 +702,13 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                       options={PLAN_TYPE_OPTIONS}
                       placeholder="Select Plan Type"
                       activeColor="brand"
+                      error={!!errors.planType}
                     />
                   )}
                 />
-                <FormError message={errors.planType?.message} />
+                {errors.planType?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.planType.message}</p>
+                )}
               </div>
             </div>
 
@@ -695,7 +716,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className={labelClass}>
-                  Status <span className="text-slate-500">*</span>
+                  Status <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <Controller
                   control={control}
@@ -707,10 +728,13 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                       options={PLAN_STATUS_OPTIONS}
                       placeholder="Select Status"
                       activeColor="brand"
+                      error={!!errors.status}
                     />
                   )}
                 />
-                <FormError message={errors.status?.message} />
+                {errors.status?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.status.message}</p>
+                )}
               </div>
             </div>
 

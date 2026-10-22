@@ -85,9 +85,29 @@ export const mapApiPurchaseOrderToUi = (
   const normalizedStatus = (apiPo.status as PurchaseStatus) || 'Pending';
   const isFulfilled = normalizedStatus === 'Received' || (normalizedStatus as string) === 'Completed';
 
-  const paidAmount = isFulfilled ? grandTotal : 0;
-  const balance = isFulfilled ? 0 : grandTotal;
-  const paymentStatus: PurchasePaymentStatus = isFulfilled ? 'Paid' : 'Unpaid';
+  // Check if we have an existing local record with payments recorded
+  let existingPaid = 0;
+  let existingPaymentMethod: any = 'Bank Transfer';
+  let existingPaymentTerms = 'Net 30 Days';
+  try {
+    const rawStored = localStorage.getItem('yaa_crm_purchase_orders');
+    if (rawStored) {
+      const parsed = JSON.parse(rawStored);
+      if (Array.isArray(parsed)) {
+        const found = parsed.find((p: any) => p.id === apiPo.id || (apiPo.poNo && p.purchaseNo === apiPo.poNo));
+        if (found) {
+          existingPaid = Number(found.paidAmount || 0);
+          if (found.paymentMethod) existingPaymentMethod = found.paymentMethod;
+          if (found.paymentTerms) existingPaymentTerms = found.paymentTerms;
+        }
+      }
+    }
+  } catch {}
+
+  const paidAmount = isFulfilled ? grandTotal : Math.min(grandTotal, existingPaid);
+  const balance = Math.max(0, grandTotal - paidAmount);
+  const paymentStatus: PurchasePaymentStatus =
+    balance <= 0 ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
 
   const orderDateStr = apiPo.orderDate
     ? apiPo.orderDate.split('T')[0]
@@ -128,8 +148,8 @@ export const mapApiPurchaseOrderToUi = (
     grandTotal: grandTotal,
     paidAmount: paidAmount,
     balance: balance,
-    paymentMethod: 'Bank Transfer',
-    paymentTerms: 'Net 30 Days',
+    paymentMethod: existingPaymentMethod,
+    paymentTerms: existingPaymentTerms,
     paymentStatus: paymentStatus,
     purchaseStatus: normalizedStatus,
     status: apiPo.status,
@@ -260,7 +280,7 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         return {
           url: '/work/purchase-orders',
           method: 'GET',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -297,7 +317,11 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
           body: cleanPayload,
         };
       },
-      invalidatesTags: [{ type: 'Purchase', id: 'LIST' }],
+      invalidatesTags: [
+        { type: 'Purchase', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
+      ],
     }),
 
     updateWorkPurchaseOrder: builder.mutation<
@@ -320,6 +344,8 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Purchase', id },
         { type: 'Purchase', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
 
@@ -343,6 +369,8 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Purchase', id },
         { type: 'Purchase', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
 
@@ -358,6 +386,8 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Purchase', id },
         { type: 'Purchase', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
 
@@ -369,6 +399,8 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, id) => [
         { type: 'Purchase', id },
         { type: 'Purchase', id: 'LIST' },
+        { type: 'Stock', id: 'LIST' },
+        { type: 'Supplier', id: 'LIST' },
       ],
     }),
   }),
@@ -420,7 +452,7 @@ export const workPurchaseOrderApi = {
 
     const response = await baseClient.get<PurchaseOrderListResponse>(
       '/work/purchase-orders',
-      { params: queryParams }
+      { params: Object.keys(queryParams).length > 0 ? queryParams : undefined }
     );
     return response.data;
   },

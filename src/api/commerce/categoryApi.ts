@@ -57,13 +57,13 @@ export const categoryEndpoints = baseApi.injectEndpoints({
             queryParams.search = params.search.trim();
           }
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.status && params.status !== 'ALL') {
+          if (params.status && params.status.toUpperCase() !== 'ALL') {
             queryParams.status = params.status;
           }
         }
         return {
           url: '/commerce/categories',
-          params: queryParams,
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
       providesTags: (result) =>
@@ -86,7 +86,7 @@ export const categoryEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Category', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Category', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
 
     updateCommerceCategory: builder.mutation<CategorySingleResponse, { id: string; payload: UpdateCategoryPayload }>({
@@ -98,6 +98,7 @@ export const categoryEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Category', id },
         { type: 'Category', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -110,6 +111,7 @@ export const categoryEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Category', id },
         { type: 'Category', id: 'LIST' },
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -118,7 +120,7 @@ export const categoryEndpoints = baseApi.injectEndpoints({
         url: `/commerce/categories/${encodeURIComponent(id)}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Category', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Category', id: 'LIST' }, { type: 'Product', id: 'LIST' }],
     }),
   }),
   overrideExisting: false,
@@ -151,13 +153,13 @@ export const categoryApi = {
         queryParams.search = params.search.trim();
       }
       if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-      if (params.status && params.status !== 'ALL') {
+      if (params.status && params.status.toUpperCase() !== 'ALL') {
         queryParams.status = params.status;
       }
     }
 
     const response = await baseClient.get<CategoryListResponse>('/commerce/categories', {
-      params: queryParams,
+      params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
     return response.data;
   },
