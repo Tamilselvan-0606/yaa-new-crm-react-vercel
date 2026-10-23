@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { baseApi } from '../../api/baseApi';
+import { store } from '../../store/store';
 import {
   LayoutDashboard,
   Boxes,
@@ -250,18 +252,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleSwitchOrgType = (type: 'Client Management' | 'Sales Management') => {
     setOrgType(type);
     if (type === 'Sales Management') {
-      const clientOnly = [
-        '/leads', '/quotes', '/proforma', '/sales', '/customers',
-        '/digital-marketing', '/content', '/tasks', '/payments',
-        '/subscriptions', '/employees', '/reports'
-      ];
-      if (clientOnly.some((r) => location.pathname.startsWith(r))) {
-        navigate('/');
-      }
-    } else if (type === 'Client Management') {
-      if (location.pathname.startsWith('/sale-management')) {
-        navigate('/');
-      }
+      navigate('/sale-management');
+    } else {
+      navigate('/');
     }
   };
 
@@ -349,15 +342,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Sales Management Suite Navigation Items (The 4 modules in the image)
   const salesManagementNavItems: NavItem[] = [
-    { id: 'dashboard', path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'dashboard', path: '/sale-management', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'ai-copilot', path: '/ai-copilot', label: 'AI Copilot', icon: Sparkles },
     ...(isOrgSuperAdmin || isOrgAdminUser
       ? [{ id: 'organization', path: '/organization', label: 'Sub Organization', icon: Building2 }]
       : []),
     { id: 'branches', path: '/branches', label: 'Branches', icon: GitBranch, adminOnly: true },
     inventoryNavItem,
-    salesHubNavItem,
     purchaseNavItem,
+    salesHubNavItem,
     saleReportNavItem,
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, count: unreadRemindersCount },
   ];
@@ -483,8 +476,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         'billing-inventory-group',
         'billing-sales-group',
         'sm-inventory',
-        'sm-sales-hub',
         'sm-purchase',
+        'sm-sales-hub',
         'sm-reports',
         'reminders',
       ];
@@ -508,6 +501,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
     if (currentTab) {
       return currentTab === item.id;
+    }
+    if (item.path === '/sale-management') {
+      return location.pathname === '/sale-management' || location.pathname === '/sale-management/dashboard';
     }
     if (item.path === '/') {
       return location.pathname === '/';
@@ -541,6 +537,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (onClose) {
       onClose();
     }
+
+    // Invalidate RTK Query cache tags and emit crm:sidebar-navigate event so active views immediately call backend APIs
+    const tagMap: Record<string, any[]> = {
+      '/sale-management/sales/customer': [{ type: 'Customer', id: 'LIST' }],
+      '/sale-management/sales/sales-representatives': [{ type: 'SalesRepresentative', id: 'LIST' }],
+      '/sale-management/sales/sales-representative': [{ type: 'SalesRepresentative', id: 'LIST' }],
+      '/sale-management/sales/quotation': [{ type: 'Quotation', id: 'LIST' }],
+      '/sale-management/sales/estimate': [{ type: 'Quotation', id: 'LIST' }],
+      '/sale-management/sales/proforma': [{ type: 'Proforma', id: 'LIST' }],
+      '/sale-management/sales/sale-order': [{ type: 'SalesOrder', id: 'LIST' }],
+      '/sale-management/sales/order': [{ type: 'SalesOrder', id: 'LIST' }],
+      '/sale-management/sales/delivery-challan': [{ type: 'DeliveryChallan', id: 'LIST' }],
+      '/sale-management/sales/challan': [{ type: 'DeliveryChallan', id: 'LIST' }],
+      '/sale-management/sales/sale': [{ type: 'SalesInvoice', id: 'LIST' }],
+      '/sale-management/sales/payment-in': [{ type: 'PaymentIn', id: 'LIST' }],
+      '/sale-management/sales/return': [{ type: 'SalesReturn', id: 'LIST' }],
+      '/sale-management/sales/collections': ['Collection', { type: 'Collection', id: 'INVOICES_LIST' }],
+      '/sale-management/inventory/products': [{ type: 'Product', id: 'LIST' }],
+      '/sale-management/inventory/stocks': [{ type: 'Stock', id: 'LIST' }],
+      '/sale-management/inventory/category': [{ type: 'Category', id: 'LIST' }],
+      '/sale-management/inventory/subcategory': [{ type: 'Subcategory', id: 'LIST' }],
+      '/sale-management/purchase/supplier': [{ type: 'Supplier', id: 'LIST' }],
+      '/sale-management/purchase/request': [{ type: 'PurchaseRequest', id: 'LIST' }],
+      '/sale-management/purchase/purchase': [{ type: 'Purchase', id: 'LIST' }],
+      '/sale-management/purchase/return': [{ type: 'PurchaseReturn', id: 'LIST' }],
+      '/sale-management/purchase/payment-out': [{ type: 'PaymentOut', id: 'LIST' }],
+      '/sale-management/purchase/expense': [{ type: 'Expense', id: 'LIST' }],
+    };
+
+    const tagsToInvalidate = tagMap[item.path];
+    if (tagsToInvalidate) {
+      store.dispatch(baseApi.util.invalidateTags(tagsToInvalidate));
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('crm:sidebar-navigate', {
+        detail: { path: item.path, id: item.id },
+      })
+    );
   };
 
   const renderSubNav = (items: SubNavItem[], level: number = 1) => {
@@ -689,13 +724,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 id="switch-client-management-button"
                 onClick={() => handleSwitchOrgType('Client Management')}
-                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${activeOrgType === 'Client Management'
-                    ? 'bg-[#33077C] text-white shadow-sm ring-1 ring-white/30 font-extrabold'
-                    : 'bg-white text-slate-700 hover:bg-slate-50 shadow-2xs font-semibold'
-                  }`}
+                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeOrgType === 'Client Management'
+                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
+                    : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20 border border-white/15 font-semibold'
+                }`}
               >
                 {activeOrgType === 'Client Management' && (
-                  <Check className="w-3.5 h-3.5 stroke-[3] text-white shrink-0" />
+                  <Check className="w-3.5 h-3.5 stroke-[3] text-[#33077C] shrink-0" />
                 )}
                 <span className="truncate">Client Mgmt</span>
               </button>
@@ -704,13 +740,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 id="switch-sales-management-button"
                 onClick={() => handleSwitchOrgType('Sales Management')}
-                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${activeOrgType === 'Sales Management'
-                    ? 'bg-[#33077C] text-white shadow-sm ring-1 ring-white/30 font-extrabold'
-                    : 'bg-white text-slate-700 hover:bg-slate-50 shadow-2xs font-semibold'
-                  }`}
+                className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeOrgType === 'Sales Management'
+                    ? 'bg-white text-[#33077C] shadow-sm font-extrabold'
+                    : 'bg-white/10 text-white/80 hover:text-white hover:bg-white/20 border border-white/15 font-semibold'
+                }`}
               >
                 {activeOrgType === 'Sales Management' && (
-                  <Check className="w-3.5 h-3.5 stroke-[3] text-white shrink-0" />
+                  <Check className="w-3.5 h-3.5 stroke-[3] text-[#33077C] shrink-0" />
                 )}
                 <span className="truncate">Sale Mgmt</span>
               </button>

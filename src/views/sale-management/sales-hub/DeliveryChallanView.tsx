@@ -54,6 +54,7 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
@@ -61,7 +62,7 @@ import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printBusinessDocument } from '../../../utils/printUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
@@ -337,6 +338,12 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [isBulkConvertModalOpen, setIsBulkConvertModalOpen] = useState(false);
   const [selectedBulkChallanIds, setSelectedBulkChallanIds] = useState<string[]>([]);
 
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetChallan, setDeleteTargetChallan] = useState<DeliveryChallanRecord | null>(null);
+  const [isDeletingChallan, setIsDeletingChallan] = useState(false);
+  const [deleteChallanError, setDeleteChallanError] = useState<string | null>(null);
+
   // Table Column Settings
   const [columnSettings, setColumnSettings] = useState<TableColumnSettings>({
     showItemCategory: false,
@@ -481,6 +488,24 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   useEffect(() => {
     fetchDeliveryChallans();
+  }, [fetchDeliveryChallans]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch delivery challans
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === '/sale-management/sales/delivery-challan' ||
+        customEvent.detail?.id === 'delivery-challan'
+      ) {
+        isFetchingChallansRef.current = false;
+        fetchDeliveryChallans();
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    return () => {
+      window.removeEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    };
   }, [fetchDeliveryChallans]);
 
   // Combined Customers (Live API + Local Store)
@@ -1225,24 +1250,44 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }
   };
 
-  // Delete Delivery Challan (DELETE /commerce/challans/{id})
-  const handleDeleteChallan = async (id: string) => {
+  // Delete Delivery Challan (DELETE /commerce/challans/{id}) with confirmation modal
+  const handleOpenDeleteModal = (challan: DeliveryChallanRecord) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetChallan(challan);
+    setDeleteChallanError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteChallan = async () => {
+    if (!deleteTargetChallan) return;
+    setIsDeletingChallan(true);
+    setDeleteChallanError(null);
     try {
-      setIsActionLoading(true);
-      if (UUID_REGEX.test(id)) {
-        await commerceDeliveryChallanApi.deleteChallan(id);
-        toast.success('Delivery challan cancelled / deleted.');
+      if (UUID_REGEX.test(deleteTargetChallan.id)) {
+        await commerceDeliveryChallanApi.deleteChallan(deleteTargetChallan.id);
+        toast.success(`Delivery challan "${deleteTargetChallan.challanNo}" deleted successfully.`);
       } else {
-        const updated = challans.filter((c) => c.id !== id);
+        const updated = challans.filter((c) => c.id !== deleteTargetChallan.id);
         persistChallans(updated);
-        toast.success('Delivery challan removed from cache.');
+        toast.success(`Delivery challan "${deleteTargetChallan.challanNo}" removed.`);
       }
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'DeliveryChallan', id: deleteTargetChallan.id },
+          { type: 'DeliveryChallan', id: 'LIST' },
+        ])
+      );
+      setIsDeleteModalOpen(false);
+      setDeleteTargetChallan(null);
       await fetchDeliveryChallans();
     } catch (err: any) {
       console.error('Delete failed:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to delete delivery challan');
+      const errMsg = err?.response?.data?.error?.message || err?.message || 'Failed to delete delivery challan';
+      setDeleteChallanError(errMsg);
+      toast.error(errMsg);
     } finally {
-      setIsActionLoading(false);
+      setIsDeletingChallan(false);
     }
   };
 
@@ -1498,6 +1543,50 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     });
 
     toast.success(`Delivery Challans Excel report downloaded (${challans.length} records)!`);
+  };
+
+  // Print Delivery Challans Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (challans.length === 0) {
+      toast.error('No delivery challans to print.');
+      return;
+    }
+
+    const printRows = challans.map((c) => ({
+      challanNo: c.challanNo,
+      date: isoToDdmmyyyy(c.invoiceDate),
+      partyName: c.partyName,
+      customerPhone: c.customerPhone || '-',
+      amount: Number(c.amount || 0),
+      balance: Number(c.balance || 0),
+      status: c.status,
+    }));
+
+    printTableReport({
+      title: 'DELIVERY CHALLAN REGISTER',
+      subtitle: `Filter: ${appliedPeriod} | Total Challans: ${challans.length}`,
+      columns: [
+        { header: 'Challan No.', key: 'challanNo', align: 'center', width: '15%' },
+        { header: 'Date', key: 'date', align: 'center', width: '12%' },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: '25%' },
+        { header: 'Contact', key: 'customerPhone', align: 'left', width: '14%' },
+        { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: '14%' },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '14%' },
+        { header: 'Status', key: 'status', align: 'center', width: '10%' },
+      ],
+      data: printRows,
+      summaryRow: {
+        challanNo: 'TOTAL',
+        partyName: `${challans.length} Challans`,
+        amount: metrics.totalVal,
+        balance: metrics.openVal,
+      },
+      metrics: [
+        { label: 'Total Value', value: metrics.totalVal },
+        { label: 'Open Amount', value: metrics.openVal },
+        { label: 'Total Challans', value: challans.length },
+      ],
+    });
   };
 
   // Metrics
@@ -2386,6 +2475,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           </Button>
 
           <Button
+            variant="secondary"
+            size="md"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+            onClick={handlePrintTableReport}
+            className="hover:border-purple-300 transition-colors"
+          >
+            Print Report
+          </Button>
+
+          <Button
             variant="primary"
             size="md"
             icon={<Plus className="w-4 h-4 text-white stroke-[2.5]" />}
@@ -2724,7 +2823,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               {
                                 label: 'Delete / Cancel',
                                 variant: 'delete',
-                                onClick: () => handleDeleteChallan(item.id),
+                                onClick: () => handleOpenDeleteModal(item),
                               },
                             ]}
                           />
@@ -2994,6 +3093,23 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingChallan) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetChallan(null);
+            setDeleteChallanError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteChallan}
+        entityName="Delivery Challan"
+        recordName={deleteTargetChallan?.challanNo}
+        isLoading={isDeletingChallan}
+        error={deleteChallanError}
+      />
     </div>
   );
 };

@@ -157,7 +157,7 @@ function getVariantConfig(variant: ActionVariant, customIcon?: ReactNode) {
       };
     case 'delete':
       return {
-        bg: 'bg-[#E11D48]',
+        bg: 'bg-[#F51F4F]',
         icon: customIcon || <Trash2 {...iconProps} />,
         isDanger: true,
       };

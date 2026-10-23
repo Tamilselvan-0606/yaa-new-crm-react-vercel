@@ -210,8 +210,11 @@ export {
   ensureValidUuid,
 } from './work/expenseApi';
 
+export * from './commerce/salesRepresentativeTypes';
+export * from './commerce/salesRepresentativeApi';
+
 export * from './commerce/collectionTypes';
-export { collectionApi } from './commerce/collectionApi';
+export * from './commerce/collectionApi';
 
 export * from './commerce/salesDashboardTypes';
 export * from './commerce/salesDashboardApi';

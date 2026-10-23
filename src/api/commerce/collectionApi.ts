@@ -21,6 +21,229 @@ import {
 
 export * from './collectionTypes';
 
+export const collectionEndpoints = baseApi.injectEndpoints({
+  endpoints: (builder) => ({
+    getCommerceCollectionMetrics: builder.query<
+      CommerceCollectionMetricsResponse,
+      { salesRepresentativeId?: string; referenceDate?: string; date?: string } | void
+    >({
+      query: (arg) => {
+        const params = (arg || {}) as { salesRepresentativeId?: string; referenceDate?: string; date?: string };
+        const queryParams: Record<string, any> = {};
+        if (params.salesRepresentativeId) queryParams.salesRepresentativeId = params.salesRepresentativeId;
+        if (params.referenceDate || params.date) {
+          queryParams.referenceDate = params.referenceDate || params.date;
+          queryParams.date = params.date || params.referenceDate;
+        }
+        return {
+          url: '/commerce/collections/dashboard-metrics',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: ['Collection', 'SalesInvoice', 'Customer'],
+    }),
+
+    getCommerceCollectionInvoices: builder.query<
+      CommerceCollectionInvoicesResponse,
+      CollectionInvoicesParams | void
+    >({
+      query: (params) => {
+        const queryParams: Record<string, any> = {};
+        if (params) {
+          if (params.tab && params.tab !== 'all') queryParams.tab = params.tab;
+          if (params.search && params.search.trim()) queryParams.search = params.search.trim();
+          if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
+            queryParams.salesRepresentativeId = params.salesRepresentativeId;
+          }
+          if (params.customerId && params.customerId !== 'ALL') {
+            queryParams.customerId = params.customerId;
+          }
+          if (params.dueDateFilter && params.dueDateFilter !== 'ALL') {
+            queryParams.dueDateFilter = params.dueDateFilter;
+          }
+          if (params.status && params.status !== 'ALL') queryParams.status = params.status;
+          if (params.paymentStatus && params.paymentStatus !== 'ALL') {
+            queryParams.paymentStatus = params.paymentStatus;
+          }
+          if (typeof params.page === 'number') queryParams.page = params.page;
+          if (typeof params.limit === 'number') queryParams.limit = params.limit;
+          else if (typeof params.pageSize === 'number') queryParams.limit = params.pageSize;
+          if (params.sub_organization_id) queryParams.sub_organization_id = params.sub_organization_id;
+        }
+        return {
+          url: '/commerce/collections/invoices',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: (result) =>
+        result?.data
+          ? [
+              ...result.data.map(({ id }) => ({ type: 'Collection' as const, id })),
+              { type: 'Collection', id: 'INVOICES_LIST' },
+            ]
+          : [{ type: 'Collection', id: 'INVOICES_LIST' }],
+    }),
+
+    getCommerceCustomerAssignments: builder.query<
+      CommerceCustomerAssignmentsResponse,
+      { salesRepresentativeId?: string; search?: string; status?: string; page?: number; limit?: number } | void
+    >({
+      query: (params) => {
+        const queryParams: Record<string, any> = {};
+        if (params) {
+          if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
+            queryParams.salesRepresentativeId = params.salesRepresentativeId;
+          }
+          if (params.search && params.search.trim()) queryParams.search = params.search.trim();
+          if (params.status && params.status !== 'ALL') queryParams.status = params.status;
+          if (typeof params.page === 'number') queryParams.page = params.page;
+          if (typeof params.limit === 'number') queryParams.limit = params.limit;
+        }
+        return {
+          url: '/commerce/collections/customer-assignments',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: [{ type: 'Collection', id: 'ASSIGNMENTS_LIST' }, 'Customer', 'SalesRepresentative'],
+    }),
+
+    assignCommerceCustomer: builder.mutation<{ success: boolean; message?: string }, AssignCustomerPayload>({
+      query: (payload) => ({
+        url: '/commerce/collections/assign-customer',
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [
+        { type: 'Collection', id: 'ASSIGNMENTS_LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'SalesRepresentative',
+      ],
+    }),
+
+    getCommerceCollectionFollowUps: builder.query<
+      CommerceFollowUpsResponse,
+      { salesRepresentativeId?: string; customerId?: string; search?: string; outcome?: string; page?: number; pageSize?: number; limit?: number } | void
+    >({
+      query: (params) => {
+        const queryParams: Record<string, any> = {};
+        if (params) {
+          if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
+            queryParams.salesRepresentativeId = params.salesRepresentativeId;
+          }
+          if (params.customerId && params.customerId !== 'ALL') queryParams.customerId = params.customerId;
+          if (params.search && params.search.trim()) queryParams.search = params.search.trim();
+          if (params.outcome && params.outcome !== 'ALL') queryParams.outcome = params.outcome;
+          if (typeof params.page === 'number') queryParams.page = params.page;
+          if (typeof params.pageSize === 'number') queryParams.pageSize = params.pageSize;
+          if (typeof params.limit === 'number') queryParams.limit = params.limit;
+        }
+        return {
+          url: '/commerce/sales/collections/follow-ups',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: [{ type: 'Collection', id: 'FOLLOWUPS_LIST' }],
+    }),
+
+    createCommerceCollectionFollowUp: builder.mutation<
+      { success: boolean; message?: string; data?: any },
+      CreateCollectionFollowUpPayload
+    >({
+      query: (payload) => ({
+        url: '/commerce/sales/collections/follow-ups',
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [
+        { type: 'Collection', id: 'FOLLOWUPS_LIST' },
+        { type: 'Collection', id: 'INVOICES_LIST' },
+        'Collection',
+      ],
+    }),
+
+    getCommerceCollectionHistory: builder.query<
+      CommerceCollectionHistoryResponse,
+      { search?: string; salesRepresentativeId?: string; paymentMethod?: string; fromDate?: string; toDate?: string; page?: number; limit?: number } | void
+    >({
+      query: (params) => {
+        const queryParams: Record<string, any> = {};
+        if (params) {
+          if (params.search && params.search.trim()) queryParams.search = params.search.trim();
+          if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
+            queryParams.salesRepresentativeId = params.salesRepresentativeId;
+          }
+          if (params.paymentMethod && params.paymentMethod !== 'ALL') queryParams.paymentMethod = params.paymentMethod;
+          if (params.fromDate) queryParams.fromDate = params.fromDate;
+          if (params.toDate) queryParams.toDate = params.toDate;
+          if (typeof params.page === 'number') queryParams.page = params.page;
+          if (typeof params.limit === 'number') queryParams.limit = params.limit;
+        }
+        return {
+          url: '/commerce/collections/history',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: [{ type: 'Collection', id: 'HISTORY_LIST' }],
+    }),
+
+    recordCommerceCollectionPayment: builder.mutation<
+      { success: boolean; message?: string; data?: any },
+      RecordCollectionPaymentPayload
+    >({
+      query: (payload) => ({
+        url: '/commerce/sales/collections/record-payment',
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [
+        'Collection',
+        { type: 'Collection', id: 'INVOICES_LIST' },
+        { type: 'Collection', id: 'HISTORY_LIST' },
+        { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'PaymentIn', id: 'LIST' },
+        { type: 'Customer', id: 'LIST' },
+        'Dashboard',
+      ],
+    }),
+
+    createCommercePromiseToPay: builder.mutation<
+      { success: boolean; message?: string; data?: any },
+      RecordPromiseToPayPayload
+    >({
+      query: (payload) => ({
+        url: '/commerce/sales/collections/promises-to-pay',
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [
+        'Collection',
+        { type: 'Collection', id: 'INVOICES_LIST' },
+        { type: 'Collection', id: 'FOLLOWUPS_LIST' },
+      ],
+    }),
+
+    getCommerceCustomerTimeline: builder.query<CommerceCustomerTimelineResponse, string>({
+      query: (customerId) => `/commerce/customers/${customerId}/collection-timeline`,
+      providesTags: (_result, _error, id) => [{ type: 'Collection', id: `TIMELINE_${id}` }],
+    }),
+  }),
+  overrideExisting: false,
+});
+
+export const {
+  useGetCommerceCollectionMetricsQuery,
+  useGetCommerceCollectionInvoicesQuery,
+  useLazyGetCommerceCollectionInvoicesQuery,
+  useGetCommerceCustomerAssignmentsQuery,
+  useAssignCommerceCustomerMutation,
+  useGetCommerceCollectionFollowUpsQuery,
+  useCreateCommerceCollectionFollowUpMutation,
+  useGetCommerceCollectionHistoryQuery,
+  useRecordCommerceCollectionPaymentMutation,
+  useCreateCommercePromiseToPayMutation,
+  useGetCommerceCustomerTimelineQuery,
+} = collectionEndpoints;
+
 export const collectionApi = {
   /**
    * Get collection dashboard summary metrics

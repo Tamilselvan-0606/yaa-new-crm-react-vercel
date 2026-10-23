@@ -26,6 +26,7 @@ import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import {
   categoryApi,
   mapApiCategoryToCategoryItem,
@@ -71,6 +72,11 @@ export const CategoryView: React.FC = () => {
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<CategoryItem | null>(null);
+
+  // Delete Confirmation Modal State
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState<CategoryItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // React Hook Form instance for Category Add/Edit Modal
   const {
@@ -377,23 +383,43 @@ export const CategoryView: React.FC = () => {
     toast.success(`Category "${item.categoryName}" status set to ${nextStatus}.`);
   };
 
-  // Delete Category (DELETE /commerce/categories/:id)
-  const handleDeleteCategory = async (id: string, name?: string) => {
+  // Open Delete Confirmation Modal
+  const handleDeleteCategory = (item: CategoryItem) => {
     setActiveDropdownId(null);
     setDropdownPos(null);
+    setDeleteError(null);
+    setDeleteConfirmItem(item);
+  };
+
+  // Confirm and Execute Delete (DELETE /commerce/categories/:id)
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmItem) return;
+    const { id, categoryName } = deleteConfirmItem;
+    setIsDeleting(true);
+    setDeleteError(null);
 
     try {
       const res = await categoryApi.deleteCategory(id);
       if (res?.success) {
-        toast.success(name ? `Category "${name}" deleted.` : 'Category deleted successfully.');
+        toast.success(categoryName ? `Category "${categoryName}" deleted.` : 'Category deleted successfully.');
         // Reset fetch key so loadCategories always re-fetches fresh data
         lastFetchKeyRef.current = '';
         loadCategories(true);
+        setDeleteConfirmItem(null);
+        setDeleteError(null);
         return;
+      } else {
+        const errorMsg = (res as any)?.message || 'Failed to delete category.';
+        setDeleteError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (apiErr: any) {
       console.warn('Remote category delete failed:', apiErr);
-      toast.error('Failed to delete category. Please try again.');
+      const errorMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to delete category. Please try again.';
+      setDeleteError(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -636,7 +662,7 @@ export const CategoryView: React.FC = () => {
                             {
                               label: 'Delete',
                               variant: 'delete',
-                              onClick: () => handleDeleteCategory(item.id, item.categoryName),
+                              onClick: () => handleDeleteCategory(item),
                             },
                           ]}
                         />
@@ -742,7 +768,7 @@ export const CategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => handleDeleteCategory(item.id, item.categoryName)}
+                      onClick={() => handleDeleteCategory(item)}
                       className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Delete Category"
                     >
@@ -973,6 +999,23 @@ export const CategoryView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={Boolean(deleteConfirmItem)}
+        onClose={() => {
+          if (!isDeleting) {
+            setDeleteConfirmItem(null);
+            setDeleteError(null);
+          }
+        }}
+        onConfirm={handleConfirmDelete}
+        title="Delete Category"
+        entityName="Category"
+        recordName={deleteConfirmItem?.categoryName}
+        isLoading={isDeleting}
+        error={deleteError}
+      />
     </div>
   );
 };

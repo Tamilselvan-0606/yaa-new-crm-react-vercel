@@ -51,6 +51,7 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
@@ -59,6 +60,8 @@ import { printTableReport, printBusinessDocument } from '../../../utils/printUti
 import { UniversalShareDropdown, formatCreditNoteShare } from '../../../utils/shareUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { toast } from 'sonner';
+import { useAppDispatch } from '../../../hooks/redux';
+import { baseApi } from '../../../api/baseApi';
 import {
   commerceSalesReturnApi,
   mapApiSalesReturnToSalesReturn,
@@ -131,6 +134,7 @@ export interface UnifiedTransactionRecord {
 }
 
 export const SalesReturnView: React.FC = () => {
+  const dispatch = useAppDispatch();
   const {
     sales,
     setSalesList,
@@ -198,6 +202,12 @@ export const SalesReturnView: React.FC = () => {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedReturn, setSelectedReturn] = useState<SalesReturn | null>(null);
   const [historyTx, setHistoryTx] = useState<UnifiedTransactionRecord | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetTx, setDeleteTargetTx] = useState<UnifiedTransactionRecord | null>(null);
+  const [isDeletingTx, setIsDeletingTx] = useState(false);
+  const [deleteTxError, setDeleteTxError] = useState<string | null>(null);
 
   // Status Change Modal
   const [statusModalReturn, setStatusModalReturn] = useState<SalesReturn | null>(null);
@@ -329,6 +339,24 @@ export const SalesReturnView: React.FC = () => {
   // Trigger fetch on filter change
   useEffect(() => {
     fetchSalesReturns();
+  }, [fetchSalesReturns]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch sales returns
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === '/sale-management/sales/return' ||
+        customEvent.detail?.id === 'return'
+      ) {
+        isFetchingRef.current = false;
+        fetchSalesReturns();
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    return () => {
+      window.removeEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    };
   }, [fetchSalesReturns]);
 
   // Close transaction dropdown and action dropdown on outside click or scroll
@@ -731,6 +759,16 @@ export const SalesReturnView: React.FC = () => {
         }
       }
 
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'SalesReturn', id: 'LIST' },
+          { type: 'SalesInvoice', id: 'LIST' },
+          { type: 'Stock', id: 'LIST' },
+          { type: 'Customer', id: 'LIST' },
+          'Dashboard',
+        ])
+      );
+
       setIsCreateModalOpen(false);
       fetchSalesReturns();
     } catch (err: any) {
@@ -798,6 +836,14 @@ export const SalesReturnView: React.FC = () => {
         statusModalReturn.id,
         newStatusValue,
         newStatusValue === 'Rejected' ? rejectionReasonText.trim() : undefined
+      );
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'SalesReturn', id: statusModalReturn.id },
+          { type: 'SalesReturn', id: 'LIST' },
+          { type: 'Stock', id: 'LIST' },
+          'Dashboard',
+        ])
       );
       toast.success(`Sales Return ${statusModalReturn.returnNo} status updated to ${newStatusValue}`);
       setStatusModalReturn(null);
@@ -945,28 +991,51 @@ export const SalesReturnView: React.FC = () => {
     toast.success(`Opening WhatsApp for Credit Note ${tx.refNo}`);
   };
 
-  // Delete / Void Return via Backend API
-  const handleDeleteTransaction = async (tx: UnifiedTransactionRecord) => {
+  // Delete / Void Return via Backend API with confirmation modal
+  const handleOpenDeleteModal = (tx: UnifiedTransactionRecord) => {
     setActiveMenuId(null);
-    if (tx.originalReturn) {
-      try {
-        if (UUID_REGEX.test(tx.originalReturn.id)) {
-          await commerceSalesReturnApi.deleteSalesReturn(tx.originalReturn.id);
-        }
-        deleteStoreSalesReturn(tx.originalReturn.id);
-        toast.success(`Sales Return #${tx.refNo} voided successfully.`);
-        fetchSalesReturns();
-      } catch (err: any) {
-        console.error('Failed to delete sales return:', err);
-        const msg =
-          err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to delete sales return';
-        toast.error(msg);
-      }
-    } else {
+    setDropdownPos(null);
+    if (!tx.originalReturn) {
       toast.info(`Transaction #${tx.refNo} cannot be deleted from here.`);
+      return;
+    }
+    setDeleteTargetTx(tx);
+    setDeleteTxError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteTx = async () => {
+    if (!deleteTargetTx || !deleteTargetTx.originalReturn) return;
+    setIsDeletingTx(true);
+    setDeleteTxError(null);
+    try {
+      if (UUID_REGEX.test(deleteTargetTx.originalReturn.id)) {
+        await commerceSalesReturnApi.deleteSalesReturn(deleteTargetTx.originalReturn.id);
+      }
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: 'SalesReturn', id: deleteTargetTx.originalReturn.id },
+          { type: 'SalesReturn', id: 'LIST' },
+          { type: 'Stock', id: 'LIST' },
+          'Dashboard',
+        ])
+      );
+      deleteStoreSalesReturn(deleteTargetTx.originalReturn.id);
+      toast.success(`Sales Return #${deleteTargetTx.refNo} deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetTx(null);
+      fetchSalesReturns();
+    } catch (err: any) {
+      console.error('Failed to delete sales return:', err);
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete sales return';
+      setDeleteTxError(msg);
+      toast.error(msg);
+    } finally {
+      setIsDeletingTx(false);
     }
   };
 
@@ -1324,7 +1393,7 @@ export const SalesReturnView: React.FC = () => {
                               {
                                 label: 'Void / Delete',
                                 variant: 'delete',
-                                onClick: () => handleDeleteTransaction(row),
+                                onClick: () => handleOpenDeleteModal(row),
                               },
                             ]}
                           />
@@ -1697,7 +1766,11 @@ export const SalesReturnView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => {
+                  if (selectedReturn) {
+                    handlePrintCreditNote(selectedReturn);
+                  }
+                }}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md"
               >
                 <Printer className="w-4 h-4" />
@@ -1828,6 +1901,23 @@ export const SalesReturnView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingTx) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetTx(null);
+            setDeleteTxError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteTx}
+        entityName="Sales Return"
+        recordName={deleteTargetTx?.refNo ? `#${deleteTargetTx.refNo}` : undefined}
+        isLoading={isDeletingTx}
+        error={deleteTxError}
+      />
     </div>
   );
 };

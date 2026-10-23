@@ -68,6 +68,10 @@ export interface CreatePurchaseOrderItemPayload {
   quantity: number;
   unitCost: number;
   taxPercent: number;
+  batchNo?: string;
+  batch?: string;
+  expDate?: string;
+  mfgDate?: string;
 }
 
 export interface CreatePurchaseOrderPayload {

@@ -53,12 +53,14 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { printTableReport } from '../../../utils/printUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   quotationApi,
@@ -323,6 +325,12 @@ export const EstimateQuotationView: React.FC = () => {
     new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]
   );
 
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetQuotation, setDeleteTargetQuotation] = useState<{ id: string; quotationNo: string } | null>(null);
+  const [isDeletingQuotation, setIsDeletingQuotation] = useState(false);
+  const [deleteQuotationError, setDeleteQuotationError] = useState<string | null>(null);
+
   // Table Row Dropdowns
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
@@ -577,6 +585,23 @@ export const EstimateQuotationView: React.FC = () => {
   // Trigger API fetch on filter/page change
   useEffect(() => {
     fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+  }, [fetchQuotations, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  // Listen for sidebar click event to trigger immediate fresh API fetch
+  useEffect(() => {
+    const handleSidebarNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        detail?.path === '/sale-management/sales/quotation' ||
+        detail?.path === '/sale-management/sales/estimate' ||
+        detail?.id === 'sales-hub-quotation' ||
+        detail?.id === 'billing-quotes'
+      ) {
+        fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNav);
+    return () => window.removeEventListener('crm:sidebar-navigate', handleSidebarNav);
   }, [fetchQuotations, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
 
   // Auto-purge legacy mock quotations and mock grocery stocks on mount (Runs ONCE)
@@ -1743,18 +1768,35 @@ export const EstimateQuotationView: React.FC = () => {
     }
   };
 
-  // Delete via Live API
-  const handleDelete = async (id: string, no: string) => {
+  // Delete via Live API with confirmation modal
+  const handleDelete = (id: string, no: string) => {
+    setActiveDropdownId(null);
+    setDeleteTargetQuotation({ id, quotationNo: no });
+    setDeleteQuotationError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteQuotation = async () => {
+    if (!deleteTargetQuotation) return;
+    setIsDeletingQuotation(true);
+    setDeleteQuotationError(null);
     try {
-      await quotationApi.deleteQuotation(id);
-      toast.success(`Quotation ${no} deleted successfully.`);
-      deleteQuotation(id);
+      await quotationApi.deleteQuotation(deleteTargetQuotation.id);
+      toast.success(`Quotation "${deleteTargetQuotation.quotationNo}" deleted successfully.`);
+      deleteQuotation(deleteTargetQuotation.id);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetQuotation(null);
       await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete quotation');
-      deleteQuotation(id);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete quotation.';
+      setDeleteQuotationError(errMsg);
+      toast.error(errMsg);
     } finally {
-      setActiveDropdownId(null);
+      setIsDeletingQuotation(false);
     }
   };
 
@@ -1840,6 +1882,50 @@ export const EstimateQuotationView: React.FC = () => {
     });
 
     toast.success(`Estimates Excel report downloaded (${displayQuotations.length} records)!`);
+  };
+
+  // Print Estimates Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (displayQuotations.length === 0) {
+      toast.error('No quotations to print.');
+      return;
+    }
+
+    const printRows = displayQuotations.map((q) => ({
+      quotationNo: q.quotationNo,
+      date: isoToDdmmyyyy(q.date),
+      partyName: q.partyName,
+      customerPhone: q.customerPhone || '-',
+      amount: Number(q.amount || 0),
+      balance: Number(q.balance || 0),
+      status: q.status,
+    }));
+
+    printTableReport({
+      title: 'ESTIMATE & QUOTATION LEDGER',
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length}`,
+      columns: [
+        { header: 'Estimate No.', key: 'quotationNo', align: 'center', width: '15%' },
+        { header: 'Date', key: 'date', align: 'center', width: '12%' },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: '25%' },
+        { header: 'Contact', key: 'customerPhone', align: 'left', width: '15%' },
+        { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: '15%' },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '15%' },
+        { header: 'Status', key: 'status', align: 'center', width: '12%' },
+      ],
+      data: printRows,
+      summaryRow: {
+        quotationNo: 'TOTAL',
+        partyName: `${displayQuotations.length} Quotations`,
+        amount: metrics.totalAmount,
+        balance: metrics.openAmount,
+      },
+      metrics: [
+        { label: 'Total Value', value: metrics.totalAmount },
+        { label: 'Open Amount', value: metrics.openAmount },
+        { label: 'Total Quotations', value: displayQuotations.length },
+      ],
+    });
   };
 
   // Printable Document Generator
@@ -3161,6 +3247,17 @@ export const EstimateQuotationView: React.FC = () => {
             Excel Report
           </Button>
 
+          {/* Print Report Button */}
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+            onClick={handlePrintTableReport}
+            className="hover:border-purple-300 transition-colors"
+          >
+            Print Report
+          </Button>
+
           {/* Add Estimate Button (Themed) */}
           <Button
             variant="primary"
@@ -3770,6 +3867,23 @@ export const EstimateQuotationView: React.FC = () => {
           </form>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingQuotation) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetQuotation(null);
+            setDeleteQuotationError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteQuotation}
+        entityName="Quotation"
+        recordName={deleteTargetQuotation?.quotationNo}
+        isLoading={isDeletingQuotation}
+        error={deleteQuotationError}
+      />
     </div>
   );
 };

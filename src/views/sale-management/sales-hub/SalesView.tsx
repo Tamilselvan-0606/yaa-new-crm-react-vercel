@@ -61,6 +61,7 @@ import {
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
@@ -76,6 +77,8 @@ import {
 } from "../../../utils/shareUtils";
 import { SalesGraphModal } from "./SalesGraphModal";
 import { SaleActionDropdown } from "../utils";
+import { useAppDispatch } from "../../../hooks/redux";
+import { baseApi } from "../../../api/baseApi";
 import {
   commerceInvoiceApi,
   mapApiInvoiceToSaleTransaction,
@@ -87,6 +90,7 @@ import {
   stockApi,
   mapApiStockToInventoryStockItem,
   productApi,
+  commercePaymentInApi,
 } from "../../../api";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import { initializeWorkflowIntegrity } from "../../../utils/salesDocumentWorkflow";
@@ -333,6 +337,7 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
 };
 
 export const SalesView: React.FC = () => {
+  const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -455,6 +460,12 @@ export const SalesView: React.FC = () => {
     null,
   );
   const [editingSale, setEditingSale] = useState<SaleTransaction | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetSale, setDeleteTargetSale] = useState<SaleTransaction | null>(null);
+  const [isDeletingSale, setIsDeletingSale] = useState(false);
+  const [deleteSaleError, setDeleteSaleError] = useState<string | null>(null);
 
   // Load Stocks on demand only when Form Modal is opened (products are searched on demand)
   const hasLoadedProductsRef = useRef(false);
@@ -720,6 +731,24 @@ export const SalesView: React.FC = () => {
 
   useEffect(() => {
     fetchSalesInvoices();
+  }, [fetchSalesInvoices]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch sales invoices
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === "/sale-management/sales/sale" ||
+        customEvent.detail?.id === "sale"
+      ) {
+        isFetchingInvoicesRef.current = false;
+        fetchSalesInvoices();
+      }
+    };
+    window.addEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    return () => {
+      window.removeEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    };
   }, [fetchSalesInvoices]);
 
   // Quick Assign Sales Rep Modal State (Table Row Action)
@@ -2070,11 +2099,21 @@ export const SalesView: React.FC = () => {
     }
   };
 
-  // Delete Invoice
-  const handleDeleteSaleInvoice = async (sale: SaleTransaction) => {
-    setIsActionLoading(true);
+  // Delete Invoice with confirmation modal
+  const handleOpenDeleteModal = (sale: SaleTransaction) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetSale(sale);
+    setDeleteSaleError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteSale = async () => {
+    if (!deleteTargetSale) return;
+    setIsDeletingSale(true);
+    setDeleteSaleError(null);
     try {
-      const cleanId = (sale.id || "").trim();
+      const cleanId = (deleteTargetSale.id || "").trim();
       if (
         cleanId &&
         !cleanId.startsWith("mock_") &&
@@ -2082,16 +2121,16 @@ export const SalesView: React.FC = () => {
       ) {
         await commerceInvoiceApi.deleteInvoice(cleanId);
       }
-      deleteSale(sale.id);
+      deleteSale(deleteTargetSale.id);
       setSalesList(
-        sales.filter((s) => s.id !== sale.id && s.invoiceNo !== sale.invoiceNo),
+        sales.filter((s) => s.id !== deleteTargetSale.id && s.invoiceNo !== deleteTargetSale.invoiceNo),
       );
       try {
         const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
         if (rawLocal) {
           const list: SaleTransaction[] = JSON.parse(rawLocal);
           const updated = list.filter(
-            (s) => s.id !== sale.id && s.invoiceNo !== sale.invoiceNo,
+            (s) => s.id !== deleteTargetSale.id && s.invoiceNo !== deleteTargetSale.invoiceNo,
           );
           localStorage.setItem(
             "yaa_crm_sales_transactions",
@@ -2101,18 +2140,29 @@ export const SalesView: React.FC = () => {
       } catch (e) {
         console.warn("Local storage delete notice:", e);
       }
-      toast.success(`Invoice ${sale.invoiceNo} deleted successfully.`);
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "SalesInvoice", id: deleteTargetSale.id },
+          { type: "SalesInvoice", id: "LIST" },
+          { type: "Customer", id: "LIST" },
+          "Dashboard",
+          "Collection",
+        ]),
+      );
+      toast.success(`Invoice "${deleteTargetSale.invoiceNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetSale(null);
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to delete invoice:", err);
-      toast.error(
+      const errMsg =
         err?.response?.data?.error?.message ||
-          err?.message ||
-          "Failed to delete invoice.",
-      );
+        err?.message ||
+        "Failed to delete invoice.";
+      setDeleteSaleError(errMsg);
+      toast.error(errMsg);
     } finally {
-      setIsActionLoading(false);
-      setActiveDropdownId(null);
+      setIsDeletingSale(false);
     }
   };
 
@@ -2126,7 +2176,9 @@ export const SalesView: React.FC = () => {
     if (mode === "print") {
       setIsFormModalOpen(false);
       setIsInvoiceModalOpen(true);
-      setTimeout(() => window.print(), 300);
+      if (selectedSale) {
+        handlePrintSaleInvoice(selectedSale);
+      }
     } else if (mode === "new") {
       handleOpenCreateModal();
     }
@@ -2300,7 +2352,7 @@ export const SalesView: React.FC = () => {
   };
 
   // Confirm Payment: Records payment against the SAME invoice and updates payment status
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
     if (!selectedSale) return;
     const totalAllocated = paymentModalSplits.reduce(
       (acc, p) => acc + (Number(p.amount) || 0),
@@ -2328,6 +2380,35 @@ export const SalesView: React.FC = () => {
       minute: "2-digit",
       hour12: true,
     });
+    const paymentDateStr = paymentModalDate || now.toISOString().split("T")[0];
+
+    // Attempt to persist to backend via Commerce Payment-In API
+    try {
+      const isUuidInvoice = UUID_REGEX.test(selectedSale.id);
+      const isUuidCust = selectedSale.customerId && UUID_REGEX.test(selectedSale.customerId);
+      await commercePaymentInApi.createPaymentIn({
+        partyName: selectedSale.customerName || "Customer",
+        customerId: isUuidCust ? selectedSale.customerId : undefined,
+        paymentType: primaryMethod,
+        receivedAmount: totalAllocated,
+        invoiceId: isUuidInvoice ? selectedSale.id : undefined,
+        invoiceNo: selectedSale.invoiceNo,
+        date: paymentDateStr,
+        notes: recordNotes || `Payment received for Invoice ${selectedSale.invoiceNo}`,
+      });
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "SalesInvoice", id: selectedSale.id },
+          { type: "SalesInvoice", id: "LIST" },
+          { type: "PaymentIn", id: "LIST" },
+          { type: "Customer", id: "LIST" },
+          "Dashboard",
+          "Collection",
+        ]),
+      );
+    } catch (apiErr) {
+      console.warn("Backend payment recording notice:", apiErr);
+    }
 
     // Generate individual payment receipt records for this payment transaction
     const newRecords: SalePaymentRecord[] = paymentModalSplits
@@ -2335,7 +2416,7 @@ export const SalesView: React.FC = () => {
       .map((p) => ({
         id: `PAY-${String(Math.floor(100000 + Math.random() * 900000))}`,
         invoiceNo: selectedSale.invoiceNo,
-        paymentDate: paymentModalDate || now.toISOString().split("T")[0],
+        paymentDate: paymentDateStr,
         paymentTime: timeStr,
         method: p.method,
         referenceNo:
@@ -2397,6 +2478,7 @@ export const SalesView: React.FC = () => {
       `Payment of ₹${totalAllocated.toLocaleString("en-IN", { minimumFractionDigits: 2 })} recorded successfully for Invoice ${selectedSale.invoiceNo}!`,
     );
     setIsPaymentModalOpen(false);
+    await fetchSalesInvoices();
   };
 
   const handleViewPaymentDetails = (record: SalePaymentRecord) => {
@@ -4091,7 +4173,7 @@ export const SalesView: React.FC = () => {
                               };
                             setSelectedSale(targetSale);
                             setIsInvoiceModalOpen(true);
-                            setTimeout(() => window.print(), 300);
+                            handlePrintSaleInvoice(targetSale);
                           }}
                           className="w-full py-2.5 px-3 bg-white/10 hover:bg-white/20 text-purple-200 hover:text-white font-semibold text-xs rounded-xl transition-all border border-white/15 flex items-center justify-center gap-1.5 cursor-pointer"
                         >
@@ -4354,6 +4436,16 @@ export const SalesView: React.FC = () => {
                 className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
               >
                 Excel Report
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<Printer className="w-4 h-4 text-slate-600" />}
+                onClick={handlePrintTableReport}
+                className="hover:border-purple-300 transition-colors"
+              >
+                Print Report
               </Button>
 
               <Button
@@ -5021,7 +5113,7 @@ export const SalesView: React.FC = () => {
                                     label: "Delete",
                                     variant: "delete",
                                     danger: true,
-                                    onClick: () => handleDeleteSaleInvoice(sale),
+                                    onClick: () => handleOpenDeleteModal(sale),
                                   },
                                 ]}
                               />
@@ -5393,7 +5485,13 @@ export const SalesView: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={() => {
+                    if (selectedSale) {
+                      handlePrintSaleInvoice(selectedSale);
+                    } else {
+                      window.print();
+                    }
+                  }}
                   className="h-9 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" />
@@ -7076,6 +7174,23 @@ export const SalesView: React.FC = () => {
         isOpen={isSalesGraphModalOpen}
         onClose={() => setIsSalesGraphModalOpen(false)}
         sales={sales}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingSale) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetSale(null);
+            setDeleteSaleError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteSale}
+        entityName="Sales Invoice"
+        recordName={deleteTargetSale?.invoiceNo}
+        isLoading={isDeletingSale}
+        error={deleteSaleError}
       />
     </>
   );

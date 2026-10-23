@@ -50,6 +50,8 @@ import {
   QuoteApiItem,
   CreateQuoteRequest,
   getStoredOrganizationId,
+  platformClientApi,
+  PlatformClientItem,
 } from '../../api';
 
 export interface Quotation {
@@ -87,7 +89,9 @@ export interface AvailableClient {
   email: string;
   phone: string;
   location: string;
-  type: 'Sub-Organization' | 'Organization' | 'Lead' | 'Customer';
+  type: 'Sub-Organization' | 'Organization' | 'Lead' | 'Customer' | 'Client';
+  gstin?: string;
+  pan?: string;
 }
 
 interface QuotesViewProps {
@@ -178,73 +182,33 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         }
       }
 
-      // 2. Fetch real clients: sub-organizations, platform organizations, leads
+      // 2. Fetch real clients from Client API for Org Admin
       setLoadingClients(true);
       const clientsMap = new Map<string, AvailableClient>();
 
       try {
-        const subRes = await subOrganizationApi.getSubOrganizations(
-          { page_no: 1, page_size: 100, pagination_required: 'false' },
-          orgId || undefined
-        );
-        if (subRes && Array.isArray(subRes.data)) {
-          subRes.data.forEach((s) => {
-            if (s.id) {
-              clientsMap.set(s.id, {
-                id: s.id,
-                name: s.name,
-                company: s.name,
-                email: s.email || '',
-                phone: s.phone || '',
-                location: '',
-                type: 'Sub-Organization',
+        const clientRes = await platformClientApi.getClients({ page: 1, limit: 100, organization_id: orgId || undefined });
+        if (clientRes && Array.isArray(clientRes.data)) {
+          clientRes.data.forEach((c) => {
+            if (c.id) {
+              const displayName = c.name || c.legalName || c.contactPerson || 'Client';
+              clientsMap.set(c.id, {
+                id: c.id,
+                name: c.contactPerson || displayName,
+                company: displayName,
+                contactPerson: c.contactPerson || '',
+                email: c.email || '',
+                phone: c.phone || c.whatsapp || '',
+                location: c.address || c.location || '',
+                type: 'Client',
+                gstin: c.gstNumber || '',
+                pan: c.panNumber || '',
               });
             }
           });
         }
       } catch (e) {
-        console.warn('Failed to load sub-organizations:', e);
-      }
-
-      try {
-        const orgsRes = await organizationApi.getOrganizations(1, 100);
-        if (orgsRes && Array.isArray(orgsRes.data)) {
-          orgsRes.data.forEach((o) => {
-            if (o.id && !clientsMap.has(o.id) && o.id !== orgId) {
-              clientsMap.set(o.id, {
-                id: o.id,
-                name: o.contactPerson || o.user?.name || o.name,
-                company: o.name,
-                contactPerson: o.contactPerson || o.user?.name || '',
-                email: o.email || '',
-                phone: o.phone || '',
-                location: o.address || o.location || '',
-                type: 'Organization',
-              });
-            }
-          });
-        }
-      } catch {}
-
-      try {
-        const leadsRes = await platformLeadApi.getLeads({ limit: 100 });
-        if (leadsRes && Array.isArray(leadsRes.data)) {
-          leadsRes.data.forEach((l) => {
-            if (l.id && !clientsMap.has(l.id)) {
-              clientsMap.set(l.id, {
-                id: l.id,
-                name: l.name,
-                company: l.company || l.name,
-                email: l.email || '',
-                phone: l.phone || '',
-                location: l.location || '',
-                type: 'Lead',
-              });
-            }
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load leads for quotes:', e);
+        console.warn('Failed to load clients for quotes:', e);
       }
 
       if (isMounted) {
@@ -737,12 +701,16 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setCustomerLocation(client.location || '');
       setCustomerEmail(client.email || '');
       setCustomerPhone(client.phone || '');
+      setCustomerGstId(client.gstin || '');
+      setCustomerPan(client.pan || '');
     } else {
       setCustomerName('');
       setCustomerCompany('');
       setCustomerLocation('');
       setCustomerEmail('');
       setCustomerPhone('');
+      setCustomerGstId('');
+      setCustomerPan('');
     }
   };
 

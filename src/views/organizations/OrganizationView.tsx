@@ -407,6 +407,7 @@ export const OrganizationView: React.FC = () => {
   }, []);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [editingOrg, setEditingOrg] = useState<OrganizationItem | null>(null);
   const [viewingOrg, setViewingOrg] = useState<OrganizationItem | null>(null);
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -587,6 +588,7 @@ export const OrganizationView: React.FC = () => {
     setShowPassword(false);
     setSubOrganizationSupport(false);
     setFormErrors({});
+    setApiModalError(null);
     setIsModalOpen(true);
   };
 
@@ -613,6 +615,7 @@ export const OrganizationView: React.FC = () => {
     setShowPassword(false);
     setSubOrganizationSupport(!!org.subOrganizationSupport);
     setFormErrors({});
+    setApiModalError(null);
     setIsModalOpen(true);
   };
 
@@ -631,7 +634,7 @@ export const OrganizationView: React.FC = () => {
       if (!code.trim()) {
         errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
       }
-      if (!organizationType || organizationType === 'All') {
+      if (!organizationType || (isOrgSuperAdmin && organizationType === 'All')) {
         errors.organizationType = isOrgSuperAdmin
           ? 'Sub Organization Suite is required'
           : 'Organization Type is required';
@@ -691,6 +694,7 @@ export const OrganizationView: React.FC = () => {
       return;
     }
     setFormErrors({});
+    setApiModalError(null);
 
     setIsSubmitting(true);
     try {
@@ -832,6 +836,7 @@ export const OrganizationView: React.FC = () => {
           : null) ||
         err?.message ||
         'Could not save organization.';
+      setApiModalError(backendMsg);
       showToast('error', 'Operation Failed', backendMsg);
     } finally {
       setIsSubmitting(false);
@@ -1349,6 +1354,18 @@ export const OrganizationView: React.FC = () => {
           hideCloseButton={true}
         >
           <form onSubmit={handleSubmit} noValidate className="space-y-4.5 p-2 sm:p-4">
+            {apiModalError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
+                <span>{apiModalError}</span>
+                <button
+                  type="button"
+                  onClick={() => setApiModalError(null)}
+                  className="text-rose-500 hover:text-rose-700 font-bold ml-2 cursor-pointer"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {/* Unified 3-fields-per-row Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Field 1: Logo */}
@@ -1453,7 +1470,7 @@ export const OrganizationView: React.FC = () => {
                     setOrganizationType(val);
                     if (formErrors.organizationType) setFormErrors((prev) => ({ ...prev, organizationType: '' }));
                   }}
-                  options={isOrgSuperAdmin ? ['Client Management', 'Sales Management'] : ORGANIZATION_TYPE_OPTIONS.filter((opt) => opt !== 'All')}
+                  options={isOrgSuperAdmin ? ['Client Management', 'Sales Management'] : ORGANIZATION_TYPE_OPTIONS}
                   placeholder="Select company type"
                   activeColor="brand"
                   error={!!formErrors.organizationType}

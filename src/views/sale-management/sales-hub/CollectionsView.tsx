@@ -57,6 +57,7 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { printTableReport } from '../../../utils/printUtils';
 import { toast } from 'sonner';
 import { SaleActionDropdown } from '../utils';
 import { store } from '../../../store/store';
@@ -72,6 +73,7 @@ import {
   CollectionHistoryItem,
   CustomerCollectionTimelineData,
 } from '../../../api/commerce/collectionApi';
+import { salesRepresentativeApi, ApiSalesRepresentative } from '../../../api/commerce/salesRepresentativeApi';
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
 
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
@@ -100,13 +102,11 @@ export const CollectionsView: React.FC = () => {
   } = useSalesManagementStore();
 
   // Live sales representatives from API
-  const [liveReps, setLiveReps] = React.useState<import('../../../api/commerce/salesRepresentativeApi').ApiSalesRepresentative[]>([]);
+  const [liveReps, setLiveReps] = React.useState<ApiSalesRepresentative[]>([]);
   React.useEffect(() => {
-    import('../../../api/commerce/salesRepresentativeApi').then(({ salesRepresentativeApi }) => {
-      salesRepresentativeApi.getList({ limit: 200 }).then((res) => {
-        if (res.success) setLiveReps(res.data ?? []);
-      }).catch(() => {});
-    });
+    salesRepresentativeApi.getList({ limit: 200 }).then((res) => {
+      if (res.success) setLiveReps(res.data ?? []);
+    }).catch(() => {});
   }, []);
 
   // Current system date reference
@@ -410,6 +410,27 @@ export const CollectionsView: React.FC = () => {
       loadHistory();
     }
   }, [subView, loadInvoices, loadAssignments, loadFollowUps, loadHistory]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch collection data
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === '/sale-management/sales/collections' ||
+        customEvent.detail?.id === 'collections'
+      ) {
+        loadMetrics();
+        loadInvoices();
+        if (subView === 'customer-assignments') loadAssignments();
+        if (subView === 'follow-ups') loadFollowUps();
+        if (subView === 'collection-history') loadHistory();
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    return () => {
+      window.removeEventListener('crm:sidebar-navigate', handleSidebarNavigate);
+    };
+  }, [loadMetrics, loadInvoices, loadAssignments, loadFollowUps, loadHistory, subView]);
 
   // Derived Collection Items from API Invoices
   interface CollectionItem {
@@ -991,6 +1012,50 @@ export const CollectionsView: React.FC = () => {
     toast.success('Collection records exported to Excel');
   };
 
+  // Helper: Print Collections Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (filteredItems.length === 0) {
+      toast.error('No collection records to print.');
+      return;
+    }
+
+    const printRows = filteredItems.map((item) => ({
+      customerName: item.customerName,
+      customerPhone: item.customerPhone || '-',
+      invoiceNumber: item.invoiceNumber,
+      invoiceDate: item.invoiceDate,
+      dueDate: item.dueDate,
+      invoiceTotal: Number(item.invoiceTotal || 0),
+      paidAmount: Number(item.paidAmount || 0),
+      outstandingAmount: Number(item.outstandingAmount || 0),
+      salesRepName: item.salesRepName || 'Unassigned',
+      status: item.status,
+    }));
+
+    printTableReport({
+      title: 'COLLECTIONS & RECEIVABLES REPORT',
+      subtitle: `Filter: ${activeTab} | Total Records: ${filteredItems.length}`,
+      columns: [
+        { header: 'Customer Name', key: 'customerName', align: 'left', width: '20%' },
+        { header: 'Invoice No.', key: 'invoiceNumber', align: 'center', width: '14%' },
+        { header: 'Inv Date', key: 'invoiceDate', align: 'center', width: '10%' },
+        { header: 'Due Date', key: 'dueDate', align: 'center', width: '10%' },
+        { header: 'Total (₹)', key: 'invoiceTotal', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Paid (₹)', key: 'paidAmount', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Balance (₹)', key: 'outstandingAmount', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Sales Rep', key: 'salesRepName', align: 'left', width: '10%' },
+      ],
+      data: printRows,
+      summaryRow: {
+        customerName: 'TOTAL',
+        invoiceNumber: `${filteredItems.length} Invoices`,
+        invoiceTotal: filteredItems.reduce((acc, i) => acc + (Number(i.invoiceTotal) || 0), 0),
+        paidAmount: filteredItems.reduce((acc, i) => acc + (Number(i.paidAmount) || 0), 0),
+        outstandingAmount: filteredItems.reduce((acc, i) => acc + (Number(i.outstandingAmount) || 0), 0),
+      },
+    });
+  };
+
   // Status Badge Component
   const renderStatusBadge = (status: CollectionItem['status']) => {
     switch (status) {
@@ -1060,6 +1125,16 @@ export const CollectionsView: React.FC = () => {
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+          >
+            Print Report
           </Button>
 
           <Button

@@ -108,16 +108,28 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
       { id: string; payload: UpdateClientProductRequest; orgId?: string }
     >({
       query: ({ id, payload, orgId }) => {
-        const activeOrgId = orgId || getStoredOrganizationId();
+        const activeOrgId = orgId || payload.organizationId || getStoredOrganizationId();
         const headers: Record<string, string> = {};
         if (activeOrgId) {
           headers['x-organization-id'] = activeOrgId;
         }
 
+        const { organizationId, subOrganizationId, branchId, ...rest } = payload as any;
+        const bodyPayload = {
+          ...rest,
+          ...(subOrganizationId ? { subOrganizationId } : {}),
+          ...(branchId ? { branchId } : {}),
+        };
+
         return {
           url: `/products/${encodeURIComponent(id)}`,
           method: 'PUT',
-          body: payload,
+          body: bodyPayload,
+          params: {
+            ...(organizationId ? { organizationId } : {}),
+            ...(subOrganizationId ? { subOrganizationId } : {}),
+            ...(branchId ? { branchId } : {}),
+          },
           headers,
         };
       },
@@ -319,8 +331,12 @@ export const clientProductApi = {
       headers['x-organization-id'] = activeOrgId;
     }
 
-    // Backend rejects unrecognized keys in PUT body: "organizationId", "subOrganizationId", "branchId"
-    const { organizationId, subOrganizationId, branchId, ...bodyPayload } = payload as any;
+    const { organizationId, subOrganizationId, branchId, ...rest } = payload as any;
+    const bodyPayload = {
+      ...rest,
+      ...(subOrganizationId ? { subOrganizationId } : {}),
+      ...(branchId ? { branchId } : {}),
+    };
 
     const response = await baseClient.put<ClientProductSingleResponse>(
       `/products/${encodeURIComponent(id)}`,
@@ -329,8 +345,8 @@ export const clientProductApi = {
         headers,
         params: {
           ...(organizationId ? { organizationId } : {}),
-          ...(subOrganizationId ? { subOrganizationId, sub_organization_id: subOrganizationId } : {}),
-          ...(branchId ? { branchId, branch_id: branchId } : {}),
+          ...(subOrganizationId ? { subOrganizationId } : {}),
+          ...(branchId ? { branchId } : {}),
         },
       }
     );

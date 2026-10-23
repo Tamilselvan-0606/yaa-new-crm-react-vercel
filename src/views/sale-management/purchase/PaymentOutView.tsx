@@ -47,12 +47,14 @@ import {
 import { Badge } from '../../../components/common/Badge';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
@@ -76,6 +78,7 @@ export const PaymentOutView: React.FC = () => {
     savePaymentOut,
     setPaymentOutsList,
     deletePaymentOut,
+    updatePurchasePayment,
   } = useSalesManagementStore();
 
   // Live Work Payments Out API State
@@ -307,6 +310,12 @@ export const PaymentOutView: React.FC = () => {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<PaymentOut | null>(null);
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetPayment, setDeleteTargetPayment] = useState<PaymentOut | null>(null);
+  const [isDeletingPayment, setIsDeletingPayment] = useState(false);
+  const [deletePaymentError, setDeletePaymentError] = useState<string | null>(null);
 
   // Only load registered suppliers & purchases on demand when the form modal opens
   useEffect(() => {
@@ -558,6 +567,9 @@ export const PaymentOutView: React.FC = () => {
         }
 
         savePaymentOut(updatedItem);
+        if (data.purchaseId && numAmount > 0) {
+          updatePurchasePayment(data.purchaseId, numAmount, data.paymentMode, data.notes);
+        }
         setLivePayments((prev) => prev.map((p) => (p.id === editingPaymentId ? updatedItem : p)));
         toast.success(`Payment voucher ${updatedItem.paymentNo} updated successfully!`);
       } else {
@@ -575,22 +587,25 @@ export const PaymentOutView: React.FC = () => {
         if (!res?.data) {
           throw new Error((res as any)?.error?.message || 'Failed to record payment voucher');
         }
-          const createdItem = mapApiPaymentOutToUi(res.data);
-          if (data.purchaseId) {
-            createdItem.purchaseId = data.purchaseId;
-            createdItem.purchaseNo = purchaseObj?.purchaseNo;
-          }
-          if (data.receiptImage) {
-            createdItem.receiptImage = data.receiptImage;
-          }
-          if (supplierObj?.name && (!createdItem.supplierName || createdItem.supplierName === 'Unknown Supplier')) {
-            createdItem.supplierName = supplierObj.name;
-          }
-
-          savePaymentOut(createdItem);
-          setLivePayments((prev) => [createdItem, ...prev]);
-          toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
+        const createdItem = mapApiPaymentOutToUi(res.data);
+        if (data.purchaseId) {
+          createdItem.purchaseId = data.purchaseId;
+          createdItem.purchaseNo = purchaseObj?.purchaseNo;
         }
+        if (data.receiptImage) {
+          createdItem.receiptImage = data.receiptImage;
+        }
+        if (supplierObj?.name && (!createdItem.supplierName || createdItem.supplierName === 'Unknown Supplier')) {
+          createdItem.supplierName = supplierObj.name;
+        }
+
+        savePaymentOut(createdItem);
+        if (data.purchaseId && numAmount > 0) {
+          updatePurchasePayment(data.purchaseId, numAmount, data.paymentMode, data.notes);
+        }
+        setLivePayments((prev) => [createdItem, ...prev]);
+        toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
+      }
 
         setEditingPaymentId(null);
         setIsFormModalOpen(false);
@@ -603,54 +618,51 @@ export const PaymentOutView: React.FC = () => {
     }
   };
 
-  // Delete / Cancel Payment (voids voucher as Cancelled as per Work API)
-  const handleDeletePayment = async (id: string, paymentNo: string) => {
-    const existing = activePool.find((p) => p.id === id);
-    if (existing?.status === 'Cancelled') {
-      toast.info(`Payment voucher ${paymentNo} is already cancelled.`);
+  // Delete / Cancel Payment (voids voucher as Cancelled as per Work API) with confirmation modal
+  const handleOpenDeleteModal = (po: PaymentOut) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    if (po.status === 'Cancelled') {
+      toast.info(`Payment voucher ${po.paymentNo} is already cancelled.`);
       return;
     }
+    setDeleteTargetPayment(po);
+    setDeletePaymentError(null);
+    setIsDeleteModalOpen(true);
+  };
 
+  const handleConfirmDeletePayment = async () => {
+    if (!deleteTargetPayment) return;
+    setIsDeletingPayment(true);
+    setDeletePaymentError(null);
+    const existing = activePool.find((p) => p.id === deleteTargetPayment.id);
     try {
-      await workPaymentOutApi.deletePaymentOut(id);
-        const cancelledPayment: PaymentOut = {
-          ...(existing || {
-            id,
-            paymentNo,
-            paymentDate: new Date().toISOString().split('T')[0],
-            supplierId: '',
-            supplierName: '',
-            amount: 0,
-            paymentMode: 'Bank Transfer',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }),
-          status: 'Cancelled',
-          updatedAt: new Date().toISOString(),
-        };
-        savePaymentOut(cancelledPayment);
-        setLivePayments((prev) =>
-          prev.map((p) => (p.id === id ? { ...p, status: 'Cancelled' } : p))
-        );
-        toast.success(`Payment voucher ${paymentNo} cancelled successfully.`);
-        fetchPaymentsOut(true);
-      } catch (err: any) {
-        console.warn('API cancel failed, updating locally:', err);
-        if (existing) {
-          const cancelledPayment: PaymentOut = {
-            ...existing,
-            status: 'Cancelled',
-            updatedAt: new Date().toISOString(),
-          };
-          savePaymentOut(cancelledPayment);
-          setLivePayments((prev) =>
-            prev.map((p) => (p.id === id ? { ...p, status: 'Cancelled' } : p))
-          );
-        }
-        toast.success(`Payment voucher ${paymentNo} marked as Cancelled.`);
-      } finally {
-        setActiveDropdownId(null);
-      }
+      await workPaymentOutApi.deletePaymentOut(deleteTargetPayment.id);
+      const cancelledPayment: PaymentOut = {
+        ...(existing || deleteTargetPayment),
+        status: 'Cancelled',
+        updatedAt: new Date().toISOString(),
+      };
+      savePaymentOut(cancelledPayment);
+      setLivePayments((prev) =>
+        prev.map((p) => (p.id === deleteTargetPayment.id ? { ...p, status: 'Cancelled' } : p))
+      );
+      toast.success(`Payment voucher "${deleteTargetPayment.paymentNo}" cancelled successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetPayment(null);
+      fetchPaymentsOut(true);
+    } catch (err: any) {
+      console.error('API cancel failed:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to cancel payment voucher';
+      setDeletePaymentError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsDeletingPayment(false);
+    }
   };
 
   // Filtered List based on Search, Period & Date Ranges, Payment Mode, Status
@@ -833,6 +845,100 @@ export const PaymentOutView: React.FC = () => {
     toast.success(`Payment Out Excel report downloaded (${filteredPayments.length} records)!`);
   };
 
+  // Print Payment-Out Voucher via universal printUtils
+  const handlePrintPaymentOut = (po: PaymentOut) => {
+    const matchedSup = mergedSuppliers.find((s) => s.id === po.supplierId || s.name === po.supplierName);
+
+    printBusinessDocument({
+      docTypeTitle: 'PAYMENT-OUT VOUCHER',
+      docNo: po.paymentNo,
+      docDate: po.paymentDate,
+      status: po.status || 'Completed',
+      statusColor: po.status === 'Cancelled' ? 'rose' : po.status === 'Pending' ? 'amber' : 'emerald',
+      referenceNo: po.referenceNo,
+      partyTitle: 'Paid To (Supplier / Vendor)',
+      partyName: po.supplierName,
+      partyPhone: (matchedSup as any)?.phone || (matchedSup as any)?.mobile,
+      partyEmail: (matchedSup as any)?.email,
+      partyAddress: (matchedSup as any)?.billingAddress || (matchedSup as any)?.address,
+      partyGstin: (matchedSup as any)?.gstNumber,
+      extraMeta: [
+        { label: 'Payment Mode', value: po.paymentMode },
+        { label: 'Against Bill #', value: po.purchaseNo || 'Direct / Advance Payment' },
+        ...(po.referenceNo ? [{ label: 'UTR / Ref No', value: po.referenceNo }] : []),
+      ],
+      columns: [
+        { header: 'Disbursement Details', width: '50%' },
+        { header: 'Payment Mode', align: 'center', width: '25%' },
+        { header: 'Disbursed Amount (₹)', align: 'right', width: '25%' },
+      ],
+      items: [
+        {
+          name: `Vendor payment to ${po.supplierName}${po.purchaseNo ? ` against Purchase Order ${po.purchaseNo}` : ' (Direct / On Account)'}`,
+          remarks: `Mode: ${po.paymentMode}${po.referenceNo ? ` | Ref/UTR: ${po.referenceNo}` : ''}`,
+          quantity: 1,
+          unitPrice: Number(po.amount || 0),
+          total: Number(po.amount || 0),
+        },
+      ],
+      subtotal: Number(po.amount || 0),
+      grandTotal: Number(po.amount || 0),
+      paidAmount: Number(po.amount || 0),
+      balance: 0,
+      paidAmountLabel: 'Amount Disbursed',
+      balanceLabel: 'Balance',
+      notes: po.notes || 'Vendor disbursement processed and verified.',
+    });
+  };
+
+  // Print Table Report for Payment Out
+  const handlePrintTableReport = () => {
+    if (filteredPayments.length === 0) {
+      toast.info('No payment vouchers available to print.');
+      return;
+    }
+
+    const printRows = filteredPayments.map((p) => ({
+      paymentNo: p.paymentNo,
+      paymentDate: p.paymentDate,
+      supplierName: p.supplierName,
+      purchaseNo: p.purchaseNo || 'Direct / Advance',
+      paymentMode: p.paymentMode,
+      referenceNo: p.referenceNo || '—',
+      status: p.status,
+      amount: Number(p.amount || 0),
+    }));
+
+    const grandDisbursed = printRows.reduce(
+      (acc, row) => acc + (row.status !== 'Cancelled' ? row.amount : 0),
+      0
+    );
+
+    printTableReport({
+      title: 'Payment-Out & Vendor Disbursements Report',
+      subtitle: `Total Payments: ${filteredPayments.length} | Period: ${appliedPeriod} | Mode: ${appliedPaymentMode}`,
+      columns: [
+        { header: 'Voucher #', key: 'paymentNo', width: '15%' },
+        { header: 'Date', key: 'paymentDate', width: '12%' },
+        { header: 'Supplier Name', key: 'supplierName', width: '24%' },
+        { header: 'Bill Ref #', key: 'purchaseNo', width: '15%' },
+        { header: 'Mode', key: 'paymentMode', align: 'center', width: '12%' },
+        { header: 'Status', key: 'status', align: 'center', width: '10%' },
+        { header: 'Disbursed (₹)', key: 'amount', align: 'right', type: 'currency', width: '12%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Paid Out', value: summary.totalDisbursed },
+        { label: 'Today Paid', value: summary.todayPaid },
+        { label: 'Total Vouchers', value: filteredPayments.length },
+      ],
+      summaryRow: {
+        paymentNo: 'Total',
+        amount: grandDisbursed,
+      },
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
@@ -852,6 +958,16 @@ export const PaymentOutView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
+          </Button>
+
           <Button
             variant="secondary"
             size="md"
@@ -1211,6 +1327,11 @@ export const PaymentOutView: React.FC = () => {
                                 onClick: () => handleDuplicatePayment(po),
                               },
                               {
+                                label: 'Print Voucher',
+                                variant: 'print',
+                                onClick: () => handlePrintPaymentOut(po),
+                              },
+                              {
                                 label: 'Preview',
                                 variant: 'preview',
                                 onClick: () => {
@@ -1228,7 +1349,7 @@ export const PaymentOutView: React.FC = () => {
                                 variant: 'delete',
                                 danger: true,
                                 dividerBefore: true,
-                                onClick: () => handleDeletePayment(po.id, po.paymentNo),
+                                onClick: () => handleOpenDeleteModal(po),
                               },
                             ]}
                           />
@@ -1675,14 +1796,11 @@ export const PaymentOutView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  toast.info(`Preparing print for ${selectedPayment.paymentNo}...`);
-                  window.print();
-                }}
+                onClick={() => handlePrintPaymentOut(selectedPayment)}
                 className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Order</span>
+                <span>Print Voucher</span>
               </button>
             </div>
           </div>
@@ -1767,6 +1885,23 @@ export const PaymentOutView: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingPayment) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetPayment(null);
+            setDeletePaymentError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeletePayment}
+        entityName="Payment Voucher"
+        recordName={deleteTargetPayment?.paymentNo}
+        isLoading={isDeletingPayment}
+        error={deletePaymentError}
+      />
     </div>
   );
 };

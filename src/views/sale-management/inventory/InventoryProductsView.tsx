@@ -41,6 +41,7 @@ import { Pagination } from '../../../components/common/Pagination';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { toast } from 'sonner';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import {
   baseClient,
   productApi,
@@ -868,6 +869,7 @@ export const InventoryProductsView: React.FC = () => {
 
   // Delete Confirmation State
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<ProductItem | null>(null);
+  const [deleteProductError, setDeleteProductError] = useState<string | null>(null);
 
   // Selected row IDs for bulk actions
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -1111,6 +1113,7 @@ export const InventoryProductsView: React.FC = () => {
     if (!deleteConfirmItem) return;
     const { id, productName } = deleteConfirmItem;
     setIsDeleting(true);
+    setDeleteProductError(null);
 
     try {
       const res = await productApi.deleteProduct(id);
@@ -1119,17 +1122,21 @@ export const InventoryProductsView: React.FC = () => {
         setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
         toast.success(`Product "${productName}" deleted successfully.`);
         setDeleteConfirmItem(null);
+        setDeleteProductError(null);
         return;
+      } else {
+        const errorMsg = (res as any)?.message || 'Failed to delete product.';
+        setDeleteProductError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (apiErr: any) {
-      console.warn('Remote product delete failed, removing locally:', apiErr);
+      console.warn('Remote product delete failed:', apiErr);
+      const errorMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to delete product. Please try again.';
+      setDeleteProductError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setIsDeleting(false);
     }
-
-    setProducts((prev) => prev.filter((p) => p.id !== id));
-    toast.success(`Product "${productName}" deleted.`);
-    setDeleteConfirmItem(null);
   };
 
   // 3-Dots Action Dropdown State
@@ -1885,6 +1892,7 @@ export const InventoryProductsView: React.FC = () => {
   const handleDeleteProduct = (id: string) => {
     setActiveDropdownId(null);
     setDropdownPos(null);
+    setDeleteProductError(null);
     const prod = products.find((p) => p.id === id);
     if (prod) {
       setDeleteConfirmItem(prod);
@@ -4954,64 +4962,21 @@ export const InventoryProductsView: React.FC = () => {
       )}
 
       {/* 9. Delete Confirmation Modal */}
-      {deleteConfirmItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-100"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isDeleting) setDeleteConfirmItem(null);
-          }}
-        >
-          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-100 my-auto">
-            <div className="p-5 space-y-4">
-              <div className="flex items-start gap-3.5">
-                <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
-                  <AlertTriangle className="w-5 h-5 text-rose-600" />
-                </div>
-                <div className="text-xs sm:text-[13px] text-slate-600 leading-relaxed">
-                  <p className="font-semibold text-slate-800 text-sm mb-1">
-                    Delete Product?
-                  </p>
-                  <p>
-                    Are you sure you want to delete <strong className="text-slate-900">{deleteConfirmItem.productName}</strong>?
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-2">
-                    This action will soft-delete the item from your inventory master registry.
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100">
-                <button
-                  type="button"
-                  disabled={isDeleting}
-                  onClick={() => setDeleteConfirmItem(null)}
-                  className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={isDeleting}
-                  onClick={handleConfirmDelete}
-                  className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-all active:scale-[0.98] cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isDeleting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
-                      <span>Deleting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-3.5 h-3.5 text-white" />
-                      <span>Delete</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteConfirmationModal
+        isOpen={Boolean(deleteConfirmItem)}
+        onClose={() => {
+          if (!isDeleting) {
+            setDeleteConfirmItem(null);
+            setDeleteProductError(null);
+          }
+        }}
+        onConfirm={handleConfirmDelete}
+        title="Delete Product"
+        entityName="Product"
+        recordName={deleteConfirmItem?.productName}
+        isLoading={isDeleting}
+        error={deleteProductError}
+      />
     </div>
   );
 };

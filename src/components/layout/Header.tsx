@@ -587,6 +587,7 @@ export const Header: React.FC<HeaderProps> = ({
     }
     setSelectedProduct('All');
     localStorage.setItem('active_product', 'All');
+    localStorage.removeItem('active_product_id');
 
     const matchedSub = subOrgOptions.find(
       (s) => s.name.toLowerCase() === subOrgName.toLowerCase()
@@ -635,6 +636,7 @@ export const Header: React.FC<HeaderProps> = ({
     // Reset product
     setSelectedProduct('All');
     localStorage.setItem('active_product', 'All');
+    localStorage.removeItem('active_product_id');
 
     const matchedBranch = branchOptions.find(
       (b) =>
@@ -678,6 +680,11 @@ export const Header: React.FC<HeaderProps> = ({
       (p) => p.name.toLowerCase() === productName.toLowerCase()
     );
     const prodId = matchedProduct && matchedProduct.id !== 'all' ? matchedProduct.id : undefined;
+    if (prodId) {
+      localStorage.setItem('active_product_id', prodId);
+    } else {
+      localStorage.removeItem('active_product_id');
+    }
     window.dispatchEvent(
       new CustomEvent('productChanged', {
         detail: {
@@ -727,8 +734,13 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Only sync suite mode if user navigates to an exclusive suite-specific sub-route
+  // Only sync suite mode if user navigates to an exclusive suite-specific sub-route via actual URL change
+  const lastPathRef = useRef(location.pathname);
   useEffect(() => {
+    const isNewPath = lastPathRef.current !== location.pathname;
+    lastPathRef.current = location.pathname;
+    if (!isNewPath) return;
+
     if (location.pathname.startsWith('/sale-management')) {
       if (isClientOnly) {
         navigate('/');
@@ -748,7 +760,7 @@ export const Header: React.FC<HeaderProps> = ({
       location.pathname.startsWith('/subscriptions')
     ) {
       if (isSaleOnly) {
-        navigate('/');
+        navigate('/sale-management');
       } else if (isSaleManagement) {
         setOrgType('Client Management');
       }

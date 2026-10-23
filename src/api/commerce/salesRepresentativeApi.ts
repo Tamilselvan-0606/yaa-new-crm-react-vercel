@@ -1,4 +1,4 @@
-import { baseClient } from '../baseApi';
+import { baseClient, baseApi } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   ApiSalesRepresentative,
@@ -12,6 +12,119 @@ import {
 } from './salesRepresentativeTypes';
 
 export * from './salesRepresentativeTypes';
+
+export const salesRepresentativeEndpoints = baseApi.injectEndpoints({
+  endpoints: (builder) => ({
+    getSalesRepresentatives: builder.query<SalesRepListResponse, SalesRepListParams | void>({
+      query: (arg) => {
+        const params = (arg || {}) as SalesRepListParams;
+        const queryParams: Record<string, any> = {};
+        if (params.page) queryParams.page = params.page;
+        if (params.limit) queryParams.limit = params.limit;
+        if (params.search?.trim()) queryParams.search = params.search.trim();
+        if (params.status && params.status !== 'ALL') queryParams.status = params.status;
+        return {
+          url: '/commerce/sales-representatives',
+          params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        };
+      },
+      providesTags: (result) =>
+        result?.data
+          ? [
+              ...result.data.map(({ id }) => ({ type: 'SalesRepresentative' as const, id })),
+              { type: 'SalesRepresentative', id: 'LIST' },
+            ]
+          : [{ type: 'SalesRepresentative', id: 'LIST' }],
+    }),
+
+    getSalesRepresentativeById: builder.query<SalesRepSingleResponse, string>({
+      query: (id) => `/commerce/sales-representatives/${id}`,
+      providesTags: (_result, _error, id) => [{ type: 'SalesRepresentative', id }],
+    }),
+
+    getSalesRepresentativePortfolio: builder.query<SalesRepPortfolioResponse, string>({
+      query: (id) => `/commerce/sales-representatives/${id}/portfolio`,
+      providesTags: (_result, _error, id) => [{ type: 'SalesRepresentative', id: `PORTFOLIO_${id}` }],
+    }),
+
+    getSalesRepresentativeMe: builder.query<SalesRepPortfolioResponse, void>({
+      query: () => '/commerce/sales-representatives/me',
+      providesTags: [{ type: 'SalesRepresentative', id: 'ME' }],
+    }),
+
+    createSalesRepresentative: builder.mutation<SalesRepSingleResponse, CreateSalesRepPayload>({
+      query: (payload) => ({
+        url: '/commerce/sales-representatives',
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [{ type: 'SalesRepresentative', id: 'LIST' }, 'Customer', 'Dashboard'],
+    }),
+
+    updateSalesRepresentative: builder.mutation<
+      SalesRepSingleResponse,
+      { id: string; payload: UpdateSalesRepPayload; organizationId?: string }
+    >({
+      query: ({ id, payload, organizationId }) => {
+        const headers: Record<string, string> = {};
+        const orgId = organizationId || getStoredOrganizationId();
+        if (orgId) headers['x-organization-id'] = orgId;
+        return {
+          url: `/commerce/sales-representatives/${encodeURIComponent(id)}`,
+          method: 'PUT',
+          body: payload,
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+        };
+      },
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: 'SalesRepresentative', id },
+        { type: 'SalesRepresentative', id: 'LIST' },
+        { type: 'SalesRepresentative', id: `PORTFOLIO_${id}` },
+        'Customer',
+        'Dashboard',
+      ],
+    }),
+
+    patchSalesRepresentative: builder.mutation<
+      SalesRepSingleResponse,
+      { id: string; payload: Partial<UpdateSalesRepPayload> }
+    >({
+      query: ({ id, payload }) => ({
+        url: `/commerce/sales-representatives/${encodeURIComponent(id)}`,
+        method: 'PATCH',
+        body: payload,
+      }),
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: 'SalesRepresentative', id },
+        { type: 'SalesRepresentative', id: 'LIST' },
+        { type: 'SalesRepresentative', id: `PORTFOLIO_${id}` },
+        'Customer',
+        'Dashboard',
+      ],
+    }),
+
+    deleteSalesRepresentative: builder.mutation<{ success: boolean; message?: string }, string>({
+      query: (id) => ({
+        url: `/commerce/sales-representatives/${id}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: [{ type: 'SalesRepresentative', id: 'LIST' }, 'Customer', 'Dashboard'],
+    }),
+  }),
+  overrideExisting: false,
+});
+
+export const {
+  useGetSalesRepresentativesQuery,
+  useLazyGetSalesRepresentativesQuery,
+  useGetSalesRepresentativeByIdQuery,
+  useGetSalesRepresentativePortfolioQuery,
+  useGetSalesRepresentativeMeQuery,
+  useCreateSalesRepresentativeMutation,
+  useUpdateSalesRepresentativeMutation,
+  usePatchSalesRepresentativeMutation,
+  useDeleteSalesRepresentativeMutation,
+} = salesRepresentativeEndpoints;
 
 export const salesRepresentativeApi = {
   /**

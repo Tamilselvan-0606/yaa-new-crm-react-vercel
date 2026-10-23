@@ -191,6 +191,7 @@ export const baseApi = createApi({
     'ClientProduct',
     'PlatformClient',
     'SalesRepresentative',
+    'Collection',
   ],
   endpoints: () => ({}),
 });

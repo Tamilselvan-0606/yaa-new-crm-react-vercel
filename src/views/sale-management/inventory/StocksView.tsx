@@ -37,6 +37,7 @@ import {
   Loader2,
   Database,
   AlertCircle,
+  Printer,
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import {
@@ -50,6 +51,7 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { printBusinessDocument, printTableReport } from "../../../utils/printUtils";
 import { toast } from "sonner";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
@@ -480,8 +482,12 @@ export const StocksView: React.FC = () => {
               });
             }
 
+            const batchTotal = itemBatches.reduce((acc, b) => acc + (b.quantity || 0), 0);
+            const effectiveInStock = Math.max(stk.inStock, batchTotal, storeItem?.inStock || 0);
+
             return {
               ...stk,
+              inStock: effectiveInStock,
               itemImage: stk.itemImage || cat?.itemImage,
               batches: itemBatches,
             };
@@ -1034,6 +1040,110 @@ export const StocksView: React.FC = () => {
     );
   };
 
+  // Print Individual Stock Item Slip via universal printUtils
+  const handlePrintStockSlip = (stk: InventoryStockItem) => {
+    const computedStatus =
+      (stk as any).status ||
+      (stk.inStock <= 0
+        ? 'Out of Stock'
+        : stk.inStock <= stk.reorderLevel
+        ? 'Low Stock'
+        : 'In Stock');
+    printBusinessDocument({
+      docTypeTitle: 'STOCK ITEM INVENTORY SLIP',
+      docNo: stk.sku || stk.id.slice(0, 8).toUpperCase(),
+      docDate: new Date().toISOString().split('T')[0],
+      status: computedStatus,
+      statusColor: computedStatus === 'In Stock' ? 'emerald' : computedStatus === 'Low Stock' ? 'amber' : 'rose',
+      partyTitle: 'Inventory Classification',
+      partyName: stk.productName,
+      partyCompany: `Category: ${stk.category} / ${stk.subcategory || 'General'}`,
+      extraMeta: [
+        { label: 'Reorder Level', value: `${stk.reorderLevel} ${stk.unit}` },
+        { label: 'Current In-Stock', value: `${stk.inStock} ${stk.unit}` },
+        { label: 'Total Active Batches', value: `${stk.batches?.length || 0} Batches` },
+        ...((stk as any).location ? [{ label: 'Warehouse Bin/Rack', value: (stk as any).location }] : []),
+      ],
+      columns: [
+        { header: 'Batch / Lot #', width: '25%' },
+        { header: 'Expiry Date', width: '20%' },
+        { header: 'Mfg Date', width: '20%' },
+        { header: 'Quantity', align: 'center', width: '15%' },
+        { header: 'Batch Cost (₹)', align: 'right', width: '20%' },
+      ],
+      items: (stk.batches && stk.batches.length > 0)
+        ? stk.batches.map((b) => ({
+            name: b.batchNo || 'Primary Batch',
+            remarks: `Exp: ${b.expDate || (b as any).expiryDate || 'N/A'} | Cost: ₹${b.costPrice || stk.unitCost || (stk as any).costPrice}`,
+            quantity: b.quantity,
+            unit: stk.unit,
+            unitPrice: b.costPrice || stk.unitCost || (stk as any).costPrice,
+            total: (b.quantity || 0) * (b.costPrice || stk.unitCost || (stk as any).costPrice || 0),
+          }))
+        : [
+            {
+              name: stk.productName,
+              sku: stk.sku,
+              unit: stk.unit,
+              quantity: stk.inStock,
+              unitPrice: stk.unitCost || (stk as any).costPrice,
+              total: (stk.inStock || 0) * (stk.unitCost || (stk as any).costPrice || 0),
+            },
+          ],
+      subtotal: (stk.inStock || 0) * (stk.unitCost || (stk as any).costPrice || 0),
+      grandTotal: (stk.inStock || 0) * (stk.unitCost || (stk as any).costPrice || 0),
+      paidAmountLabel: 'Retail Potential (Selling)',
+      paidAmount: (stk.inStock || 0) * (stk.unitPrice || (stk as any).sellingPrice || 0),
+      notes: `Product SKU: ${stk.sku || 'N/A'}. Tracked in warehouse inventory catalog.`,
+    });
+  };
+
+  // Print Table Report for Stocks
+  const handlePrintStocksReport = () => {
+    if (displayedStocks.length === 0) {
+      toast.info('No inventory stock records available to print.');
+      return;
+    }
+
+    const printRows = displayedStocks.map((s) => ({
+      productName: s.productName,
+      category: s.category,
+      subcategory: s.subcategory || 'General',
+      inStock: `${s.inStock} ${s.unit}`,
+      reorderLevel: `${s.reorderLevel} ${s.unit}`,
+      costPrice: s.unitCost || (s as any).costPrice || 0,
+      sellingPrice: s.unitPrice || (s as any).sellingPrice || 0,
+      stockValue: (s.inStock || 0) * (s.unitCost || (s as any).costPrice || 0),
+      status: s.inStock === 0 ? 'Out of Stock' : s.inStock <= s.reorderLevel ? 'Low Stock' : 'In Stock',
+    }));
+
+    printTableReport({
+      title: 'Inventory & Warehouse Stock Valuation Report',
+      subtitle: `Total SKUs: ${displayedStocks.length} | Category: ${appliedCategory} | Status: ${appliedStatus}`,
+      columns: [
+        { header: 'Product Name', key: 'productName', width: '22%' },
+        { header: 'Category', key: 'category', width: '13%' },
+        { header: 'Subcategory', key: 'subcategory', width: '12%' },
+        { header: 'Available Qty', key: 'inStock', align: 'center', width: '11%' },
+        { header: 'Cost / Unit (₹)', key: 'costPrice', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Selling Price (₹)', key: 'sellingPrice', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Stock Value (₹)', key: 'stockValue', align: 'right', type: 'currency', width: '13%' },
+        { header: 'Status', key: 'status', align: 'center', width: '7%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Tracked SKUs', value: summary.totalItems },
+        { label: 'Total Asset Valuation', value: summary.totalValuation },
+        { label: 'Low Stock Alerts', value: summary.lowStockCount },
+        { label: 'Out of Stock SKUs', value: summary.outOfStockCount },
+      ],
+      summaryRow: {
+        productName: 'Total',
+        stockValue: displayedStocks.reduce((acc, s) => acc + (s.inStock || 0) * (s.unitCost || (s as any).costPrice || 0), 0),
+      },
+    });
+  };
+
   // Stock Movements for selected product
   const stockMovements = useMemo(() => {
     if (!selectedStock) return [];
@@ -1149,6 +1259,16 @@ export const StocksView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintStocksReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
+          </Button>
+
           <Button
             variant="secondary"
             size="md"
@@ -1623,6 +1743,11 @@ export const StocksView: React.FC = () => {
                                 setDetailTab('overview');
                                 setIsDetailModalOpen(true);
                               },
+                            },
+                            {
+                              label: 'Print Stock Slip',
+                              variant: 'print',
+                              onClick: () => handlePrintStockSlip(stk),
                             },
                             {
                               label: 'Edit',
@@ -2327,6 +2452,14 @@ export const StocksView: React.FC = () => {
                 <span>Edit Product Info</span>
               </button>
               <div className="flex items-center gap-2.5">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => handlePrintStockSlip(selectedStock)}
+                  icon={<Printer className="w-3.5 h-3.5 text-[#33077C]" />}
+                >
+                  Print Stock Slip
+                </Button>
                 <Button
                   variant="secondary"
                   size="md"

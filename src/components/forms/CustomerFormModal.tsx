@@ -86,6 +86,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   const [branches, setBranches] = useState<BranchApiItem[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [apiModalError, setApiModalError] = useState<string | null>(null);
 
   // Fetch Organizations (for Super Admin) or default org name
   useEffect(() => {
@@ -333,6 +334,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         ]);
       }
       setFormErrors({});
+      setApiModalError(null);
     }
   }, [isOpen, initialCustomer, reset]);
 
@@ -428,109 +430,55 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       };
 
       const effectiveOrgId = (isSuperAdmin ? selectedOrgId : activeOrgId) || undefined;
+      const resolvedProdId =
+        selectedProductItem?.id ||
+        products.find((p) => p.name === selectedProductId || p.id === selectedProductId)?.id ||
+        selectedProductId ||
+        undefined;
 
       if (initialCustomer) {
-        let updated = false;
-        try {
-          const resolvedProdId =
-            selectedProductItem?.id ||
-            products.find((p) => p.name === selectedProductId || p.id === selectedProductId)?.id ||
-            selectedProductId ||
-            undefined;
-
-          await platformClientApi.updateClient(initialCustomer.id, {
-            name: data.businessName || data.clientName,
-            legalName: data.businessName || data.clientName,
-            contactPerson: data.contactPerson || data.clientName,
-            phone: data.phone,
-            whatsapp: data.whatsapp || data.phone,
-            email: data.email,
-            address: data.address,
-            gstNumber: data.gstNumber,
-            panNumber: data.panNumber,
-            registrationType: 'Pvt Ltd',
-            organizationType: 1,
-            status: 'Active',
-            subOrganizationSupport: true,
-            organizationId: effectiveOrgId,
-            subOrganizationId: selectedSubOrgId || undefined,
-            branchId: selectedBranchId || undefined,
-            productId: resolvedProdId,
-          });
-          updated = true;
-        } catch (platformErr: any) {
-          console.warn('platformClientApi.updateClient failed, trying fallback:', platformErr);
-        }
-
-        if (!updated) {
-          try {
-            await customerApi.updateCustomer(initialCustomer.id, {
-              name: data.clientName,
-              company: data.businessName,
-              phone: data.phone,
-              email: data.email,
-              address: data.address,
-              gstin: data.gstNumber,
-              pan: data.panNumber,
-            } as any);
-          } catch {
-            await api.updateCustomer(initialCustomer.id, payload as any);
-          }
-        }
+        await platformClientApi.updateClient(initialCustomer.id, {
+          name: data.businessName || data.clientName,
+          legalName: data.businessName || data.clientName,
+          contactPerson: data.contactPerson || data.clientName,
+          phone: data.phone,
+          whatsapp: data.whatsapp || data.phone,
+          email: data.email,
+          address: data.address,
+          gstNumber: data.gstNumber,
+          panNumber: data.panNumber,
+          registrationType: 'Pvt Ltd',
+          organizationType: 1,
+          status: 'Active',
+          subOrganizationSupport: true,
+          organizationId: effectiveOrgId,
+          subOrganizationId: selectedSubOrgId || undefined,
+          branchId: selectedBranchId || undefined,
+          productId: resolvedProdId,
+        });
         toast.success('Client updated successfully');
       } else {
-        let created = false;
-        try {
-          const resolvedProdId =
-            selectedProductItem?.id ||
-            products.find((p) => p.name === selectedProductId || p.id === selectedProductId)?.id ||
-            selectedProductId ||
-            undefined;
-
-          await platformClientApi.createClient({
-            code: data.clientId,
-            name: data.businessName || data.clientName,
-            legalName: data.businessName || `${data.clientName} Private Limited`,
-            contactPerson: data.contactPerson || data.clientName,
-            phone: data.phone,
-            whatsapp: data.whatsapp || data.phone,
-            email: data.email,
-            password: 'Password@123',
-            gstNumber: data.gstNumber,
-            panNumber: data.panNumber,
-            address: data.address,
-            organizationId: effectiveOrgId,
-            subOrganizationId: selectedSubOrgId || undefined,
-            branchId: selectedBranchId || undefined,
-            productId: resolvedProdId,
-            registrationType: 'Pvt Ltd',
-            organizationType: 1,
-            status: 'Active',
-            subOrganizationSupport: true,
-          });
-          created = true;
-        } catch (platformErr: any) {
-          console.warn('platformClientApi.createClient failed, trying fallback:', platformErr);
-        }
-
-        if (!created) {
-          try {
-            await customerApi.createCustomer({
-              name: data.clientName,
-              company: data.businessName,
-              phone: data.phone,
-              email: data.email,
-              customerType: 'Business',
-              address: data.address,
-              country: 'India',
-              status: 'Active',
-              gstin: data.gstNumber,
-              pan: data.panNumber,
-            } as any);
-          } catch {
-            await api.createCustomer(payload as any);
-          }
-        }
+        await platformClientApi.createClient({
+          code: data.clientId,
+          name: data.businessName || data.clientName,
+          legalName: data.businessName || `${data.clientName} Private Limited`,
+          contactPerson: data.contactPerson || data.clientName,
+          phone: data.phone,
+          whatsapp: data.whatsapp || data.phone,
+          email: data.email,
+          password: 'Password@123',
+          gstNumber: data.gstNumber,
+          panNumber: data.panNumber,
+          address: data.address,
+          organizationId: effectiveOrgId,
+          subOrganizationId: selectedSubOrgId || undefined,
+          branchId: selectedBranchId || undefined,
+          productId: resolvedProdId,
+          registrationType: 'Pvt Ltd',
+          organizationType: 1,
+          status: 'Active',
+          subOrganizationSupport: true,
+        });
         toast.success('Client profile created successfully');
       }
 
@@ -543,7 +491,21 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       );
       onClose();
     } catch (e: any) {
-      toast.error('Operation failed', { description: e.message });
+      console.error('Client save failed:', e);
+      const errMsg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error?.message ||
+        (Array.isArray(e?.response?.data?.fields)
+          ? e.response.data.fields.map((f: any) => `${f.path?.join('.') ? f.path.join('.') + ': ' : ''}${f.message}`).join(', ')
+          : null) ||
+        (Array.isArray(e?.response?.data?.errors)
+          ? e.response.data.errors.map((er: any) => er.message || er).join(', ')
+          : null) ||
+        e?.data?.message ||
+        e?.message ||
+        'Operation failed';
+      setApiModalError(errMsg);
+      toast.error('Operation failed', { description: errMsg });
     }
   };
 
@@ -566,6 +528,18 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       onBack={onClose}
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        {apiModalError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
+            <span>{apiModalError}</span>
+            <button
+              type="button"
+              onClick={() => setApiModalError(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold ml-2 cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
           {/* Organization */}

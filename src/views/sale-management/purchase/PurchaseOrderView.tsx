@@ -42,6 +42,7 @@ import {
   PurchaseReturn,
   PurchaseReturnItem,
   PurchaseRequest,
+  PaymentOut,
 } from '../../../store/useSalesManagementStore';
 import {
   workPurchaseOrderApi,
@@ -59,7 +60,13 @@ import {
   ensureValidUuid,
   commercePurchaseRequestApi,
   mapApiPurchaseRequestToUi,
+  baseApi,
 } from '../../../api';
+import {
+  workPaymentOutApi,
+  mapUiToCreatePaymentOutPayload,
+} from '../../../api/work/paymentOutApi';
+import { useDispatch } from 'react-redux';
 import {
   commercePurchaseReturnApi,
   mapApiPurchaseReturnToUi,
@@ -69,6 +76,7 @@ import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
@@ -76,6 +84,7 @@ import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseOrderShare } from '../../../utils/shareUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { toast } from 'sonner';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -113,6 +122,7 @@ const TAX_RATE_OPTIONS = [
 export const PurchaseOrderView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const dispatch = useDispatch();
   const {
     purchases,
     suppliers,
@@ -121,6 +131,7 @@ export const PurchaseOrderView: React.FC = () => {
     setPurchasesList,
     deletePurchase,
     updatePurchasePayment,
+    savePaymentOut,
     savePurchaseReturn,
     updatePurchaseRequestStatus,
     purchaseRequests,
@@ -157,6 +168,12 @@ export const PurchaseOrderView: React.FC = () => {
   const [historyPurchase, setHistoryPurchase] = useState<PurchaseOrder | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState<PurchaseOrder | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetPo, setDeleteTargetPo] = useState<PurchaseOrder | null>(null);
+  const [isDeletingPo, setIsDeletingPo] = useState(false);
+  const [deletePoError, setDeletePoError] = useState<string | null>(null);
 
   const handleOpenHistory = async (po: PurchaseOrder) => {
     setActiveDropdownId(null);
@@ -639,22 +656,34 @@ export const PurchaseOrderView: React.FC = () => {
       }
 
       const prefilledItems: PurchaseProductItem[] = prData.items.map((it) => {
-        const matchingProd = productOptions.find((p) => p.value === it.productId);
-        const pPrice = it.purchasePrice || matchingProd?.unitCost || 0;
-        const sPrice = matchingProd?.salePrice || 0;
-        const u = it.unit || matchingProd?.unit || 'PCS';
+        const matchingProd = availableProducts.find((p) => p.id === it.productId);
+        const prodOpt = productOptions.find((p) => p.value === it.productId);
+        const pPrice = it.purchasePrice || matchingProd?.purchasePrice || prodOpt?.unitCost || 0;
+        const sPrice = matchingProd?.salePrice || prodOpt?.salePrice || 0;
+        const u = it.unit || matchingProd?.unit || prodOpt?.unit || 'PCS';
         const qty = Math.max(1, it.quantity || 1);
         const itemTax = pPrice * qty * 0.18;
+        const initialBatch =
+          (it as any).batchNo ||
+          (it as any).batch ||
+          matchingProd?.batchNo ||
+          (matchingProd as any)?.initialBatchNo ||
+          '';
+        const initialExpDate =
+          (it as any).expDate ||
+          matchingProd?.expDate ||
+          '';
+
         return {
           id: `po_item_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
           productId: it.productId,
-          productName: it.productName || matchingProd?.label || 'Product',
-          batch: '',
+          productName: it.productName || matchingProd?.productName || prodOpt?.label || 'Product',
+          batch: initialBatch,
           quantity: qty,
           freeQuantity: 0,
           unit: u,
           packingUnit: '',
-          expDate: '',
+          expDate: initialExpDate,
           purchasePrice: pPrice,
           salePrice: sPrice,
           discountPercent: 0,
@@ -1058,6 +1087,127 @@ export const PurchaseOrderView: React.FC = () => {
     });
   };
 
+  // Print Purchase Bill via universal printUtils
+  const [isPrintingBill, setIsPrintingBill] = useState(false);
+  const handlePrintPurchaseBill = async (po: PurchaseOrder) => {
+    if (isPrintingBill) return;
+    setIsPrintingBill(true);
+    let targetPo = po;
+
+    // Check if items detail is missing or empty - fetch on-demand from API
+    if (!targetPo.items || targetPo.items.length === 0) {
+      toast.info(`Fetching bill details for ${po.purchaseNo}...`);
+      try {
+        if (po.id) {
+          const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
+          if (res?.data) {
+            targetPo = mapApiPurchaseOrderToUi(res.data);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch single purchase order details for printing:', err);
+      }
+    }
+
+    const matchedSup = mergedSuppliers.find((s) => s.id === targetPo.supplierId || s.name === targetPo.supplierName);
+
+    printBusinessDocument({
+      docTypeTitle: 'PURCHASE ORDER / BILL',
+      docNo: targetPo.purchaseNo || targetPo.poNo || 'PO-DRAFT',
+      docDate: targetPo.purchaseDate || targetPo.orderDate || new Date().toISOString().split('T')[0],
+      dueDate: targetPo.dueDate || targetPo.expectedDeliveryDate,
+      status: targetPo.purchaseStatus,
+      statusColor: targetPo.purchaseStatus === 'Received' ? 'emerald' : targetPo.purchaseStatus === 'Cancelled' ? 'rose' : 'purple',
+      referenceNo: targetPo.purchaseInvoiceNo,
+      partyTitle: 'Supplier / Vendor',
+      partyName: targetPo.supplierName,
+      partyCompany: targetPo.supplier?.name || (matchedSup as any)?.company,
+      partyPhone: (matchedSup as any)?.phone || (matchedSup as any)?.mobile,
+      partyEmail: (matchedSup as any)?.email,
+      partyAddress: (matchedSup as any)?.billingAddress || (matchedSup as any)?.address,
+      partyGstin: (matchedSup as any)?.gstNumber,
+      extraMeta: [
+        { label: 'Payment Terms', value: targetPo.paymentTerms || 'Net 30 Days' },
+        { label: 'Payment Status', value: targetPo.paymentStatus },
+        ...(targetPo.expectedDeliveryDate ? [{ label: 'Expected Delivery', value: targetPo.expectedDeliveryDate }] : []),
+        ...(targetPo.purchaseInvoiceNo ? [{ label: 'Supplier Invoice #', value: targetPo.purchaseInvoiceNo }] : []),
+      ],
+      items: (targetPo.items || []).map((it) => ({
+        name: it.productName,
+        sku: (it as any).sku,
+        batch: it.batch,
+        unit: it.unit || 'PCS',
+        quantity: it.quantity,
+        unitPrice: it.purchasePrice,
+        taxPercent: it.taxPercent,
+        total: it.total,
+      })),
+      subtotal: targetPo.subtotal || targetPo.subTotal,
+      discount: targetPo.discount || targetPo.discountAmount || 0,
+      tax: {
+        withGst: targetPo.withGst ?? true,
+        gstType: targetPo.gstType || 'intra_state',
+        taxAmount: targetPo.tax || targetPo.taxAmount,
+        cgst: targetPo.cgst,
+        sgst: targetPo.sgst,
+        igst: targetPo.igst,
+      },
+      shipping: targetPo.shipping || 0,
+      otherCharges: targetPo.otherCharges || 0,
+      grandTotal: targetPo.grandTotal,
+      paidAmount: targetPo.paidAmount,
+      balance: targetPo.balance,
+      notes: targetPo.notes,
+    });
+
+    setIsPrintingBill(false);
+  };
+
+  // Print Table Report for Purchase Orders
+  const handlePrintTableReport = () => {
+    if (paginatedPurchases.length === 0) {
+      toast.info('No purchase orders to print.');
+      return;
+    }
+
+    const printRows = paginatedPurchases.map((p) => ({
+      purchaseNo: p.purchaseNo,
+      purchaseDate: p.purchaseDate,
+      supplierName: p.supplierName,
+      purchaseStatus: p.purchaseStatus,
+      paymentStatus: p.paymentStatus,
+      grandTotal: p.grandTotal,
+      paidAmount: p.paidAmount,
+      balance: p.balance,
+    }));
+
+    printTableReport({
+      title: 'Purchase Orders & Bills Report',
+      subtitle: `Total Orders: ${totalRecordsCount} | Filters: Status [${appliedPurchaseStatus}], Payment [${appliedPaymentStatus}], Supplier [${appliedSupplier}]`,
+      columns: [
+        { header: 'PO / Bill #', key: 'purchaseNo', width: '15%' },
+        { header: 'Date', key: 'purchaseDate', width: '12%' },
+        { header: 'Supplier Name', key: 'supplierName', width: '25%' },
+        { header: 'Order Status', key: 'purchaseStatus', align: 'center', width: '12%' },
+        { header: 'Payment Status', key: 'paymentStatus', align: 'center', width: '12%' },
+        { header: 'Total (₹)', key: 'grandTotal', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '12%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Purchases', value: summary.totalAmount },
+        { label: 'Pending Payments', value: summary.pendingPayments },
+        { label: 'Fully Paid Count', value: summary.paidCount },
+        { label: 'Total Orders', value: totalRecordsCount },
+      ],
+      summaryRow: {
+        purchaseNo: 'Total',
+        grandTotal: paginatedPurchases.reduce((acc, p) => acc + (p.grandTotal || 0), 0),
+        balance: paginatedPurchases.reduce((acc, p) => acc + (p.balance || 0), 0),
+      },
+    });
+  };
+
   const handleSupplierChange = (supId: string) => {
     const sup = mergedSuppliers.find((s) => s.id === supId);
     if (sup) {
@@ -1119,26 +1269,40 @@ export const PurchaseOrderView: React.FC = () => {
 
     // 2. Map line items from request
     const prItems: PurchaseProductItem[] = (pr.items || []).map((it, idx) => {
-      const matchingProd = productOptions.find(
-        (p) => p.value === it.productId || p.label.toLowerCase() === it.productName.toLowerCase()
+      const matchingProd = availableProducts.find(
+        (p) => p.id === it.productId || p.productName.toLowerCase() === (it.productName || '').toLowerCase()
       );
-      const pPrice = Number(it.estimatedUnitPrice || matchingProd?.unitCost || 0);
-      const sPrice = Number(matchingProd?.salePrice || 0);
-      const u = (it as any).unit || matchingProd?.unit || 'PCS';
+      const prodOpt = productOptions.find(
+        (p) => p.value === it.productId || p.label.toLowerCase() === (it.productName || '').toLowerCase()
+      );
+      const pPrice = Number(it.estimatedUnitPrice || matchingProd?.purchasePrice || prodOpt?.unitCost || 0);
+      const sPrice = Number(matchingProd?.salePrice || prodOpt?.salePrice || 0);
+      const u = (it as any).unit || matchingProd?.unit || prodOpt?.unit || 'PCS';
       const qty = Math.max(1, it.requestedQuantity || 1);
       const taxPct = 18;
       const sub = qty * pPrice;
       const tax = formData.withGst ? sub * (taxPct / 100) : 0;
+      const initialBatch =
+        (it as any).batchNo ||
+        (it as any).batch ||
+        matchingProd?.batchNo ||
+        (matchingProd as any)?.initialBatchNo ||
+        '';
+      const initialExpDate =
+        (it as any).expDate ||
+        matchingProd?.expDate ||
+        '';
+
       return {
         id: `po_item_${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 4)}`,
-        productId: it.productId || matchingProd?.value || '',
-        productName: it.productName || matchingProd?.label || 'Product',
-        batch: '',
+        productId: it.productId || matchingProd?.id || prodOpt?.value || '',
+        productName: it.productName || matchingProd?.productName || prodOpt?.label || 'Product',
+        batch: initialBatch,
         quantity: qty,
         freeQuantity: 0,
         unit: u,
         packingUnit: '',
-        expDate: '',
+        expDate: initialExpDate,
         purchasePrice: pPrice,
         salePrice: sPrice,
         discountPercent: 0,
@@ -1508,7 +1672,7 @@ export const PurchaseOrderView: React.FC = () => {
   }, [formData]);
 
   // Save Purchase Order (Create or Update with Work API)
-  const handleSavePurchase = async (status: PurchaseStatus = 'Ordered') => {
+  const handleSavePurchase = async (status: PurchaseStatus = 'Pending') => {
     let targetSupplierId = formData.supplierId;
     if (!targetSupplierId) {
       // If no supplier selected yet, pick the first available supplier
@@ -1582,13 +1746,22 @@ export const PurchaseOrderView: React.FC = () => {
         if (apiRes && apiRes.data) {
           const mapped = mapApiPurchaseOrderToUi(apiRes.data);
           // Work API PUT /work/purchase-orders/{id} only stores line items/due date/notes.
-          // Retain the payment disbursement recorded by the user in this edit session:
+          // Retain the payment disbursement and form line item details (batch, unit, expDate):
           updatedPo = {
             ...mapped,
+            items: formData.items.map((formIt, idx) => {
+              const apiIt = mapped.items?.[idx];
+              return {
+                ...formIt,
+                id: apiIt?.id || formIt.id,
+                total: apiIt?.total || formIt.total,
+              };
+            }),
             purchaseInvoiceNo: formData.purchaseInvoiceNo || mapped.purchaseInvoiceNo,
             paidAmount: finalPaid,
             balance: finalBalance,
             paymentStatus: finalPaymentStatus,
+            hasManualPayment: finalPaid > 0,
             paymentMethod: (formData.paymentMethod as any) || (finalPaid > 0 ? 'Cash' : 'Bank Transfer'),
             paymentTerms: formData.paymentTerms || mapped.paymentTerms,
             withGst: formData.withGst,
@@ -1598,6 +1771,47 @@ export const PurchaseOrderView: React.FC = () => {
           };
         } else {
           throw new Error('No data returned from Work API');
+        }
+
+        // Auto-generate Payment Out voucher if new payment was recorded during edit
+        const prevPaid = Number(editingPurchase.paidAmount || 0);
+        if (finalPaid > prevPaid) {
+          const deltaAmount = finalPaid - prevPaid;
+          const paymentVoucher: PaymentOut = {
+            id: `po_pm_${Date.now()}`,
+            paymentNo: `PV-${Date.now().toString().slice(-5)}`,
+            paymentDate: formData.purchaseDate || new Date().toISOString().split('T')[0],
+            supplierId: updatedPo.supplierId,
+            supplierName: updatedPo.supplierName,
+            purchaseId: updatedPo.id,
+            purchaseNo: updatedPo.purchaseNo,
+            amount: deltaAmount,
+            paymentMode: (formData.paymentMethod as any) || 'Bank Transfer',
+            paymentType: (formData.paymentMethod as any) || 'Bank Transfer',
+            referenceNo: formData.purchaseInvoiceNo || updatedPo.purchaseNo,
+            status: 'Completed',
+            notes: `Payment recorded on update of purchase bill ${updatedPo.purchaseNo}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          savePaymentOut(paymentVoucher);
+
+          if (UUID_REGEX.test(updatedPo.supplierId)) {
+            try {
+              await workPaymentOutApi.createPaymentOut(
+                mapUiToCreatePaymentOutPayload({
+                  supplierId: updatedPo.supplierId,
+                  paymentType: formData.paymentMethod || 'Bank Transfer',
+                  paymentMode: formData.paymentMethod || 'Bank Transfer',
+                  amount: deltaAmount,
+                  referenceNo: formData.purchaseInvoiceNo || updatedPo.purchaseNo,
+                  notes: `Payment for ${updatedPo.purchaseNo}`,
+                })
+              );
+            } catch (pErr) {
+              console.warn('API Payment Out creation on purchase bill edit warning:', pErr);
+            }
+          }
         }
 
         savePurchase(updatedPo);
@@ -1638,10 +1852,19 @@ export const PurchaseOrderView: React.FC = () => {
 
         createdPo = {
           ...createdPo,
+          items: formData.items.map((formIt, idx) => {
+            const apiIt = createdPo.items?.[idx];
+            return {
+              ...formIt,
+              id: apiIt?.id || formIt.id,
+              total: apiIt?.total || formIt.total,
+            };
+          }),
           purchaseInvoiceNo: formData.purchaseInvoiceNo || createdPo.purchaseInvoiceNo,
           paidAmount: finalPaid,
           balance: finalBalance,
           paymentStatus: finalPaymentStatus,
+          hasManualPayment: finalPaid > 0,
           paymentMethod: (formData.paymentMethod as any) || (finalPaid > 0 ? 'Cash' : 'Bank Transfer'),
           paymentTerms: formData.paymentTerms || createdPo.paymentTerms,
           withGst: formData.withGst,
@@ -1650,8 +1873,82 @@ export const PurchaseOrderView: React.FC = () => {
           otherCharges: formData.otherCharges,
         };
 
+        // Auto-generate Payment Out voucher if initial payment was made on creation
+        if (finalPaid > 0) {
+          const paymentVoucher: PaymentOut = {
+            id: `po_pm_${Date.now()}`,
+            paymentNo: `PV-${Date.now().toString().slice(-5)}`,
+            paymentDate: formData.purchaseDate || new Date().toISOString().split('T')[0],
+            supplierId: createdPo.supplierId,
+            supplierName: createdPo.supplierName,
+            purchaseId: createdPo.id,
+            purchaseNo: createdPo.purchaseNo,
+            amount: finalPaid,
+            paymentMode: (formData.paymentMethod as any) || 'Bank Transfer',
+            paymentType: (formData.paymentMethod as any) || 'Bank Transfer',
+            referenceNo: formData.purchaseInvoiceNo || createdPo.purchaseNo,
+            status: 'Completed',
+            notes: `Initial payment recorded on creation of purchase bill ${createdPo.purchaseNo}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          savePaymentOut(paymentVoucher);
+
+          if (UUID_REGEX.test(createdPo.supplierId)) {
+            try {
+              await workPaymentOutApi.createPaymentOut(
+                mapUiToCreatePaymentOutPayload({
+                  supplierId: createdPo.supplierId,
+                  paymentType: formData.paymentMethod || 'Bank Transfer',
+                  paymentMode: formData.paymentMethod || 'Bank Transfer',
+                  amount: finalPaid,
+                  referenceNo: formData.purchaseInvoiceNo || createdPo.purchaseNo,
+                  notes: `Initial payment for ${createdPo.purchaseNo}`,
+                })
+              );
+            } catch (pErr) {
+              console.warn('API Payment Out creation on purchase bill create warning:', pErr);
+            }
+          }
+        }
+
         savePurchase(createdPo);
         setLivePurchases((prev) => [createdPo, ...prev]);
+
+        // If created directly in an inwarded state (Approved or Received), inward stock into Commerce API
+        if (createdPo.purchaseStatus === 'Approved' || createdPo.purchaseStatus === 'Received' || createdPo.purchaseStatus === 'Completed') {
+          for (const item of createdPo.items) {
+            if (!item.productId || !item.quantity) continue;
+            try {
+              const matchingProd = availableProducts.find((p) => p.id === item.productId || p.productName.toLowerCase() === (item.productName || '').toLowerCase());
+              const prodBatch = matchingProd?.batchNo || (matchingProd as any)?.initialBatchNo;
+              const cleanBatch = (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+                ? item.batch.trim()
+                : (prodBatch || `BAT-${createdPo.purchaseNo || 'PO'}`);
+              await stockApi.adjustStock({
+                productId: item.productId,
+                quantity: item.quantity,
+                batchNo: cleanBatch,
+                adjustmentType: 'INWARD',
+                reason: `Purchase Bill ${createdPo.purchaseNo} created (${createdPo.purchaseStatus})`,
+                costPrice: item.purchasePrice,
+                sellingPrice: item.salePrice,
+                expDate: item.expDate || matchingProd?.expDate || undefined,
+                supplierName: createdPo.supplierName,
+              });
+            } catch (adjErr) {
+              console.warn('Backend stock adjustment warning on purchase create:', adjErr);
+            }
+          }
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: 'Stock', id: 'LIST' },
+              { type: 'Stock', id: 'BATCHES' },
+              { type: 'Stock', id: 'LEDGER' },
+              { type: 'Product', id: 'LIST' },
+            ])
+          );
+        }
 
         // If this purchase was converted from a Purchase Request, update its status to "Purchase Created" NOW
         if (originatingRequestId) {
@@ -1683,32 +1980,117 @@ export const PurchaseOrderView: React.FC = () => {
     }
   };
 
-  // Change Purchase Order Status via Work API
+  // Change Purchase Order Status via Work API & sync Stock Inward to Commerce
   const handleUpdateStatus = async (
     po: PurchaseOrder,
     newStatus: 'Pending' | 'Approved' | 'Ordered' | 'Received' | 'Cancelled'
   ) => {
+    // Helper to perform live stock inward to Commerce API
+    const inwardStockViaApi = async (targetPo: PurchaseOrder) => {
+      let inwardedCount = 0;
+      for (const item of targetPo.items) {
+        if (!item.productId || !item.quantity) continue;
+        try {
+          const matchingProd = availableProducts.find((p) => p.id === item.productId || p.productName.toLowerCase() === (item.productName || '').toLowerCase());
+          const prodBatch = matchingProd?.batchNo || (matchingProd as any)?.initialBatchNo;
+          const cleanBatch = (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+            ? item.batch.trim()
+            : (prodBatch || `BAT-${targetPo.purchaseNo || 'PO'}`);
+          await stockApi.adjustStock({
+            productId: item.productId,
+            quantity: item.quantity,
+            batchNo: cleanBatch,
+            adjustmentType: 'INWARD',
+            reason: `Purchase Bill ${targetPo.purchaseNo} (${newStatus})`,
+            costPrice: item.purchasePrice,
+            sellingPrice: item.salePrice,
+            expDate: item.expDate || matchingProd?.expDate || undefined,
+            supplierName: targetPo.supplierName,
+          });
+          inwardedCount++;
+        } catch (stkErr) {
+          console.warn('API Stock inward warning for item:', item.productName, stkErr);
+        }
+      }
+      if (inwardedCount > 0) {
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: 'Stock', id: 'LIST' },
+            { type: 'Stock', id: 'BATCHES' },
+            { type: 'Stock', id: 'LEDGER' },
+            { type: 'Product', id: 'LIST' },
+          ])
+        );
+      }
+    };
+
     // If it's a local draft / offline record (e.g. "po_1792142284518"), update locally without 404ing the API
     if (!UUID_REGEX.test(po.id)) {
       const updated: PurchaseOrder = { ...po, purchaseStatus: newStatus as any };
       savePurchase(updated);
       setLivePurchases((prev) => prev.map((p) => (p.id === po.id ? updated : p)));
-      toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+      if (newStatus === 'Approved' || newStatus === 'Received') {
+        await inwardStockViaApi(updated);
+        toast.success(`Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`);
+      } else {
+        toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+      }
       return;
     }
 
+    const batchPayload = po.items.map((it) => {
+      const matchingProd = availableProducts.find((p) => p.id === it.productId || p.productName.toLowerCase() === (it.productName || '').toLowerCase());
+      const prodBatch = matchingProd?.batchNo || (matchingProd as any)?.initialBatchNo;
+      const cleanBatch = (it.batch && it.batch.trim() && it.batch !== 'SELECT BATCH')
+        ? it.batch.trim()
+        : (prodBatch || `BAT-${po.purchaseNo || 'PO'}`);
+      return {
+        productId: ensureValidUuid(it.productId),
+        quantity: Math.max(1, Number(it.quantity) || 1),
+        unitCost: Math.max(0, Number(it.purchasePrice) || 0),
+        taxPercent: Math.max(0, Number(it.taxPercent) || 0),
+        batchNo: cleanBatch,
+        batch: cleanBatch,
+        expDate: it.expDate || matchingProd?.expDate || undefined,
+        mfgDate: it.mfgDate || matchingProd?.mfgDate || undefined,
+      };
+    });
+
     try {
+      // If receiving, ensure line items in the backend purchase order carry a batch number first
+      if (newStatus === 'Received') {
+        try {
+          await workPurchaseOrderApi.updatePurchaseOrder(po.id, {
+            items: batchPayload,
+          });
+        } catch (putErr) {
+          console.warn('Syncing batch to PO before receiving warning:', putErr);
+        }
+      }
+
+      // Status patch strictly expects { status: newStatus }
       const res = await workPurchaseOrderApi.patchPurchaseOrderStatus(po.id, newStatus);
+
       if (res && res.data) {
         const mapped = mapApiPurchaseOrderToUi(res.data);
         savePurchase(mapped);
         setLivePurchases((prev) => prev.map((p) => (p.id === po.id ? mapped : p)));
-        toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+        if (newStatus === 'Approved' || newStatus === 'Received') {
+          await inwardStockViaApi(mapped);
+          toast.success(`Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`);
+        } else {
+          toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+        }
       } else {
         const updated: PurchaseOrder = { ...po, purchaseStatus: newStatus as any };
         savePurchase(updated);
         setLivePurchases((prev) => prev.map((p) => (p.id === po.id ? updated : p)));
-        toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+        if (newStatus === 'Approved' || newStatus === 'Received') {
+          await inwardStockViaApi(updated);
+          toast.success(`Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`);
+        } else {
+          toast.success(`Purchase order ${po.purchaseNo} status changed to ${newStatus}`);
+        }
       }
       fetchPurchaseOrders(true);
     } catch (err: any) {
@@ -1721,25 +2103,41 @@ export const PurchaseOrderView: React.FC = () => {
     }
   };
 
-  // Delete Purchase Order via Work API
-  const handleDeletePurchase = async (po: PurchaseOrder) => {
+  // Delete Purchase Order via Work API with confirmation modal
+  const handleOpenDeleteModal = (po: PurchaseOrder) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
     if (po.purchaseStatus === 'Received') {
       toast.error('Received purchase orders are final and cannot be deleted.');
       return;
     }
+    setDeleteTargetPo(po);
+    setDeletePoError(null);
+    setIsDeleteModalOpen(true);
+  };
 
-    if (!UUID_REGEX.test(po.id)) {
-      deletePurchase(po.id);
-      setLivePurchases((prev) => prev.filter((p) => p.id !== po.id));
-      toast.success(`Purchase order ${po.purchaseNo} deleted.`);
+  const handleConfirmDeletePo = async () => {
+    if (!deleteTargetPo) return;
+    setIsDeletingPo(true);
+    setDeletePoError(null);
+
+    if (!UUID_REGEX.test(deleteTargetPo.id)) {
+      deletePurchase(deleteTargetPo.id);
+      setLivePurchases((prev) => prev.filter((p) => p.id !== deleteTargetPo.id));
+      toast.success(`Purchase order "${deleteTargetPo.purchaseNo}" deleted.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetPo(null);
+      setIsDeletingPo(false);
       return;
     }
 
     try {
-      await workPurchaseOrderApi.deletePurchaseOrder(po.id);
-      deletePurchase(po.id);
-      setLivePurchases((prev) => prev.filter((p) => p.id !== po.id));
-      toast.success(`Purchase order ${po.purchaseNo} deleted.`);
+      await workPurchaseOrderApi.deletePurchaseOrder(deleteTargetPo.id);
+      deletePurchase(deleteTargetPo.id);
+      setLivePurchases((prev) => prev.filter((p) => p.id !== deleteTargetPo.id));
+      toast.success(`Purchase order "${deleteTargetPo.purchaseNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetPo(null);
       fetchPurchaseOrders(true);
     } catch (err: any) {
       const errMsg =
@@ -1747,9 +2145,10 @@ export const PurchaseOrderView: React.FC = () => {
         err?.response?.data?.message ||
         err?.message ||
         'Failed to delete purchase order';
+      setDeletePoError(errMsg);
       toast.error(errMsg);
-      deletePurchase(po.id);
-      setLivePurchases((prev) => prev.filter((p) => p.id !== po.id));
+    } finally {
+      setIsDeletingPo(false);
     }
   };
 
@@ -1762,15 +2161,80 @@ export const PurchaseOrderView: React.FC = () => {
     setIsPaymentModalOpen(true);
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
     if (!selectedPurchase) return;
     if (recordAmount <= 0) {
       toast.error('Payment amount must be greater than zero.');
       return;
     }
-    updatePurchasePayment(selectedPurchase.id, recordAmount, recordMethod, recordNotes);
-    toast.success(`Payment of ₹${recordAmount.toLocaleString('en-IN')} recorded for ${selectedPurchase.purchaseNo}`);
-    setIsPaymentModalOpen(false);
+
+    try {
+      // 1. If backend supplier ID is valid UUID, create live Payment Out in Work API
+      if (UUID_REGEX.test(selectedPurchase.supplierId)) {
+        try {
+          await workPaymentOutApi.createPaymentOut(
+            mapUiToCreatePaymentOutPayload({
+              supplierId: selectedPurchase.supplierId,
+              paymentType: recordMethod,
+              paymentMode: recordMethod,
+              amount: recordAmount,
+              referenceNo: recordNotes || selectedPurchase.purchaseNo,
+              notes: `Payment for ${selectedPurchase.purchaseNo}. ${recordNotes || ''}`.trim(),
+            })
+          );
+        } catch (apiErr) {
+          console.warn('API Payment Out creation warning:', apiErr);
+        }
+      }
+
+      // 2. Record payment voucher in store for accounts payable ledger and audit history
+      const paymentVoucher: PaymentOut = {
+        id: `po_pm_${Date.now()}`,
+        paymentNo: `PV-${Date.now().toString().slice(-5)}`,
+        paymentDate: new Date().toISOString().split('T')[0],
+        supplierId: selectedPurchase.supplierId,
+        supplierName: selectedPurchase.supplierName,
+        purchaseId: selectedPurchase.id,
+        purchaseNo: selectedPurchase.purchaseNo,
+        amount: recordAmount,
+        paymentMode: recordMethod as any,
+        paymentType: recordMethod as any,
+        referenceNo: recordNotes,
+        status: 'Completed',
+        notes: recordNotes,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      savePaymentOut(paymentVoucher);
+
+      // 3. Update purchase order payment and state
+      updatePurchasePayment(selectedPurchase.id, recordAmount, recordMethod, recordNotes);
+
+      setLivePurchases((prev) =>
+        prev.map((p) => {
+          if (p.id === selectedPurchase.id) {
+            const newPaid = Math.min(p.grandTotal, (p.paidAmount || 0) + recordAmount);
+            const newBal = Math.max(0, p.grandTotal - newPaid);
+            const newStatus: PurchasePaymentStatus =
+              newBal <= 0 ? 'Paid' : newPaid > 0 ? 'Partial' : 'Unpaid';
+            return {
+              ...p,
+              paidAmount: newPaid,
+              balance: newBal,
+              paymentStatus: newStatus,
+              hasManualPayment: true,
+            };
+          }
+          return p;
+        })
+      );
+
+      toast.success(`Payment of ₹${recordAmount.toLocaleString('en-IN')} recorded for ${selectedPurchase.purchaseNo}`);
+      setIsPaymentModalOpen(false);
+      fetchPurchaseOrders(true);
+    } catch (err: any) {
+      toast.error('Failed to record payment');
+    }
   };
 
   // Filtered Purchases (Reflects API data)
@@ -3241,6 +3705,16 @@ export const PurchaseOrderView: React.FC = () => {
                 variant="secondary"
                 size="md"
                 className="w-full sm:w-auto justify-center"
+                onClick={handlePrintTableReport}
+                icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+              >
+                Print Report
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="md"
+                className="w-full sm:w-auto justify-center"
                 onClick={handleExportExcel}
                 icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
               >
@@ -3634,24 +4108,34 @@ export const PurchaseOrderView: React.FC = () => {
                                     onClick: () => handleOpenEditModal(po),
                                   },
                                   {
+                                    label: 'Print Bill',
+                                    variant: 'print',
+                                    onClick: () => handlePrintPurchaseBill(po),
+                                  },
+                                  {
                                     label: 'Duplicate',
                                     variant: 'duplicate',
                                     onClick: () => handleDuplicatePurchase(po),
+                                  },
+                                  po.balance > 0 && {
+                                    label: 'Record Payment',
+                                    variant: 'payment',
+                                    onClick: () => handleOpenPaymentModal(po),
                                   },
                                   po.purchaseStatus === 'Pending' && {
                                     label: 'Mark as Approved',
                                     variant: 'approve',
                                     onClick: () => handleUpdateStatus(po, 'Approved'),
                                   },
+                                  (po.purchaseStatus === 'Pending' || po.purchaseStatus === 'Approved' || po.purchaseStatus === 'Ordered') && {
+                                    label: 'Mark as Received (Inward Stock)',
+                                    variant: 'activate',
+                                    onClick: () => handleUpdateStatus(po, 'Received'),
+                                  },
                                   (po.purchaseStatus === 'Approved' || po.purchaseStatus === 'Pending') && {
                                     label: 'Mark as Ordered',
                                     variant: 'order',
                                     onClick: () => handleUpdateStatus(po, 'Ordered'),
-                                  },
-                                  po.purchaseStatus === 'Ordered' && {
-                                    label: 'Mark as Received',
-                                    variant: 'activate',
-                                    onClick: () => handleUpdateStatus(po, 'Received'),
                                   },
                                   po.purchaseStatus !== 'Received' && po.purchaseStatus !== 'Cancelled' && {
                                     label: 'Cancel Order',
@@ -3681,7 +4165,7 @@ export const PurchaseOrderView: React.FC = () => {
                                     variant: 'delete',
                                     danger: true,
                                     dividerBefore: true,
-                                    onClick: () => handleDeletePurchase(po),
+                                    onClick: () => handleOpenDeleteModal(po),
                                   },
                                 ]}
                               />
@@ -3915,14 +4399,11 @@ export const PurchaseOrderView: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      toast.info(`Preparing print for ${selectedPurchase.purchaseNo}...`);
-                      window.print();
-                    }}
+                    onClick={() => handlePrintPurchaseBill(selectedPurchase)}
                     className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
                   >
                     <Printer className="w-4 h-4" />
-                    <span>Print Order</span>
+                    <span>Print Bill</span>
                   </button>
                 </div>
               </div>
@@ -4213,6 +4694,23 @@ export const PurchaseOrderView: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingPo) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetPo(null);
+            setDeletePoError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeletePo}
+        entityName="Purchase Order"
+        recordName={deleteTargetPo?.purchaseNo}
+        isLoading={isDeletingPo}
+        error={deletePoError}
+      />
     </>
   );
 };

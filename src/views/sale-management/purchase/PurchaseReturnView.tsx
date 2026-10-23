@@ -31,12 +31,15 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseReturnShare } from '../../../utils/shareUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { toast } from 'sonner';
+import { useDispatch } from 'react-redux';
 import {
   commercePurchaseReturnApi,
   mapApiPurchaseReturnToUi,
@@ -45,7 +48,7 @@ import {
   ensureValidUuid,
   UUID_REGEX,
 } from '../../../api/commerce/purchaseReturnApi';
-import { workPurchaseOrderApi } from '../../../api';
+import { workPurchaseOrderApi, stockApi, baseApi } from '../../../api';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
@@ -54,6 +57,7 @@ import { SaleActionDropdown } from '../utils';
 export const PurchaseReturnView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const dispatch = useDispatch();
   const {
     purchases,
     purchaseReturns,
@@ -109,6 +113,12 @@ export const PurchaseReturnView: React.FC = () => {
   const [historyReturn, setHistoryReturn] = useState<PurchaseReturn | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedReturn, setSelectedReturn] = useState<PurchaseReturn | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetReturn, setDeleteTargetReturn] = useState<PurchaseReturn | null>(null);
+  const [isDeletingReturn, setIsDeletingReturn] = useState(false);
+  const [deleteReturnError, setDeleteReturnError] = useState<string | null>(null);
 
   const handleOpenHistory = async (pret: PurchaseReturn) => {
     setActiveDropdownId(null);
@@ -770,6 +780,39 @@ export const PurchaseReturnView: React.FC = () => {
           };
         }
 
+        // Outward stock deduction if created directly in an enacted return state
+        if (newReturn.returnStatus === 'Completed' || newReturn.returnStatus === 'Returned' || newReturn.returnStatus === 'Dispatched') {
+          let outwardCount = 0;
+          for (const item of newReturn.items) {
+            if (!item.productId || !item.returnQuantity) continue;
+            try {
+              await stockApi.adjustStock({
+                productId: item.productId,
+                quantity: item.returnQuantity,
+                batchNo: (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH') ? item.batch.trim() : `BAT-${newReturn.purchaseNo || 'RET'}`,
+                adjustmentType: 'OUTWARD',
+                reason: `Purchase Return ${newReturn.returnNo} (${newReturn.returnStatus})`,
+                costPrice: item.unitPrice,
+                supplierName: newReturn.supplierName,
+              });
+              outwardCount++;
+            } catch (stkErr) {
+              console.warn('API Stock outward return warning:', stkErr);
+            }
+          }
+          if (outwardCount > 0) {
+            newReturn.stockDeducted = true;
+            dispatch(
+              baseApi.util.invalidateTags([
+                { type: 'Stock', id: 'LIST' },
+                { type: 'Stock', id: 'BATCHES' },
+                { type: 'Stock', id: 'LEDGER' },
+                { type: 'Product', id: 'LIST' },
+              ])
+            );
+          }
+        }
+
         savePurchaseReturn(newReturn);
 
         // If this return originated from a Purchase Bill, update the PO status to 'Returned' now
@@ -808,9 +851,44 @@ export const PurchaseReturnView: React.FC = () => {
       } catch (err) {
         console.warn('Quick status update fallback to local store:', err);
       }
+
+      let stockDeducted = pret.stockDeducted;
+      if ((nextStatus === 'Completed' || nextStatus === 'Returned' || nextStatus === 'Dispatched') && !stockDeducted) {
+        let outwardCount = 0;
+        for (const item of pret.items) {
+          if (!item.productId || !item.returnQuantity) continue;
+          try {
+            await stockApi.adjustStock({
+              productId: item.productId,
+              quantity: item.returnQuantity,
+              batchNo: (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH') ? item.batch.trim() : `BAT-${pret.purchaseNo || 'RET'}`,
+              adjustmentType: 'OUTWARD',
+              reason: `Purchase Return ${pret.returnNo} (${nextStatus})`,
+              costPrice: item.unitPrice,
+              supplierName: pret.supplierName,
+            });
+            outwardCount++;
+          } catch (stkErr) {
+            console.warn('API Stock outward return warning:', stkErr);
+          }
+        }
+        if (outwardCount > 0) {
+          stockDeducted = true;
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: 'Stock', id: 'LIST' },
+              { type: 'Stock', id: 'BATCHES' },
+              { type: 'Stock', id: 'LEDGER' },
+              { type: 'Product', id: 'LIST' },
+            ])
+          );
+        }
+      }
+
       const updated: PurchaseReturn = {
         ...pret,
         returnStatus: nextStatus,
+        stockDeducted,
         updatedAt: new Date().toISOString(),
       };
       savePurchaseReturn(updated);
@@ -855,19 +933,39 @@ export const PurchaseReturnView: React.FC = () => {
     toast.info(`Duplicated return details from ${pret.returnNo} into editor. Review and save when ready.`);
   };
 
-  // Delete Return
-  const handleDeleteReturn = async (pret: PurchaseReturn) => {
+  // Delete Return with confirmation modal
+  const handleOpenDeleteModal = (pret: PurchaseReturn) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetReturn(pret);
+    setDeleteReturnError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteReturn = async () => {
+    if (!deleteTargetReturn) return;
+    setIsDeletingReturn(true);
+    setDeleteReturnError(null);
     try {
-      try {
-        await commercePurchaseReturnApi.deletePurchaseReturn(pret.id);
-      } catch (err) {
-        console.warn('Backend delete error, removing from local state:', err);
+      if (UUID_REGEX.test(deleteTargetReturn.id)) {
+        await commercePurchaseReturnApi.deletePurchaseReturn(deleteTargetReturn.id);
       }
-      deletePurchaseReturn(pret.id);
-      toast.success(`Purchase return ${pret.returnNo} deleted.`);
+      deletePurchaseReturn(deleteTargetReturn.id);
+      toast.success(`Purchase return "${deleteTargetReturn.returnNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetReturn(null);
       fetchPurchaseReturns(true);
-    } catch {
-      toast.error('Failed to delete purchase return');
+    } catch (err: any) {
+      console.error('Failed to delete purchase return:', err);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete purchase return';
+      setDeleteReturnError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsDeletingReturn(false);
     }
   };
 
@@ -922,6 +1020,93 @@ export const PurchaseReturnView: React.FC = () => {
     toast.success(`Purchase Returns Excel report downloaded (${listToExport.length} records)!`);
   };
 
+  // Print Debit Note via universal printUtils
+  const handlePrintDebitNote = (pret: PurchaseReturn) => {
+    const matchedSup = suppliers.find((s) => s.id === pret.supplierId || s.name === pret.supplierName);
+
+    printBusinessDocument({
+      docTypeTitle: 'DEBIT NOTE / PURCHASE RETURN',
+      docNo: pret.returnNo,
+      docDate: pret.returnDate,
+      status: pret.returnStatus,
+      statusColor: pret.returnStatus === 'Completed' ? 'emerald' : pret.returnStatus === 'Rejected' ? 'rose' : 'purple',
+      referenceNo: pret.purchaseNo,
+      partyTitle: 'Supplier / Vendor',
+      partyName: pret.supplierName,
+      partyPhone: (matchedSup as any)?.phone || (matchedSup as any)?.mobile,
+      partyEmail: (matchedSup as any)?.email,
+      partyAddress: (matchedSup as any)?.billingAddress || (matchedSup as any)?.address,
+      partyGstin: (matchedSup as any)?.gstNumber,
+      extraMeta: [
+        { label: 'Original Purchase Bill', value: pret.purchaseNo || 'N/A' },
+        { label: 'Refund Method / Status', value: pret.refundStatus },
+      ],
+      columns: [
+        { header: 'Returned Product Item', width: '38%' },
+        { header: 'Batch', align: 'center', width: '14%' },
+        { header: 'Return Qty', align: 'center', width: '12%' },
+        { header: 'Unit Price (₹)', align: 'right', width: '18%' },
+        { header: 'Total Refund (₹)', align: 'right', width: '18%' },
+      ],
+      items: pret.items.map((it) => ({
+        name: it.productName,
+        batch: it.batch,
+        quantity: it.returnQuantity,
+        unitPrice: it.unitPrice,
+        total: it.returnAmount,
+        remarks: `${it.reason}${it.remarks ? ` - ${it.remarks}` : ''}`,
+      })),
+      subtotal: Number(pret.returnAmount || 0),
+      grandTotal: Number(pret.returnAmount || 0),
+      notes: pret.notes,
+    });
+  };
+
+  // Print Table Report for Purchase Returns
+  const handlePrintTableReport = () => {
+    const listToPrint = effectiveReturns;
+    if (listToPrint.length === 0) {
+      toast.info('No purchase returns available to print.');
+      return;
+    }
+
+    const printRows = listToPrint.map((r) => ({
+      returnNo: r.returnNo,
+      returnDate: r.returnDate,
+      purchaseNo: r.purchaseNo,
+      supplierName: r.supplierName,
+      refundStatus: r.refundStatus,
+      returnStatus: r.returnStatus,
+      returnAmount: Number(r.returnAmount || 0),
+    }));
+
+    const totalReturnAmt = printRows.reduce((acc, r) => acc + r.returnAmount, 0);
+
+    printTableReport({
+      title: 'Purchase Returns & Debit Notes Report',
+      subtitle: `Total Returns: ${listToPrint.length} | Status Filter: ${appliedStatus} | Refund Filter: ${appliedRefundStatus}`,
+      columns: [
+        { header: 'Debit Note #', key: 'returnNo', width: '16%' },
+        { header: 'Return Date', key: 'returnDate', width: '12%' },
+        { header: 'Purchase Bill #', key: 'purchaseNo', width: '16%' },
+        { header: 'Supplier Name', key: 'supplierName', width: '22%' },
+        { header: 'Refund Mode', key: 'refundStatus', align: 'center', width: '12%' },
+        { header: 'Status', key: 'returnStatus', align: 'center', width: '10%' },
+        { header: 'Return Value (₹)', key: 'returnAmount', align: 'right', type: 'currency', width: '12%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Debit Notes', value: listToPrint.length },
+        { label: 'Total Debit Amount', value: totalReturnAmt },
+        { label: 'Pending Refunds', value: listToPrint.filter((r) => r.refundStatus === 'Pending').length },
+      ],
+      summaryRow: {
+        returnNo: 'Total',
+        returnAmount: totalReturnAmt,
+      },
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
@@ -941,6 +1126,16 @@ export const PurchaseReturnView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
+          </Button>
+
           <Button
             variant="secondary"
             size="md"
@@ -1277,6 +1472,11 @@ export const PurchaseReturnView: React.FC = () => {
                               onClick: () => handleOpenEditModal(pret),
                             },
                             {
+                              label: 'Print Debit Note',
+                              variant: 'print',
+                              onClick: () => handlePrintDebitNote(pret),
+                            },
+                            {
                               label: 'Duplicate',
                               variant: 'duplicate',
                               onClick: () => handleDuplicateReturn(pret),
@@ -1309,7 +1509,7 @@ export const PurchaseReturnView: React.FC = () => {
                               variant: 'delete',
                               danger: true,
                               dividerBefore: true,
-                              onClick: () => handleDeleteReturn(pret),
+                              onClick: () => handleOpenDeleteModal(pret),
                             },
                           ]}
                         />
@@ -1802,14 +2002,11 @@ export const PurchaseReturnView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  toast.info(`Preparing print for ${selectedReturn.returnNo}...`);
-                  window.print();
-                }}
+                onClick={() => handlePrintDebitNote(selectedReturn)}
                 className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Order</span>
+                <span>Print Debit Note</span>
               </button>
             </div>
           </div>
@@ -1971,6 +2168,23 @@ export const PurchaseReturnView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingReturn) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetReturn(null);
+            setDeleteReturnError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteReturn}
+        entityName="Purchase Return"
+        recordName={deleteTargetReturn?.returnNo}
+        isLoading={isDeletingReturn}
+        error={deleteReturnError}
+      />
     </div>
   );
 };

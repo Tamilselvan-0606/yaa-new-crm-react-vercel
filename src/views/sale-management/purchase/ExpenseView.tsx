@@ -36,12 +36,14 @@ import {
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatExpenseShare } from '../../../utils/shareUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
@@ -368,6 +370,12 @@ export const ExpenseView: React.FC = () => {
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [receiptImageState, setReceiptImageState] = useState<string>('');
 
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetExpense, setDeleteTargetExpense] = useState<ExpenseItem | null>(null);
+  const [isDeletingExpense, setIsDeletingExpense] = useState(false);
+  const [deleteExpenseError, setDeleteExpenseError] = useState<string | null>(null);
+
   // Category Manager Modal state
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -528,15 +536,35 @@ export const ExpenseView: React.FC = () => {
     setIsDetailModalOpen(true);
   };
 
-  // Delete Expense via Work API
-  const handleDeleteExpense = async (id: string, expNo: string) => {
+  // Delete Expense via Work API with confirmation modal
+  const handleOpenDeleteModal = (exp: ExpenseItem) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetExpense(exp);
+    setDeleteExpenseError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteExpense = async () => {
+    if (!deleteTargetExpense) return;
+    setIsDeletingExpense(true);
+    setDeleteExpenseError(null);
     try {
-      await workExpenseApi.deleteExpense(id);
-      toast.success(`Expense ${expNo} deleted successfully.`);
+      await workExpenseApi.deleteExpense(deleteTargetExpense.id);
+      toast.success(`Expense "${deleteTargetExpense.expenseNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetExpense(null);
       fetchExpenses(true);
     } catch (err: any) {
-      const msg = err?.message || 'Failed to delete expense';
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete expense';
+      setDeleteExpenseError(msg);
       toast.error(msg);
+    } finally {
+      setIsDeletingExpense(false);
     }
   };
 
@@ -792,6 +820,94 @@ export const ExpenseView: React.FC = () => {
     toast.success(`Expenses Excel report downloaded (${excelRows.length} records in view)!`);
   };
 
+  // Print Expense Voucher via universal printUtils
+  const handlePrintExpense = (exp: ExpenseItem) => {
+    printBusinessDocument({
+      docTypeTitle: 'EXPENSE VOUCHER',
+      docNo: exp.expenseNo,
+      docDate: exp.expenseDate,
+      status: exp.status || 'Paid',
+      statusColor: 'emerald',
+      referenceNo: exp.referenceNo,
+      partyTitle: 'Paid To / Vendor',
+      partyName: exp.payee || exp.supplierName || 'General Payee',
+      partyCompany: exp.supplierName ? `Linked Supplier: ${exp.supplierName}` : undefined,
+      extraMeta: [
+        { label: 'Category', value: exp.category },
+        { label: 'Payment Mode', value: exp.paymentMode },
+        ...(exp.referenceNo ? [{ label: 'Ref / Bill No', value: exp.referenceNo }] : []),
+      ],
+      columns: [
+        { header: 'Expense Description & Purpose', width: '50%' },
+        { header: 'Category', align: 'center', width: '25%' },
+        { header: 'Amount (₹)', align: 'right', width: '25%' },
+      ],
+      items: [
+        {
+          name: exp.title,
+          remarks: exp.notes ? `Remarks: ${exp.notes}` : `Payee: ${exp.payee}`,
+          quantity: 1,
+          unitPrice: Number(exp.amount || 0),
+          taxPercent: exp.taxPercent,
+          total: Number(exp.totalAmount || 0),
+        },
+      ],
+      subtotal: Number(exp.amount || 0),
+      tax: {
+        withGst: exp.taxAmount > 0,
+        taxAmount: exp.taxAmount,
+      },
+      grandTotal: Number(exp.totalAmount || 0),
+      paidAmount: Number(exp.totalAmount || 0),
+      balance: 0,
+      paidAmountLabel: 'Amount Disbursed',
+      balanceLabel: 'Balance',
+      notes: exp.notes || 'Operating expense processed and verified.',
+    });
+  };
+
+  // Print Table Report for Expenses
+  const handlePrintTableReport = () => {
+    if (expenses.length === 0) {
+      toast.info('No expense records available to print.');
+      return;
+    }
+
+    const printRows = expenses.map((exp) => ({
+      expenseNo: exp.expenseNo,
+      expenseDate: exp.expenseDate,
+      category: exp.category,
+      title: exp.title,
+      payee: exp.payee || exp.supplierName || '—',
+      paymentMode: exp.paymentMode,
+      referenceNo: exp.referenceNo || '—',
+      totalAmount: Number(exp.totalAmount || 0),
+    }));
+
+    printTableReport({
+      title: 'Operating Expenses Ledger Report',
+      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Category Filter: ${appliedCategory} | Mode: ${appliedPaymentMode}`,
+      columns: [
+        { header: 'Expense #', key: 'expenseNo', width: '15%' },
+        { header: 'Date', key: 'expenseDate', width: '12%' },
+        { header: 'Category', key: 'category', width: '16%' },
+        { header: 'Title / Purpose', key: 'title', width: '25%' },
+        { header: 'Payee / Vendor', key: 'payee', width: '18%' },
+        { header: 'Total (₹)', key: 'totalAmount', align: 'right', type: 'currency', width: '14%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Operating Expenses', value: summaryTotalAmount },
+        { label: 'Tax Deductions', value: summaryTaxAmount },
+        { label: 'Total Expense Vouchers', value: totalApiRecords ?? expenses.length },
+      ],
+      summaryRow: {
+        expenseNo: 'Total',
+        totalAmount: summaryTotalAmount,
+      },
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* Header Banner */}
@@ -832,6 +948,17 @@ export const ExpenseView: React.FC = () => {
                 {categories.length}
               </span>
             )}
+          </Button>
+
+          {/* Print Report Button */}
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
           </Button>
 
           {/* Export to Excel */}
@@ -1225,6 +1352,11 @@ export const ExpenseView: React.FC = () => {
                               onClick: () => handleOpenEditModal(exp),
                             },
                             {
+                              label: 'Print Expense Voucher',
+                              variant: 'print',
+                              onClick: () => handlePrintExpense(exp),
+                            },
+                            {
                               label: 'Preview',
                               variant: 'preview',
                               onClick: () => handleOpenDetailModal(exp),
@@ -1239,7 +1371,7 @@ export const ExpenseView: React.FC = () => {
                               variant: 'delete',
                               danger: true,
                               dividerBefore: true,
-                              onClick: () => handleDeleteExpense(exp.id, exp.expenseNo),
+                              onClick: () => handleOpenDeleteModal(exp),
                             },
                           ]}
                         />
@@ -1764,14 +1896,11 @@ export const ExpenseView: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    toast.info(`Preparing print for ${selectedExpense.expenseNo}...`);
-                    window.print();
-                  }}
+                  onClick={() => handlePrintExpense(selectedExpense)}
                   className="h-8.5 px-4 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print Order</span>
+                  <span>Print Expense Voucher</span>
                 </button>
               </div>
             </div>
@@ -2013,6 +2142,23 @@ export const ExpenseView: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingExpense) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetExpense(null);
+            setDeleteExpenseError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteExpense}
+        entityName="Expense"
+        recordName={deleteTargetExpense?.expenseNo}
+        isLoading={isDeletingExpense}
+        error={deleteExpenseError}
+      />
     </div>
   );
 };

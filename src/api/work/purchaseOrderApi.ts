@@ -54,13 +54,18 @@ export const mapApiItemToUiProductItem = (
   return {
     id: `po_item_${idx}_${Date.now()}`,
     productId: it.productId,
-    productName: it.productName || 'Product',
-    batch: '',
+    productName: it.productName || (it as any).name || 'Product',
+    batch: (it as any).batchNo || (it as any).batch || '',
+    expDate: (it as any).expDate || undefined,
+    mfgDate: (it as any).mfgDate || undefined,
     quantity: qty,
-    unit: 'NONE',
+    freeQuantity: Number((it as any).freeQuantity || 0),
+    unit: (it as any).unit || 'NONE',
+    packingUnit: (it as any).packingUnit,
     purchasePrice: cost,
-    discountPercent: 0,
-    discountAmount: 0,
+    salePrice: (it as any).salePrice ? Number((it as any).salePrice) : undefined,
+    discountPercent: Number((it as any).discountPercent || 0),
+    discountAmount: Number((it as any).discountAmount || 0),
     taxPercent: taxPct,
     total: Math.round(total * 100) / 100,
   };
@@ -83,20 +88,42 @@ export const mapApiPurchaseOrderToUi = (
 
   // Determine status & payment status
   const normalizedStatus = (apiPo.status as PurchaseStatus) || 'Pending';
-  const isFulfilled = normalizedStatus === 'Received' || (normalizedStatus as string) === 'Completed';
 
-  // Check if we have an existing local record with payments recorded
+  // Check if we have an existing local record with payments recorded or vouchers
   let existingPaid = 0;
   let existingPaymentMethod: any = 'Bank Transfer';
   let existingPaymentTerms = 'Net 30 Days';
   try {
+    // 1. Check official accounts payable payment vouchers from Payment Out
+    const rawPayments = localStorage.getItem('yaa_crm_payments_out');
+    let hasVouchers = false;
+    if (rawPayments) {
+      const parsedPm = JSON.parse(rawPayments);
+      if (Array.isArray(parsedPm)) {
+        const pmForPo = parsedPm.filter(
+          (pm: any) => pm.status !== 'Cancelled' && (pm.purchaseId === apiPo.id || (apiPo.poNo && pm.purchaseNo === apiPo.poNo))
+        );
+        if (pmForPo.length > 0) {
+          existingPaid = pmForPo.reduce((sum: number, pm: any) => sum + (Number(pm.amount) || 0), 0);
+          hasVouchers = true;
+          if (pmForPo[0].paymentMode) existingPaymentMethod = pmForPo[0].paymentMode;
+        }
+      }
+    }
+
+    // 2. Check stored purchase orders
     const rawStored = localStorage.getItem('yaa_crm_purchase_orders');
     if (rawStored) {
       const parsed = JSON.parse(rawStored);
       if (Array.isArray(parsed)) {
         const found = parsed.find((p: any) => p.id === apiPo.id || (apiPo.poNo && p.purchaseNo === apiPo.poNo));
         if (found) {
-          existingPaid = Number(found.paidAmount || 0);
+          if (!hasVouchers) {
+            // Only consider paid if explicitly entered/recorded
+            if (found.hasManualPayment || (Number(found.paidAmount || 0) > 0 && Number(found.paidAmount || 0) < grandTotal)) {
+              existingPaid = Number(found.paidAmount || 0);
+            }
+          }
           if (found.paymentMethod) existingPaymentMethod = found.paymentMethod;
           if (found.paymentTerms) existingPaymentTerms = found.paymentTerms;
         }
@@ -104,10 +131,14 @@ export const mapApiPurchaseOrderToUi = (
     }
   } catch {}
 
-  const paidAmount = isFulfilled ? grandTotal : Math.min(grandTotal, existingPaid);
+  const paidAmount = Math.min(grandTotal, existingPaid);
   const balance = Math.max(0, grandTotal - paidAmount);
   const paymentStatus: PurchasePaymentStatus =
-    balance <= 0 ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+    balance <= 0 && grandTotal > 0 && paidAmount >= grandTotal
+      ? 'Paid'
+      : paidAmount > 0
+      ? 'Partial'
+      : 'Unpaid';
 
   const orderDateStr = apiPo.orderDate
     ? apiPo.orderDate.split('T')[0]
@@ -176,12 +207,18 @@ export const mapUiToCreatePurchaseOrderPayload = (
   },
   items: PurchaseProductItem[]
 ): CreatePurchaseOrderPayload => {
-  const lineItems = items.map((it) => ({
-    productId: ensureValidUuid(it.productId),
-    quantity: Math.max(1, Number(it.quantity) || 1),
-    unitCost: Math.max(0, Number(it.purchasePrice) || 0),
-    taxPercent: Math.max(0, Number(it.taxPercent) || 0),
-  }));
+  const lineItems = items.map((it) => {
+    const rawBatch = (it.batch && it.batch.trim() && it.batch !== 'SELECT BATCH') ? it.batch.trim() : undefined;
+    return {
+      productId: ensureValidUuid(it.productId),
+      quantity: Math.max(1, Number(it.quantity) || 1),
+      unitCost: Math.max(0, Number(it.purchasePrice) || 0),
+      taxPercent: Math.max(0, Number(it.taxPercent) || 0),
+      ...(rawBatch ? { batchNo: rawBatch, batch: rawBatch } : {}),
+      expDate: it.expDate || undefined,
+      mfgDate: it.mfgDate || undefined,
+    };
+  });
 
   const rawDeliveryDate = formData.expectedDeliveryDate || formData.dueDate;
   const deliveryDate = rawDeliveryDate ? rawDeliveryDate.split('T')[0] : undefined;
@@ -218,12 +255,18 @@ export const mapUiToUpdatePurchaseOrderPayload = (
   },
   items: PurchaseProductItem[]
 ): UpdatePurchaseOrderPayload => {
-  const lineItems = items.map((it) => ({
-    productId: ensureValidUuid(it.productId),
-    quantity: Math.max(1, Number(it.quantity) || 1),
-    unitCost: Math.max(0, Number(it.purchasePrice) || 0),
-    taxPercent: Math.max(0, Number(it.taxPercent) || 0),
-  }));
+  const lineItems = items.map((it) => {
+    const rawBatch = (it.batch && it.batch.trim() && it.batch !== 'SELECT BATCH') ? it.batch.trim() : undefined;
+    return {
+      productId: ensureValidUuid(it.productId),
+      quantity: Math.max(1, Number(it.quantity) || 1),
+      unitCost: Math.max(0, Number(it.purchasePrice) || 0),
+      taxPercent: Math.max(0, Number(it.taxPercent) || 0),
+      ...(rawBatch ? { batchNo: rawBatch, batch: rawBatch } : {}),
+      expDate: it.expDate || undefined,
+      mfgDate: it.mfgDate || undefined,
+    };
+  });
 
   const rawDeliveryDate = formData.expectedDeliveryDate || formData.dueDate;
   const deliveryDate = rawDeliveryDate ? rawDeliveryDate.split('T')[0] : undefined;

@@ -38,6 +38,7 @@ import {
 } from "../../../store/useSalesManagementStore";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
@@ -45,6 +46,7 @@ import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "sonner";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { printTableReport } from "../../../utils/printUtils";
 import { FileSpreadsheet } from "lucide-react";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { useAppDispatch } from "../../../hooks/redux";
@@ -326,6 +328,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     null,
   );
 
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetOrder, setDeleteTargetOrder] = useState<SaleOrderRecord | null>(null);
+  const [isDeletingOrder, setIsDeletingOrder] = useState(false);
+  const [deleteOrderError, setDeleteOrderError] = useState<string | null>(null);
+
   // Close dropdown on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -521,6 +529,24 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   useEffect(() => {
     fetchSaleOrders();
+  }, [fetchSaleOrders]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch sale orders
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === "/sale-management/sales/sale-order" ||
+        customEvent.detail?.id === "sale-order"
+      ) {
+        isFetchingOrdersRef.current = false;
+        fetchSaleOrders();
+      }
+    };
+    window.addEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    return () => {
+      window.removeEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    };
   }, [fetchSaleOrders]);
 
   // Combined Customer List (Live API + Local Store)
@@ -1725,26 +1751,39 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     printWindow.document.close();
   };
 
-  // Delete / Cancel Sale Order (DELETE /commerce/orders/{id})
-  const handleDeleteOrder = async (id: string) => {
+  // Delete / Cancel Sale Order (DELETE /commerce/orders/{id}) with confirmation modal
+  const handleOpenDeleteModal = (order: SaleOrderRecord) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetOrder(order);
+    setDeleteOrderError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteOrder = async () => {
+    if (!deleteTargetOrder) return;
+    setIsDeletingOrder(true);
+    setDeleteOrderError(null);
     try {
-      setIsActionLoading(true);
-      if (UUID_REGEX.test(id)) {
-        await commerceSaleOrderApi.deleteOrder(id);
+      if (UUID_REGEX.test(deleteTargetOrder.id)) {
+        await commerceSaleOrderApi.deleteOrder(deleteTargetOrder.id);
       }
-      const updated = saleOrders.filter((o) => o.id !== id);
+      const updated = saleOrders.filter((o) => o.id !== deleteTargetOrder.id);
       persistSaleOrders(updated);
-      toast.success("Sale order removed successfully.");
+      toast.success(`Sale order "${deleteTargetOrder.orderNo}" removed successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetOrder(null);
       await fetchSaleOrders();
     } catch (err: any) {
       console.error("Delete order failed:", err);
-      toast.error(
+      const errMsg =
         err?.response?.data?.error?.message ||
-          err?.message ||
-          "Failed to delete sale order",
-      );
+        err?.message ||
+        "Failed to delete sale order";
+      setDeleteOrderError(errMsg);
+      toast.error(errMsg);
     } finally {
-      setIsActionLoading(false);
+      setIsDeletingOrder(false);
     }
   };
 
@@ -2806,6 +2845,47 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     );
   };
 
+  // Print Sale Orders Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (filteredOrders.length === 0) {
+      toast.error("No sale orders to print.");
+      return;
+    }
+
+    const printRows = filteredOrders.map((o) => ({
+      orderNo: o.orderNo,
+      orderDate: isoToDdmmyyyy(o.orderDate),
+      dueDate: isoToDdmmyyyy(o.dueDate),
+      partyName: o.partyName,
+      customerPhone: o.customerPhone || "-",
+      amount: Number(o.amount || 0),
+      balance: Number(o.balance || 0),
+      status: o.status,
+    }));
+
+    printTableReport({
+      title: "SALES ORDER REGISTER",
+      subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length}`,
+      columns: [
+        { header: "Order No.", key: "orderNo", align: "center", width: "15%" },
+        { header: "Date", key: "orderDate", align: "center", width: "12%" },
+        { header: "Due Date", key: "dueDate", align: "center", width: "12%" },
+        { header: "Customer Name", key: "partyName", align: "left", width: "25%" },
+        { header: "Contact", key: "customerPhone", align: "left", width: "14%" },
+        { header: "Total (₹)", key: "amount", align: "right", type: "currency", width: "14%" },
+        { header: "Balance (₹)", key: "balance", align: "right", type: "currency", width: "14%" },
+        { header: "Status", key: "status", align: "center", width: "10%" },
+      ],
+      data: printRows,
+      summaryRow: {
+        orderNo: "TOTAL",
+        partyName: `${filteredOrders.length} Orders`,
+        amount: metrics.totalVal,
+        balance: metrics.openVal,
+      },
+    });
+  };
+
   // =========================================================================
   // VIEW MODE: LIST (Transactions Table View - Royal Purple CRM Theme)
   // =========================================================================
@@ -2844,6 +2924,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+            onClick={handlePrintTableReport}
+            className="hover:border-purple-300 transition-colors"
+          >
+            Print Report
           </Button>
 
           <Button
@@ -3273,7 +3363,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                 {
                                   label: "Delete",
                                   variant: "delete",
-                                  onClick: () => handleDeleteOrder(item.id),
+                                  onClick: () => handleOpenDeleteModal(item),
                                 },
                               ]}
                             />
@@ -3743,6 +3833,23 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           </form>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingOrder) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetOrder(null);
+            setDeleteOrderError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteOrder}
+        entityName="Sale Order"
+        recordName={deleteTargetOrder?.orderNo}
+        isLoading={isDeletingOrder}
+        error={deleteOrderError}
+      />
     </div>
   );
 };

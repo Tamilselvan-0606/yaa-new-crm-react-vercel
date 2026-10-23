@@ -39,14 +39,18 @@ import {
 } from "../../../store/useSalesManagementStore";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { printTableReport } from "../../../utils/printUtils";
 import { UniversalShareDropdown, formatPaymentInShare } from "../../../utils/shareUtils";
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "sonner";
+import { useAppDispatch } from "../../../hooks/redux";
+import { baseApi } from "../../../api/baseApi";
 import {
   commercePaymentInApi,
   mapApiPaymentInToSalePaymentIn,
@@ -169,6 +173,7 @@ const PERIOD_OPTIONS = [
 ];
 
 export const PaymentInView: React.FC = () => {
+  const dispatch = useAppDispatch();
   const {
     customers,
     setCustomersList,
@@ -228,6 +233,12 @@ export const PaymentInView: React.FC = () => {
   const [isViewReceiptModalOpen, setIsViewReceiptModalOpen] = useState(false);
   const [selectedPaymentIn, setSelectedPaymentIn] =
     useState<SalePaymentIn | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetPayment, setDeleteTargetPayment] = useState<SalePaymentIn | null>(null);
+  const [isDeletingPayment, setIsDeletingPayment] = useState(false);
+  const [deletePaymentError, setDeletePaymentError] = useState<string | null>(null);
 
   // Quick Customer Modal
   const [isQuickCustomerOpen, setIsQuickCustomerOpen] = useState(false);
@@ -404,6 +415,24 @@ export const PaymentInView: React.FC = () => {
   // Trigger list fetch on dependency changes
   useEffect(() => {
     fetchPaymentIns();
+  }, [fetchPaymentIns]);
+
+  // Listen for sidebar click navigation events to immediately re-fetch payment-in records
+  useEffect(() => {
+    const handleSidebarNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ path: string; id: string }>;
+      if (
+        customEvent.detail?.path === "/sale-management/sales/payment-in" ||
+        customEvent.detail?.id === "payment-in"
+      ) {
+        isFetchingRef.current = false;
+        fetchPaymentIns();
+      }
+    };
+    window.addEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    return () => {
+      window.removeEventListener("crm:sidebar-navigate", handleSidebarNavigate);
+    };
   }, [fetchPaymentIns]);
 
   // Close dropdowns on outside click or scroll
@@ -896,15 +925,38 @@ export const PaymentInView: React.FC = () => {
     toast.success(`Opening WhatsApp for Receipt #${item.receiptNo}`);
   };
 
-  // Delete / Void Payment Record via Backend API
-  const handleDeletePayment = async (id: string, receiptNo: string) => {
+  // Delete / Void Payment Record via Backend API with confirmation modal
+  const handleOpenDeleteModal = (payment: SalePaymentIn) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetPayment(payment);
+    setDeletePaymentError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeletePayment = async () => {
+    if (!deleteTargetPayment) return;
+    setIsDeletingPayment(true);
+    setDeletePaymentError(null);
     try {
-      if (UUID_REGEX.test(id)) {
-        await commercePaymentInApi.deletePaymentIn(id);
+      if (UUID_REGEX.test(deleteTargetPayment.id)) {
+        await commercePaymentInApi.deletePaymentIn(deleteTargetPayment.id);
       }
-      setPaymentIns((prev) => prev.filter((p) => p.id !== id));
-      deleteStorePaymentIn(id);
-      toast.success(`Payment-In #${receiptNo} voided successfully`);
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "PaymentIn", id: deleteTargetPayment.id },
+          { type: "PaymentIn", id: "LIST" },
+          { type: "SalesInvoice", id: "LIST" },
+          { type: "Customer", id: "LIST" },
+          "Collection",
+          "Dashboard",
+        ]),
+      );
+      setPaymentIns((prev) => prev.filter((p) => p.id !== deleteTargetPayment.id));
+      deleteStorePaymentIn(deleteTargetPayment.id);
+      toast.success(`Payment-In #${deleteTargetPayment.receiptNo} voided successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetPayment(null);
       fetchPaymentIns();
     } catch (err: any) {
       console.error("Failed to void payment:", err);
@@ -913,7 +965,10 @@ export const PaymentInView: React.FC = () => {
         err?.response?.data?.message ||
         err?.message ||
         "Failed to void payment receipt";
+      setDeletePaymentError(msg);
       toast.error(msg);
+    } finally {
+      setIsDeletingPayment(false);
     }
   };
 
@@ -1023,6 +1078,16 @@ export const PaymentInView: React.FC = () => {
           toast.success(`Payment-In #${mapped.receiptNo} recorded successfully!`);
         }
       }
+
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "PaymentIn", id: "LIST" },
+          { type: "SalesInvoice", id: "LIST" },
+          { type: "Customer", id: "LIST" },
+          "Collection",
+          "Dashboard",
+        ]),
+      );
 
       setIsCreateModalOpen(false);
       fetchPaymentIns();
@@ -1160,6 +1225,44 @@ export const PaymentInView: React.FC = () => {
     );
   };
 
+  // Print Payment-In Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (paymentIns.length === 0) {
+      toast.error("No payment records to print.");
+      return;
+    }
+
+    const printRows = paymentIns.map((p, idx) => ({
+      index: idx + 1,
+      receiptNo: p.receiptNo || "-",
+      paymentDate: p.paymentDate,
+      partyName: p.partyName,
+      invoiceNo: p.invoiceNo || "-",
+      paymentType: p.paymentType,
+      receivedAmount: Number(p.receivedAmount || 0),
+    }));
+
+    printTableReport({
+      title: "PAYMENT-IN TRANSACTIONS REPORT",
+      subtitle: `Total Payments: ${paymentIns.length}`,
+      columns: [
+        { header: "#", key: "index", align: "center", width: "6%" },
+        { header: "Receipt No.", key: "receiptNo", align: "center", width: "16%" },
+        { header: "Date", key: "paymentDate", align: "center", width: "14%" },
+        { header: "Customer Name", key: "partyName", align: "left", width: "24%" },
+        { header: "Invoice Ref", key: "invoiceNo", align: "center", width: "14%" },
+        { header: "Mode", key: "paymentType", align: "center", width: "12%" },
+        { header: "Amount Received (₹)", key: "receivedAmount", align: "right", type: "currency", width: "14%" },
+      ],
+      data: printRows,
+      summaryRow: {
+        receiptNo: "TOTAL",
+        partyName: `${paymentIns.length} Receipts`,
+        receivedAmount: paymentIns.reduce((acc, p) => acc + (Number(p.receivedAmount) || 0), 0),
+      },
+    });
+  };
+
   const handleResetFilters = () => {
     setPendingSearch("");
     setAppliedSearch("");
@@ -1205,6 +1308,16 @@ export const PaymentInView: React.FC = () => {
             className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+            onClick={handlePrintTableReport}
+            className="hover:border-purple-300 transition-colors"
+          >
+            Print Report
           </Button>
 
           <Button
@@ -1611,7 +1724,7 @@ export const PaymentInView: React.FC = () => {
                               {
                                 label: 'Void / Delete',
                                 variant: 'delete',
-                                onClick: () => handleDeletePayment(item.id, item.receiptNo),
+                                onClick: () => handleOpenDeleteModal(item),
                               },
                             ]}
                           />
@@ -2422,6 +2535,23 @@ export const PaymentInView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingPayment) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetPayment(null);
+            setDeletePaymentError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeletePayment}
+        entityName="Payment In"
+        recordName={deleteTargetPayment?.receiptNo ? `#${deleteTargetPayment.receiptNo}` : undefined}
+        isLoading={isDeletingPayment}
+        error={deletePaymentError}
+      />
     </div>
   );
 };

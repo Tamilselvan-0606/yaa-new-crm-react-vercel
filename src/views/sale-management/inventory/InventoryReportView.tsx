@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { printTableReport } from '../../../utils/printUtils';
 import {
   FileSpreadsheet,
   Download,
@@ -111,7 +112,51 @@ export const InventoryReportView: React.FC = () => {
   };
 
   const handlePrint = () => {
-    window.print();
+    const tableData = STOCK_MOVEMENT_DATA.map((d) => {
+      const catShare = CATEGORY_SHARE_DATA.find((c) => c.name.toLowerCase().includes(d.category.toLowerCase()));
+      return {
+        category: d.category,
+        stockIn: d.stockIn,
+        stockOut: d.stockOut,
+        available: d.available,
+        turnoverRatio: ((d.stockOut / (d.stockIn || 1)) * 100).toFixed(1) + '%',
+        share: catShare ? `${catShare.value}% (${catShare.count} items)` : 'N/A',
+      };
+    });
+
+    const totalIn = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockIn, 0);
+    const totalOut = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockOut, 0);
+    const totalAvail = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.available, 0);
+
+    printTableReport({
+      title: 'Inventory & Stock Analytics Report',
+      subtitle: `Time Range: ${timeRange} | Category Filter: ${selectedCategory}`,
+      metrics: [
+        { label: 'Total Inbound Units', value: totalIn },
+        { label: 'Total Outbound Units', value: totalOut },
+        { label: 'Available Stock Units', value: totalAvail },
+        { label: 'Latest Stock Valuation', value: '₹31,50,000' },
+      ],
+      columns: [
+        { header: 'Category', key: 'category', align: 'left' },
+        { header: 'Stock In Units', key: 'stockIn', align: 'right' },
+        { header: 'Stock Out Units', key: 'stockOut', align: 'right' },
+        { header: 'Current Available', key: 'available', align: 'right' },
+        { header: 'Movement Ratio', key: 'turnoverRatio', align: 'right' },
+        { header: 'Category Share', key: 'share', align: 'right' },
+      ],
+      data: tableData,
+      summaryRow: {
+        category: 'Total / Summary',
+        stockIn: totalIn,
+        stockOut: totalOut,
+        available: totalAvail,
+        turnoverRatio: ((totalOut / (totalIn || 1)) * 100).toFixed(1) + '%',
+        share: '100%',
+      },
+      orientation: 'landscape',
+      footerNote: 'Generated from YAA CRM Inventory Management System • Read-only Analytics Report',
+    });
   };
 
   return (

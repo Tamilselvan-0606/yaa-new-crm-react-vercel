@@ -97,6 +97,7 @@ export const ProductsView: React.FC = () => {
 
   const [submitting, setSubmitting] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     organizationId: '',
     subOrganizationId: '',
@@ -124,7 +125,7 @@ export const ProductsView: React.FC = () => {
   const lastRequestKeyRef = useRef<string>('');
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const loadProducts = async (subOrgId?: string, branchId?: string, forced = false) => {
+  const loadProducts = async (subOrgId?: string, branchId?: string, forced = false, prodFilterName?: string) => {
     const activeSubOrgName = localStorage.getItem('active_sub_organization');
     const storedSubOrgId = localStorage.getItem('active_sub_organization_id');
     const effectiveSubOrgId =
@@ -139,7 +140,9 @@ export const ProductsView: React.FC = () => {
         ? branchId
         : (activeBranch && activeBranch !== 'All' ? storedBranchId || undefined : undefined);
 
-    const requestKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${effectiveSubOrgId || ''}_${effectiveBranchId || ''}`;
+    const activeProduct = prodFilterName !== undefined ? prodFilterName : (localStorage.getItem('active_product') || 'All');
+
+    const requestKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${effectiveSubOrgId || ''}_${effectiveBranchId || ''}_${activeProduct}`;
     if (!forced && lastRequestKeyRef.current === requestKey) {
       return;
     }
@@ -158,8 +161,16 @@ export const ProductsView: React.FC = () => {
       });
 
       if (res && res.success) {
-        setProducts(res.data || []);
-        const total = res.pagination?.totalRecords ?? res.data?.length ?? 0;
+        let items = res.data || [];
+        if (activeProduct && activeProduct !== 'All') {
+          items = items.filter(
+            (p) =>
+              (p.name || '').trim().toLowerCase() === activeProduct.trim().toLowerCase() ||
+              (p.code || '').trim().toLowerCase() === activeProduct.trim().toLowerCase()
+          );
+        }
+        setProducts(items);
+        const total = (activeProduct && activeProduct !== 'All') ? items.length : (res.pagination?.totalRecords ?? items.length);
         setTotalProducts(total);
       } else {
         setProducts([]);
@@ -180,11 +191,17 @@ export const ProductsView: React.FC = () => {
       setPage(1);
       loadProducts(e?.detail?.subOrganizationId || e?.detail?.id, e?.detail?.branchId);
     };
+    const handleProductChange = (e: any) => {
+      setPage(1);
+      loadProducts(undefined, undefined, true, e?.detail?.product || e?.detail?.name);
+    };
     window.addEventListener('subOrgChanged', handleFilterChange);
     window.addEventListener('branchChanged', handleFilterChange);
+    window.addEventListener('productChanged', handleProductChange);
     return () => {
       window.removeEventListener('subOrgChanged', handleFilterChange);
       window.removeEventListener('branchChanged', handleFilterChange);
+      window.removeEventListener('productChanged', handleProductChange);
     };
   }, [pageSize, appliedSearch, appliedStatus]);
 
@@ -393,6 +410,7 @@ export const ProductsView: React.FC = () => {
   const handleOpenAddModal = () => {
     setEditingProduct(null);
     setFormErrors({});
+    setApiModalError(null);
     setFormData({
       organizationId: currentUser?.organizationId || getStoredOrganizationId() || '',
       subOrganizationId: '',
@@ -422,6 +440,7 @@ export const ProductsView: React.FC = () => {
   const handleOpenEditModal = (prod: ClientProductApiItem) => {
     setEditingProduct(prod);
     setFormErrors({});
+    setApiModalError(null);
     const resolvedSubOrgId = prod.subOrganizationId || (prod as any).sub_organization_id || '';
     const resolvedBranchId = prod.branchId || (prod as any).branch_id || '';
     setFormData({
@@ -544,12 +563,14 @@ export const ProductsView: React.FC = () => {
         showToast?.('success', 'Product Created', `Added "${formData.name}" to products list`);
       }
       setIsModalOpen(false);
+      setApiModalError(null);
       await loadProducts(undefined, undefined, true);
     } catch (err: any) {
       console.error('Save product error:', err);
       const apiErr = err?.response?.data?.error;
       const fieldMsg = apiErr?.fields?.map((f: any) => `${f.path?.join('.') || ''}: ${f.message}`).join(', ');
       const msg = fieldMsg || apiErr?.message || err?.response?.data?.message || err?.message || 'Failed to save product';
+      setApiModalError(msg);
       showToast?.('error', 'Failed', msg);
     } finally {
       setSubmitting(false);
@@ -1046,6 +1067,16 @@ export const ProductsView: React.FC = () => {
         onBack={() => setIsModalOpen(false)}
       >
         <form onSubmit={handleSaveProduct} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+
+          {apiModalError && (
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-700 animate-in fade-in duration-150">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <span className="font-bold block">Operation Failed</span>
+                <span className="text-rose-600 break-words">{apiModalError}</span>
+              </div>
+            </div>
+          )}
 
           {/* Row 0: Organization (Read-Only) | Sub-Organization | Branch */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

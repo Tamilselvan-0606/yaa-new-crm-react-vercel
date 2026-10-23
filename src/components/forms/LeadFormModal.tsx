@@ -109,6 +109,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
   const [branches, setBranches] = useState<BranchApiItem[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [apiModalError, setApiModalError] = useState<string | null>(null);
 
   // Fetch Organizations (for Super Admin) or default org name
   useEffect(() => {
@@ -373,6 +374,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         });
       }
       setFormErrors({});
+      setApiModalError(null);
     }
   }, [isOpen, initialLead, reset, currentUser]);
 
@@ -405,6 +407,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     setFormErrors({});
 
     try {
+      setApiModalError(null);
       const chosenPlan = data.interestedProductOrService || '';
       const effectivePhone = data.whatsapp || data.phone || '';
 
@@ -436,6 +439,19 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       onClose();
     } catch (e: any) {
       console.error('Failed to save platform lead:', e);
+      const errMsg =
+        e?.data?.message ||
+        e?.response?.data?.message ||
+        e?.response?.data?.error?.message ||
+        (Array.isArray(e?.data?.fields)
+          ? e.data.fields.map((f: any) => `${f.path?.join('.') ? f.path.join('.') + ': ' : ''}${f.message}`).join(', ')
+          : null) ||
+        (Array.isArray(e?.response?.data?.fields)
+          ? e.response.data.fields.map((f: any) => `${f.path?.join('.') ? f.path.join('.') + ': ' : ''}${f.message}`).join(', ')
+          : null) ||
+        e?.message ||
+        'Failed to save lead.';
+      setApiModalError(errMsg);
     }
   };
 
@@ -458,6 +474,18 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       onBack={onClose}
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        {apiModalError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
+            <span>{apiModalError}</span>
+            <button
+              type="button"
+              onClick={() => setApiModalError(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold ml-2 cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
           {/* Organization */}

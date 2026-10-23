@@ -24,6 +24,7 @@ import {
   FileSpreadsheet,
   MoreVertical,
   X,
+  Printer,
 } from "lucide-react";
 import {
   UniversalShareDropdown,
@@ -32,6 +33,7 @@ import {
 import { Button } from "../../../components/common/Button";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { printTableReport } from "../../../utils/printUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   salesRepresentativeApi,
@@ -47,6 +49,7 @@ import {
 } from "../../../api/commerce/collectionApi";
 import { SalesRepresentativeSchema, SalesRepFormData } from "../../../schemas";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FormError } from "../../../components/common/FormError";
@@ -170,6 +173,7 @@ export const SalesRepresentativeView: React.FC = () => {
     useState<ApiSalesRepresentative | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingRep, setIsDeletingRep] = useState(false);
+  const [deleteRepError, setDeleteRepError] = useState<string | null>(null);
 
   // ── react-hook-form ──────────────────────────────────────────────────────
   const {
@@ -362,6 +366,23 @@ export const SalesRepresentativeView: React.FC = () => {
 
   useEffect(() => {
     loadReps();
+  }, [loadReps]);
+
+  // Listen for sidebar click event to trigger immediate fresh API fetch
+  useEffect(() => {
+    const handleSidebarNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        detail?.path === '/sale-management/sales/sales-representatives' ||
+        detail?.path === '/sale-management/sales/sales-representative' ||
+        detail?.id === 'sales-hub-sales-representative' ||
+        detail?.id === 'billing-sales-representatives'
+      ) {
+        loadReps();
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNav);
+    return () => window.removeEventListener('crm:sidebar-navigate', handleSidebarNav);
   }, [loadReps]);
 
   // ── load portfolio when detail modal opens ────────────────────────────────
@@ -616,6 +637,7 @@ export const SalesRepresentativeView: React.FC = () => {
   const handleConfirmDelete = async () => {
     if (!deleteTargetRep) return;
     setIsDeletingRep(true);
+    setDeleteRepError(null);
     try {
       await salesRepresentativeApi.remove(deleteTargetRep.id);
       toast.success(`"${deleteTargetRep.name}" deleted.`);
@@ -635,10 +657,13 @@ export const SalesRepresentativeView: React.FC = () => {
       );
       loadReps();
     } catch (err: any) {
-      toast.error(
+      const errMsg =
         err?.response?.data?.error?.message ||
-          "Failed to delete representative.",
-      );
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to delete representative.";
+      setDeleteRepError(errMsg);
+      toast.error(errMsg);
     } finally {
       setIsDeletingRep(false);
     }
@@ -810,6 +835,60 @@ export const SalesRepresentativeView: React.FC = () => {
     );
   };
 
+  // Print Sales Representatives Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (reps.length === 0) {
+      toast.error("No sales representatives to print.");
+      return;
+    }
+
+    const printRows = reps.map((r, idx) => {
+      const m = repMetricsMap.get(r.id);
+      const outstanding = m ? m.totalOutstanding : Number(r.totalOutstandingAmount || 0);
+      const collected = m ? m.totalCollected : Number(r.totalCollectedAmount || 0);
+      const collectionRate = `${(m ? m.collectionRatePercent : (r.collectionRatePercent || 0)).toFixed(1)}%`;
+
+      return {
+        sNo: idx + 1,
+        name: r.name,
+        phone: r.mobile || "-",
+        email: r.email || "-",
+        assignedCustomers: m ? m.customersCount : Number(r.assignedCustomersCount || 0),
+        outstanding: outstanding,
+        collected: collected,
+        collectionRate: collectionRate,
+        status: r.status,
+      };
+    });
+
+    printTableReport({
+      title: "SALES REPRESENTATIVES PERFORMANCE REPORT",
+      subtitle: `Total Sales Representatives: ${reps.length}`,
+      columns: [
+        { header: "#", key: "sNo", align: "center", width: "5%" },
+        { header: "Representative", key: "name", align: "left", width: "20%" },
+        { header: "Phone", key: "phone", align: "left", width: "14%" },
+        { header: "Email", key: "email", align: "left", width: "18%" },
+        { header: "Customers", key: "assignedCustomers", align: "center", width: "10%" },
+        { header: "Outstanding (₹)", key: "outstanding", align: "right", type: "currency", width: "12%" },
+        { header: "Collected (₹)", key: "collected", align: "right", type: "currency", width: "12%" },
+        { header: "Status", key: "status", align: "center", width: "9%" },
+      ],
+      data: printRows,
+      summaryRow: {
+        sNo: "TOTAL",
+        name: `${reps.length} Reps`,
+        outstanding: kpis.totalOutstanding,
+        collected: kpis.totalCollected,
+      },
+      metrics: [
+        { label: "Total Outstanding", value: kpis.totalOutstanding },
+        { label: "Total Collected", value: kpis.totalCollected },
+        { label: "Active Representatives", value: kpis.activeCount },
+      ],
+    });
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
@@ -846,6 +925,16 @@ export const SalesRepresentativeView: React.FC = () => {
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={handlePrintTableReport}
+            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+          >
+            Print Report
           </Button>
 
           <Button
@@ -1183,6 +1272,7 @@ export const SalesRepresentativeView: React.FC = () => {
                               variant: 'delete',
                               onClick: () => {
                                 setDeleteTargetRep(rep);
+                                setDeleteRepError(null);
                                 setIsDeleteModalOpen(true);
                               },
                             },
@@ -1213,74 +1303,25 @@ export const SalesRepresentativeView: React.FC = () => {
       </div>
 
       {/* Delete Confirmation Modal */}
-      <Modal
+      <DeleteConfirmationModal
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingRep) {
             setIsDeleteModalOpen(false);
             setDeleteTargetRep(null);
+            setDeleteRepError(null);
           }
         }}
-        title="Delete Representative"
-        subtitle="Permanent record removal confirmation"
-        maxWidth="md"
-      >
-        <div className="p-4 space-y-4">
-          <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3">
-            <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center flex-shrink-0">
-              <Trash2 className="w-5 h-5 stroke-[2.2]" />
-            </div>
-            <div>
-              <h4 className="text-sm font-bold text-rose-900">
-                Are you sure you want to delete this sales representative?
-              </h4>
-              <p className="text-xs text-rose-700 mt-1">
-                You are about to delete{" "}
-                <span className="font-bold text-rose-950">
-                  "{deleteTargetRep?.name}"
-                </span>
-                {deleteTargetRep?.designation && (
-                  <span className="text-[11px] font-semibold text-rose-800">
-                    {" "}
-                    ({deleteTargetRep.designation})
-                  </span>
-                )}
-                . This action cannot be undone.
-              </p>
-            </div>
-          </div>
-
-          <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
-            <button
-              type="button"
-              disabled={isDeletingRep}
-              onClick={() => {
-                setIsDeleteModalOpen(false);
-                setDeleteTargetRep(null);
-              }}
-              className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
-            >
-              <X className="w-4 h-4 text-slate-500" />
-              <span>Cancel</span>
-            </button>
-            <button
-              type="button"
-              disabled={isDeletingRep}
-              onClick={handleConfirmDelete}
-              className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-            >
-              {isDeletingRep ? (
-                <Loader2 className="w-4 h-4 animate-spin text-white" />
-              ) : (
-                <Trash2 className="w-4 h-4 stroke-[2.2]" />
-              )}
-              <span>
-                {isDeletingRep ? "Deleting..." : "Delete Representative"}
-              </span>
-            </button>
-          </div>
-        </div>
-      </Modal>
+        onConfirm={handleConfirmDelete}
+        entityName="Sales Representative"
+        recordName={
+          deleteTargetRep
+            ? `${deleteTargetRep.name}${deleteTargetRep.designation ? ` (${deleteTargetRep.designation})` : ""}`
+            : undefined
+        }
+        isLoading={isDeletingRep}
+        error={deleteRepError}
+      />
 
       {/* ================================================================ */}
       {/* ADD / EDIT MODAL                                                  */}

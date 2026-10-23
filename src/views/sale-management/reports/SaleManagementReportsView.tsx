@@ -114,6 +114,30 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
     ],
   },
   {
+    category: 'inventory',
+    label: 'Inventory & Stock Reports',
+    icon: Package,
+    items: [
+      { id: 'stock_summary', label: 'Stock Summary & Valuation', category: 'inventory', description: 'Current on-hand stock quantities and asset valuation' },
+      { id: 'low_stock_summary', label: 'Low Stock & Reorder Alert', category: 'inventory', description: 'Items at or below minimum threshold requiring reorder' },
+      { id: 'item_movement', label: 'Item Stock Movement', category: 'inventory', description: 'Inward purchase vs. outward sales audit trail per product' },
+      { id: 'category_stock', label: 'Category-wise Stock & Sales', category: 'inventory', description: 'Stock value distribution across categories and subcategories' },
+    ],
+  },
+  {
+    category: 'purchase',
+    label: 'Purchase Reports',
+    icon: Truck,
+    items: [
+      { id: 'purchase_summary', label: 'Purchase Summary & Analytics', category: 'purchase', description: 'Procurement volume, vendor expense breakdown, and stats' },
+      { id: 'supplier_statement', label: 'Supplier Statement (Ledger)', category: 'purchase', description: 'Supplier accounts, payments released, and pending payables' },
+      { id: 'purchase_by_supplier', label: 'Purchase by Supplier', category: 'purchase', description: 'Total purchase expenditure grouped by vendor' },
+      { id: 'purchase_return_report', label: 'Purchase Return / Debit Note Report', category: 'purchase', description: 'Returned purchase goods and debit adjustments' },
+      { id: 'purchase_request_report', label: 'Purchase Request Report', category: 'purchase', description: 'Pending purchase requests, approved vs rejected, department/category-wise breakdown' },
+      { id: 'payment_out_report', label: 'Payment Out Report', category: 'purchase', description: 'Vendor payments made, payment mode breakdown, supplier-wise payment summary' },
+    ],
+  },
+  {
     category: 'sales',
     label: 'Sales Hub Reports',
     icon: ShoppingCart,
@@ -137,30 +161,6 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
       { id: 'payment_receipts_report', label: 'Payment Receipts Report (Payment-In)', category: 'collections', description: 'Cash/bank receipts, payment mode breakdown, party-wise payment received summary' },
       { id: 'sales_rep_collections', label: 'Sales Rep Collection Report', category: 'collections', description: 'Representative performance, assigned customers, dues, and recovery rates' },
       { id: 'customer_aging_report', label: 'Customer Aging Report', category: 'collections', description: 'Receivables aging analysis across 0–30, 31–60, 61–90, and 90+ day buckets' },
-    ],
-  },
-  {
-    category: 'inventory',
-    label: 'Inventory & Stock Reports',
-    icon: Package,
-    items: [
-      { id: 'stock_summary', label: 'Stock Summary & Valuation', category: 'inventory', description: 'Current on-hand stock quantities and asset valuation' },
-      { id: 'low_stock_summary', label: 'Low Stock & Reorder Alert', category: 'inventory', description: 'Items at or below minimum threshold requiring reorder' },
-      { id: 'item_movement', label: 'Item Stock Movement', category: 'inventory', description: 'Inward purchase vs. outward sales audit trail per product' },
-      { id: 'category_stock', label: 'Category-wise Stock & Sales', category: 'inventory', description: 'Stock value distribution across categories and subcategories' },
-    ],
-  },
-  {
-    category: 'purchase',
-    label: 'Purchase Reports',
-    icon: Truck,
-    items: [
-      { id: 'purchase_summary', label: 'Purchase Summary & Analytics', category: 'purchase', description: 'Procurement volume, vendor expense breakdown, and stats' },
-      { id: 'supplier_statement', label: 'Supplier Statement (Ledger)', category: 'purchase', description: 'Supplier accounts, payments released, and pending payables' },
-      { id: 'purchase_by_supplier', label: 'Purchase by Supplier', category: 'purchase', description: 'Total purchase expenditure grouped by vendor' },
-      { id: 'purchase_return_report', label: 'Purchase Return / Debit Note Report', category: 'purchase', description: 'Returned purchase goods and debit adjustments' },
-      { id: 'purchase_request_report', label: 'Purchase Request Report', category: 'purchase', description: 'Pending purchase requests, approved vs rejected, department/category-wise breakdown' },
-      { id: 'payment_out_report', label: 'Payment Out Report', category: 'purchase', description: 'Vendor payments made, payment mode breakdown, supplier-wise payment summary' },
     ],
   },
   {
@@ -389,6 +389,13 @@ export const SaleManagementReportsView: React.FC = () => {
     return REPORT_MENU[0].items[0];
   }, [activeReport]);
 
+  const activeCategoryLabel = useMemo(() => {
+    for (const group of REPORT_MENU) {
+      if (group.items.some((i) => i.id === activeReport)) return group.label;
+    }
+    return 'Sale Management Report';
+  }, [activeReport]);
+
   const activePartyName = useMemo(() => {
     if (selectedPartyFilter === 'ALL') return 'All Parties';
     const c = customers.find((cust) => cust.id === selectedPartyFilter);
@@ -403,7 +410,24 @@ export const SaleManagementReportsView: React.FC = () => {
       return `From ${formatToDDMMYYYY(customStartDate)} to ${formatToDDMMYYYY(customEndDate)}`;
     }
     const today = new Date().toISOString().split('T')[0];
-    return `From ${formatToDDMMYYYY(today)} to ${formatToDDMMYYYY(today)}`;
+    if (timeRange === 'today') {
+      return `For Today (${formatToDDMMYYYY(today)})`;
+    }
+    if (timeRange === 'this_week') {
+      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+      return `From ${formatToDDMMYYYY(weekAgo)} to ${formatToDDMMYYYY(today)}`;
+    }
+    if (timeRange === 'this_month') {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      return `From ${formatToDDMMYYYY(monthStart)} to ${formatToDDMMYYYY(today)}`;
+    }
+    if (timeRange === 'this_year') {
+      const now = new Date();
+      const yearStart = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
+      return `From ${formatToDDMMYYYY(yearStart)} to ${formatToDDMMYYYY(today)}`;
+    }
+    return 'All Available Records';
   }, [timeRange, customStartDate, customEndDate]);
 
   interface ReportColumn {
@@ -1877,7 +1901,7 @@ export const SaleManagementReportsView: React.FC = () => {
     purchaseRequests,
   ]);
 
-  // Dedicated Print Function for the clean preview document
+  // Dedicated Print Function for the clean preview document matching Estimation PDF theme
   const handlePrintDocument = () => {
     const printEl = document.getElementById('report-document-printable-content');
     if (!printEl) {
@@ -1898,69 +1922,45 @@ export const SaleManagementReportsView: React.FC = () => {
           <title>${currentReportData.title}</title>
           <meta charset="utf-8" />
           <style>
-            @page {
-              size: A4 portrait;
-              margin: 15mm 12mm 15mm 12mm;
-            }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
             body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-              color: #0f172a;
-              background: #ffffff;
-              margin: 0;
-              padding: 12px;
+              padding: 32px;
+              color: #1e293b;
+              background: #fff;
+              line-height: 1.5;
+              font-size: 13px;
               -webkit-print-color-adjust: exact;
               print-color-adjust: exact;
             }
-            .report-title {
-              text-align: center;
-              font-size: 20px;
-              font-weight: 800;
-              text-decoration: underline;
-              text-underline-offset: 4px;
-              margin-bottom: 24px;
-              color: #0f172a;
-            }
-            .meta-block {
-              margin-bottom: 18px;
-              font-size: 13px;
-              line-height: 1.6;
-              color: #0f172a;
-            }
-            .meta-block strong {
-              font-weight: 800;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              font-size: 12px;
-              margin-bottom: 24px;
-            }
-            thead th {
-              background-color: #e2e8f0 !important;
-              border-top: 1px solid #cbd5e1;
-              border-bottom: 1px solid #cbd5e1;
-              padding: 7px 10px;
-              text-align: left;
-              font-weight: 700;
-              color: #1e293b;
-            }
-            tbody td {
-              padding: 7px 10px;
-              border-bottom: 1px solid #f1f5f9;
-              color: #1e293b;
-            }
+            .header { display: flex; justify-content: space-between; border-bottom: 2px solid #33077C; padding-bottom: 16px; margin-bottom: 20px; }
+            .brand-name { font-size: 22px; font-weight: 800; color: #33077C; }
+            .doc-title { font-size: 18px; font-weight: 800; color: #0f172a; text-align: right; text-transform: uppercase; letter-spacing: 0.5px; }
+            .badge { display: inline-block; padding: 3px 10px; border-radius: 9999px; font-size: 11px; font-weight: 700; background: #FEF3C7; color: #B45309; }
+            .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 20px; }
+            .meta-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; }
+            .meta-title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px; }
+            .meta-text { font-size: 13px; font-weight: 600; color: #0f172a; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
+            th { background: #33077C !important; color: #fff !important; font-size: 11px; font-weight: 700; text-transform: uppercase; text-align: left; padding: 10px 12px; border: 1px solid #33077C; }
+            td { padding: 9px 12px; border: 1px solid #e2e8f0; font-size: 12px; }
+            tbody tr:nth-child(even) { background-color: #f8fafc; }
             .text-right { text-align: right; }
             .text-center { text-align: center; }
             .font-bold { font-weight: 700; }
-            .summary-box {
-              margin-top: 24px;
-              font-size: 13px;
-              line-height: 1.8;
-              color: #0f172a;
-            }
-            .summary-title {
-              font-weight: 800;
-              margin-bottom: 4px;
+            .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+            .total-section { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+            .total-table { width: 340px; }
+            .total-table td { border: none; padding: 4px 8px; }
+            .grand-total { font-size: 14px; font-weight: 800; color: #33077C; border-top: 2px solid #33077C !important; padding-top: 8px !important; }
+            .terms-box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; background: #fafafa; margin-bottom: 30px; }
+            .footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 40px; padding-top: 20px; border-top: 1px dashed #cbd5e1; }
+            .sign-box { text-align: center; width: 180px; border-top: 1px solid #64748b; padding-top: 6px; font-weight: 700; font-size: 12px; }
+            @media print {
+              body { padding: 0; }
+              @page {
+                size: A4 portrait;
+                margin: 15mm 12mm 15mm 12mm;
+              }
             }
           </style>
         </head>
@@ -2359,32 +2359,74 @@ export const SaleManagementReportsView: React.FC = () => {
             id="report-document-printable-content"
             className="p-6 sm:p-10 bg-white border border-slate-200/90 rounded-xl shadow-xs font-sans text-slate-800"
           >
-            {/* Centered Bold Report Title */}
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center tracking-tight underline decoration-2 underline-offset-4 mb-6">
-              {currentReportData.title}
-            </h2>
-
-            {/* Metadata Info on Left */}
-            <div className="space-y-1.5 mb-6 text-sm font-medium text-slate-900">
+            {/* Header: Brand Name & Doc Title */}
+            <div className="header flex justify-between border-b-2 border-[#33077C] pb-4 mb-5">
               <div>
-                <span className="font-bold">Party Name: </span>
-                <span className="font-bold">{activePartyName}</span>
+                <div className="brand-name text-[22px] font-extrabold text-[#33077C] tracking-tight">
+                  YAA SALES &amp; MART
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">Wholesale &amp; FMCG Distribution</div>
+                <div className="text-[11px] text-slate-600">GSTIN: 33AAAAA0000A1Z5 • Phone: +91 98400 12345</div>
               </div>
-              <div>
-                <span className="font-bold">Duration: </span>
-                <span className="font-bold">{formattedDateRange}</span>
+              <div className="text-right">
+                <div className="doc-title text-lg sm:text-xl font-extrabold text-slate-900 uppercase tracking-wide">
+                  {currentReportData.title}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Report Category: <strong className="text-slate-800">{activeCategoryLabel}</strong>
+                </div>
+                <div className="mt-1.5">
+                  <span className="badge inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF3C7] text-[#B45309]">
+                    OFFICIAL REPORT
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Document Table */}
-            <div className="overflow-x-auto border-t border-b border-slate-300">
+            {/* Grid-2 Metadata Cards */}
+            <div className="grid-2 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 mb-5">
+              <div className="meta-box bg-[#f8fafc] border border-[#e2e8f0] rounded-lg p-3 sm:px-4 sm:py-3">
+                <div className="meta-title text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Scope / Party Details
+                </div>
+                <div className="meta-text text-sm font-semibold text-slate-900">{activePartyName}</div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Report Type: <span className="font-medium text-slate-700">{currentReportData.title}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Total Records: <span className="font-medium text-slate-700">{currentReportData.rows.length} entries</span>
+                </div>
+              </div>
+              <div className="meta-box bg-[#f8fafc] border border-[#e2e8f0] rounded-lg p-3 sm:px-4 sm:py-3">
+                <div className="meta-title text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Timeline &amp; Period
+                </div>
+                <div className="flex justify-between items-center text-xs mb-1">
+                  <span className="text-slate-500">Duration:</span>
+                  <strong className="text-slate-900">{formattedDateRange}</strong>
+                </div>
+                <div className="flex justify-between items-center text-xs mb-1">
+                  <span className="text-slate-500">Filter Range:</span>
+                  <strong className="capitalize text-slate-900">{timeRange.replace('_', ' ')}</strong>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500">Generated On:</span>
+                  <strong className="text-slate-900">
+                    {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Document Table (Unified Estimation PDF Theme) */}
+            <div className="overflow-x-auto mb-6">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-slate-200/90 border-b border-slate-300 font-bold text-slate-800">
+                  <tr>
                     {currentReportData.columns.map((col, cIdx) => (
                       <th
                         key={cIdx}
-                        className={`py-2.5 px-3 ${
+                        className={`bg-[#33077C] text-white font-bold uppercase tracking-wider text-[11px] py-2.5 px-3 border border-[#33077C] ${
                           col.align === 'right'
                             ? 'text-right'
                             : col.align === 'center'
@@ -2402,20 +2444,23 @@ export const SaleManagementReportsView: React.FC = () => {
                     <tr>
                       <td
                         colSpan={currentReportData.columns.length}
-                        className="py-8 text-center text-slate-400 font-normal"
+                        className="py-8 text-center text-slate-400 font-normal border border-slate-200"
                       >
                         No transactions found for the selected period.
                       </td>
                     </tr>
                   ) : (
-                    currentReportData.rows.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50/50">
+                    currentReportData.rows.map((row, rIdx) => (
+                      <tr
+                        key={row.id || rIdx}
+                        className={rIdx % 2 === 1 ? 'bg-[#f8fafc]' : 'bg-white hover:bg-purple-50/20'}
+                      >
                         {row.cells.map((cellVal, cellIdx) => {
                           const col: ReportColumn = currentReportData.columns[cellIdx] || { label: '', align: 'left' };
                           return (
                             <td
                               key={cellIdx}
-                              className={`py-2.5 px-3 ${
+                              className={`py-2 px-3 border border-slate-200 ${
                                 col.align === 'right'
                                   ? 'text-right'
                                   : col.align === 'center'
@@ -2436,15 +2481,57 @@ export const SaleManagementReportsView: React.FC = () => {
               </table>
             </div>
 
-            {/* Document Summary on Left Below Table */}
-            <div className="mt-6 pt-2 space-y-1.5 text-xs sm:text-sm text-slate-900">
-              <div className="font-bold text-slate-900 mb-1">Summary</div>
-              {currentReportData.summary.map((sumItem, sIdx) => (
-                <div key={sIdx}>
-                  <span>{sumItem.label}: </span>
-                  <span className="font-bold text-slate-900">{sumItem.value}</span>
+            {/* Summary & Grand Total Section (Matching Estimation PDF Total Section) */}
+            {currentReportData.summary && currentReportData.summary.length > 0 && (
+              <div className="total-section flex justify-end mb-6">
+                <table className="total-table w-full sm:w-[340px] text-xs">
+                  <tbody>
+                    {currentReportData.summary.map((sumItem, sIdx) => {
+                      const isLast = sIdx === currentReportData.summary.length - 1;
+                      if (isLast) {
+                        return (
+                          <tr key={sIdx} className="grand-total border-t-2 border-[#33077C]">
+                            <td className="grand-total py-2 text-slate-800 font-extrabold text-sm text-[#33077C]">
+                              {sumItem.label}:
+                            </td>
+                            <td className="grand-total py-2 text-right font-extrabold text-sm text-[#33077C]">
+                              {sumItem.value}
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return (
+                        <tr key={sIdx}>
+                          <td className="py-1 text-slate-500 font-medium">{sumItem.label}:</td>
+                          <td className="py-1 text-right font-bold text-slate-800">{sumItem.value}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Terms / Report Notes Box */}
+            <div className="terms-box border border-slate-200 rounded-lg p-3 sm:px-4 sm:py-3 bg-[#fafafa] mb-6">
+              <div className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                Report Notes &amp; Audit Trail
+              </div>
+              <div className="text-[11.5px] text-slate-500 leading-relaxed">
+                This report is dynamically generated from YAA CRM real-time records. Discrepancies should be reported to the audit and accounts department within 7 business days.
+              </div>
+            </div>
+
+            {/* Footer with Timestamp and Signatory */}
+            <div className="footer flex justify-between items-end pt-5 border-t border-dashed border-slate-300">
+              <div>
+                <div className="text-[11px] text-slate-400">
+                  Generated from YAA CRM • Confidential &amp; Proprietary Document
                 </div>
-              ))}
+              </div>
+              <div className="sign-box text-center w-44 border-t border-slate-500 pt-1.5 font-bold text-xs text-slate-700">
+                Authorized Signatory
+              </div>
             </div>
           </div>
 

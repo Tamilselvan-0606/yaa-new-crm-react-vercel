@@ -497,6 +497,7 @@ export interface PurchaseOrder {
   paymentMethod: 'Cash' | 'UPI' | 'Card' | 'Bank Transfer' | 'Credit' | 'Other';
   paymentTerms: string;
   paymentStatus: PurchasePaymentStatus;
+  hasManualPayment?: boolean;
   purchaseStatus: PurchaseStatus;
   status?: string;
   notes?: string;
@@ -606,200 +607,7 @@ export const INITIAL_COLLECTION_FOLLOW_UPS: CollectionFollowUp[] = [];
 export const INITIAL_PROMISES_TO_PAY: PromiseToPay[] = [];
 
 
-export const INITIAL_CUSTOMERS: SalesCustomer[] = [
-  {
-    id: 'cust_1',
-    customerCode: 'CUS-1001',
-    name: 'Ramesh Kumar',
-    company: 'Kumar Daily Supermarket',
-    customerType: 'Business',
-    phone: '+91 98410 23456',
-    alternatePhone: '+91 98410 23457',
-    email: 'ramesh@kumarsupermarket.in',
-    gender: 'Male',
-    dateOfBirth: '1985-06-12',
-    address: '18 Gandhi Road, T. Nagar',
-    city: 'Chennai',
-    state: 'Tamil Nadu',
-    country: 'India',
-    pincode: '600017',
-    gstNumber: '33AAACK1234D1Z5',
-    panNumber: 'AAACK1234D',
-    billingAddress: '18 Gandhi Road, T. Nagar, Chennai, Tamil Nadu 600017',
-    shippingAddress: '18 Gandhi Road, T. Nagar, Chennai, Tamil Nadu 600017',
-    sameAsBilling: true,
-    creditLimit: 100000,
-    paymentTerms: 'Net 15 Days',
-    openingBalance: 0,
-    preferredPaymentMethod: 'Bank Transfer',
-    status: 'Active',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    salesRepresentativeType: 'Primary',
-    assignedDate: '2026-08-10',
-    assignmentNotes: 'High priority customer assigned to Kumar',
-    notes: 'High-volume wholesale & retail neighborhood grocery mart.',
-    tags: ['Supermarket', 'Wholesale', 'Retail'],
-    activities: [
-      { id: 'act_1', action: 'Customer Created', details: 'Customer profile registered in CRM', date: '2026-01-10T09:00:00Z', user: 'James Wilson' },
-    ],
-    createdAt: '2026-01-10T09:00:00Z',
-    updatedAt: '2026-09-28T11:30:00Z',
-  },
-  {
-    id: 'cust_2',
-    customerCode: 'CUS-1002',
-    name: 'Priya Sundaram',
-    company: 'Annapoorna Caterers & Kitchen',
-    customerType: 'Business',
-    phone: '+91 98840 55678',
-    email: 'orders@annapoornacaterers.in',
-    gender: 'Female',
-    dateOfBirth: '1989-11-20',
-    address: '42 100ft Road, Indiranagar',
-    city: 'Bengaluru',
-    state: 'Karnataka',
-    country: 'India',
-    pincode: '560038',
-    gstNumber: '29AABCA7788P1Z3',
-    panNumber: 'AABCA7788P',
-    billingAddress: '42 100ft Road, Indiranagar, Bengaluru, Karnataka 560038',
-    shippingAddress: '42 100ft Road, Indiranagar, Bengaluru, Karnataka 560038',
-    sameAsBilling: true,
-    creditLimit: 75000,
-    paymentTerms: '50% Advance, 50% on Delivery',
-    openingBalance: 0,
-    preferredPaymentMethod: 'UPI',
-    status: 'Active',
-    salesRepresentativeId: 'rep_4',
-    salesRepresentativeName: 'Ravi',
-    salesRepresentativeType: 'Primary',
-    assignedDate: '2026-09-01',
-    assignmentNotes: 'Assigned to Ravi for catering order collections',
-    notes: 'Bulk consumer for rice, dals, ghee, and edible oil requirements.',
-    tags: ['Catering', 'Commercial', 'Bulk Buyer'],
-    activities: [
-      { id: 'act_6', action: 'Customer Created', details: 'Customer profile registered in CRM', date: '2026-02-14T10:30:00Z', user: 'Alex Rivera' },
-    ],
-    createdAt: '2026-02-14T10:30:00Z',
-    updatedAt: '2026-09-28T09:30:00Z',
-  },
-  {
-    id: 'cust_3',
-    customerCode: 'CUS-1003',
-    name: 'Anand Verma',
-    company: 'Verma Provision Store',
-    customerType: 'Business',
-    phone: '+91 99401 88992',
-    email: 'anand.verma@vermastores.com',
-    gender: 'Male',
-    dateOfBirth: '1982-04-15',
-    address: '104 Begumpet Main Road',
-    city: 'Hyderabad',
-    state: 'Telangana',
-    country: 'India',
-    pincode: '500016',
-    gstNumber: '36AACCV9911K1Z8',
-    panNumber: 'AACCV9911K',
-    billingAddress: '104 Begumpet Main Road, Hyderabad, Telangana 500016',
-    shippingAddress: '104 Begumpet Main Road, Hyderabad, Telangana 500016',
-    sameAsBilling: true,
-    creditLimit: 50000,
-    paymentTerms: 'Net 30 Days',
-    openingBalance: 0,
-    preferredPaymentMethod: 'Credit',
-    status: 'Active',
-    salesRepresentativeId: 'rep_1',
-    salesRepresentativeName: 'Arun Kumar',
-    salesRepresentativeType: 'Primary',
-    assignedDate: '2026-07-15',
-    assignmentNotes: 'Wholesale provision account assigned to Arun',
-    notes: 'Community provision & FMCG retail grocery branch.',
-    tags: ['Provision', 'FMCG', 'Growth'],
-    activities: [
-      { id: 'act_9', action: 'Customer Created', details: 'Customer profile registered in CRM', date: '2026-03-05T14:15:00Z', user: 'Sarah Jenkins' },
-    ],
-    createdAt: '2026-03-05T14:15:00Z',
-    updatedAt: '2026-09-28T11:45:00Z',
-  },
-  {
-    id: 'cust_4',
-    customerCode: 'CUS-1004',
-    name: 'Meenakshi Iyer',
-    company: 'Household Account',
-    customerType: 'Individual',
-    phone: '+91 97908 11223',
-    alternatePhone: '+91 97908 11224',
-    email: 'meenakshi.iyer@gmail.com',
-    gender: 'Female',
-    dateOfBirth: '1978-08-25',
-    address: 'Flat 4B, Shanthi Apartments, Mylapore',
-    city: 'Chennai',
-    state: 'Tamil Nadu',
-    country: 'India',
-    pincode: '600004',
-    gstNumber: 'N/A',
-    panNumber: 'N/A',
-    billingAddress: 'Flat 4B, Shanthi Apartments, Mylapore, Chennai, Tamil Nadu 600004',
-    shippingAddress: 'Flat 4B, Shanthi Apartments, Mylapore, Chennai, Tamil Nadu 600004',
-    sameAsBilling: true,
-    creditLimit: 10000,
-    paymentTerms: 'Immediate / Cash',
-    openingBalance: 0,
-    preferredPaymentMethod: 'Cash',
-    status: 'Active',
-    salesRepresentativeId: 'rep_2',
-    salesRepresentativeName: 'Kumar',
-    salesRepresentativeType: 'Temporary',
-    assignedDate: '2026-10-01',
-    assignmentNotes: 'Temporary cover for retail walk-in accounts',
-    notes: 'Regular household walk-in customer for monthly groceries.',
-    tags: ['Walk-in', 'Retail', 'Regular'],
-    activities: [
-      { id: 'act_11', action: 'Customer Created', details: 'Customer profile registered', date: '2026-04-10T11:00:00Z', user: 'Yaa Admin' },
-    ],
-    createdAt: '2026-04-10T11:00:00Z',
-    updatedAt: '2026-09-20T15:00:00Z',
-  },
-  {
-    id: 'cust_5',
-    customerCode: 'CUS-1005',
-    name: 'Rajesh Gupta',
-    company: 'Gupta Bakers & Confectioners',
-    customerType: 'Business',
-    phone: '+91 98112 33445',
-    email: 'guptabakers@gmail.com',
-    gender: 'Male',
-    dateOfBirth: '1992-03-08',
-    address: '55 Linking Road, Bandra West',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    country: 'India',
-    pincode: '400050',
-    gstNumber: '27AABCG4433E1Z0',
-    panNumber: 'AABCG4433E',
-    billingAddress: '55 Linking Road, Bandra West, Mumbai, Maharashtra 400050',
-    shippingAddress: '55 Linking Road, Bandra West, Mumbai, Maharashtra 400050',
-    sameAsBilling: true,
-    creditLimit: 60000,
-    paymentTerms: 'Net 15 Days',
-    openingBalance: 0,
-    preferredPaymentMethod: 'UPI',
-    status: 'Active',
-    salesRepresentativeId: 'rep_1',
-    salesRepresentativeName: 'Arun Kumar',
-    salesRepresentativeType: 'Primary',
-    assignedDate: '2026-05-18',
-    assignmentNotes: 'Bakery chain commercial account',
-    notes: 'Bakery chain procuring flours, sugar, butter, and chocolates.',
-    tags: ['Bakery', 'Commercial'],
-    activities: [
-      { id: 'act_12', action: 'Customer Created', details: 'Customer profile onboarded', date: '2026-05-18T10:00:00Z', user: 'Sarah Jenkins' },
-    ],
-    createdAt: '2026-05-18T10:00:00Z',
-    updatedAt: '2026-09-22T14:30:00Z',
-  },
-];
+export const INITIAL_CUSTOMERS: SalesCustomer[] = [];
 
 export const INITIAL_SUPPLIERS: Supplier[] = [];
 
@@ -1262,15 +1070,27 @@ export const useSalesManagementStore = () => {
       mfgDate?: string;
       expDate?: string;
       supplierName?: string;
+      productName?: string;
+      sku?: string;
+      category?: string;
+      subcategory?: string;
+      unit?: string;
     }
   ) => {
     const currentStocks = getStorage<InventoryStockItem[]>(KEYS.STOCKS, INITIAL_INVENTORY_STOCKS);
-    const updated = currentStocks.map((item) => {
-      if (item.productId === productId || item.id === productId) {
+    let found = false;
+
+    // Determine clean batch identifier - ensure active batch is never blank when inwarding
+    const cleanBatch = (batchNo && batchNo.trim() && batchNo.trim() !== 'SELECT BATCH')
+      ? batchNo.trim()
+      : (quantityDelta > 0 ? `BAT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}` : '');
+
+    let updated = currentStocks.map((item) => {
+      if (item.productId === productId || item.id === productId || (batchMeta?.sku && item.sku === batchMeta.sku)) {
+        found = true;
         let batches = [...(item.batches || [])];
 
-        if (batchNo && batchNo.trim()) {
-          const cleanBatch = batchNo.trim();
+        if (cleanBatch) {
           const bIdx = batches.findIndex((b) => b.batchNo.toLowerCase() === cleanBatch.toLowerCase());
           if (bIdx >= 0) {
             const currentQty = batches[bIdx].quantity;
@@ -1278,7 +1098,7 @@ export const useSalesManagementStore = () => {
             batches[bIdx] = {
               ...batches[bIdx],
               quantity: newQty,
-              status: newQty === 0 ? 'Depleted' : batches[bIdx].status,
+              status: newQty === 0 ? 'Depleted' : 'Active',
               costPrice: batchMeta?.costPrice ?? batches[bIdx].costPrice,
               sellingPrice: batchMeta?.sellingPrice ?? batches[bIdx].sellingPrice,
               expDate: batchMeta?.expDate ?? batches[bIdx].expDate,
@@ -1323,7 +1143,7 @@ export const useSalesManagementStore = () => {
         }
 
         const totalBatchQty = batches.reduce((sum, b) => sum + b.quantity, 0);
-        const newInStock = batches.length > 0 ? totalBatchQty : Math.max(0, item.inStock + quantityDelta);
+        const newInStock = batches.length > 0 ? Math.max(totalBatchQty, item.inStock + quantityDelta) : Math.max(0, item.inStock + quantityDelta);
 
         return {
           ...item,
@@ -1334,6 +1154,41 @@ export const useSalesManagementStore = () => {
       }
       return item;
     });
+
+    // If item was not yet in currentStocks (e.g. newly created catalog item) and inwarding stock, register it
+    if (!found && quantityDelta > 0) {
+      const fallbackBatch: StockBatch = {
+        id: `bat_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        batchNo: cleanBatch || `BAT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-001`,
+        productId,
+        quantity: quantityDelta,
+        costPrice: batchMeta?.costPrice ?? 0,
+        sellingPrice: batchMeta?.sellingPrice ?? 0,
+        mfgDate: batchMeta?.mfgDate,
+        expDate: batchMeta?.expDate,
+        supplierName: batchMeta?.supplierName,
+        status: 'Active',
+        receivedDate: new Date().toISOString().split('T')[0],
+      };
+
+      const newItem: InventoryStockItem = {
+        id: productId,
+        productId,
+        productName: batchMeta?.productName || 'Product',
+        sku: batchMeta?.sku || `PRD-${Math.floor(1000 + Math.random() * 9000)}`,
+        category: batchMeta?.category || 'General',
+        subcategory: batchMeta?.subcategory || 'General',
+        unit: batchMeta?.unit || 'KG',
+        inStock: quantityDelta,
+        reorderLevel: 10,
+        unitCost: batchMeta?.costPrice ?? 0,
+        unitPrice: batchMeta?.sellingPrice ?? 0,
+        lastUpdated: new Date().toISOString(),
+        batches: [fallbackBatch],
+      };
+      updated = [newItem, ...updated];
+    }
+
     setStorage(KEYS.STOCKS, updated);
     setStocks(updated);
   };
@@ -1674,32 +1529,36 @@ export const useSalesManagementStore = () => {
     const current = getStorage<PurchaseOrder[]>(KEYS.PURCHASES, INITIAL_PURCHASES);
     const exists = current.find((p) => p.id === po.id);
     let updated: PurchaseOrder[];
+
+    const isInwardStatus = (status?: string) =>
+      status === 'Completed' || status === 'Received' || status === 'Approved';
+
+    const wasAlreadyInwarded = exists && ((exists as any).stockInwarded || isInwardStatus(exists.purchaseStatus));
+    const shouldInward = isInwardStatus(po.purchaseStatus) && !wasAlreadyInwarded;
+
+    if (shouldInward) {
+      po.items.forEach((item) => {
+        const cleanBatch = (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+          ? item.batch.trim()
+          : ((item as any).batchNo || `BAT-${po.purchaseNo || 'PO'}`);
+
+        adjustStock(item.productId, item.quantity, cleanBatch, {
+          costPrice: item.purchasePrice,
+          sellingPrice: (item as any).sellingPrice,
+          mfgDate: item.mfgDate,
+          expDate: item.expDate,
+          supplierName: po.supplierName,
+          productName: item.productName,
+          sku: (item as any).sku,
+          unit: item.unit,
+        });
+      });
+      (po as any).stockInwarded = true;
+    }
+
     if (exists) {
-      if (
-        (exists.purchaseStatus !== 'Completed' && exists.purchaseStatus !== 'Received') &&
-        (po.purchaseStatus === 'Completed' || po.purchaseStatus === 'Received')
-      ) {
-        po.items.forEach((item) =>
-          adjustStock(item.productId, item.quantity, item.batch, {
-            costPrice: item.purchasePrice,
-            mfgDate: item.mfgDate,
-            expDate: item.expDate,
-            supplierName: po.supplierName,
-          })
-        );
-      }
-      updated = current.map((p) => (p.id === po.id ? po : p));
+      updated = current.map((p) => (p.id === po.id ? { ...po, stockInwarded: (po as any).stockInwarded ?? wasAlreadyInwarded } : p));
     } else {
-      if (po.purchaseStatus === 'Completed' || po.purchaseStatus === 'Received') {
-        po.items.forEach((item) =>
-          adjustStock(item.productId, item.quantity, item.batch, {
-            costPrice: item.purchasePrice,
-            mfgDate: item.mfgDate,
-            expDate: item.expDate,
-            supplierName: po.supplierName,
-          })
-        );
-      }
       updated = [po, ...current];
     }
 

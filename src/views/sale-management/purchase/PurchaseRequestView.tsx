@@ -34,6 +34,7 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
@@ -41,6 +42,7 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseRequestShare } from '../../../utils/shareUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -268,6 +270,12 @@ export const PurchaseRequestView: React.FC = () => {
   const [historyRequest, setHistoryRequest] = useState<PurchaseRequest | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<PurchaseRequest | null>(null);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetRequest, setDeleteTargetRequest] = useState<PurchaseRequest | null>(null);
+  const [isDeletingRequest, setIsDeletingRequest] = useState(false);
+  const [deleteRequestError, setDeleteRequestError] = useState<string | null>(null);
 
   // Automatically load initial products list when requisition form modal opens
   useEffect(() => {
@@ -758,17 +766,37 @@ export const PurchaseRequestView: React.FC = () => {
     }
   };
 
-  // Delete Purchase Request via API
-  const handleDeleteRequest = async (req: PurchaseRequest) => {
+  // Delete Purchase Request via API with confirmation modal
+  const handleOpenDeleteModal = (req: PurchaseRequest) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetRequest(req);
+    setDeleteRequestError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteRequest = async () => {
+    if (!deleteTargetRequest) return;
+    setIsDeletingRequest(true);
+    setDeleteRequestError(null);
     try {
-      await commercePurchaseRequestApi.deletePurchaseRequest(req.id);
-      deletePurchaseRequest(req.id);
-      toast.success(`Purchase request ${req.requestNo} deleted.`);
+      await commercePurchaseRequestApi.deletePurchaseRequest(deleteTargetRequest.id);
+      deletePurchaseRequest(deleteTargetRequest.id);
+      toast.success(`Purchase request "${deleteTargetRequest.requestNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetRequest(null);
       loadPurchaseRequests(true);
     } catch (err: any) {
       console.warn('API delete error:', err);
-      deletePurchaseRequest(req.id);
-      toast.success(`Purchase request ${req.requestNo} deleted.`);
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete purchase request';
+      setDeleteRequestError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsDeletingRequest(false);
     }
   };
 
@@ -979,6 +1007,104 @@ export const PurchaseRequestView: React.FC = () => {
     toast.success(`Purchase Requests Excel report downloaded (${listToExport.length} records)!`);
   };
 
+  // Print Purchase Request via universal printUtils
+  const handlePrintPurchaseRequest = (req: PurchaseRequest) => {
+    const totalEst = req.items.reduce(
+      (acc, it) => acc + (it.estimatedUnitPrice || 0) * (it.requestedQuantity || (it as any).quantity || 0),
+      0
+    );
+
+    printBusinessDocument({
+      docTypeTitle: 'PURCHASE REQUISITION',
+      docNo: req.requestNo,
+      docDate: req.requestDate,
+      dueDate: req.requiredDate,
+      status: req.status,
+      statusColor: req.status === 'Approved' || req.status === 'Purchase Created' ? 'emerald' : req.status === 'Rejected' ? 'rose' : 'purple',
+      partyTitle: 'Requisitioner / Department',
+      partyName: req.requestedBy,
+      partyCompany: `Department: ${req.department}`,
+      extraMeta: [
+        { label: 'Priority', value: req.priority },
+        ...(req.supplierName ? [{ label: 'Suggested Supplier', value: req.supplierName }] : []),
+        ...(req.rejectionReason ? [{ label: 'Rejection Reason', value: req.rejectionReason }] : []),
+      ],
+      columns: [
+        { header: 'Product Item Description', width: '40%' },
+        { header: 'Unit', align: 'center', width: '15%' },
+        { header: 'Requested Qty', align: 'center', width: '15%' },
+        { header: 'Est. Unit Price (₹)', align: 'right', width: '15%' },
+        { header: 'Total Est. (₹)', align: 'right', width: '15%' },
+      ],
+      items: req.items.map((it) => {
+        const qty = it.requestedQuantity || (it as any).quantity || 1;
+        const price = it.estimatedUnitPrice || 0;
+        return {
+          name: it.productName,
+          unit: (it as any).unit || 'PCS',
+          quantity: qty,
+          unitPrice: price,
+          total: qty * price,
+          remarks: it.remarks,
+        };
+      }),
+      subtotal: totalEst,
+      grandTotal: totalEst,
+      notes: req.notes,
+    });
+  };
+
+  // Print Table Report for Purchase Requests
+  const handlePrintTableReport = () => {
+    const listToPrint = isApiConnected && liveRequests.length > 0 ? liveRequests : filteredLocalRequests;
+    if (listToPrint.length === 0) {
+      toast.info('No purchase requests available to print.');
+      return;
+    }
+
+    const printRows = listToPrint.map((r) => {
+      const totalEstimated = r.items.reduce(
+        (acc, it) => acc + (it.estimatedUnitPrice || 0) * (it.requestedQuantity || (it as any).quantity || 0),
+        0
+      );
+      return {
+        requestNo: r.requestNo,
+        requestDate: r.requestDate,
+        requestedBy: `${r.requestedBy} (${r.department})`,
+        priority: r.priority,
+        status: r.status,
+        itemCount: `${r.items.length} items`,
+        estimatedTotal: totalEstimated,
+      };
+    });
+
+    const grandTotal = printRows.reduce((acc, r) => acc + r.estimatedTotal, 0);
+
+    printTableReport({
+      title: 'Purchase Requisitions & Requests Report',
+      subtitle: `Total Requests: ${listToPrint.length} | Status Filter: ${appliedStatus} | Priority: ${appliedPriority}`,
+      columns: [
+        { header: 'Request #', key: 'requestNo', width: '15%' },
+        { header: 'Date', key: 'requestDate', width: '12%' },
+        { header: 'Requested By & Department', key: 'requestedBy', width: '25%' },
+        { header: 'Priority', key: 'priority', align: 'center', width: '12%' },
+        { header: 'Status', key: 'status', align: 'center', width: '12%' },
+        { header: 'Items Count', key: 'itemCount', align: 'center', width: '10%' },
+        { header: 'Est. Total (₹)', key: 'estimatedTotal', align: 'right', type: 'currency', width: '14%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Requisitions', value: listToPrint.length },
+        { label: 'Total Estimated Value', value: grandTotal },
+        { label: 'Pending Approvals', value: listToPrint.filter((r) => isPendingApproval(r.status)).length },
+      ],
+      summaryRow: {
+        requestNo: 'Total',
+        estimatedTotal: grandTotal,
+      },
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
@@ -998,6 +1124,16 @@ export const PurchaseRequestView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
+          </Button>
+
           <Button
             variant="secondary"
             size="md"
@@ -1377,6 +1513,11 @@ export const PurchaseRequestView: React.FC = () => {
                               onClick: () => handleOpenEditModal(req),
                             },
                             {
+                              label: 'Print Request',
+                              variant: 'print',
+                              onClick: () => handlePrintPurchaseRequest(req),
+                            },
+                            {
                               label: 'Duplicate',
                               variant: 'duplicate',
                               onClick: () => handleDuplicateRequest(req),
@@ -1404,7 +1545,7 @@ export const PurchaseRequestView: React.FC = () => {
                               variant: 'delete',
                               danger: true,
                               dividerBefore: true,
-                              onClick: () => handleDeleteRequest(req),
+                              onClick: () => handleOpenDeleteModal(req),
                             },
                           ]}
                         />
@@ -1902,14 +2043,11 @@ export const PurchaseRequestView: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => {
-                  toast.info(`Preparing print for ${selectedRequest.requestNo}...`);
-                  window.print();
-                }}
+                onClick={() => handlePrintPurchaseRequest(selectedRequest)}
                 className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Order</span>
+                <span>Print Request</span>
               </button>
             </div>
           </div>
@@ -2144,6 +2282,23 @@ export const PurchaseRequestView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingRequest) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetRequest(null);
+            setDeleteRequestError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteRequest}
+        entityName="Purchase Request"
+        recordName={deleteTargetRequest?.requestNo}
+        isLoading={isDeletingRequest}
+        error={deleteRequestError}
+      />
     </div>
   );
 };

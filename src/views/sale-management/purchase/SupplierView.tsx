@@ -39,6 +39,7 @@ import {
   FileSpreadsheet,
   Loader2,
   History,
+  Printer,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -58,6 +59,7 @@ import { FormError } from "../../../components/common/FormError";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
@@ -66,6 +68,7 @@ import {
   UniversalShareDropdown,
   formatSupplierShare,
 } from "../../../utils/shareUtils";
+import { printBusinessDocument, printTableReport } from "../../../utils/printUtils";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -173,6 +176,12 @@ export const SupplierView: React.FC = () => {
   >("overview");
   const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetSupplier, setDeleteTargetSupplier] = useState<Supplier | null>(null);
+  const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
+  const [deleteSupplierError, setDeleteSupplierError] = useState<string | null>(null);
 
   // Open History Modal with live API sync
   const handleOpenHistory = async (sup: Supplier) => {
@@ -543,12 +552,25 @@ export const SupplierView: React.FC = () => {
     }
   };
 
-  // Delete Supplier
-  const handleDeleteSupplier = async (sup: Supplier) => {
+  // Delete Supplier with confirmation modal
+  const handleOpenDeleteModal = (sup: Supplier) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetSupplier(sup);
+    setDeleteSupplierError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteSupplier = async () => {
+    if (!deleteTargetSupplier) return;
+    setIsDeletingSupplier(true);
+    setDeleteSupplierError(null);
     try {
-      setIsDeletingId(sup.id);
-      await supplierApi.deleteSupplier(sup.id);
-      toast.success(`Supplier "${sup.name}" deleted successfully.`);
+      setIsDeletingId(deleteTargetSupplier.id);
+      await supplierApi.deleteSupplier(deleteTargetSupplier.id);
+      toast.success(`Supplier "${deleteTargetSupplier.name}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetSupplier(null);
       loadSuppliers(true);
     } catch (error: any) {
       console.error("Error deleting supplier:", error);
@@ -557,9 +579,11 @@ export const SupplierView: React.FC = () => {
         error?.response?.data?.message ||
         error?.message ||
         "Failed to delete supplier.";
+      setDeleteSupplierError(msg);
       toast.error(msg);
     } finally {
       setIsDeletingId(null);
+      setIsDeletingSupplier(false);
     }
   };
 
@@ -671,6 +695,109 @@ export const SupplierView: React.FC = () => {
     );
   };
 
+  // Print Supplier Statement / Profile via universal printUtils
+  const handlePrintSupplierStatement = (sup: Supplier) => {
+    printBusinessDocument({
+      docTypeTitle: 'SUPPLIER STATEMENT / VENDOR PROFILE',
+      docNo: sup.supplierCode || sup.id.slice(0, 8).toUpperCase(),
+      docDate: new Date().toISOString().split('T')[0],
+      status: sup.status,
+      statusColor: sup.status === 'Active' ? 'emerald' : sup.status === 'Blocked' ? 'rose' : 'slate',
+      partyTitle: 'Supplier / Vendor Details',
+      partyName: sup.name,
+      partyCompany: (sup as any).company || sup.name,
+      partyPhone: sup.phone || (sup as any).mobile,
+      partyEmail: sup.email,
+      partyAddress: (sup as any).billingAddress || sup.address,
+      partyGstin: sup.gstNumber,
+      extraMeta: [
+        { label: 'Contact Person', value: sup.contactPerson || 'N/A' },
+        { label: 'Payment Terms', value: sup.paymentTerms || 'Net 30 Days' },
+        { label: 'Credit Limit', value: `₹${(sup.creditLimit || 0).toLocaleString('en-IN')}` },
+        ...(sup.bankName ? [{ label: 'Bank Name', value: sup.bankName }] : []),
+        ...(sup.accountNumber ? [{ label: 'Account Number', value: sup.accountNumber }] : []),
+        ...(sup.ifscCode ? [{ label: 'IFSC Code', value: sup.ifscCode }] : []),
+      ],
+      columns: [
+        { header: 'Metric', width: '50%' },
+        { header: 'Financial Value (₹)', align: 'right', width: '50%' },
+      ],
+      items: [
+        {
+          name: 'Total Cumulative Purchases',
+          remarks: 'Sum of all historical purchase bills from this supplier',
+          quantity: 1,
+          unitPrice: Number(sup.totalPurchase || 0),
+          total: Number(sup.totalPurchase || 0),
+        },
+        {
+          name: 'Total Disbursed / Paid Amount',
+          remarks: 'Total payments made to vendor',
+          quantity: 1,
+          unitPrice: Number(sup.paid || 0),
+          total: Number(sup.paid || 0),
+        },
+        {
+          name: 'Outstanding Balance Payable',
+          remarks: 'Current pending payment liability',
+          quantity: 1,
+          unitPrice: Number(sup.payable || 0),
+          total: Number(sup.payable || 0),
+        },
+      ],
+      subtotal: Number(sup.totalPurchase || 0),
+      grandTotal: Number(sup.totalPurchase || 0),
+      paidAmount: Number(sup.paid || 0),
+      balance: Number(sup.payable || 0),
+      paidAmountLabel: 'Total Disbursed',
+      balanceLabel: 'Net Payable Outstanding',
+      notes: sup.notes || 'Vendor account maintained under active compliance.',
+    });
+  };
+
+  // Print Table Report for Suppliers
+  const handlePrintTableReport = () => {
+    if (displaySuppliers.length === 0) {
+      toast.info('No supplier records available to print.');
+      return;
+    }
+
+    const printRows = displaySuppliers.map((sup) => ({
+      supplierCode: sup.supplierCode,
+      name: sup.name,
+      contactPerson: sup.contactPerson || '—',
+      phone: sup.phone || (sup as any).mobile || '—',
+      city: sup.city || '—',
+      totalPurchase: Number(sup.totalPurchase || 0),
+      payable: Number(sup.payable || 0),
+      status: sup.status,
+    }));
+
+    printTableReport({
+      title: 'Suppliers & Vendor Directory Report',
+      subtitle: `Total Vendors: ${totalRecords || displaySuppliers.length} | Status Filter: ${pendingStatus}`,
+      columns: [
+        { header: 'Code', key: 'supplierCode', width: '12%' },
+        { header: 'Supplier Name', key: 'name', width: '25%' },
+        { header: 'Contact Person', key: 'contactPerson', width: '16%' },
+        { header: 'Phone', key: 'phone', width: '14%' },
+        { header: 'Status', key: 'status', align: 'center', width: '11%' },
+        { header: 'Purchases (₹)', key: 'totalPurchase', align: 'right', type: 'currency', width: '11%' },
+        { header: 'Payable (₹)', key: 'payable', align: 'right', type: 'currency', width: '11%' },
+      ],
+      data: printRows,
+      metrics: [
+        { label: 'Total Suppliers', value: summary.totalCount },
+        { label: 'Total Accounts Payable', value: summary.totalPayables },
+        { label: 'Active Suppliers', value: summary.activeCount },
+      ],
+      summaryRow: {
+        supplierCode: 'Total',
+        payable: summary.totalPayables,
+      },
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
@@ -691,6 +818,16 @@ export const SupplierView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+          <Button
+            variant="secondary"
+            size="md"
+            className="w-full sm:w-auto justify-center"
+            onClick={handlePrintTableReport}
+            icon={<Printer className="w-4 h-4 text-[#33077C]" />}
+          >
+            Print Report
+          </Button>
+
           <Button
             variant="secondary"
             size="md"
@@ -1104,6 +1241,11 @@ export const SupplierView: React.FC = () => {
                                 onClick: () => handleOpenEditModal(sup),
                               },
                               {
+                                label: "Print Statement",
+                                variant: "print",
+                                onClick: () => handlePrintSupplierStatement(sup),
+                              },
+                              {
                                 label: "Duplicate",
                                 variant: "duplicate",
                                 onClick: () => handleDuplicateSupplier(sup),
@@ -1123,7 +1265,7 @@ export const SupplierView: React.FC = () => {
                                 variant: "delete",
                                 danger: true,
                                 dividerBefore: true,
-                                onClick: () => handleDeleteSupplier(sup),
+                                onClick: () => handleOpenDeleteModal(sup),
                               },
                             ]}
                           />
@@ -2125,6 +2267,23 @@ export const SupplierView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingSupplier) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetSupplier(null);
+            setDeleteSupplierError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteSupplier}
+        entityName="Supplier"
+        recordName={deleteTargetSupplier?.name}
+        isLoading={isDeletingSupplier}
+        error={deleteSupplierError}
+      />
     </div>
   );
 };

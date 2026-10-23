@@ -52,13 +52,14 @@ import {
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printBusinessDocument } from '../../../utils/printUtils';
+import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   commerceProformaApi,
@@ -365,6 +366,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<string | null>(null);
   const [convertDropdownPos, setConvertDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
 
+  // Delete Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteTargetProforma, setDeleteTargetProforma] = useState<{ id: string; proformaNo: string } | null>(null);
+  const [isDeletingProforma, setIsDeletingProforma] = useState(false);
+  const [deleteProformaError, setDeleteProformaError] = useState<string | null>(null);
+
   // Preview / Print Modal
   const [previewProforma, setPreviewProforma] = useState<SaleProformaInvoice | null>(null);
 
@@ -472,6 +479,22 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   // Trigger API fetch on filter/page change
   useEffect(() => {
     fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+  }, [fetchProformas, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+
+  // Listen for sidebar click event to trigger immediate fresh API fetch
+  useEffect(() => {
+    const handleSidebarNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        detail?.path === '/sale-management/sales/proforma' ||
+        detail?.id === 'sales-hub-proforma' ||
+        detail?.id === 'billing-proforma'
+      ) {
+        fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNav);
+    return () => window.removeEventListener('crm:sidebar-navigate', handleSidebarNav);
   }, [fetchProformas, page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
 
   // Keep proformaListRef synced
@@ -1684,21 +1707,38 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
   };
 
-  // Delete Proforma (DELETE /commerce/proformas/{id})
-  const handleDeleteProforma = async (id: string) => {
+  // Delete Proforma (DELETE /commerce/proformas/{id}) with confirmation modal
+  const handleOpenDeleteModal = (id: string, proformaNo: string) => {
+    setActiveDropdownId(null);
+    setDropdownPos(null);
+    setDeleteTargetProforma({ id, proformaNo });
+    setDeleteProformaError(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteProforma = async () => {
+    if (!deleteTargetProforma) return;
+    setIsDeletingProforma(true);
+    setDeleteProformaError(null);
     try {
-      await commerceProformaApi.deleteProforma(id);
-      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id }, { type: 'Proforma', id: 'LIST' }]));
-      toast.success('Proforma invoice removed.');
-    } catch (err: any) {
-      console.warn('Delete API warning:', err);
-      toast.info('Proforma invoice removed locally.');
-    } finally {
-      const updated = proformaList.filter((p) => p.id !== id);
+      await commerceProformaApi.deleteProforma(deleteTargetProforma.id);
+      dispatch(baseApi.util.invalidateTags([{ type: 'Proforma', id: deleteTargetProforma.id }, { type: 'Proforma', id: 'LIST' }]));
+      const updated = proformaList.filter((p) => p.id !== deleteTargetProforma.id);
       persistProformas(updated);
+      toast.success(`Proforma invoice "${deleteTargetProforma.proformaNo}" deleted successfully.`);
+      setIsDeleteModalOpen(false);
+      setDeleteTargetProforma(null);
       fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-      setActiveDropdownId(null);
-      setDropdownPos(null);
+    } catch (err: any) {
+      const errMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete proforma invoice.';
+      setDeleteProformaError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsDeletingProforma(false);
     }
   };
 
@@ -2989,6 +3029,52 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     toast.success(`Proforma Invoices Excel report downloaded (${displayProformas.length} records)!`);
   };
 
+  // Print Proforma Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (displayProformas.length === 0) {
+      toast.error('No proforma invoices to print.');
+      return;
+    }
+
+    const printRows = displayProformas.map((p) => ({
+      date: isoToDdmmyyyy(p.date),
+      validUntil: isoToDdmmyyyy(p.validUntil),
+      proformaNo: p.proformaNo,
+      partyName: p.partyName,
+      customerPhone: p.customerPhone || '-',
+      amount: Number(p.amount || 0),
+      balance: Number(p.balance || 0),
+      status: p.status,
+    }));
+
+    printTableReport({
+      title: 'PROFORMA INVOICE REGISTER',
+      subtitle: `Filter: ${appliedPeriod} | Total Records: ${displayProformas.length}`,
+      columns: [
+        { header: 'Proforma No.', key: 'proformaNo', align: 'center', width: '15%' },
+        { header: 'Date', key: 'date', align: 'center', width: '12%' },
+        { header: 'Valid Until', key: 'validUntil', align: 'center', width: '12%' },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: '25%' },
+        { header: 'Contact', key: 'customerPhone', align: 'left', width: '14%' },
+        { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: '14%' },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '14%' },
+        { header: 'Status', key: 'status', align: 'center', width: '10%' },
+      ],
+      data: printRows,
+      summaryRow: {
+        proformaNo: 'TOTAL',
+        partyName: `${displayProformas.length} Proformas`,
+        amount: metrics.totalVal,
+        balance: metrics.openVal,
+      },
+      metrics: [
+        { label: 'Total Value', value: metrics.totalVal },
+        { label: 'Open Amount', value: metrics.openVal },
+        { label: 'Total Proformas', value: displayProformas.length },
+      ],
+    });
+  };
+
   // =========================================================================
   // VIEW MODE: LIST (Master Proforma Invoices Table View matching CRM Theme)
   // =========================================================================
@@ -3024,6 +3110,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+            onClick={handlePrintTableReport}
+            className="hover:border-purple-300 transition-colors"
+          >
+            Print Report
           </Button>
 
           <Button
@@ -3358,7 +3454,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                               {
                                 label: 'Delete',
                                 variant: 'delete',
-                                onClick: () => handleDeleteProforma(item.id),
+                                onClick: () => handleOpenDeleteModal(item.id, item.proformaNo),
                               },
                             ]}
                           />
@@ -3519,6 +3615,23 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           </div>
         </Modal>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeletingProforma) {
+            setIsDeleteModalOpen(false);
+            setDeleteTargetProforma(null);
+            setDeleteProformaError(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteProforma}
+        entityName="Proforma Invoice"
+        recordName={deleteTargetProforma?.proformaNo}
+        isLoading={isDeletingProforma}
+        error={deleteProformaError}
+      />
     </div>
   );
 };

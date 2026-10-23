@@ -261,14 +261,21 @@ export const BranchesView: React.FC = () => {
     loadOrganizationAndSubOrgs();
   }, [currentUser?.organizationId, isSaleManagement]);
 
-  // Listen to subOrgChanged event to reload branches based on header sub-org
+  // Listen to subOrgChanged and branchChanged events to reload branches based on header selections
   useEffect(() => {
     const handleSubOrgChanged = (e: any) => {
       const subId = e?.detail?.subOrganizationId || e?.detail?.id;
       loadData(1, pageSize, appliedSearch, appliedStatus, subId);
     };
+    const handleBranchChanged = () => {
+      loadData(1, pageSize, appliedSearch, appliedStatus);
+    };
     window.addEventListener('subOrgChanged', handleSubOrgChanged);
-    return () => window.removeEventListener('subOrgChanged', handleSubOrgChanged);
+    window.addEventListener('branchChanged', handleBranchChanged);
+    return () => {
+      window.removeEventListener('subOrgChanged', handleSubOrgChanged);
+      window.removeEventListener('branchChanged', handleBranchChanged);
+    };
   }, [subOrganizations, pageSize, appliedSearch, appliedStatus]);
 
   const isBranchForSuite = (b: Branch) => {
@@ -364,6 +371,20 @@ export const BranchesView: React.FC = () => {
         });
 
       let allItems = Array.from(branchMap.values());
+
+      // Filter by active branch from header if a specific branch is selected
+      const activeBranchName = localStorage.getItem('active_branch');
+      const activeBranchId = localStorage.getItem('active_branch_id');
+      if (activeBranchName && activeBranchName !== 'All') {
+        allItems = allItems.filter((b) => {
+          if (activeBranchId && b.id === activeBranchId) return true;
+          const loc = (b.location || '').toLowerCase();
+          const city = (b.city || '').toLowerCase();
+          const name = (b.name || '').toLowerCase();
+          const target = activeBranchName.toLowerCase();
+          return loc === target || city === target || name.includes(target);
+        });
+      }
 
       // Search filter
       if (searchTerm.trim()) {
@@ -543,24 +564,20 @@ export const BranchesView: React.FC = () => {
       const suiteType = formData.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management');
 
       if (editingBranch) {
-        try {
-          await branchApi.updateBranch(editingBranch.id, {
-            name: formData.name.trim(),
-            code: formData.code.trim(),
-            organizationId: activeOrgId || undefined,
-            subOrganizationId: formData.subOrganizationId || undefined,
-            contactPerson: formData.contactPerson.trim(),
-            phone: formData.mobileNumber.trim(),
-            mobileNumber: formData.mobileNumber.trim(),
-            whatsapp: formData.whatsapp.trim(),
-            email: formData.email.trim(),
-            location: formData.location.trim(),
-            city: formData.location.trim(),
-            status: formData.status,
-          });
-        } catch (apiErr) {
-          console.warn('API updateBranch notice (persisting locally):', apiErr);
-        }
+        await branchApi.updateBranch(editingBranch.id, {
+          name: formData.name.trim(),
+          code: formData.code.trim(),
+          organizationId: activeOrgId || undefined,
+          subOrganizationId: formData.subOrganizationId || undefined,
+          contactPerson: formData.contactPerson.trim(),
+          phone: formData.mobileNumber.trim(),
+          mobileNumber: formData.mobileNumber.trim(),
+          whatsapp: formData.whatsapp.trim(),
+          email: formData.email.trim(),
+          location: formData.location.trim(),
+          city: formData.location.trim(),
+          status: formData.status,
+        });
 
         // Update local catalog
         const savedCatalog = localStorage.getItem('branches_catalog_orgsuperadmin');
@@ -602,32 +619,28 @@ export const BranchesView: React.FC = () => {
         const trimmedCode = formData.code.trim();
         const trimmedName = formData.name.trim();
 
-        try {
-          await branchApi.createBranch({
-            code: trimmedCode,
-            name: trimmedName,
+        await branchApi.createBranch({
+          code: trimmedCode,
+          name: trimmedName,
+          email: trimmedEmail,
+          password: trimmedPassword,
+          roleId: formData.roleId.trim() || undefined,
+          organizationId: activeOrgId || undefined,
+          subOrganizationId: formData.subOrganizationId || undefined,
+          contactPerson: formData.contactPerson.trim() || undefined,
+          phone: formData.mobileNumber.trim() || undefined,
+          mobileNumber: formData.mobileNumber.trim() || undefined,
+          whatsapp: formData.whatsapp.trim() || undefined,
+          location: formData.location.trim() || undefined,
+          city: formData.location.trim() || undefined,
+          status: formData.status,
+          user: {
             email: trimmedEmail,
             password: trimmedPassword,
+            name: formData.contactPerson.trim() || trimmedName,
             roleId: formData.roleId.trim() || undefined,
-            organizationId: activeOrgId || undefined,
-            subOrganizationId: formData.subOrganizationId || undefined,
-            contactPerson: formData.contactPerson.trim() || undefined,
-            phone: formData.mobileNumber.trim() || undefined,
-            mobileNumber: formData.mobileNumber.trim() || undefined,
-            whatsapp: formData.whatsapp.trim() || undefined,
-            location: formData.location.trim() || undefined,
-            city: formData.location.trim() || undefined,
-            status: formData.status,
-            user: {
-              email: trimmedEmail,
-              password: trimmedPassword,
-              name: formData.contactPerson.trim() || trimmedName,
-              roleId: formData.roleId.trim() || undefined,
-            },
-          });
-        } catch (apiErr) {
-          console.warn('API createBranch notice (persisting locally):', apiErr);
-        }
+          },
+        });
 
         // Add to local catalog tagged with suite
         const newBranchObj: Branch = {

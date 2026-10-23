@@ -26,6 +26,7 @@ import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
+import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import {
   subcategoryApi,
   mapApiSubcategoryToSubcategoryItem,
@@ -131,6 +132,7 @@ export const SubcategoryView: React.FC = () => {
 
   // Delete Confirmation Modal State
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<SubcategoryItem | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -460,6 +462,7 @@ export const SubcategoryView: React.FC = () => {
     if (!deleteConfirmItem) return;
     const { id, subcategory } = deleteConfirmItem;
     setIsDeleting(true);
+    setDeleteError(null);
 
     try {
       const res = await subcategoryApi.deleteSubcategory(id);
@@ -468,17 +471,21 @@ export const SubcategoryView: React.FC = () => {
         setTotalApiRecords((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
         toast.success(`Subcategory "${subcategory}" deleted successfully.`);
         setDeleteConfirmItem(null);
+        setDeleteError(null);
         return;
+      } else {
+        const errorMsg = (res as any)?.message || 'Failed to delete subcategory.';
+        setDeleteError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (apiErr: any) {
-      console.warn('Remote subcategory delete failed, falling back to local:', apiErr);
+      console.warn('Remote subcategory delete failed:', apiErr);
+      const errorMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to delete subcategory. Please try again.';
+      setDeleteError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setIsDeleting(false);
     }
-
-    setSubcategories((prev) => prev.filter((s) => s.id !== id));
-    toast.success(`Subcategory "${subcategory}" deleted.`);
-    setDeleteConfirmItem(null);
   };
 
   // Export to Excel
@@ -729,7 +736,10 @@ export const SubcategoryView: React.FC = () => {
                             {
                               label: 'Delete',
                               variant: 'delete',
-                              onClick: () => setDeleteConfirmItem(item),
+                              onClick: () => {
+                                setDeleteError(null);
+                                setDeleteConfirmItem(item);
+                              },
                             },
                           ]}
                         />
@@ -843,7 +853,10 @@ export const SubcategoryView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => setDeleteConfirmItem(item)}
+                      onClick={() => {
+                        setDeleteError(null);
+                        setDeleteConfirmItem(item);
+                      }}
                       className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1 transition-colors"
                       title="Delete Subcategory"
                     >
@@ -1070,66 +1083,21 @@ export const SubcategoryView: React.FC = () => {
       )}
 
       {/* 7. Delete Confirmation Modal */}
-      {deleteConfirmItem && (
-        <Modal
-          isOpen={!!deleteConfirmItem}
-          onClose={() => !isDeleting && setDeleteConfirmItem(null)}
-          title="Delete Subcategory"
-          subtitle="Confirm subcategory removal or deactivation"
-          maxWidth="md"
-          headerGradient={false}
-          showBackIcon={false}
-          hideCloseButton={true}
-        >
-          <div className="p-4 sm:p-5 space-y-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
-                <AlertTriangle className="w-5 h-5 text-rose-600" />
-              </div>
-              <div className="text-xs sm:text-[13px] text-slate-600 leading-relaxed">
-                <p className="font-semibold text-slate-800 text-sm mb-1">
-                  Are you sure you want to delete this subcategory?
-                </p>
-                <p>
-                  Subcategory: <strong className="text-slate-900">{deleteConfirmItem.subcategory}</strong>
-                </p>
-                <p className="text-[11px] text-slate-400 mt-2">
-                  Unused subcategories are permanently removed. If this subcategory is linked to active inventory products, it will be safely deactivated instead.
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100">
-              <button
-                type="button"
-                disabled={isDeleting}
-                onClick={() => setDeleteConfirmItem(null)}
-                className="h-9 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isDeleting}
-                onClick={handleConfirmDelete}
-                className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-all active:scale-[0.98] cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {isDeleting ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
-                    <span>Deleting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5 text-white" />
-                    <span>Delete</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <DeleteConfirmationModal
+        isOpen={Boolean(deleteConfirmItem)}
+        onClose={() => {
+          if (!isDeleting) {
+            setDeleteConfirmItem(null);
+            setDeleteError(null);
+          }
+        }}
+        onConfirm={handleConfirmDelete}
+        title="Delete Subcategory"
+        entityName="Subcategory"
+        recordName={deleteConfirmItem?.subcategory}
+        isLoading={isDeleting}
+        error={deleteError}
+      />
     </div>
   );
 };

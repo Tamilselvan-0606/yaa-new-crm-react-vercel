@@ -472,17 +472,6 @@ export const SaleManagementDashboardView: React.FC = () => {
               )}
             </button>
             <button
-              onClick={() => handleModuleTabChange('sales_hub')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                activeModuleTab === 'sales_hub'
-                  ? 'bg-white text-[#33077C] shadow-xs'
-                  : 'text-white/80 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <ShoppingCart className="w-3.5 h-3.5" />
-              <span>Sales Hub</span>
-            </button>
-            <button
               onClick={() => handleModuleTabChange('purchase')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                 activeModuleTab === 'purchase'
@@ -497,6 +486,17 @@ export const SaleManagementDashboardView: React.FC = () => {
                   {modulesData?.purchase?.purchaseRequests?.pending ?? 0}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => handleModuleTabChange('sales_hub')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                activeModuleTab === 'sales_hub'
+                  ? 'bg-white text-[#33077C] shadow-xs'
+                  : 'text-white/80 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <ShoppingCart className="w-3.5 h-3.5" />
+              <span>Sales Hub</span>
             </button>
             <button
               onClick={() => handleModuleTabChange('reports')}
@@ -569,38 +569,6 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
             </div>
 
-            {/* All Modules: Sales Hub KPI */}
-            <div
-              onClick={() => navigate('/sale-management/sales/sale')}
-              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                  <ShoppingCart className="w-3.5 h-3.5 text-emerald-600" />
-                  Sales Hub Revenue
-                </span>
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 group-hover:bg-emerald-100 flex items-center justify-center text-emerald-700 transition-colors">
-                  <TrendingUp className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="mt-3">
-                <h3 className="text-2xl font-black text-emerald-700 tracking-tight">
-                  ₹
-                  {(
-                    modulesData?.saleReport?.netSales ?? 0
-                  ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </h3>
-                <div className="flex items-center justify-between mt-1 text-xs">
-                  <span className="text-slate-500 font-medium">
-                    {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
-                  </span>
-                  <span className="text-emerald-600 font-bold">
-                    {modulesData?.salesHub?.quotations?.total ?? 0} Quotes
-                  </span>
-                </div>
-              </div>
-            </div>
-
             {/* All Modules: Purchase KPI */}
             <div
               onClick={() => navigate('/sale-management/purchase/purchase')}
@@ -628,6 +596,38 @@ export const SaleManagementDashboardView: React.FC = () => {
                   </span>
                   <span className="text-rose-600 font-bold">
                     {modulesData?.purchase?.purchaseRequests?.pending ?? 0} Pending Req
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* All Modules: Sales Hub KPI */}
+            <div
+              onClick={() => navigate('/sale-management/sales/sale')}
+              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                  <ShoppingCart className="w-3.5 h-3.5 text-emerald-600" />
+                  Sales Hub Revenue
+                </span>
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 group-hover:bg-emerald-100 flex items-center justify-center text-emerald-700 transition-colors">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <h3 className="text-2xl font-black text-emerald-700 tracking-tight">
+                  ₹
+                  {(
+                    modulesData?.saleReport?.netSales ?? 0
+                  ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </h3>
+                <div className="flex items-center justify-between mt-1 text-xs">
+                  <span className="text-slate-500 font-medium">
+                    {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
+                  </span>
+                  <span className="text-emerald-600 font-bold">
+                    {modulesData?.salesHub?.quotations?.total ?? 0} Quotes
                   </span>
                 </div>
               </div>
@@ -788,124 +788,6 @@ export const SaleManagementDashboardView: React.FC = () => {
           </>
         )}
 
-        {activeModuleTab === 'sales_hub' && (
-          <>
-            {/* Sales Hub KPI 1: Sales Revenue */}
-            <div
-              onClick={() => navigate('/sale-management/sales/sale')}
-              className="bg-white p-5 rounded-2xl border border-emerald-200/90 shadow-2xs hover:shadow-md hover:border-emerald-400 transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1">
-                  <ShoppingCart className="w-3.5 h-3.5 text-emerald-600" />
-                  Invoiced Sales Revenue
-                </span>
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 group-hover:bg-emerald-100 flex items-center justify-center text-emerald-700 transition-colors">
-                  <TrendingUp className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="mt-3">
-                <h3 className="text-2xl font-black text-emerald-700 tracking-tight">
-                  ₹
-                  {(
-                    modulesData?.saleReport?.netSales ?? 0
-                  ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </h3>
-                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
-                  <span>Net billed in period</span>
-                  <span className="text-emerald-700 font-bold flex items-center gap-0.5">
-                    Invoices <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sales Hub KPI 2: Customer Accounts */}
-            <div
-              onClick={() => navigate('/sale-management/sales/customer')}
-              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                  <Users className="w-3.5 h-3.5 text-blue-600" />
-                  Customer Accounts
-                </span>
-                <div className="w-9 h-9 rounded-xl bg-blue-50 group-hover:bg-blue-100 flex items-center justify-center text-blue-700 transition-colors">
-                  <Users className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="mt-3">
-                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-                  {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
-                </h3>
-                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
-                  <span>Active customer base</span>
-                  <span className="text-blue-700 font-bold flex items-center gap-0.5">
-                    Customers <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sales Hub KPI 3: Quotations */}
-            <div
-              onClick={() => navigate('/sale-management/sales/quotations')}
-              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-purple-300 transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                  <FileText className="w-3.5 h-3.5 text-purple-600" />
-                  Quotations & Estimates
-                </span>
-                <div className="w-9 h-9 rounded-xl bg-purple-50 group-hover:bg-purple-100 flex items-center justify-center text-purple-700 transition-colors">
-                  <FileText className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="mt-3">
-                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-                  {modulesData?.salesHub?.quotations?.total ?? 0} Quotes
-                </h3>
-                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
-                  <span className="text-emerald-600 font-semibold">
-                    {modulesData?.salesHub?.quotations?.open ?? 0} Open •{' '}
-                    {modulesData?.salesHub?.quotations?.converted ?? 0} Converted
-                  </span>
-                  <span className="text-purple-700 font-bold flex items-center gap-0.5">
-                    Pipeline <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sales Hub KPI 4: Sales Reps */}
-            <div
-              onClick={() => navigate('/sale-management/sales/sales-representative')}
-              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-violet-300 transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                  <Users className="w-3.5 h-3.5 text-violet-600" />
-                  Sales Representatives
-                </span>
-                <div className="w-9 h-9 rounded-xl bg-violet-50 group-hover:bg-violet-100 flex items-center justify-center text-violet-700 transition-colors">
-                  <Users className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="mt-3">
-                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-                  {modulesData?.salesHub?.salesRepresentatives?.active ?? 0} Active
-                </h3>
-                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
-                  <span>{modulesData?.salesHub?.salesRepresentatives?.assigned ?? 0} Assigned leads</span>
-                  <span className="text-violet-700 font-bold flex items-center gap-0.5">
-                    Team <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
         {activeModuleTab === 'purchase' && (
           <>
             {/* Purchase KPI 1: Spend */}
@@ -1019,6 +901,124 @@ export const SaleManagementDashboardView: React.FC = () => {
                   <span>Disbursed vendor payments</span>
                   <span className="text-emerald-700 font-bold flex items-center gap-0.5">
                     Payments <ArrowRight className="w-3 h-3" />
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeModuleTab === 'sales_hub' && (
+          <>
+            {/* Sales Hub KPI 1: Sales Revenue */}
+            <div
+              onClick={() => navigate('/sale-management/sales/sale')}
+              className="bg-white p-5 rounded-2xl border border-emerald-200/90 shadow-2xs hover:shadow-md hover:border-emerald-400 transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1">
+                  <ShoppingCart className="w-3.5 h-3.5 text-emerald-600" />
+                  Invoiced Sales Revenue
+                </span>
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 group-hover:bg-emerald-100 flex items-center justify-center text-emerald-700 transition-colors">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <h3 className="text-2xl font-black text-emerald-700 tracking-tight">
+                  ₹
+                  {(
+                    modulesData?.saleReport?.netSales ?? 0
+                  ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </h3>
+                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
+                  <span>Net billed in period</span>
+                  <span className="text-emerald-700 font-bold flex items-center gap-0.5">
+                    Invoices <ArrowRight className="w-3 h-3" />
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sales Hub KPI 2: Customer Accounts */}
+            <div
+              onClick={() => navigate('/sale-management/sales/customer')}
+              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-blue-600" />
+                  Customer Accounts
+                </span>
+                <div className="w-9 h-9 rounded-xl bg-blue-50 group-hover:bg-blue-100 flex items-center justify-center text-blue-700 transition-colors">
+                  <Users className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
+                  {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
+                </h3>
+                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
+                  <span>Active customer base</span>
+                  <span className="text-blue-700 font-bold flex items-center gap-0.5">
+                    Customers <ArrowRight className="w-3 h-3" />
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sales Hub KPI 3: Quotations */}
+            <div
+              onClick={() => navigate('/sale-management/sales/quotations')}
+              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-purple-300 transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5 text-purple-600" />
+                  Quotations & Estimates
+                </span>
+                <div className="w-9 h-9 rounded-xl bg-purple-50 group-hover:bg-purple-100 flex items-center justify-center text-purple-700 transition-colors">
+                  <FileText className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
+                  {modulesData?.salesHub?.quotations?.total ?? 0} Quotes
+                </h3>
+                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
+                  <span className="text-emerald-600 font-semibold">
+                    {modulesData?.salesHub?.quotations?.open ?? 0} Open •{' '}
+                    {modulesData?.salesHub?.quotations?.converted ?? 0} Converted
+                  </span>
+                  <span className="text-purple-700 font-bold flex items-center gap-0.5">
+                    Pipeline <ArrowRight className="w-3 h-3" />
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sales Hub KPI 4: Sales Reps */}
+            <div
+              onClick={() => navigate('/sale-management/sales/sales-representative')}
+              className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-violet-300 transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-violet-600" />
+                  Sales Representatives
+                </span>
+                <div className="w-9 h-9 rounded-xl bg-violet-50 group-hover:bg-violet-100 flex items-center justify-center text-violet-700 transition-colors">
+                  <Users className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
+                  {modulesData?.salesHub?.salesRepresentatives?.active ?? 0} Active
+                </h3>
+                <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
+                  <span>{modulesData?.salesHub?.salesRepresentatives?.assigned ?? 0} Assigned leads</span>
+                  <span className="text-violet-700 font-bold flex items-center gap-0.5">
+                    Team <ArrowRight className="w-3 h-3" />
                   </span>
                 </div>
               </div>
@@ -1511,82 +1511,7 @@ export const SaleManagementDashboardView: React.FC = () => {
           </div>
         )}
 
-        {/* Module 2: SALES HUB CARD */}
-        {(activeModuleTab === 'all' || activeModuleTab === 'sales_hub') && (
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 flex flex-col justify-between hover:border-emerald-300 transition-colors">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center">
-                    <ShoppingCart className="w-4.5 h-4.5" />
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900">Sales Hub</h4>
-                </div>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 flex items-center gap-1">
-                  {loadingModules && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                  {modulesData?.salesHub?.sections ?? 10} Sections
-                </span>
-              </div>
-
-              <div className="mt-4 space-y-2.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Active Customers:</span>
-                  <span className="font-bold text-slate-900">
-                    {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Estimates / Quotes:</span>
-                  <span className="font-bold text-slate-900">
-                    {modulesData?.salesHub?.quotations?.open ?? 0} Open (
-                    {modulesData?.salesHub?.quotations?.converted ?? 0} Converted)
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Sales Representatives:</span>
-                  <span className="font-bold text-slate-900">
-                    {modulesData?.salesHub?.salesRepresentatives?.active ?? 0} Active
-                    {modulesData?.salesHub?.salesRepresentatives?.assigned !== undefined && (
-                      <span className="text-slate-400 font-normal">
-                        {' '}
-                        ({modulesData.salesHub.salesRepresentatives.assigned} Assigned)
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-              <button
-                onClick={() => navigate('/sale-management/sales/customer')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-              >
-                Customers
-              </button>
-              <button
-                onClick={() => navigate('/sale-management/sales/quotation')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-              >
-                Quotes
-              </button>
-              <button
-                onClick={() => navigate('/sale-management/sales/payment-in')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-              >
-                Payment-In
-              </button>
-              <button
-                onClick={() => navigate('/sale-management/sales/sale')}
-                className="px-2 py-1.5 text-center text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer font-bold"
-              >
-                Sales Invoice →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Module 3: PURCHASE CARD */}
+        {/* Module 2: PURCHASE CARD */}
         {(activeModuleTab === 'all' || activeModuleTab === 'purchase') && (
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 flex flex-col justify-between hover:border-blue-300 transition-colors">
             <div>
@@ -1656,6 +1581,81 @@ export const SaleManagementDashboardView: React.FC = () => {
                 className="px-2 py-1.5 text-center text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer font-bold"
               >
                 Purchase Bills →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Module 3: SALES HUB CARD */}
+        {(activeModuleTab === 'all' || activeModuleTab === 'sales_hub') && (
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 flex flex-col justify-between hover:border-emerald-300 transition-colors">
+            <div>
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center">
+                    <ShoppingCart className="w-4.5 h-4.5" />
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900">Sales Hub</h4>
+                </div>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 flex items-center gap-1">
+                  {loadingModules && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                  {modulesData?.salesHub?.sections ?? 10} Sections
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Active Customers:</span>
+                  <span className="font-bold text-slate-900">
+                    {modulesData?.salesHub?.activeCustomers ?? 0} Accounts
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Estimates / Quotes:</span>
+                  <span className="font-bold text-slate-900">
+                    {modulesData?.salesHub?.quotations?.open ?? 0} Open (
+                    {modulesData?.salesHub?.quotations?.converted ?? 0} Converted)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Sales Representatives:</span>
+                  <span className="font-bold text-slate-900">
+                    {modulesData?.salesHub?.salesRepresentatives?.active ?? 0} Active
+                    {modulesData?.salesHub?.salesRepresentatives?.assigned !== undefined && (
+                      <span className="text-slate-400 font-normal">
+                        {' '}
+                        ({modulesData.salesHub.salesRepresentatives.assigned} Assigned)
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <button
+                onClick={() => navigate('/sale-management/sales/customer')}
+                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+              >
+                Customers
+              </button>
+              <button
+                onClick={() => navigate('/sale-management/sales/quotation')}
+                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+              >
+                Quotes
+              </button>
+              <button
+                onClick={() => navigate('/sale-management/sales/payment-in')}
+                className="px-2 py-1.5 text-center text-[11px] font-semibold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+              >
+                Payment-In
+              </button>
+              <button
+                onClick={() => navigate('/sale-management/sales/sale')}
+                className="px-2 py-1.5 text-center text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer font-bold"
+              >
+                Sales Invoice →
               </button>
             </div>
           </div>

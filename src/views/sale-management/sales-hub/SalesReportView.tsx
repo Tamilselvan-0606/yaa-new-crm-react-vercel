@@ -34,6 +34,7 @@ import { Button } from '../../../components/common/Button';
 import { Badge } from '../../../components/common/Badge';
 import { toast } from 'sonner';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { printTableReport } from '../../../utils/printUtils';
 
 const CHART_COLORS = ['#4309A2', '#7C3AED', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
 
@@ -235,6 +236,49 @@ export const SalesReportView: React.FC = () => {
     toast.success(`Sales report Excel downloaded (${filteredSales.length} records)!`);
   };
 
+  const handlePrintReport = () => {
+    if (filteredSales.length === 0) {
+      toast.error('No sales data to print');
+      return;
+    }
+
+    const printRows = filteredSales.map((s) => ({
+      invoiceNo: s.invoiceNo,
+      date: s.saleDate,
+      customer: s.customerName,
+      itemsCount: s.items?.length || 1,
+      tax: Number(s.totalTax || 0),
+      grandTotal: Number(s.grandTotal || 0),
+      status: s.saleStatus,
+    }));
+
+    printTableReport({
+      title: 'SALES ANALYTICS & REVENUE REPORT',
+      subtitle: `Filter: ${timeRange} | Total Records: ${filteredSales.length}`,
+      columns: [
+        { header: 'Invoice No.', key: 'invoiceNo', align: 'center', width: '15%' },
+        { header: 'Date', key: 'date', align: 'center', width: '12%' },
+        { header: 'Customer', key: 'customer', align: 'left', width: '25%' },
+        { header: 'Items', key: 'itemsCount', align: 'center', width: '8%' },
+        { header: 'Tax (₹)', key: 'tax', align: 'right', type: 'currency', width: '15%' },
+        { header: 'Grand Total (₹)', key: 'grandTotal', align: 'right', type: 'currency', width: '15%' },
+        { header: 'Status', key: 'status', align: 'center', width: '10%' },
+      ],
+      data: printRows,
+      summaryRow: {
+        invoiceNo: 'TOTAL',
+        customer: `${filteredSales.length} Invoices`,
+        tax: kpis.totalTax,
+        grandTotal: kpis.netSales,
+      },
+      metrics: [
+        { label: 'Gross Sales', value: kpis.totalSales },
+        { label: 'Total Tax', value: kpis.totalTax },
+        { label: 'Net Sales', value: kpis.netSales },
+      ],
+    });
+  };
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
@@ -271,7 +315,7 @@ export const SalesReportView: React.FC = () => {
           <Button
             size="md"
             variant="primary"
-            onClick={() => window.print()}
+            onClick={handlePrintReport}
             icon={<Printer className="w-4 h-4 text-white" />}
             className="bg-[#33077C] hover:bg-[#280563] text-white shadow-sm hover:shadow transition-all"
           >

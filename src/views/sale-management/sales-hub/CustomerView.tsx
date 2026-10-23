@@ -44,6 +44,7 @@ import {
   Truck,
   RefreshCw,
   Loader2,
+  Printer,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -56,10 +57,12 @@ import {
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
+import { DeleteConfirmationModal } from "../../../components/common/DeleteConfirmationModal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { printTableReport } from "../../../utils/printUtils";
 import {
   UniversalShareDropdown,
   formatCustomerShare,
@@ -142,6 +145,48 @@ export const CustomerView: React.FC = () => {
   const setSalesRepresentativesListRef = useRef(setSalesRepresentativesList);
   setSalesRepresentativesListRef.current = setSalesRepresentativesList;
 
+  // Load sales representatives from Commerce API with deduplication guards
+  const loadSalesReps = useCallback(async (forceRefresh = false) => {
+    if (isFetchingRepsRef.current) return;
+    if (!forceRefresh && hasLoadedRepsRef.current) return;
+
+    isFetchingRepsRef.current = true;
+    setIsSalesRepsLoading(true);
+    try {
+      const res = await salesRepresentativeApi.getList({
+        limit: 200,
+      });
+      if (res && res.success && Array.isArray(res.data)) {
+        hasLoadedRepsRef.current = true;
+        setLiveSalesReps(res.data);
+        const mappedReps: SalesRepresentative[] = res.data.map((r) => ({
+          id: r.id,
+          name: r.name,
+          mobile: r.mobile,
+          email: r.email,
+          designation: r.designation,
+          status: r.status,
+          createdAt: r.createdAt || new Date().toISOString(),
+          updatedAt: r.updatedAt || new Date().toISOString(),
+        }));
+        setSalesRepresentativesListRef.current(mappedReps);
+      }
+    } catch (err: any) {
+      console.warn(
+        "Failed to fetch sales representatives for customer view:",
+        err?.message || err,
+      );
+    } finally {
+      isFetchingRepsRef.current = false;
+      setIsSalesRepsLoading(false);
+    }
+  }, []);
+
+  // Single mount effect to load sales representatives once
+  useEffect(() => {
+    loadSalesReps();
+  }, [loadSalesReps]);
+
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -183,6 +228,7 @@ export const CustomerView: React.FC = () => {
     useState<SalesCustomer | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
+  const [deleteCustomerError, setDeleteCustomerError] = useState<string | null>(null);
 
   const [selectedCustomer, setSelectedCustomer] =
     useState<SalesCustomer | null>(null);
@@ -588,47 +634,23 @@ export const CustomerView: React.FC = () => {
     loadCustomers();
   }, [loadCustomers]);
 
-  // Load sales representatives from Commerce API with deduplication guards
-  const loadSalesReps = useCallback(async (forceRefresh = false) => {
-    if (isFetchingRepsRef.current) return;
-    if (!forceRefresh && hasLoadedRepsRef.current) return;
-
-    isFetchingRepsRef.current = true;
-    setIsSalesRepsLoading(true);
-    try {
-      const res = await salesRepresentativeApi.getList({
-        limit: 200,
-      });
-      if (res && res.success && Array.isArray(res.data)) {
-        hasLoadedRepsRef.current = true;
-        setLiveSalesReps(res.data);
-        const mappedReps: SalesRepresentative[] = res.data.map((r) => ({
-          id: r.id,
-          name: r.name,
-          mobile: r.mobile,
-          email: r.email,
-          designation: r.designation,
-          status: r.status,
-          createdAt: r.createdAt || new Date().toISOString(),
-          updatedAt: r.updatedAt || new Date().toISOString(),
-        }));
-        setSalesRepresentativesListRef.current(mappedReps);
-      }
-    } catch (err: any) {
-      console.warn(
-        "Failed to fetch sales representatives for customer view:",
-        err?.message || err,
-      );
-    } finally {
-      isFetchingRepsRef.current = false;
-      setIsSalesRepsLoading(false);
-    }
-  }, []);
-
-  // Single mount effect to load sales representatives once
+  // Listen for sidebar click event to trigger immediate fresh API fetch
   useEffect(() => {
-    loadSalesReps();
-  }, [loadSalesReps]);
+    const handleSidebarNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        detail?.path === '/sale-management/sales/customer' ||
+        detail?.id === 'sales-hub-customer' ||
+        detail?.id === 'billing-customers'
+      ) {
+        lastFetchKeyRef.current = null;
+        loadCustomers(true);
+        loadSalesReps(true);
+      }
+    };
+    window.addEventListener('crm:sidebar-navigate', handleSidebarNav);
+    return () => window.removeEventListener('crm:sidebar-navigate', handleSidebarNav);
+  }, [loadCustomers, loadSalesReps]);
 
   // Debounced Search (600ms) - waits until typing completes before triggering API
   useEffect(() => {
@@ -1159,12 +1181,14 @@ export const CustomerView: React.FC = () => {
 
   const handleOpenDeleteModal = (target: SalesCustomer) => {
     setDeleteTargetCustomer(target);
+    setDeleteCustomerError(null);
     setIsDeleteModalOpen(true);
   };
 
   const handleConfirmDeleteCustomer = async () => {
     if (!deleteTargetCustomer) return;
     setIsDeletingCustomer(true);
+    setDeleteCustomerError(null);
     try {
       await customerApi.deleteCustomer(deleteTargetCustomer.id);
       toast.success(
@@ -1195,6 +1219,7 @@ export const CustomerView: React.FC = () => {
         apiErr?.response?.data?.message ||
         apiErr?.message ||
         "Failed to delete customer.";
+      setDeleteCustomerError(errMsg);
       toast.error(`Delete failed: ${errMsg}`);
     } finally {
       setIsDeletingCustomer(false);
@@ -1544,6 +1569,52 @@ export const CustomerView: React.FC = () => {
     );
   };
 
+  // Print Customers Table Report via universal printUtils
+  const handlePrintTableReport = () => {
+    if (filteredCustomers.length === 0) {
+      toast.error("No customers to print.");
+      return;
+    }
+
+    const printRows = filteredCustomers.map((c, idx) => ({
+      sNo: idx + 1,
+      customerCode: c.customerCode,
+      name: c.name,
+      company: c.company || "-",
+      phone: c.phone,
+      email: c.email || "-",
+      customerType: c.customerType,
+      creditLimit: Number(c.creditLimit || 0),
+      outstanding: Number(c.outstandingAmount || 0),
+      status: c.status,
+    }));
+
+    printTableReport({
+      title: "CUSTOMER DIRECTORY & BALANCE REPORT",
+      subtitle: `Total Customers: ${filteredCustomers.length}`,
+      columns: [
+        { header: "#", key: "sNo", align: "center", width: "5%" },
+        { header: "Customer ID", key: "customerCode", align: "center", width: "12%" },
+        { header: "Customer Name", key: "name", align: "left", width: "22%" },
+        { header: "Company", key: "company", align: "left", width: "18%" },
+        { header: "Phone", key: "phone", align: "left", width: "13%" },
+        { header: "Type", key: "customerType", align: "center", width: "10%" },
+        { header: "Outstanding (₹)", key: "outstanding", align: "right", type: "currency", width: "12%" },
+        { header: "Status", key: "status", align: "center", width: "8%" },
+      ],
+      data: printRows,
+      summaryRow: {
+        sNo: "TOTAL",
+        name: `${filteredCustomers.length} Customers`,
+        outstanding: summary.totalReceivable,
+      },
+      metrics: [
+        { label: "Total Receivable", value: summary.totalReceivable },
+        { label: "Total Customers", value: filteredCustomers.length },
+      ],
+    });
+  };
+
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* 1. TOP HEADER CARD */}
@@ -1578,6 +1649,16 @@ export const CustomerView: React.FC = () => {
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={handlePrintTableReport}
+            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            icon={<Printer className="w-4 h-4 text-slate-600" />}
+          >
+            Print Report
           </Button>
 
           <Button
@@ -2788,78 +2869,25 @@ export const CustomerView: React.FC = () => {
       {/* ========================================== */}
       {/* 2b. DELETE CUSTOMER CONFIRMATION MODAL     */}
       {/* ========================================== */}
-      <Modal
+      <DeleteConfirmationModal
         isOpen={isDeleteModalOpen}
         onClose={() => {
           if (!isDeletingCustomer) {
             setIsDeleteModalOpen(false);
             setDeleteTargetCustomer(null);
+            setDeleteCustomerError(null);
           }
         }}
-        title="Delete Customer"
-        subtitle="Confirm customer profile removal"
-        maxWidth="md"
-        headerGradient={true}
-        showBackIcon={true}
-        hideCloseButton={true}
-        onBack={() => {
-          if (!isDeletingCustomer) {
-            setIsDeleteModalOpen(false);
-            setDeleteTargetCustomer(null);
-          }
-        }}
-      >
-        <div className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
-          <div className="flex items-start gap-3 p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl">
-            <Trash2 className="w-6 h-6 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <h4 className="text-sm font-bold text-rose-900 dark:text-rose-200">
-                Are you sure you want to delete this customer?
-              </h4>
-              <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
-                You are about to delete{" "}
-                <span className="font-bold text-rose-950 dark:text-white">
-                  "{deleteTargetCustomer?.name}"
-                </span>{" "}
-                {deleteTargetCustomer?.customerCode && (
-                  <span className="font-mono text-[11px] font-semibold text-rose-800 dark:text-rose-200">
-                    ({deleteTargetCustomer.customerCode})
-                  </span>
-                )}
-                . This action cannot be undone.
-              </p>
-            </div>
-          </div>
-
-          <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
-            <button
-              type="button"
-              disabled={isDeletingCustomer}
-              onClick={() => {
-                setIsDeleteModalOpen(false);
-                setDeleteTargetCustomer(null);
-              }}
-              className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
-            >
-              <X className="w-4 h-4 text-slate-500" />
-              <span>Cancel</span>
-            </button>
-            <button
-              type="button"
-              disabled={isDeletingCustomer}
-              onClick={handleConfirmDeleteCustomer}
-              className="h-10 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-            >
-              {isDeletingCustomer ? (
-                <Loader2 className="w-4 h-4 animate-spin text-white" />
-              ) : (
-                <Trash2 className="w-4 h-4 stroke-[2.2]" />
-              )}
-              <span>{isDeletingCustomer ? "Deleting..." : "Delete Customer"}</span>
-            </button>
-          </div>
-        </div>
-      </Modal>
+        onConfirm={handleConfirmDeleteCustomer}
+        entityName="Customer"
+        recordName={
+          deleteTargetCustomer
+            ? `${deleteTargetCustomer.name}${deleteTargetCustomer.customerCode ? ` (${deleteTargetCustomer.customerCode})` : ""}`
+            : undefined
+        }
+        isLoading={isDeletingCustomer}
+        error={deleteCustomerError}
+      />
 
       {/* ========================================== */}
       {/* 3. COMPREHENSIVE 6-TAB DETAIL MODAL       */}

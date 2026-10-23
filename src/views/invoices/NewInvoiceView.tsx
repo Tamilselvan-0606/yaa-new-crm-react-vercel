@@ -46,6 +46,9 @@ import {
   organizationApi,
   OrganizationApiItem,
   subscriptionPlanApi,
+  platformClientApi,
+  PlatformClientItem,
+  getStoredOrganizationId,
 } from '../../api';
 
 interface BankAccount {
@@ -78,7 +81,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const navigate = useNavigate();
   const location = useLocation();
   const invoiceToEdit = (location.state as any)?.invoiceToEdit as SavedInvoice | undefined;
-  const { showToast, isSuperAdmin } = useAuth();
+  const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
   const { addInvoice: addStandardInvoice } = useInvoiceStore();
   const { addProformaInvoice } = useProformaInvoiceStore();
   const addInvoice = isProforma ? addProformaInvoice : addStandardInvoice;
@@ -189,41 +192,77 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     showToast('success', 'Bank Account Added', `Added and selected ${created.bankName}.`);
   };
 
-  // Live platform organizations
+  // Live platform organizations (for Platform Administrator)
   const [platformOrgs, setPlatformOrgs] = useState<OrganizationApiItem[]>([]);
+  // Live platform clients (for Org Admin)
+  const [platformClients, setPlatformClients] = useState<PlatformClientItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    const fetchOrgs = async () => {
-      try {
-        const res = await organizationApi.getOrganizations(1, 100);
-        if (isMounted && res.data) {
-          setPlatformOrgs(res.data);
+    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+
+    if (isSuperAdmin && !isOrgSuperAdmin) {
+      // Platform Administrator: load registered organizations
+      const fetchOrgs = async () => {
+        try {
+          const res = await organizationApi.getOrganizations(1, 100);
+          if (isMounted && res.data) {
+            setPlatformOrgs(res.data);
+          }
+        } catch (err) {
+          console.error('Failed to load organizations in NewInvoiceView:', err);
         }
-      } catch (err) {
-        console.error('Failed to load organizations in NewInvoiceView:', err);
-      }
-    };
-    fetchOrgs();
+      };
+      fetchOrgs();
+    } else {
+      // Org Admin: load clients from client API
+      const fetchClients = async () => {
+        try {
+          const res = await platformClientApi.getClients({ page: 1, limit: 100, organization_id: orgId || undefined });
+          if (isMounted && res.data) {
+            setPlatformClients(res.data);
+          }
+        } catch (err) {
+          console.error('Failed to load clients in NewInvoiceView:', err);
+        }
+      };
+      fetchClients();
+    }
+
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
 
-  const mappedPlatformClients: Customer[] = platformOrgs.map((org: any) => ({
-    id: org.id,
-    name: org.name,
-    company: org.name,
-    email: org.email || '',
-    phone: org.phone || '',
-    location: org.location || '',
-    address: org.address || org.location || org.user?.address || '',
-    status: 'Active' as const,
-    linkedProducts: [],
-    gstin: org.gstNumber || '',
-    taxId: org.gstNumber || '',
-  }));
+  const mappedPlatformClients: Customer[] = (isSuperAdmin && !isOrgSuperAdmin)
+    ? platformOrgs.map((org: any) => ({
+        id: org.id,
+        name: org.name,
+        company: org.name,
+        email: org.email || '',
+        phone: org.phone || '',
+        location: org.location || '',
+        address: org.address || org.location || org.user?.address || '',
+        status: 'Active' as const,
+        linkedProducts: [],
+        gstin: org.gstNumber || '',
+        taxId: org.gstNumber || '',
+      }))
+    : platformClients.map((client) => ({
+        id: client.id,
+        name: client.contactPerson || client.name,
+        company: client.name || client.legalName || 'Client',
+        email: client.email || '',
+        phone: client.phone || client.whatsapp || '',
+        location: client.address || client.location || '',
+        address: client.address || client.location || '',
+        status: 'Active' as const,
+        linkedProducts: [],
+        gstin: client.gstNumber || '',
+        taxId: client.gstNumber || '',
+        pan: client.panNumber || '',
+      }));
 
   const availableCustomers = mappedPlatformClients.length > 0 ? mappedPlatformClients : commerceCustomers;
 
@@ -940,7 +979,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
           <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between rounded-t-2xl">
             <div className="flex items-center gap-3.5">
               <h2 className="text-base font-bold text-white tracking-tight">
-                Organization / Bill To
+                {isSuperAdmin && !isOrgSuperAdmin ? 'Organization / Bill To' : 'Client & Billing Party'}
               </h2>
             </div>
             {selectedCustomer && (
@@ -960,11 +999,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
           {/* Card Body */}
           <div className="p-8 space-y-8 flex-1 flex flex-col">
-            {/* Organizations Searchable Dropdown */}
+            {/* Organizations/Clients Searchable Dropdown */}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Organization <span className="text-rose-500">*</span>
+                  {isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Client / Customer'} <span className="text-rose-500">*</span>
                 </label>
               </div>
 
@@ -989,7 +1028,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         setClientSearchQuery(selectedCustomer.company);
                       }
                     }}
-                    placeholder="Search or select organization..."
+                    placeholder={isSuperAdmin && !isOrgSuperAdmin ? "Search or select organization..." : "Search or select client / customer..."}
                     className={`w-full h-11 pl-11 pr-16 bg-white border rounded-xl text-sm font-semibold transition-all shadow-2xs outline-none ${isClientDropdownOpen
                       ? 'border-[#4309A2] ring-4 ring-[#4309A2]/10 text-slate-900'
                       : 'border-slate-200 hover:border-slate-300 text-slate-800'
@@ -1009,13 +1048,15 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   </div>
                 </div>
 
-                {/* Dropdown Menu Popup: Direct List of Organizations */}
+                {/* Dropdown Menu Popup: Direct List of Organizations / Clients */}
                 {isClientDropdownOpen && (
                   <div className="dropdown-menu absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 animate-in fade-in zoom-in-95 duration-100">
                     <div className="max-h-60 overflow-y-auto space-y-1">
                       {filteredCustomers.length === 0 ? (
                         <div className="py-4 text-center text-xs text-slate-400">
-                          No matching organizations found for "{clientSearchQuery}".
+                          {isSuperAdmin && !isOrgSuperAdmin
+                            ? `No matching organizations found for "${clientSearchQuery}".`
+                            : `No matching clients found for "${clientSearchQuery}".`}
                         </div>
                       ) : (
                         filteredCustomers.map((cust) => {
@@ -1029,7 +1070,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                                 setSelectedCustomer(cust);
                                 setClientSearchQuery(displayName);
                                 setIsClientDropdownOpen(false);
-                                showToast('success', 'Organization Selected', `Selected "${displayName}".`);
+                                showToast(
+                                  'success',
+                                  isSuperAdmin && !isOrgSuperAdmin ? 'Organization Selected' : 'Client Selected',
+                                  `Selected "${displayName}".`
+                                );
                               }}
                               className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                 ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
@@ -1050,18 +1095,22 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             </div>
 
-            {/* Selected Organization Card Details or Empty State */}
+            {/* Selected Organization / Client Card Details or Empty State */}
             {selectedCustomer ? (
               <div className="pt-2 flex-1 flex flex-col justify-between">
                 <div>
                   <div className="space-y-3.5 text-[13px]">
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                      <span className="font-bold text-slate-800">Organization</span>
+                      <span className="font-bold text-slate-800">{isSuperAdmin && !isOrgSuperAdmin ? 'Organization' : 'Client Name'}</span>
                       <span className="text-slate-700 font-semibold">: {selectedCustomer.company || selectedCustomer.name}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
                       <span className="text-slate-700">: {(selectedCustomer as any).gstin || (selectedCustomer as any).taxId || 'N/A'}</span>
+                    </div>
+                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                      <span className="font-bold text-slate-800">PAN Number</span>
+                      <span className="text-slate-700">: {(selectedCustomer as any).pan || 'N/A'}</span>
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">Phone Number</span>
@@ -1080,7 +1129,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             ) : (
               <div className="py-6 text-center text-sm text-slate-400 font-medium">
-                No organization selected
+                {isSuperAdmin && !isOrgSuperAdmin ? 'No organization selected' : 'No client selected'}
               </div>
             )}
           </div>
@@ -1734,11 +1783,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           showToast('success', 'Proforma Invoice Updated', `Proforma invoice #${res.data?.proformaNumber || ''} updated successfully!`);
                           navigate('/proforma/invoices');
                         } else {
+                          const activeUserOrgId = currentUser?.organizationId || getStoredOrganizationId();
                           const createPayload: CreateProformaRequest = {
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             customerId: selectedCustomer.id,
-                            organizationId: selectedCustomer.id,
+                            organizationId: (isSuperAdmin && !isOrgSuperAdmin) ? selectedCustomer.id : (activeUserOrgId || selectedCustomer.id),
                             discountTotal: totalDiscount,
                             billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
                             gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
@@ -1770,12 +1820,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     // Standard sale invoice flow
                     try {
                       setIsSubmitting(true);
-                      let validOrgId = selectedCustomer.id;
-                      const matchedOrg = platformOrgs.find(
-                        (o) => o.id === selectedCustomer.id || o.name.toLowerCase() === selectedCustomer.company.toLowerCase()
-                      );
-                      if (matchedOrg) {
-                        validOrgId = matchedOrg.id;
+                      const activeUserOrgId = currentUser?.organizationId || getStoredOrganizationId();
+                      let validOrgId = (isSuperAdmin && !isOrgSuperAdmin)
+                        ? selectedCustomer.id
+                        : (activeUserOrgId || selectedCustomer.id);
+                      if (isSuperAdmin && !isOrgSuperAdmin) {
+                        const matchedOrg = platformOrgs.find(
+                          (o) => o.id === selectedCustomer.id || o.name.toLowerCase() === selectedCustomer.company.toLowerCase()
+                        );
+                        if (matchedOrg) {
+                          validOrgId = matchedOrg.id;
+                        }
                       }
 
                       if (invoiceToEdit) {
@@ -1800,7 +1855,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         const createPayload: CreateInvoiceRequest = {
                           invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                           dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                          customerId: validOrgId,
+                          customerId: selectedCustomer.id,
                           organizationId: validOrgId,
                           status: 'Sent',
                           discountTotal: totalDiscount,
