@@ -20,8 +20,9 @@ import {
   X,
   Printer,
   Forward,
-  FileSpreadsheet,
   Loader2,
+  History,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -54,12 +55,11 @@ import {
   workPurchaseOrderApi,
   mapApiPurchaseOrderToUi,
   mapUiToCreatePurchaseOrderPayload,
-  supplierApi,
-  ApiSupplier,
   UUID_REGEX,
   getStoredOrganizationId,
 } from '../../../api';
 import { FormLabel, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import { SaleActionDropdown } from '../utils';
 
 const getLoggedInUserName = (): string => {
   try {
@@ -107,7 +107,6 @@ export const PurchaseRequestView: React.FC = () => {
   const [isApproving, setIsApproving] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
-  const [availableSuppliers, setAvailableSuppliers] = useState<ApiSupplier[]>([]);
 
   // Deduplication refs for fetch
   const isFetchingRef = useRef(false);
@@ -160,40 +159,23 @@ export const PurchaseRequestView: React.FC = () => {
     };
   }, [activeDropdownId, activeShareId]);
 
-  // Load suppliers from API (products are now fetched on-demand during search)
-  useEffect(() => {
-    let isMounted = true;
-    const fetchCatalog = async () => {
-      try {
-        const supRes = await supplierApi.getSuppliers({ pagination_required: false });
-        if (isMounted && supRes && supRes.success && Array.isArray(supRes.data)) {
-          setAvailableSuppliers(supRes.data);
-        }
-      } catch (err) {
-        console.warn('Failed to prefetch suppliers for PR view:', err);
-      }
-    };
-    fetchCatalog();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
-  // On-demand product search: only calls products API when user is actively searching
-  const handleProductSearch = useCallback(async (query: string) => {
+  // On-demand product loader: calls products API when user opens product selector or searches products
+  const handleProductSearch = useCallback(async (query = '') => {
     const trimmed = query.trim();
-    if (!trimmed) return;
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
+        search: trimmed || undefined,
+        page_size: 50,
         pagination_required: false,
       });
       if (res && res.success && Array.isArray(res.data)) {
         setAvailableProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          prev.forEach((p) => map.set(p.id, p));
+          if (trimmed) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
           res.data.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
@@ -272,16 +254,6 @@ export const PurchaseRequestView: React.FC = () => {
     loadPurchaseRequests();
   }, [loadPurchaseRequests]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (pendingSearch.trim() !== appliedSearch.trim()) {
-        setAppliedSearch(pendingSearch.trim());
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   const handleManualRefresh = () => {
     lastFetchKeyRef.current = null;
@@ -293,7 +265,35 @@ export const PurchaseRequestView: React.FC = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<PurchaseRequest | null>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [historyRequest, setHistoryRequest] = useState<PurchaseRequest | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<PurchaseRequest | null>(null);
+
+  // Automatically load initial products list when requisition form modal opens
+  useEffect(() => {
+    if (isCreateModalOpen) {
+      handleProductSearch('');
+    }
+  }, [isCreateModalOpen, handleProductSearch]);
+
+  const handleOpenHistory = async (req: PurchaseRequest) => {
+    setActiveDropdownId(null);
+    setHistoryRequest(req);
+    setIsLoadingHistory(true);
+    try {
+      if (req.id) {
+        const res = await commercePurchaseRequestApi.getPurchaseRequestById(req.id);
+        if (res?.data) {
+          const fresh = mapApiPurchaseRequestToUi(res.data);
+          setHistoryRequest(fresh);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load purchase request history from API:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   // Rejection Modal
   const [rejectionModalOpen, setRejectionModalOpen] = useState(false);
@@ -305,19 +305,14 @@ export const PurchaseRequestView: React.FC = () => {
   const [requestDate, setRequestDate] = useState(new Date().toISOString().split('T')[0]);
   const [requiredDate, setRequiredDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
 
-  // Merged Suppliers list (API + Store fallback)
+  // Suppliers list from local store
   const mergedSuppliers = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; supplierCode?: string }>();
-    availableSuppliers.forEach((s) => {
-      map.set(s.id, { id: s.id, name: s.name, supplierCode: s.supplierCode });
-    });
-    suppliers.forEach((s) => {
-      if (!map.has(s.id)) {
-        map.set(s.id, { id: s.id, name: s.name, supplierCode: s.supplierCode });
-      }
-    });
-    return Array.from(map.values());
-  }, [availableSuppliers, suppliers]);
+    return (suppliers || []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      supplierCode: s.supplierCode,
+    }));
+  }, [suppliers]);
   // Combined Product Options (API products + Inventory stocks)
   const productOptions = useMemo(() => {
     const map = new Map<
@@ -1131,12 +1126,32 @@ export const PurchaseRequestView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by request #, requester, department, product..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedPriority === pendingPriority &&
+            appliedStatus === pendingStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedPriority(pendingPriority);
           setAppliedStatus(pendingStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            loadPurchaseRequests(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedPriority === 'All' &&
+            pendingPriority === 'All' &&
+            appliedStatus === 'All' &&
+            pendingStatus === 'All' &&
+            currentPage === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPriority('All');
@@ -1144,6 +1159,10 @@ export const PurchaseRequestView: React.FC = () => {
           setPendingStatus('All');
           setAppliedStatus('All');
           setCurrentPage(1);
+
+          if (isSame) {
+            loadPurchaseRequests(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1152,8 +1171,6 @@ export const PurchaseRequestView: React.FC = () => {
               value={pendingPriority}
               onChange={(val) => {
                 setPendingPriority(val);
-                setAppliedPriority(val);
-                setCurrentPage(1);
               }}
               options={[
                 { label: 'Priority : All', value: 'All' },
@@ -1169,8 +1186,6 @@ export const PurchaseRequestView: React.FC = () => {
               value={pendingStatus}
               onChange={(val) => {
                 setPendingStatus(val);
-                setAppliedStatus(val);
-                setCurrentPage(1);
               }}
               options={[
                 { label: 'Status : All', value: 'All' },
@@ -1341,18 +1356,6 @@ export const PurchaseRequestView: React.FC = () => {
                     {/* 7. Actions */}
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
-                        {/* Print Button */}
-                        <button
-                          type="button"
-                          title="Print Purchase Request"
-                          onClick={() => {
-                            toast.info(`Preparing print for ${req.requestNo}...`);
-                            window.print();
-                          }}
-                          className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
 
                         {/* Share / Forward Button with Popover */}
                         <UniversalShareDropdown
@@ -1366,155 +1369,45 @@ export const PurchaseRequestView: React.FC = () => {
                         />
 
                         {/* 3-dots Actions Dropdown */}
-                        <div className="relative inline-block text-left action-dropdown-container">
-                          <button
-                            type="button"
-                            title="More Options"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === req.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                setActiveShareId(null);
-                                const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const dropdownHeight = 220;
-                                if (spaceBelow < dropdownHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - btnRect.top + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: btnRect.bottom + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                }
-                                setActiveDropdownId(req.id);
-                              }
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-
-                          {activeDropdownId === req.id && dropdownPos && (
-                            <div
-                              className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                              style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                right: `${dropdownPos.right}px`,
-                              }}
-                            >
-                              {/* 1. View/Edit */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenEditModal(req);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                View/Edit
-                              </button>
-
-                              {/* 2. Duplicate */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDuplicateRequest(req);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Duplicate
-                              </button>
-
-                              {/* 3. Delete */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDeleteRequest(req);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Delete
-                              </button>
-
-
-
-                              {/* 4. Open PDF */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(`Opening PDF for ${req.requestNo}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Open PDF
-                              </button>
-
-                              {/* 5. Preview */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  setSelectedRequest(req);
-                                  setIsViewModalOpen(true);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Preview
-                              </button>
-
-                              {/* 6. Print */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(`Preparing print for ${req.requestNo}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Print
-                              </button>
-
-                              {/* 7. View History */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(
-                                    `Requisition ${req.requestNo} created on ${req.requestDate || 'recently'} by ${req.requestedBy || 'N/A'}. Status: ${req.status}.`
-                                  );
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                View History
-                              </button>
-
-                              {/* 8. Convert to Purchase (hidden once purchase is created) */}
-                              {req.status !== 'Purchase Created' && req.status?.toLowerCase() !== 'purchase created' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleConvertToPurchase(req);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Convert to Purchase
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View/Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(req),
+                            },
+                            {
+                              label: 'Duplicate',
+                              variant: 'duplicate',
+                              onClick: () => handleDuplicateRequest(req),
+                            },
+                            {
+                              label: 'Preview',
+                              variant: 'preview',
+                              onClick: () => {
+                                setSelectedRequest(req);
+                                setIsViewModalOpen(true);
+                              },
+                            },
+                            {
+                              label: 'View History',
+                              variant: 'view',
+                              onClick: () => handleOpenHistory(req),
+                            },
+                            req.status !== 'Purchase Created' && req.status?.toLowerCase() !== 'purchase created' && {
+                              label: 'Convert to Purchase',
+                              variant: 'order',
+                              onClick: () => handleConvertToPurchase(req),
+                            },
+                            {
+                              label: 'Delete',
+                              variant: 'delete',
+                              danger: true,
+                              dividerBefore: true,
+                              onClick: () => handleDeleteRequest(req),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1754,12 +1647,17 @@ export const PurchaseRequestView: React.FC = () => {
                             <SearchableSelect
                               value={it.productId}
                               onChange={(val) => handleProductChange(idx, val)}
+                              onOpen={() => {
+                                if (availableProducts.length === 0) {
+                                  handleProductSearch('');
+                                }
+                              }}
                               onSearch={handleProductSearch}
                               isLoading={isSearchingProducts}
                               options={productOptions}
                               placeholder="Select Product..."
                               searchPlaceholder="Search product..."
-                              emptyText="Type to search products..."
+                              emptyText={isSearchingProducts ? "Searching products..." : "No products found"}
                               allowClear
                               triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                               size="sm"
@@ -1948,15 +1846,6 @@ export const PurchaseRequestView: React.FC = () => {
             )}
 
             <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setIsViewModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
-              >
-                <X className="w-4 h-4 text-slate-500" />
-                <span>Close</span>
-              </button>
-
               {isPendingApproval(selectedRequest.status) && (
                 <>
                   <button
@@ -1966,7 +1855,7 @@ export const PurchaseRequestView: React.FC = () => {
                       setRejectionReason('');
                       setRejectionModalOpen(true);
                     }}
-                    className="h-10 px-4 rounded-xl border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    className="h-10 px-4 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     <Ban className="w-4 h-4" />
                     <span>Reject</span>
@@ -1975,7 +1864,7 @@ export const PurchaseRequestView: React.FC = () => {
                     type="button"
                     disabled={isApproving}
                     onClick={() => handleApproveRequest(selectedRequest)}
-                    className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-60"
+                    className="h-10 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-60"
                   >
                     {isApproving ? (
                       <>
@@ -1996,12 +1885,32 @@ export const PurchaseRequestView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleConvertToPurchase(selectedRequest)}
-                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                  className="h-10 px-4 rounded-lg border border-purple-200 hover:border-purple-300 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
                   <ShoppingBag className="w-4 h-4" />
                   <span>Generate Purchase Order</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setIsViewModalOpen(false)}
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  toast.info(`Preparing print for ${selectedRequest.requestNo}...`);
+                  window.print();
+                }}
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Order</span>
+              </button>
             </div>
           </div>
         </Modal>
@@ -2059,6 +1968,177 @@ export const PurchaseRequestView: React.FC = () => {
                     <span>Confirm Rejection</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ==========================================
+          MODAL 4: PURCHASE REQUEST HISTORY & AUDIT TRAIL
+         ========================================== */}
+      {historyRequest && (
+        <Modal
+          isOpen={Boolean(historyRequest)}
+          onClose={() => setHistoryRequest(null)}
+          title={`Requisition History & Audit Trail: ${historyRequest.requestNo}`}
+          subtitle={
+            isLoadingHistory
+              ? 'Syncing live history from Commerce API...'
+              : 'Complete lifecycle progression and timeline audit log'
+          }
+          maxWidth="md"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryRequest(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            {/* Header Card */}
+            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
+                  Requisition No
+                </div>
+                <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                  {historyRequest.requestNo}
+                </div>
+                <div className="text-xs text-slate-600 font-medium mt-0.5">
+                  Requested By: <span className="font-semibold text-slate-800">{historyRequest.requestedBy}</span> ({historyRequest.department})
+                </div>
+                {historyRequest.supplierName && (
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    Preferred Vendor: {historyRequest.supplierName}
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Est. Total Amount
+                </div>
+                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
+                  ₹{(Number(historyRequest.totalEstimatedAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </div>
+                <div className="flex items-center gap-1.5 justify-end mt-1.5 flex-wrap">
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      historyRequest.priority === 'Urgent'
+                        ? 'bg-rose-100 text-rose-700'
+                        : historyRequest.priority === 'High'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-blue-100 text-blue-700'
+                    }`}
+                  >
+                    {historyRequest.priority} Priority
+                  </span>
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      historyRequest.status === 'Approved'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : historyRequest.status === 'Purchase Created'
+                        ? 'bg-purple-100 text-purple-700'
+                        : historyRequest.status === 'Rejected'
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}
+                  >
+                    {historyRequest.status}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Audit Timeline */}
+            <div className="space-y-3 pt-1">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                Lifecycle & Activity Timeline
+              </div>
+
+              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
+                {/* Event 1: Creation */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Purchase Requisition Raised
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Request Date: <span className="font-medium text-slate-700">{historyRequest.requestDate}</span> • Required By: <span className="font-medium text-slate-700">{historyRequest.requiredDate || 'N/A'}</span>
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Items: {historyRequest.items.length} material(s) requested for {historyRequest.department}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Event 2: Approval State */}
+                <div className="relative">
+                  <div
+                    className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
+                      historyRequest.status === 'Approved' || historyRequest.status === 'Purchase Created'
+                        ? 'bg-emerald-500 ring-4 ring-emerald-100'
+                        : historyRequest.status === 'Rejected'
+                        ? 'bg-rose-500 ring-4 ring-rose-100'
+                        : 'bg-amber-500 ring-4 ring-amber-100'
+                    }`}
+                  />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Status: {historyRequest.status}
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      {historyRequest.status === 'Purchase Created'
+                        ? 'Requisition converted into a formal Purchase Order.'
+                        : historyRequest.status === 'Approved'
+                        ? 'Authorized and approved by management; ready to convert to PO.'
+                        : historyRequest.status === 'Rejected'
+                        ? `Rejected: ${historyRequest.rejectionReason || 'Declined during review'}`
+                        : 'Pending managerial approval and review.'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Event 3: Notes & Purpose */}
+                {historyRequest.notes && (
+                  <div className="relative">
+                    <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-blue-500 ring-4 ring-blue-100" />
+                    <div>
+                      <div className="font-bold text-slate-800 text-xs">
+                        Department Purpose / Remarks
+                      </div>
+                      <div className="text-slate-600 text-[11px] mt-0.5 italic">
+                        "{historyRequest.notes}"
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Event 4: System Audit Log */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-400 ring-4 ring-slate-100" />
+                  <div>
+                    <div className="font-bold text-slate-700 text-xs">
+                      System Audit Log Entry
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Record ID: <span className="font-mono text-slate-600">{historyRequest.id}</span>
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Last Verified: {new Date(historyRequest.updatedAt || Date.now()).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setHistoryRequest(null)}
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+              >
+                Close
               </button>
             </div>
           </div>

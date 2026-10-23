@@ -50,7 +50,7 @@ export const subOrganizationEndpoints = baseApi.injectEndpoints({
     >({
       query: ({ parentOrgId, payload }) => {
         const targetOrgId = parentOrgId || getStoredOrganizationId();
-        const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
+        const { organization_id, organizationId, ...cleanPayload } = payload as any;
         return {
           url: '/platform/sub-organizations',
           method: 'POST',
@@ -189,8 +189,7 @@ export const subOrganizationApi = {
       headers['x-organization-id'] = orgId;
     }
 
-    // Backend Zod schema validates strictly - organization_id goes in query params/headers, subscriptionPlan is not a sub-org field
-    const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
+    const { organization_id, organizationId, ...cleanPayload } = payload as any;
 
     // First attempt: POST /platform/sub-organizations
     try {
@@ -232,7 +231,7 @@ export const subOrganizationApi = {
       headers['x-organization-id'] = orgId;
     }
 
-    const { organization_id, organizationId, subscriptionPlan, ...cleanPayload } = payload as any;
+    const { organization_id, organizationId, ...cleanPayload } = payload as any;
 
     const endpoints = [
       { method: 'patch', url: `/platform/sub-organizations/${id}` },

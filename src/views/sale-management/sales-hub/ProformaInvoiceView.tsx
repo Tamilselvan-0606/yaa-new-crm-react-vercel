@@ -58,6 +58,8 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { printBusinessDocument } from '../../../utils/printUtils';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   commerceProformaApi,
   mapApiProformaToSaleProforma,
@@ -609,7 +611,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           id: pid,
           productName: p.productName || 'Unnamed Product',
           sku: p.productCode || (p as any).sku || '',
-          unitPrice: Number(p.salePrice) || Number((p as any).unitPrice) || 0,
+          unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).unitPrice ?? 0),
           category: p.category || '',
           unit: p.unit || 'PCS',
           taxPercent: extractTaxPercent((p as any).taxRate ?? (p as any).taxPercent),
@@ -1716,6 +1718,45 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       setActiveDropdownId(null);
       setDropdownPos(null);
     }
+  };
+
+  // Print Proforma Invoice
+  const handlePrintProforma = (proforma: SaleProformaInvoice) => {
+    printBusinessDocument({
+      docTypeTitle: 'PROFORMA INVOICE',
+      docNo: proforma.proformaNo,
+      docDate: isoToDdmmyyyy(proforma.date),
+      dueDate: isoToDdmmyyyy(proforma.validUntil),
+      status: proforma.status,
+      statusColor: proforma.status === 'Converted' ? 'emerald' : proforma.status === 'Cancelled' ? 'rose' : 'purple',
+      partyTitle: 'Billed To',
+      partyName: proforma.partyName,
+      partyCompany: proforma.customerCompany,
+      partyPhone: proforma.customerPhone,
+      partyAddress: proforma.billingAddress,
+      extraMeta: [
+        { label: 'State of Supply', value: proforma.stateOfSupply || 'Tamil Nadu' },
+        ...(proforma.convertedToInvoiceNo ? [{ label: 'Converted Ref', value: proforma.convertedToInvoiceNo }] : []),
+      ],
+      items: proforma.items.map((it) => ({
+        name: it.productName,
+        sku: it.sku,
+        batch: it.batch,
+        unit: it.unit,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        taxPercent: it.taxPercent,
+        total: it.total,
+      })),
+      subtotal: proforma.subtotal,
+      tax: {
+        withGst: true,
+        taxAmount: proforma.taxAmount,
+      },
+      roundOff: proforma.roundOff,
+      grandTotal: proforma.amount,
+      terms: proforma.terms,
+    });
   };
 
   // Displayed Proforma Invoices: Live API data merged with local cache and cross-module lineage
@@ -3279,124 +3320,48 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             )}
                           </div>
 
-                          {/* 3-Dots Action Menu Button (matching screenshot) */}
-                          <div className="relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isActionOpen) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 290;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                  setActiveConvertDropdownId(null);
-                                  setConvertDropdownPos(null);
-                                }
-                              }}
-                              className="proforma-action-btn w-7 h-7 rounded-lg text-slate-500 hover:text-[#33077C] hover:bg-purple-50 flex items-center justify-center transition-all cursor-pointer"
-                              title="More Options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-
-                            {/* 3-Dots Floating Dropdown Menu */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: 'fixed',
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
-                                }}
-                                className="proforma-action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleOpenEditForm(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
-
-                                {/* 2. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleDeleteProforma(item.id);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
-                                >
-                                  Delete
-                                </button>
-
-                                {/* 3. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleDuplicateProforma(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-
-                                {/* 5. Mark as Cancelled (Last Option) */}
-                                {item.status !== 'Converted' && item.status !== 'Cancelled' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                      handleUpdateStatus(item.id, 'Cancelled');
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Cancelled
-                                  </button>
-                                )}
-                                {item.status === 'Cancelled' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                      handleUpdateStatus(item.id, 'Open');
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Open
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                          {/* 3-Dots Action Menu Button */}
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: 'View/Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEditForm(item),
+                              },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicateProforma(item),
+                              },
+                              {
+                                label: 'Preview',
+                                variant: 'preview',
+                                onClick: () => setPreviewProforma(item),
+                              },
+                              {
+                                label: 'Print Proforma',
+                                variant: 'print',
+                                onClick: () => handlePrintProforma(item),
+                              },
+                              {
+                                label: 'Mark as Cancelled',
+                                variant: 'cancel',
+                                hidden: item.status === 'Converted' || item.status === 'Cancelled',
+                                onClick: () => handleUpdateStatus(item.id, 'Cancelled'),
+                              },
+                              {
+                                label: 'Mark as Open',
+                                variant: 'activate',
+                                hidden: item.status !== 'Cancelled',
+                                onClick: () => handleUpdateStatus(item.id, 'Open'),
+                              },
+                              {
+                                label: 'Delete',
+                                variant: 'delete',
+                                onClick: () => handleDeleteProforma(item.id),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -3544,11 +3509,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md"
+                onClick={() => handlePrintProforma(previewProforma)}
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Invoice</span>
+                <span>Print Proforma</span>
               </button>
             </div>
           </div>

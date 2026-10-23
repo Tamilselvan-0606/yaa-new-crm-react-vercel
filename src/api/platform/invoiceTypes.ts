@@ -31,6 +31,11 @@ export interface InvoiceApiItem {
   dueDate: string;
   subscriptionId?: string | null;
   organizationId: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
+  createdScope?: 'SUPER_ADMIN' | 'ORGANIZATION' | 'SUB_ORGANIZATION' | 'BRANCH' | string;
+  createdBy?: string;
+  updatedBy?: string | null;
   customerId: string;
   customerName: string;
   customerEmail?: string;
@@ -134,7 +139,13 @@ export interface InvoiceListParams {
   search?: string;
   sortOrder?: 'asc' | 'desc';
   status?: InvoiceStatus | 'ALL' | string;
+  filter?: 'all' | string;
+  organization_id?: string;
   organizationId?: string;
+  sub_organization_id?: string;
+  subOrganizationId?: string;
+  branch_id?: string;
+  branchId?: string;
   customerId?: string;
   subscriptionId?: string;
   fromDate?: string;

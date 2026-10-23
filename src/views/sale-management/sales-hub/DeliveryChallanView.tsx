@@ -57,9 +57,12 @@ import { Modal } from '../../../components/common/Modal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
+import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { printBusinessDocument } from '../../../utils/printUtils';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
 import {
@@ -81,8 +84,9 @@ import {
   initializeWorkflowIntegrity,
 } from '../../../utils/salesDocumentWorkflow';
 import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
-import { SearchableSelect } from '../../../components/common/SearchableSelect';
-import { FormLabel, FORM_INPUT_CLS } from '../utils/formUtils';
+import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown } from '../utils/formUtils';
+import { normalizeIndianPhoneTo10Digits } from '../../../utils/validation';
+import { FormError } from '../../../components/common/FormError';
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -366,6 +370,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [quickCustCompany, setQuickCustCompany] = useState('');
   const [quickCustAddress, setQuickCustAddress] = useState('');
   const [quickCustOpeningBal, setQuickCustOpeningBal] = useState('0');
+  const [quickCustPhoneError, setQuickCustPhoneError] = useState('');
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -515,9 +520,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         productId: p.id,
         productName: p.productName || (p as any).name || 'Unnamed Product',
         sku: p.productCode || (p as any).sku || '',
-        unitPrice: Number(p.salePrice || (p as any).price || 0),
+        unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).price ?? (p as any).unitPrice ?? 0),
         unit: p.unit || 'PCS',
         taxPercent: tax,
+        hsnCode: p.hsnCode || '',
         category: p.category || '',
         batches: (p as any).batches || (p as any).stockBatches || [],
       });
@@ -531,9 +537,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           productId: pid,
           productName: s.productName || (s as any).name || 'Unnamed Product',
           sku: s.sku || (s as any).itemCode || '',
-          unitPrice: Number(s.unitPrice || (s as any).price || 0),
+          unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
           unit: s.unit || 'PCS',
           taxPercent: 5,
+          hsnCode: (s as any).hsnCode || '',
           category: s.category || '',
           batches: s.batches || [],
         });
@@ -747,12 +754,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       return;
     }
     if (quickCustPhone.trim()) {
-      const cleanPhone = quickCustPhone.replace(/[\s\-()]/g, '');
-      if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
-        toast.error('Please enter a valid 10-digit Indian phone number (e.g. 9876543210)');
+      const cleanPhone = normalizeIndianPhoneTo10Digits(quickCustPhone);
+      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+        toast.error('Please enter a valid 10-digit Indian phone number (starts with 6, 7, 8, or 9)');
+        setQuickCustPhoneError('Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)');
         return;
       }
     }
+    setQuickCustPhoneError('');
 
     try {
       setIsActionLoading(true);
@@ -840,7 +849,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           target.unit = foundStock.unit || 'PCS';
           target.category = foundStock.category;
           target.sku = foundStock.sku;
+          target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || '';
           target.taxPercent = (foundStock as any).taxPercent ?? 5;
+          if (target.unitPrice === 0) {
+            toast.warning(`Product "${foundStock.productName}" has no default Sale Price configured.`);
+          }
         }
       }
 
@@ -1397,10 +1410,45 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Print Delivery Challan
   const handlePrintChallan = (item: DeliveryChallanRecord) => {
-    setPreviewChallan(item);
-    setTimeout(() => {
-      window.print();
-    }, 300);
+    printBusinessDocument({
+      docTypeTitle: 'DELIVERY CHALLAN',
+      docNo: item.challanNo,
+      docDate: isoToDdmmyyyy(item.invoiceDate),
+      dueDate: isoToDdmmyyyy(item.dueDate),
+      status: item.status,
+      statusColor: item.status === 'Delivered' ? 'emerald' : item.status === 'Cancelled' ? 'rose' : 'purple',
+      referenceNo: item.referenceNo,
+      partyTitle: 'Consignee / Customer',
+      partyName: item.partyName,
+      partyCompany: item.customerCompany,
+      partyPhone: item.customerPhone,
+      partyAddress: item.billingAddress,
+      extraMeta: [
+        ...(item.vehicleNo ? [{ label: 'Vehicle No', value: item.vehicleNo }] : []),
+        ...(item.driverName ? [{ label: 'Driver / Transporter', value: item.driverName }] : []),
+        { label: 'State of Supply', value: item.stateOfSupply || 'Tamil Nadu' },
+      ],
+      items: (item.items || []).map((it) => ({
+        name: it.productName,
+        sku: it.sku,
+        batch: it.batch,
+        unit: it.unit,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        taxPercent: it.taxPercent,
+        total: it.total,
+      })),
+      subtotal: item.subtotal,
+      tax: {
+        withGst: true,
+        taxAmount: item.taxAmount,
+      },
+      grandTotal: item.amount,
+      balance: item.balance,
+      balanceLabel: 'Balance Value',
+      secondarySignatoryLabel: "Receiver's Signature & Stamp",
+      primarySignatoryLabel: 'For Yaa Creations (Authorized Signatory)',
+    });
   };
 
   // Export to Excel
@@ -2237,11 +2285,22 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   <FormLabel>Phone Number</FormLabel>
                   <input
                     type="tel"
-                    placeholder="9876543210"
+                    placeholder="e.g. 9876543210"
+                    maxLength={10}
                     value={quickCustPhone}
-                    onChange={(e) => setQuickCustPhone(e.target.value)}
-                    className={FORM_INPUT_CLS}
+                    onKeyDown={handleNumberOnlyKeyDown}
+                    onChange={(e) => {
+                      const clean = normalizeIndianPhoneTo10Digits(e.target.value);
+                      setQuickCustPhone(clean);
+                      if (clean && !/^[6-9]\d{9}$/.test(clean)) {
+                        setQuickCustPhoneError('Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)');
+                      } else {
+                        setQuickCustPhoneError('');
+                      }
+                    }}
+                    className={getFormInputCls(Boolean(quickCustPhoneError))}
                   />
+                  {quickCustPhoneError && <FormError message={quickCustPhoneError} />}
                 </div>
                 <div>
                   <FormLabel>Email</FormLabel>
@@ -2640,101 +2699,35 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                           </button>
 
                           {/* 3-Dots Actions Menu */}
-                          <div className="delivery-challan-action-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isActionOpen) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 240;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                              title="More options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-
-                            {/* 3-Dots Floating Dropdown Menu */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: 'fixed',
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
-                                }}
-                                className="delivery-challan-action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleOpenEditForm(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
-
-                                {/* 2. Delete / Cancel */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDeleteChallan(item.id);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Delete / Cancel
-                                </button>
-
-                                {/* 3. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDuplicateChallan(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-                                {/* 4. Preview */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setPreviewChallan(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Preview
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: 'View/Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEditForm(item),
+                              },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicateChallan(item),
+                              },
+                              {
+                                label: 'Preview',
+                                variant: 'preview',
+                                onClick: () => setPreviewChallan(item),
+                              },
+                              {
+                                label: 'Print Challan',
+                                variant: 'print',
+                                onClick: () => handlePrintChallan(item),
+                              },
+                              {
+                                label: 'Delete / Cancel',
+                                variant: 'delete',
+                                onClick: () => handleDeleteChallan(item.id),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -2991,7 +2984,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => handlePrintChallan(previewChallan)}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
               >
                 <Printer className="w-4 h-4" />

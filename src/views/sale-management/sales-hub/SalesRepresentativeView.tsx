@@ -32,6 +32,7 @@ import {
 import { Button } from "../../../components/common/Button";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   salesRepresentativeApi,
   ApiSalesRepresentative,
@@ -1160,41 +1161,33 @@ export const SalesRepresentativeView: React.FC = () => {
                         />
 
                         {/* 3-Dots Floating Menu Button */}
-                        <div className="rep-action-dropdown-container relative inline-block text-left">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === rep.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                const rect = (
-                                  e.currentTarget as HTMLElement
-                                ).getBoundingClientRect();
-                                const spaceBelow =
-                                  window.innerHeight - rect.bottom;
-                                const menuHeight = 220;
-                                if (spaceBelow < menuHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - rect.top + 4,
-                                    right: window.innerWidth - rect.right,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: rect.bottom + 4,
-                                    right: window.innerWidth - rect.right,
-                                  });
-                                }
-                                setActiveDropdownId(rep.id);
-                              }
-                            }}
-                            className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                            title="More options"
-                          >
-                            <MoreVertical className="w-4 h-4 text-slate-600" />
-                          </button>
-                        </div>
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View',
+                              variant: 'view',
+                              onClick: () => openDetailModal(rep),
+                            },
+                            {
+                              label: 'Edit',
+                              variant: 'edit',
+                              onClick: () => openEditModal(rep),
+                            },
+                            {
+                              label: rep.status === 'Active' ? 'Set as Inactive' : 'Set as Active',
+                              variant: rep.status === 'Active' ? 'deactivate' : 'activate',
+                              onClick: () => handleToggleStatus(rep, rep.status === 'Active' ? 'Inactive' : 'Active'),
+                            },
+                            {
+                              label: 'Delete Representative',
+                              variant: 'delete',
+                              onClick: () => {
+                                setDeleteTargetRep(rep);
+                                setIsDeleteModalOpen(true);
+                              },
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1218,96 +1211,6 @@ export const SalesRepresentativeView: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* Fixed Action Dropdown Menu */}
-      {activeDropdownId && dropdownPos && (
-        <div
-          style={{
-            position: "fixed",
-            top:
-              dropdownPos.top !== undefined ? `${dropdownPos.top}px` : "auto",
-            bottom:
-              dropdownPos.bottom !== undefined
-                ? `${dropdownPos.bottom}px`
-                : "auto",
-            right: `${dropdownPos.right}px`,
-            zIndex: 9999,
-          }}
-          className="rep-action-dropdown-menu w-48 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {(() => {
-            const target = reps.find((r) => r.id === activeDropdownId);
-            if (!target) return null;
-
-            return (
-              <>
-                {/* 1. View Details */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    openDetailModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  View
-                </button>
-
-                {/* 2. Edit Profile */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    openEditModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  Edit
-                </button>
-
-                {/* 3. Set as Active / Inactive */}
-                {target.status === "Active" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleToggleStatus(target, "Inactive");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Set as Inactive
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleToggleStatus(target, "Active");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Set as Active
-                  </button>
-                )}
-
-                {/* 4. Delete Representative */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeleteTargetRep(target);
-                    setIsDeleteModalOpen(true);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block border-t border-slate-100"
-                >
-                  Delete Representative
-                </button>
-              </>
-            );
-          })()}
-        </div>
-      )}
 
       {/* Delete Confirmation Modal */}
       <Modal

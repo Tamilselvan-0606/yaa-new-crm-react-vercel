@@ -33,8 +33,6 @@ import {
   FileText,
   Activity,
   Layers3,
-  Printer,
-  Forward,
   FileSpreadsheet,
   Loader2,
   Database,
@@ -52,11 +50,8 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import {
-  UniversalShareDropdown,
-  formatStockShare,
-} from "../../../utils/shareUtils";
 import { toast } from "sonner";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   stockApi,
   mapApiStockToInventoryStockItem,
@@ -230,21 +225,15 @@ export const StocksView: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // 3-Dots Action dropdown & Share Popover
+  // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{
     top?: number;
     bottom?: number;
     right: number;
   } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{
-    top?: number;
-    bottom?: number;
-    right?: number;
-  } | null>(null);
 
-  // Close action dropdown and share popover on click outside or scroll
+  // Close action dropdown on click outside or scroll
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -255,22 +244,11 @@ export const StocksView: React.FC = () => {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
-      if (
-        !target.closest(".share-popover-container") &&
-        !target.closest(".share-popover-menu")
-      ) {
-        setActiveShareId(null);
-        setSharePos(null);
-      }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     window.addEventListener("click", handleOutside);
@@ -279,7 +257,7 @@ export const StocksView: React.FC = () => {
       window.removeEventListener("click", handleOutside);
       window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
   // Modals
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
@@ -1389,7 +1367,7 @@ export const StocksView: React.FC = () => {
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
                   STATUS
                 </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                <th className="py-4 px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-20 whitespace-nowrap">
                   ACTIONS
                 </th>
               </tr>
@@ -1634,164 +1612,44 @@ export const StocksView: React.FC = () => {
                       </td>
 
                       {/* 11. ACTIONS */}
-                      <td className="py-4 px-4 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-1">
-                          {/* Print Icon Button */}
-                          <button
-                            type="button"
-                            title="Print"
-                            onClick={() => {
-                              toast.info(
-                                `Preparing print for ${stk.productName}...`,
-                              );
-                              window.print();
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          {/* Share Popover Button */}
-                          <UniversalShareDropdown
-                            id={stk.id}
-                            activeShareId={activeShareId}
-                            setActiveShareId={setActiveShareId}
-                            sharePos={sharePos}
-                            setSharePos={setSharePos}
-                            getShareData={() => formatStockShare(stk)}
-                            title="Share Stock Item"
-                          />
-
-                          {/* 3-dots Actions Dropdown */}
-                          <div className="relative inline-block text-left stock-action-dropdown-container">
-                            <button
-                              type="button"
-                              title="More Options"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === stk.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  setActiveShareId(null);
-                                  const btnRect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - btnRect.bottom;
-                                  const dropdownHeight = 220;
-                                  const rightPos =
-                                    window.innerWidth - btnRect.right;
-                                  if (
-                                    spaceBelow < dropdownHeight &&
-                                    btnRect.top > dropdownHeight
-                                  ) {
-                                    setDropdownPos({
-                                      bottom:
-                                        window.innerHeight - btnRect.top + 4,
-                                      right: rightPos,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: btnRect.bottom + 4,
-                                      right: rightPos,
-                                    });
-                                  }
-                                  setActiveDropdownId(stk.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {activeDropdownId === stk.id && dropdownPos && (
-                              <div
-                                className="stock-action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                style={{
-                                  top:
-                                    dropdownPos.top !== undefined
-                                      ? `${dropdownPos.top}px`
-                                      : "auto",
-                                  bottom:
-                                    dropdownPos.bottom !== undefined
-                                      ? `${dropdownPos.bottom}px`
-                                      : "auto",
-                                  right: `${dropdownPos.right}px`,
-                                }}
-                              >
-                                {/* 1. View */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setSelectedStock(stk);
-                                    setDetailTab("overview");
-                                    setIsDetailModalOpen(true);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View
-                                </button>
-
-                                {/* 2. Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleOpenEditModal(stk);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Edit
-                                </button>
-
-                                {/* 3. View Batches */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setSelectedStock(stk);
-                                    setDetailTab("batches");
-                                    setIsDetailModalOpen(true);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View Batches
-                                </button>
-
-                                {/* 4. Stock Movement */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleOpenMovementModal(stk);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Stock Movement
-                                </button>
-
-                                {/* 5. Stock Adjustment */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    handleOpenAdjustModal(stk);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Stock Adjustment
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                      <td className="py-4 px-3 border border-slate-200 text-center whitespace-nowrap">
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View',
+                              variant: 'view',
+                              onClick: () => {
+                                setSelectedStock(stk);
+                                setDetailTab('overview');
+                                setIsDetailModalOpen(true);
+                              },
+                            },
+                            {
+                              label: 'Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(stk),
+                            },
+                            {
+                              label: 'View Batches',
+                              variant: 'batches',
+                              onClick: () => {
+                                setSelectedStock(stk);
+                                setDetailTab('batches');
+                                setIsDetailModalOpen(true);
+                              },
+                            },
+                            {
+                              label: 'Stock Movement',
+                              variant: 'movement',
+                              onClick: () => handleOpenMovementModal(stk),
+                            },
+                            {
+                              label: 'Stock Adjustment',
+                              variant: 'adjust',
+                              onClick: () => handleOpenAdjustModal(stk),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );

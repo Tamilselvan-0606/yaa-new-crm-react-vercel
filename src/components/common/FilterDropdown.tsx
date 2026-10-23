@@ -67,7 +67,7 @@ export function FilterDropdown<T extends string = string>({
       {/* Dropdown panel */}
       {open && (
         <div
-          className="absolute top-full mt-1.5 left-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5"
+          className="absolute top-full mt-1.5 left-0 min-w-[170px] max-h-60 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 space-y-0.5"
           style={{ borderRadius: '4px' }}
         >
           {options.map((option) => {

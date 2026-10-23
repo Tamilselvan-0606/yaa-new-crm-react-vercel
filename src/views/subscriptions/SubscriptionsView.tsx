@@ -43,6 +43,7 @@ import {
   AlertCircle,
   Copy,
   RotateCcw,
+  Loader2,
   X,
   Video,
   Image,
@@ -55,6 +56,7 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
   subscriptionPlanApi,
   SubscriptionPlanApiItem,
@@ -233,6 +235,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [subAutoRenew, setSubAutoRenew] = useState(true);
   const [subStatus, setSubStatus] = useState<SubscriptionStatus | ''>('');
   const [subNotes, setSubNotes] = useState('');
+  const [subFormErrors, setSubFormErrors] = useState<Record<string, string>>({});
 
   // -------------------------------------------------------------
   // -------------------------------------------------------------
@@ -271,6 +274,18 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [orgSubAutoRenew, setOrgSubAutoRenew] = useState(true);
   const [orgSubNotes, setOrgSubNotes] = useState('');
   const [orgSubErrors, setOrgSubErrors] = useState<Record<string, string>>({});
+
+  // Confirmation Modal State for Delete / Cancel
+  const [subConfirmAction, setSubConfirmAction] = useState<{
+    type: 'plan' | 'org_sub' | 'client_sub';
+    title: string;
+    description: string;
+    buttonText: string;
+    targetId: string;
+    targetName: string;
+    extraData?: any;
+  } | null>(null);
+  const [isProcessingSubAction, setIsProcessingSubAction] = useState(false);
 
   // -------------------------------------------------------------
   // CLIENT SUBSCRIPTIONS: Live API State (Platform /subscriptions)
@@ -555,8 +570,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   // -------------------------------------------------------------
   const handleOpenCreatePlan = (productId?: string) => {
     setPlanModalProductId(
-      productId ||
-      (isSuperAdmin ? 'prod_org' : (selectedPlanProductId && selectedPlanProductId !== 'ALL' ? selectedPlanProductId : products[0]?.id || 'prod_1'))
+      productId || (isSuperAdmin ? 'prod_org' : '')
     );
     setEditingPlan(null);
     setIsPlanModalOpen(true);
@@ -696,9 +710,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   };
 
   const handleDeletePlan = async (product: Product, plan: ProductPlan) => {
-    if (!confirm(`Are you sure you want to remove the plan "${plan.name}"?`)) {
-      return;
-    }
     try {
       if (isSuperAdmin || product.id === 'prod_org') {
         await subscriptionPlanApi.deleteSubscriptionPlan(plan.id);
@@ -751,6 +762,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubAutoRenew(true);
     setSubStatus('Active');
     setSubNotes('');
+    setSubFormErrors({});
     setIsSubModalOpen(true);
   };
 
@@ -771,6 +783,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubAutoRenew(sub.autoRenew ?? true);
     setSubStatus(sub.status || 'Active');
     setSubNotes(sub.notes || '');
+    setSubFormErrors({});
     setIsSubModalOpen(true);
   };
 
@@ -801,12 +814,38 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   const handleSaveSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const errors: Record<string, string> = {};
+
     if (!subCustomerId) {
-      showToast('error', 'Validation Error', 'Please select a customer.');
-      return;
+      errors.customerId = 'Select Customer is required';
     }
     if (!subProductId) {
-      showToast('error', 'Validation Error', 'Please select a product.');
+      errors.productId = 'Target Product is required';
+    }
+    if (!subPlanName) {
+      errors.planTier = 'Select Plan Tier is required';
+    }
+    if (!subBillingCycle) {
+      errors.billingCycle = 'Billing Cycle is required';
+    }
+    if (subAmount === '' || subAmount === undefined || subAmount === null) {
+      errors.amount = 'Agreed Fee Amount is required';
+    } else if (Number(subAmount) < 0 || isNaN(Number(subAmount))) {
+      errors.amount = 'Please enter a valid amount';
+    }
+    if (!subStartDate) {
+      errors.startDate = 'Start Date is required';
+    }
+    if (!subEndDate) {
+      errors.endDate = 'Renewal Date is required';
+    }
+    if (!subStatus) {
+      errors.status = 'Status is required';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setSubFormErrors(errors);
       return;
     }
 
@@ -870,7 +909,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   };
 
   const handleDeleteSubscription = async (sub: SubscriptionItem) => {
-    if (!confirm(`Are you sure you want to delete/cancel the subscription for ${sub.customerName}?`)) return;
     try {
       await clientSubscriptionApi.deleteClientSubscription(sub.id);
       showToast('success', 'Subscription Removed', `Removed subscription for ${sub.customerName}`);
@@ -1102,7 +1140,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   };
 
   const handleDeleteOrgSubscription = async (sub: OrgSubscriptionItem) => {
-    if (!confirm(`Are you sure you want to cancel the subscription for ${sub.orgName}?`)) return;
     try {
       await organizationSubscriptionApi.cancelOrganizationSubscription(sub.id, {
         reason: 'Cancelled by platform administrator',
@@ -1567,12 +1604,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                 <span className="text-xs sm:text-[13px] font-semibold text-slate-900 block">
                                   {formatDisplayDate(sub.endDate)}
                                 </span>
-                                <div className="flex items-center gap-1.5 mt-1">
-                                  <span className={`w-1.5 h-1.5 rounded-full ${sub.autoRenew ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                                  <span className="text-[11px] text-slate-500 font-medium">
-                                    {sub.autoRenew ? 'Auto-Renew: On' : 'Auto-Renew: Off'}
-                                  </span>
-                                </div>
                               </td>
 
                               {/* 5. Amount */}
@@ -1676,7 +1707,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         type="button"
                                         onClick={() => {
                                           setActiveOrgDropdownId(null);
-                                          handleDeleteOrgSubscription(sub);
+                                          setSubConfirmAction({
+                                            type: 'org_sub',
+                                            title: 'Cancel Organization Subscription',
+                                            description: `Are you sure you want to cancel the subscription for ${sub.orgName}?`,
+                                            buttonText: 'Yes, Cancel',
+                                            targetId: sub.id,
+                                            targetName: sub.orgName,
+                                            extraData: sub,
+                                          });
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                                       >
@@ -2020,7 +2059,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         type="button"
                                         onClick={() => {
                                           setActiveClientSubDropdownId(null);
-                                          handleDeleteSubscription(sub);
+                                          setSubConfirmAction({
+                                            type: 'client_sub',
+                                            title: 'Remove Subscription',
+                                            description: `Are you sure you want to delete/cancel the subscription for ${sub.customerName}?`,
+                                            buttonText: 'Yes, Delete',
+                                            targetId: sub.id,
+                                            targetName: sub.customerName,
+                                            extraData: sub,
+                                          });
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                                       >
@@ -2308,7 +2355,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         type="button"
                                         onClick={() => {
                                           setActivePlanDropdownId(null);
-                                          handleDeletePlan(product, plan);
+                                          setSubConfirmAction({
+                                            type: 'plan',
+                                            title: 'Delete Subscription Plan',
+                                            description: `Are you sure you want to remove the plan "${plan.name}"? This action cannot be undone.`,
+                                            buttonText: 'Yes, Delete',
+                                            targetId: plan.id,
+                                            targetName: plan.name,
+                                            extraData: { product, plan },
+                                          });
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                                       >
@@ -2586,7 +2641,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                                         <button
                                           type="button"
-                                          onClick={() => handleDeletePlan(product, plan)}
+                                          onClick={() => {
+                                            setSubConfirmAction({
+                                              type: 'plan',
+                                              title: 'Delete Subscription Plan',
+                                              description: `Are you sure you want to remove the plan "${plan.name}"? This action cannot be undone.`,
+                                              buttonText: 'Yes, Delete',
+                                              targetId: plan.id,
+                                              targetName: plan.name,
+                                              extraData: { product, plan },
+                                            });
+                                          }}
                                           className="h-10 rounded-xl bg-rose-50/70 hover:bg-rose-100 text-rose-600 border border-rose-200/80 hover:border-rose-300 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs active:scale-[0.98]"
                                         >
                                           <Trash2 className="w-3.5 h-3.5" />
@@ -2638,14 +2703,16 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Select Customer <span className="text-slate-500">*</span>
+                  Select Customer <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subCustomerId}
+                  error={!!subFormErrors.customerId}
                   onChange={(val) => {
                     setSubCustomerId(val);
                     const found = customers.find((c) => c.id === val);
                     setSubCustomerName(found?.company || found?.name || '');
+                    if (subFormErrors.customerId) setSubFormErrors((prev) => ({ ...prev, customerId: '' }));
                   }}
                   options={customers.map((c) => ({
                     value: c.id,
@@ -2654,15 +2721,22 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="Select Customer"
                   activeColor="brand"
                 />
+                {subFormErrors.customerId && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.customerId}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Target Product <span className="text-slate-500">*</span>
+                  Target Product <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subProductId}
-                  onChange={(val) => handleProductChangeInSubModal(val)}
+                  error={!!subFormErrors.productId}
+                  onChange={(val) => {
+                    handleProductChangeInSubModal(val);
+                    if (subFormErrors.productId) setSubFormErrors((prev) => ({ ...prev, productId: '' }));
+                  }}
                   options={products.map((p) => ({
                     value: p.id,
                     label: p.name,
@@ -2670,15 +2744,22 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="Select Product"
                   activeColor="brand"
                 />
+                {subFormErrors.productId && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.productId}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Select Plan Tier <span className="text-slate-500">*</span>
+                  Select Plan Tier <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subPlanName}
-                  onChange={(val) => handlePlanChangeInSubModal(val)}
+                  error={!!subFormErrors.planTier}
+                  onChange={(val) => {
+                    handlePlanChangeInSubModal(val);
+                    if (subFormErrors.planTier) setSubFormErrors((prev) => ({ ...prev, planTier: '' }));
+                  }}
                   options={
                     subProductId
                       ? ((productPlansByProductId[subProductId] && productPlansByProductId[subProductId].length > 0)
@@ -2693,6 +2774,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="Select Plan Tier"
                   activeColor="brand"
                 />
+                {subFormErrors.planTier && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.planTier}</p>
+                )}
               </div>
             </div>
 
@@ -2700,15 +2784,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Billing Cycle <span className="text-slate-500">*</span>
+                  Billing Cycle <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subBillingCycle}
+                  error={!!subFormErrors.billingCycle}
                   onChange={(val) => {
                     setSubBillingCycle(val as any);
                     if (subStartDate) {
                       setSubEndDate(computeEndDate(subStartDate, val));
                     }
+                    if (subFormErrors.billingCycle) setSubFormErrors((prev) => ({ ...prev, billingCycle: '' }));
                   }}
                   options={[
                     { value: 'Monthly', label: 'Monthly' },
@@ -2720,26 +2806,38 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="Select Billing Cycle"
                   activeColor="brand"
                 />
+                {subFormErrors.billingCycle && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.billingCycle}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Agreed Fee Amount (₹) <span className="text-slate-500">*</span>
+                  Agreed Fee Amount (₹) <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="number"
                   min="0"
                   step="any"
-                  required
                   value={subAmount}
-                  onChange={(e) => setSubAmount(Number(e.target.value))}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all"
+                  onChange={(e) => {
+                    setSubAmount(e.target.value === '' ? '' : Number(e.target.value));
+                    if (subFormErrors.amount) setSubFormErrors((prev) => ({ ...prev, amount: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    subFormErrors.amount
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {subFormErrors.amount && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.amount}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Start Date <span className="text-slate-500">*</span>
+                  Start Date <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type={subStartDate ? "date" : "text"}
@@ -2748,16 +2846,23 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     if (!e.currentTarget.value) e.currentTarget.type = "text";
                   }}
                   placeholder="dd/mm/yyyy"
-                  required
                   value={subStartDate}
                   onChange={(e) => {
                     setSubStartDate(e.target.value);
                     if (subBillingCycle) {
                       setSubEndDate(computeEndDate(e.target.value, subBillingCycle));
                     }
+                    if (subFormErrors.startDate) setSubFormErrors((prev) => ({ ...prev, startDate: '' }));
                   }}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
+                    subFormErrors.startDate
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {subFormErrors.startDate && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.startDate}</p>
+                )}
               </div>
             </div>
 
@@ -2765,7 +2870,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Renewal Date <span className="text-slate-500">*</span>
+                  Renewal Date <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type={subEndDate ? "date" : "text"}
@@ -2774,20 +2879,33 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     if (!e.currentTarget.value) e.currentTarget.type = "text";
                   }}
                   placeholder="dd/mm/yyyy"
-                  required
                   value={subEndDate}
-                  onChange={(e) => setSubEndDate(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400"
+                  onChange={(e) => {
+                    setSubEndDate(e.target.value);
+                    if (subFormErrors.endDate) setSubFormErrors((prev) => ({ ...prev, endDate: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all cursor-pointer placeholder:text-slate-400 ${
+                    subFormErrors.endDate
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
+                {subFormErrors.endDate && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.endDate}</p>
+                )}
               </div>
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Status <span className="text-slate-500">*</span>
+                  Status <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={subStatus}
-                  onChange={(val) => setSubStatus(val as any)}
+                  error={!!subFormErrors.status}
+                  onChange={(val) => {
+                    setSubStatus(val as any);
+                    if (subFormErrors.status) setSubFormErrors((prev) => ({ ...prev, status: '' }));
+                  }}
                   options={[
                     { value: 'Active', label: 'Active' },
                     { value: 'Expiring Soon', label: 'Expiring Soon' },
@@ -2797,6 +2915,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   placeholder="Select Status"
                   activeColor="brand"
                 />
+                {subFormErrors.status && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.status}</p>
+                )}
               </div>
 
               <div>
@@ -3157,6 +3278,37 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
           </div>
         </form>
       </Modal>
+
+      {/* Reusable Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!subConfirmAction}
+        onClose={() => {
+          if (!isProcessingSubAction) setSubConfirmAction(null);
+        }}
+        type="Delete"
+        title={subConfirmAction?.title}
+        description={subConfirmAction?.description}
+        confirmButtonText={subConfirmAction?.buttonText || 'Yes, Delete'}
+        isLoading={isProcessingSubAction}
+        onConfirm={async () => {
+          if (!subConfirmAction) return;
+          setIsProcessingSubAction(true);
+          try {
+            if (subConfirmAction.type === 'plan') {
+              await handleDeletePlan(subConfirmAction.extraData.product, subConfirmAction.extraData.plan);
+            } else if (subConfirmAction.type === 'org_sub') {
+              await handleDeleteOrgSubscription(subConfirmAction.extraData);
+            } else if (subConfirmAction.type === 'client_sub') {
+              await handleDeleteSubscription(subConfirmAction.extraData);
+            }
+            setSubConfirmAction(null);
+          } catch (err: any) {
+            console.error('Action failed:', err);
+          } finally {
+            setIsProcessingSubAction(false);
+          }
+        }}
+      />
     </div>
   );
 };

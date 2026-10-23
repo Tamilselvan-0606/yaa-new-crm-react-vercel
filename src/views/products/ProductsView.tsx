@@ -32,6 +32,8 @@ import {
   Building2,
   MapPin,
   UserRound,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
@@ -39,6 +41,7 @@ import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 
 export const ProductsView: React.FC = () => {
   const { showToast, currentUser } = useAuth();
@@ -85,7 +88,15 @@ export const ProductsView: React.FC = () => {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<ClientProductApiItem | null>(null);
 
+  // Confirmation Modal State (Inactive / Suspend / Delete)
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'Inactive' | 'Suspend' | 'Delete';
+    product: ClientProductApiItem;
+  } | null>(null);
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState({
     organizationId: '',
     subOrganizationId: '',
@@ -381,6 +392,7 @@ export const ProductsView: React.FC = () => {
   // Modal Handlers
   const handleOpenAddModal = () => {
     setEditingProduct(null);
+    setFormErrors({});
     setFormData({
       organizationId: currentUser?.organizationId || getStoredOrganizationId() || '',
       subOrganizationId: '',
@@ -409,6 +421,7 @@ export const ProductsView: React.FC = () => {
 
   const handleOpenEditModal = (prod: ClientProductApiItem) => {
     setEditingProduct(prod);
+    setFormErrors({});
     const resolvedSubOrgId = prod.subOrganizationId || (prod as any).sub_organization_id || '';
     const resolvedBranchId = prod.branchId || (prod as any).branch_id || '';
     setFormData({
@@ -439,10 +452,62 @@ export const ProductsView: React.FC = () => {
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const errors: Record<string, string> = {};
+
     if (!formData.name.trim()) {
-      showToast?.('error', 'Validation Error', 'Product name is required');
+      errors.name = 'Product / Org Name is required';
+    }
+    if (subOrganizations.length > 0 && !formData.subOrganizationId) {
+      errors.subOrganizationId = 'Select Sub-Organization is required';
+    }
+    if (branches.length > 0 && !formData.branchId) {
+      errors.branchId = 'Select Branch is required';
+    }
+    if (!formData.contactPerson.trim()) {
+      errors.contactPerson = 'Contact Person Name is required';
+    }
+    if (!formData.mobileNumber.trim()) {
+      errors.mobileNumber = 'Mobile Number is required';
+    } else if (formData.mobileNumber.trim().length !== 10) {
+      errors.mobileNumber = 'Mobile Number must be exactly 10 digits';
+    }
+    if (formData.supportWhatsapp.trim() && formData.supportWhatsapp.trim().length !== 10) {
+      errors.supportWhatsapp = 'WhatsApp Number must be exactly 10 digits';
+    }
+    if (!formData.supportEmail.trim()) {
+      errors.supportEmail = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.supportEmail.trim())) {
+      errors.supportEmail = 'Please enter a valid email address';
+    }
+    if (!formData.gstNumber.trim()) {
+      errors.gstNumber = 'GST Number is required';
+    } else if (formData.gstNumber.trim().length !== 15) {
+      errors.gstNumber = 'GST Number must be exactly 15 characters';
+    }
+    if (!formData.panNumber.trim()) {
+      errors.panNumber = 'PAN Number is required';
+    } else if (formData.panNumber.trim().length !== 10) {
+      errors.panNumber = 'PAN Number must be exactly 10 characters';
+    }
+    if (!formData.hqCity.trim()) {
+      errors.hqCity = 'HQ City is required';
+    }
+    if (!formData.address.trim()) {
+      errors.address = 'Address is required';
+    }
+    if (!formData.code.trim()) {
+      errors.code = 'Product / Org Code is required';
+    }
+    if (!formData.status) {
+      errors.status = 'Status is required';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
       return;
     }
+    setFormErrors({});
 
     try {
       setSubmitting(true);
@@ -508,7 +573,6 @@ export const ProductsView: React.FC = () => {
   };
 
   const handleDeleteProduct = async (prod: ClientProductApiItem) => {
-    if (!confirm(`Are you sure you want to delete "${prod.name}"? This action cannot be undone.`)) return;
     try {
       await clientProductApi.deleteProduct(prod.id);
       showToast?.('success', 'Product Deleted', `Deleted "${prod.name}" from catalog`);
@@ -875,7 +939,10 @@ export const ProductsView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleUpdateStatus(prod, prod.status === 'Inactive' ? 'Active' : 'Inactive');
+                                  setConfirmAction({
+                                    type: 'Inactive',
+                                    product: prod,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -897,7 +964,10 @@ export const ProductsView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleUpdateStatus(prod, prod.status === 'Suspended' ? 'Active' : 'Suspended');
+                                  setConfirmAction({
+                                    type: 'Suspend',
+                                    product: prod,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-amber-800 hover:bg-amber-50/60 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -921,7 +991,10 @@ export const ProductsView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleDeleteProduct(prod);
+                                  setConfirmAction({
+                                    type: 'Delete',
+                                    product: prod,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -995,12 +1068,13 @@ export const ProductsView: React.FC = () => {
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Sub-Organization <span className="text-rose-500">*</span>
+                Select Sub-Organization {subOrganizations.length > 0 && <span className="text-rose-500 font-bold">*</span>}
               </label>
               <CustomSelect
                 value={formData.subOrganizationId}
                 onChange={(val) => {
                   setFormData({ ...formData, subOrganizationId: val, branchId: '' });
+                  if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
                 }}
                 options={
                   subOrganizations.length > 0
@@ -1011,12 +1085,16 @@ export const ProductsView: React.FC = () => {
                     : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
                 }
                 placeholder="Select Sub-Organization"
+                error={!!formErrors.subOrganizationId}
               />
+              {formErrors.subOrganizationId && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganizationId}</p>
+              )}
             </div>
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Branch <span className="text-rose-500">*</span>
+                Select Branch {branches.length > 0 && <span className="text-rose-500 font-bold">*</span>}
               </label>
               <CustomSelect
                 value={formData.branchId}
@@ -1027,6 +1105,7 @@ export const ProductsView: React.FC = () => {
                   } else {
                     setFormData({ ...formData, branchId: val });
                   }
+                  if (formErrors.branchId) setFormErrors((prev) => ({ ...prev, branchId: '' }));
                 }}
                 options={
                   (() => {
@@ -1043,7 +1122,11 @@ export const ProductsView: React.FC = () => {
                   })()
                 }
                 placeholder="Select Branch"
+                error={!!formErrors.branchId}
               />
+              {formErrors.branchId && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branchId}</p>
+              )}
             </div>
           </div>
 
@@ -1051,37 +1134,69 @@ export const ProductsView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Product / Org Name <span className="text-slate-500">*</span>
+                Product / Org Name <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
-                required
                 value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, name: e.target.value });
+                  if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
+                }}
+                placeholder="Enter product / org name"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.name
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.name && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Product / Org Code
+                Product / Org Code <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={formData.code}
-                onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, code: e.target.value.toUpperCase() });
+                  if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
+                }}
+                placeholder="e.g. PRD-001"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                  formErrors.code
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.code && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Contact Person Name
+                Contact Person Name <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={formData.contactPerson}
-                onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, contactPerson: e.target.value });
+                  if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
+                }}
+                placeholder="Enter contact person name"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.contactPerson
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.contactPerson && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
+              )}
             </div>
           </div>
 
@@ -1089,14 +1204,28 @@ export const ProductsView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Mobile Number
+                Mobile Number <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="e.g. 9876543210"
                 value={formData.mobileNumber}
-                onChange={(e) => setFormData({ ...formData, mobileNumber: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setFormData({ ...formData, mobileNumber: val });
+                  if (formErrors.mobileNumber) setFormErrors((prev) => ({ ...prev, mobileNumber: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.mobileNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.mobileNumber && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.mobileNumber}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1104,21 +1233,46 @@ export const ProductsView: React.FC = () => {
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="e.g. 9876543210"
                 value={formData.supportWhatsapp}
-                onChange={(e) => setFormData({ ...formData, supportWhatsapp: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setFormData({ ...formData, supportWhatsapp: val });
+                  if (formErrors.supportWhatsapp) setFormErrors((prev) => ({ ...prev, supportWhatsapp: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.supportWhatsapp
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.supportWhatsapp && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.supportWhatsapp}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Email
+                Email <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="email"
                 value={formData.supportEmail}
-                onChange={(e) => setFormData({ ...formData, supportEmail: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, supportEmail: e.target.value });
+                  if (formErrors.supportEmail) setFormErrors((prev) => ({ ...prev, supportEmail: '' }));
+                }}
+                placeholder="e.g. product@organization.com"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.supportEmail
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.supportEmail && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.supportEmail}</p>
+              )}
             </div>
           </div>
 
@@ -1126,36 +1280,73 @@ export const ProductsView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                GST Number
+                GST Number <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                maxLength={15}
+                placeholder="e.g. 22AAAAA0000A1Z5"
                 value={formData.gstNumber}
-                onChange={(e) => setFormData({ ...formData, gstNumber: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15);
+                  setFormData({ ...formData, gstNumber: val });
+                  if (formErrors.gstNumber) setFormErrors((prev) => ({ ...prev, gstNumber: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                  formErrors.gstNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.gstNumber && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.gstNumber}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                PAN Number
+                PAN Number <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                maxLength={10}
+                placeholder="e.g. ABCDE1234F"
                 value={formData.panNumber}
-                onChange={(e) => setFormData({ ...formData, panNumber: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
+                  setFormData({ ...formData, panNumber: val });
+                  if (formErrors.panNumber) setFormErrors((prev) => ({ ...prev, panNumber: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                  formErrors.panNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.panNumber && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.panNumber}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                HQ City
+                HQ City <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                placeholder="e.g. Chennai"
                 value={formData.hqCity}
-                onChange={(e) => setFormData({ ...formData, hqCity: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, hqCity: e.target.value });
+                  if (formErrors.hqCity) setFormErrors((prev) => ({ ...prev, hqCity: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.hqCity
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.hqCity && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.hqCity}</p>
+              )}
             </div>
           </div>
 
@@ -1163,26 +1354,44 @@ export const ProductsView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Address
+                Address <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                placeholder="Enter complete address"
                 value={formData.address}
-                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, address: e.target.value });
+                  if (formErrors.address) setFormErrors((prev) => ({ ...prev, address: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.address
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.address && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Status <span className="text-slate-500">*</span>
+                Status <span className="text-rose-500 font-bold">*</span>
               </label>
               <CustomSelect
                 value={formData.status}
-                onChange={(val) => setFormData({ ...formData, status: val as '' | 'Active' | 'Inactive' | 'Suspended' })}
+                onChange={(val) => {
+                  setFormData({ ...formData, status: val as '' | 'Active' | 'Inactive' | 'Suspended' });
+                  if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
+                }}
                 options={['Active', 'Inactive', 'Suspended']}
                 placeholder="Select Status"
                 activeColor="brand"
+                error={!!formErrors.status}
               />
+              {formErrors.status && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
+              )}
             </div>
             <div />
           </div>
@@ -1377,6 +1586,71 @@ export const ProductsView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Reusable Confirmation Modal: Suspend / Inactive / Delete */}
+      <ConfirmationModal
+        isOpen={!!confirmAction}
+        onClose={() => {
+          if (!isProcessingAction) setConfirmAction(null);
+        }}
+        type={confirmAction?.type}
+        itemTypeLabel="Product"
+        itemName={confirmAction?.product.name}
+        title={
+          confirmAction?.type === 'Delete'
+            ? 'Delete Product'
+            : confirmAction?.type === 'Suspend'
+              ? (confirmAction.product.status === 'Suspended' ? 'Resume Product' : 'Suspend Product')
+              : (confirmAction?.product.status === 'Inactive' ? 'Activate Product' : 'Deactivate Product')
+        }
+        description={
+          confirmAction?.type === 'Delete' ? (
+            <>
+              Are you sure you want to delete <span className="font-semibold text-slate-700">{confirmAction.product.name}</span>? This action cannot be undone.
+            </>
+          ) : confirmAction?.type === 'Suspend' ? (
+            <>
+              Are you sure you want to {confirmAction.product.status === 'Suspended' ? 'resume' : 'mark'} <span className="font-semibold text-slate-700">{confirmAction.product.name}</span> {confirmAction.product.status === 'Suspended' ? 'as Active' : 'as Suspended'}?
+            </>
+          ) : confirmAction?.type === 'Inactive' ? (
+            <>
+              Are you sure you want to mark <span className="font-semibold text-slate-700">{confirmAction.product.name}</span> as <span className="font-semibold text-slate-700">{confirmAction.product.status === 'Inactive' ? 'Active' : 'Inactive'}</span>?
+            </>
+          ) : undefined
+        }
+        confirmButtonText={
+          confirmAction?.type === 'Delete'
+            ? 'Yes, Delete'
+            : confirmAction?.type === 'Suspend'
+              ? (confirmAction.product.status === 'Suspended' ? 'Yes, Resume' : 'Yes, Suspend')
+              : (confirmAction?.product.status === 'Inactive' ? 'Yes, Activate' : 'Yes, Inactive')
+        }
+        isLoading={isProcessingAction}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          setIsProcessingAction(true);
+          try {
+            if (confirmAction.type === 'Delete') {
+              await handleDeleteProduct(confirmAction.product);
+            } else if (confirmAction.type === 'Suspend') {
+              await handleUpdateStatus(
+                confirmAction.product,
+                confirmAction.product.status === 'Suspended' ? 'Active' : 'Suspended'
+              );
+            } else if (confirmAction.type === 'Inactive') {
+              await handleUpdateStatus(
+                confirmAction.product,
+                confirmAction.product.status === 'Inactive' ? 'Active' : 'Inactive'
+              );
+            }
+            setConfirmAction(null);
+          } catch (err: any) {
+            console.error('Action failed:', err);
+          } finally {
+            setIsProcessingAction(false);
+          }
+        }}
+      />
     </div>
   );
 };

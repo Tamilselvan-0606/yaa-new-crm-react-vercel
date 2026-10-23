@@ -54,6 +54,7 @@ import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
+import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
 
 const PERIOD_FILTER_OPTIONS = [
@@ -118,32 +119,34 @@ export const PaymentOutView: React.FC = () => {
     paymentOutsRef.current = paymentOuts;
   }, [paymentOuts]);
 
-  // Load registered suppliers & purchases for dropdowns
-  useEffect(() => {
-    let isMounted = true;
+  // On-demand loader for registered suppliers & purchases (loaded only when opening form modals)
+  const hasLoadedFormMasterDataRef = useRef(false);
+  const isLoadingFormMasterDataRef = useRef(false);
 
-    supplierApi
-      .getSuppliers({ page_size: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailableSuppliers(res.data);
-        }
-      })
-      .catch(() => {});
+  const loadFormMasterData = useCallback(async () => {
+    if (hasLoadedFormMasterDataRef.current || isLoadingFormMasterDataRef.current) return;
+    isLoadingFormMasterDataRef.current = true;
 
-    workPurchaseOrderApi
-      .getPurchaseOrders({ limit: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailablePurchases(res.data.map(mapApiPurchaseOrderToUi));
-        }
-      })
-      .catch(() => {});
+    try {
+      const [suppliersRes, posRes] = await Promise.allSettled([
+        supplierApi.getSuppliers({ page_size: 100, pagination_required: false }),
+        workPurchaseOrderApi.getPurchaseOrders({ limit: 100, pagination_required: false }),
+      ]);
 
-    return () => {
-      isMounted = false;
-    };
+      if (suppliersRes.status === 'fulfilled' && suppliersRes.value?.data && Array.isArray(suppliersRes.value.data)) {
+        setAvailableSuppliers(suppliersRes.value.data);
+      }
+      if (posRes.status === 'fulfilled' && posRes.value?.data && Array.isArray(posRes.value.data)) {
+        setAvailablePurchases(posRes.value.data.map(mapApiPurchaseOrderToUi));
+      }
+      hasLoadedFormMasterDataRef.current = true;
+    } catch {
+      // ignore
+    } finally {
+      isLoadingFormMasterDataRef.current = false;
+    }
   }, []);
+
 
   // Merged Suppliers list (API + Store fallback)
   const mergedSuppliers = useMemo(() => {
@@ -248,17 +251,6 @@ export const PaymentOutView: React.FC = () => {
     fetchPaymentsOut();
   }, [fetchPaymentsOut]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // Close period dropdown on click outside
   useEffect(() => {
@@ -312,8 +304,38 @@ export const PaymentOutView: React.FC = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<PaymentOut | null>(null);
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+
+  // Only load registered suppliers & purchases on demand when the form modal opens
+  useEffect(() => {
+    if (isFormModalOpen) {
+      loadFormMasterData();
+    }
+  }, [isFormModalOpen, loadFormMasterData]);
+
+  // Open History Modal with live API sync
+  const handleOpenHistory = async (po: PaymentOut) => {
+    setActiveDropdownId(null);
+    setSelectedPayment(po);
+    setIsHistoryModalOpen(true);
+
+    if (po.id) {
+      setIsLoadingHistory(true);
+      try {
+        const res = await workPaymentOutApi.getPaymentOutById(po.id);
+        if (res && res.data) {
+          const livePayment = mapApiPaymentOutToUi(res.data);
+          setSelectedPayment(livePayment);
+        }
+      } catch (err) {
+        console.warn('Could not fetch latest payment voucher audit data from API:', err);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    }
+  };
 
   // Open Edit Payment Modal
   const {
@@ -348,6 +370,7 @@ export const PaymentOutView: React.FC = () => {
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   const handleOpenEditModal = (po: PaymentOut) => {
+    loadFormMasterData();
     if (po.status === 'Cancelled') {
       toast.error('Cancelled payments cannot be edited.');
       return;
@@ -370,6 +393,7 @@ export const PaymentOutView: React.FC = () => {
 
   // Duplicate Payment Handler
   const handleDuplicatePayment = (po: PaymentOut) => {
+    loadFormMasterData();
     setEditingPaymentId(null);
     const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
     reset({
@@ -445,6 +469,7 @@ export const PaymentOutView: React.FC = () => {
 
   // Open Create Payment Modal
   const handleOpenCreateModal = () => {
+    loadFormMasterData();
     setEditingPaymentId(null);
     const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
     reset({
@@ -922,13 +947,36 @@ export const PaymentOutView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by voucher #, supplier..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedPeriod === pendingPeriod &&
+            appliedPaymentMode === pendingPaymentMode &&
+            appliedStatus === pendingStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedPeriod(pendingPeriod);
           setAppliedPaymentMode(pendingPaymentMode);
           setAppliedStatus(pendingStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchPaymentsOut(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedPeriod === 'All Payment-Out Invoices' &&
+            pendingPeriod === 'All Payment-Out Invoices' &&
+            appliedPaymentMode === 'All' &&
+            pendingPaymentMode === 'All' &&
+            appliedStatus === 'All' &&
+            pendingStatus === 'All' &&
+            currentPage === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('All Payment-Out Invoices');
@@ -938,6 +986,10 @@ export const PaymentOutView: React.FC = () => {
           setPendingStatus('All');
           setAppliedStatus('All');
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchPaymentsOut(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2 flex-nowrap">
@@ -953,8 +1005,6 @@ export const PaymentOutView: React.FC = () => {
                 value={pendingPeriod}
                 onChange={(val) => {
                   setPendingPeriod(val);
-                  setAppliedPeriod(val);
-                  setCurrentPage(1);
                   if (val === 'Custom') {
                     setIsCustomDateModalOpen(true);
                   }
@@ -970,8 +1020,6 @@ export const PaymentOutView: React.FC = () => {
                 value={pendingStatus}
                 onChange={(val) => {
                   setPendingStatus(val);
-                  setAppliedStatus(val);
-                  setCurrentPage(1);
                 }}
                 options={[
                   { label: 'Status : All', value: 'All' },
@@ -989,8 +1037,6 @@ export const PaymentOutView: React.FC = () => {
                 value={pendingPaymentMode}
                 onChange={(val) => {
                   setPendingPaymentMode(val);
-                  setAppliedPaymentMode(val);
-                  setCurrentPage(1);
                 }}
                 options={[
                   { label: 'Mode : All', value: 'All' },
@@ -1130,19 +1176,6 @@ export const PaymentOutView: React.FC = () => {
                       {/* 9. Actions */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Print Action */}
-                          <button
-                            type="button"
-                            title="Print Payment Voucher"
-                            onClick={() => {
-                              setSelectedPayment(po);
-                              toast.info(`Preparing print for ${po.paymentNo}...`);
-                              window.print();
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
 
                           {/* Share / Forward Popover */}
                           <UniversalShareDropdown
@@ -1156,154 +1189,49 @@ export const PaymentOutView: React.FC = () => {
                           />
 
                           {/* 3-dots Actions Dropdown */}
-                          <div className="relative inline-block text-left action-dropdown-container">
-                            <button
-                              type="button"
-                              title="More Options"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === po.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  setActiveShareId(null);
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const dropdownHeight = 220;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - btnRect.top + 4,
-                                      right: window.innerWidth - btnRect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: btnRect.bottom + 4,
-                                      right: window.innerWidth - btnRect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(po.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {activeDropdownId === po.id && dropdownPos && (
-                              <div
-                                className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                style={{
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                }}
-                              >
-                                {/* 1. View/Edit */}
-                                {po.status === 'Cancelled' ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
+                          <SaleActionDropdown
+                            items={[
+                              po.status === 'Cancelled'
+                                ? {
+                                    label: 'View Voucher',
+                                    variant: 'view',
+                                    onClick: () => {
                                       setSelectedPayment(po);
                                       setIsDetailModalOpen(true);
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center justify-between"
-                                  >
-                                    <span>View Voucher</span>
-                                    <span className="text-[10px] uppercase font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded">
-                                      Locked
-                                    </span>
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleOpenEditModal(po);
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                  >
-                                    View/Edit
-                                  </button>
-                                )}
-
-                                {/* 2. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDuplicatePayment(po);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-                                {/* 3. Delete / Cancel */}
-                                {po.status === 'Cancelled' ? (
-                                  <button
-                                    type="button"
-                                    disabled
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-400 cursor-not-allowed block opacity-60"
-                                  >
-                                    Cancelled (Voided)
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleDeletePayment(po.id, po.paymentNo);
-                                    }}
-                                    className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                                  >
-                                    Cancel Voucher
-                                  </button>
-                                )}
-
-                                {/* 4. Open PDF */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedPayment(po);
-                                    setActiveDropdownId(null);
-                                    toast.info(`Opening PDF for ${po.paymentNo}...`);
-                                    window.print();
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Open PDF
-                                </button>
-
-                                {/* 5. Print */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedPayment(po);
-                                    setActiveDropdownId(null);
-                                    toast.info(`Preparing print for ${po.paymentNo}...`);
-                                    window.print();
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Print
-                                </button>
-
-                                {/* 6. View History */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedPayment(po);
-                                    setIsHistoryModalOpen(true);
-                                    setActiveDropdownId(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View History
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                                    },
+                                  }
+                                : {
+                                    label: 'View/Edit',
+                                    variant: 'edit',
+                                    onClick: () => handleOpenEditModal(po),
+                                  },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicatePayment(po),
+                              },
+                              {
+                                label: 'Preview',
+                                variant: 'preview',
+                                onClick: () => {
+                                  setSelectedPayment(po);
+                                  setIsDetailModalOpen(true);
+                                },
+                              },
+                              {
+                                label: 'View History',
+                                variant: 'view',
+                                onClick: () => handleOpenHistory(po),
+                              },
+                              po.status !== 'Cancelled' && {
+                                label: 'Cancel Voucher',
+                                variant: 'delete',
+                                danger: true,
+                                dividerBefore: true,
+                                onClick: () => handleDeletePayment(po.id, po.paymentNo),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -1738,21 +1666,24 @@ export const PaymentOutView: React.FC = () => {
 
             {/* Modal Actions */}
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={<Printer className="w-3.5 h-3.5" />}
-                onClick={() => window.print()}
-              >
-                Print Voucher
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
+              <button
+                type="button"
                 onClick={() => setIsDetailModalOpen(false)}
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
               >
                 Close
-              </Button>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  toast.info(`Preparing print for ${selectedPayment.paymentNo}...`);
+                  window.print();
+                }}
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Order</span>
+              </button>
             </div>
           </div>
         )}
@@ -1763,6 +1694,11 @@ export const PaymentOutView: React.FC = () => {
         isOpen={isHistoryModalOpen}
         onClose={() => setIsHistoryModalOpen(false)}
         title="Payment Voucher History & Audit Trail"
+        subtitle={
+          isLoadingHistory
+            ? 'Syncing live history from Work API...'
+            : 'Complete lifecycle progression and timeline audit log'
+        }
         maxWidth="md"
       >
         {selectedPayment && (

@@ -382,7 +382,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       }
     };
 
-    const handleScrollOrResize = () => {
+    const handleScrollOrResize = (e: Event) => {
+      // If the scroll happened inside an active dropdown container (user scrolling options), do NOT close it!
+      const target = e.target as HTMLElement | null;
+      if (target && (target.closest?.('.dropdown-menu') || target.closest?.('.max-h-60'))) {
+        return;
+      }
+
       if (openProductDropdownId) {
         setOpenProductDropdownId(null);
         setDropdownRect(null);

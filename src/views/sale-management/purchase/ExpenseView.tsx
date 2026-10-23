@@ -43,6 +43,7 @@ import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatExpenseShare } from '../../../utils/shareUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
+import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
 import {
   workExpenseApi,
@@ -229,10 +230,19 @@ export const ExpenseView: React.FC = () => {
     }
   }, []);
 
-  // Initial load for categories & suppliers
-  useEffect(() => {
-    fetchCategories();
-    fetchSuppliers();
+  // On-demand loader for form master data (categories & suppliers)
+  const hasLoadedFormMasterDataRef = useRef(false);
+  const isLoadingFormMasterDataRef = useRef(false);
+
+  const loadFormMasterData = useCallback(async () => {
+    if (hasLoadedFormMasterDataRef.current || isLoadingFormMasterDataRef.current) return;
+    isLoadingFormMasterDataRef.current = true;
+    try {
+      await Promise.allSettled([fetchCategories(), fetchSuppliers()]);
+      hasLoadedFormMasterDataRef.current = true;
+    } finally {
+      isLoadingFormMasterDataRef.current = false;
+    }
   }, [fetchCategories, fetchSuppliers]);
 
   // Fetch Expenses from Work API with deduplication
@@ -314,17 +324,6 @@ export const ExpenseView: React.FC = () => {
     fetchExpenses();
   }, [fetchExpenses]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // 3-Dots Action dropdown & Share Popover
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -378,6 +377,15 @@ export const ExpenseView: React.FC = () => {
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [editCategoryName, setEditCategoryName] = useState('');
   const [editCategoryDesc, setEditCategoryDesc] = useState('');
+
+  // Load master data on-demand only when modals are opened
+  useEffect(() => {
+    if (isFormModalOpen) {
+      loadFormMasterData();
+    } else if (isCategoryModalOpen) {
+      fetchCategories();
+    }
+  }, [isFormModalOpen, isCategoryModalOpen, loadFormMasterData, fetchCategories]);
 
   const {
     register,
@@ -439,6 +447,7 @@ export const ExpenseView: React.FC = () => {
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
+    loadFormMasterData();
     setEditingExpenseId(null);
     setReceiptImageState('');
     const defaultCat = categories.length > 0 ? categories[0] : null;
@@ -464,6 +473,7 @@ export const ExpenseView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (exp: ExpenseItem) => {
+    loadFormMasterData();
     setEditingExpenseId(exp.id);
     setReceiptImageState(exp.receiptImage || '');
 
@@ -488,6 +498,7 @@ export const ExpenseView: React.FC = () => {
 
   // Duplicate Expense Handler
   const handleDuplicateExpense = (exp: ExpenseItem) => {
+    loadFormMasterData();
     setEditingExpenseId(null);
     setReceiptImageState(exp.receiptImage || '');
 
@@ -809,7 +820,10 @@ export const ExpenseView: React.FC = () => {
             variant="secondary"
             size="md"
             className="w-full sm:w-auto justify-center"
-            onClick={() => setIsCategoryModalOpen(true)}
+            onClick={() => {
+              fetchCategories();
+              setIsCategoryModalOpen(true);
+            }}
             icon={<Layers className="w-4 h-4 text-[#33077C]" />}
           >
             <span>Categories</span>
@@ -914,7 +928,7 @@ export const ExpenseView: React.FC = () => {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-xl sm:text-2xl font-bold text-slate-900">
-              {categories.length}
+              {categories.length > 0 ? categories.length : new Set(expenses.map((e) => e.category).filter(Boolean)).size || 0}
             </span>
           </div>
           <span className="text-[11px] text-slate-400 mt-1 block">
@@ -929,13 +943,36 @@ export const ExpenseView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by expense #, title, payee, reference..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedPeriod === pendingPeriod &&
+            appliedCategory === pendingCategory &&
+            appliedPaymentMode === pendingPaymentMode &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedPeriod(pendingPeriod);
           setAppliedCategory(pendingCategory);
           setAppliedPaymentMode(pendingPaymentMode);
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchExpenses(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedPeriod === 'All Expenses' &&
+            pendingPeriod === 'All Expenses' &&
+            appliedCategory === 'All' &&
+            pendingCategory === 'All' &&
+            appliedPaymentMode === 'All' &&
+            pendingPaymentMode === 'All' &&
+            currentPage === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('All Expenses');
@@ -945,6 +982,10 @@ export const ExpenseView: React.FC = () => {
           setPendingPaymentMode('All');
           setAppliedPaymentMode('All');
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchExpenses(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2 flex-nowrap">
@@ -960,8 +1001,6 @@ export const ExpenseView: React.FC = () => {
                 value={pendingPeriod}
                 onChange={(val) => {
                   setPendingPeriod(val);
-                  setAppliedPeriod(val);
-                  setCurrentPage(1);
                   if (val === 'Custom') {
                     setIsCustomDateModalOpen(true);
                   }
@@ -971,14 +1010,24 @@ export const ExpenseView: React.FC = () => {
             </div>
 
             {/* Filter by Live Category */}
-            <div className="shrink-0">
+            <div
+              className="shrink-0"
+              onClick={() => {
+                if (categories.length === 0 && !isCategoriesLoading) {
+                  fetchCategories();
+                }
+              }}
+              onMouseEnter={() => {
+                if (categories.length === 0 && !isCategoriesLoading) {
+                  fetchCategories();
+                }
+              }}
+            >
               <FilterDropdown
                 placeholder="Category : All"
                 value={pendingCategory}
                 onChange={(val) => {
                   setPendingCategory(val);
-                  setAppliedCategory(val);
-                  setCurrentPage(1);
                 }}
                 options={[
                   { label: 'Category : All', value: 'All' },
@@ -994,8 +1043,6 @@ export const ExpenseView: React.FC = () => {
                 value={pendingPaymentMode}
                 onChange={(val) => {
                   setPendingPaymentMode(val);
-                  setAppliedPaymentMode(val);
-                  setCurrentPage(1);
                 }}
                 options={[
                   { label: 'Mode : All', value: 'All' },
@@ -1157,19 +1204,6 @@ export const ExpenseView: React.FC = () => {
                     {/* Actions */}
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
-                        {/* Print Action */}
-                        <button
-                          type="button"
-                          title="Print Expense Voucher"
-                          onClick={() => {
-                            setSelectedExpense(exp);
-                            toast.info(`Preparing print for ${exp.expenseNo}...`);
-                            window.print();
-                          }}
-                          className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
 
                         {/* Share Popover */}
                         <UniversalShareDropdown
@@ -1183,117 +1217,32 @@ export const ExpenseView: React.FC = () => {
                         />
 
                         {/* 3-dots Actions Dropdown */}
-                        <div className="relative inline-block text-left action-dropdown-container">
-                          <button
-                            type="button"
-                            title="More Options"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === exp.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                setActiveShareId(null);
-                                const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const dropdownHeight = 240;
-                                if (spaceBelow < dropdownHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - btnRect.top + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: btnRect.bottom + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                }
-                                setActiveDropdownId(exp.id);
-                              }
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-
-                          {activeDropdownId === exp.id && dropdownPos && (
-                            <div
-                              className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                              style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                right: `${dropdownPos.right}px`,
-                              }}
-                            >
-                              {/* 1. View/Edit */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenEditModal(exp);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                              >
-                                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>View/Edit</span>
-                              </button>
-
-                              {/* 2. Preview */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenDetailModal(exp);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                              >
-                                <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Preview</span>
-                              </button>
-
-                              {/* 3. Duplicate */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDuplicateExpense(exp);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                              >
-                                <Layers className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Duplicate</span>
-                              </button>
-
-                              {/* 4. Print */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedExpense(exp);
-                                  setActiveDropdownId(null);
-                                  toast.info(`Preparing print for ${exp.expenseNo}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                              >
-                                <Printer className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Print</span>
-                              </button>
-
-                              {/* 5. Delete */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDeleteExpense(exp.id, exp.expenseNo);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 border-t border-slate-100 group"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 text-rose-500 group-hover:text-white transition-colors" />
-                                <span>Delete</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View/Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(exp),
+                            },
+                            {
+                              label: 'Preview',
+                              variant: 'preview',
+                              onClick: () => handleOpenDetailModal(exp),
+                            },
+                            {
+                              label: 'Duplicate',
+                              variant: 'duplicate',
+                              onClick: () => handleDuplicateExpense(exp),
+                            },
+                            {
+                              label: 'Delete',
+                              variant: 'delete',
+                              danger: true,
+                              dividerBefore: true,
+                              onClick: () => handleDeleteExpense(exp.id, exp.expenseNo),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1806,12 +1755,24 @@ export const ExpenseView: React.FC = () => {
                   <Edit2 className="w-3.5 h-3.5 mr-1" />
                   Edit
                 </Button>
-                <Button
+                <button
+                  type="button"
                   onClick={() => setIsDetailModalOpen(false)}
-                  className="bg-[#33077C] text-white text-xs px-4 py-1.5 rounded-lg cursor-pointer"
+                  className="h-8.5 px-4 rounded-lg border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
                 >
                   Close
-                </Button>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.info(`Preparing print for ${selectedExpense.expenseNo}...`);
+                    window.print();
+                  }}
+                  className="h-8.5 px-4 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Order</span>
+                </button>
               </div>
             </div>
           </div>

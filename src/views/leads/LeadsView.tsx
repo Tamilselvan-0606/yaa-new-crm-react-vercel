@@ -33,6 +33,8 @@ import {
   Ban,
   Trash2,
   Check,
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { CustomerFormModal } from "../../components/forms/CustomerFormModal";
 import { LeadFormModal } from "../../components/forms/LeadFormModal";
@@ -40,6 +42,7 @@ import { Modal } from "../../components/common/Modal";
 import { SearchBar } from "../../components/common/SearchBar";
 import { FilterDropdown } from "../../components/common/FilterDropdown";
 import { Pagination } from "../../components/common/Pagination";
+import { ConfirmationModal } from "../../utils/confirmationModal";
 import { customerApi } from "../../api/commerce/customerApi";
 import {
   useGetPlatformLeadsQuery,
@@ -55,6 +58,7 @@ import {
   PlatformClientItem,
 } from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
+import { getStoredOrganizationId } from "../../api/config";
 
 interface LeadsViewProps {
   initialCreateOpen?: boolean;
@@ -135,6 +139,15 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
 
+  // Confirmation Modal State (Inactive / Suspend / Delete)
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'Inactive' | 'Suspend' | 'Delete';
+    category: 'client' | 'lead';
+    id: string;
+    name: string;
+  } | null>(null);
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+
   const customers = commerceCustomers;
 
   // Client Filters State (Pending & Applied)
@@ -148,6 +161,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [clientPage, setClientPage] = useState(1);
   const [clientLimit, setClientLimit] = useState(10);
 
+  // Active Organization ID
+  const activeOrgId = getStoredOrganizationId();
+
   // Platform Clients API Query & Mutations
   const {
     data: platformClientsResponse,
@@ -158,6 +174,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     limit: clientLimit,
     search: appliedClientSearch || undefined,
     status: appliedClientStatus !== "All" ? (appliedClientStatus as any) : undefined,
+    organizationType: "All",
+    organization_id: activeOrgId || undefined,
   });
 
   const [updatePlatformClient] = useUpdatePlatformClientMutation();
@@ -187,67 +205,53 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const leadsSummary = platformLeadsResponse?.summary;
   const totalLeadsCount = leadsPagination?.totalRecords ?? (platformLeadsResponse?.data?.length || 0);
 
-  const handleToggleCustomerStatus = async (customer: any) => {
-    const nextStatus = customer.status === 'Active' ? 'Inactive' : 'Active';
+  const handleUpdateClientStatus = async (id: string, newStatus: string) => {
     try {
       await updatePlatformClient({
-        id: customer.id,
+        id,
         payload: {
-          status: nextStatus as any,
-          active: nextStatus === 'Active',
+          status: newStatus as any,
+          active: newStatus === 'Active',
         },
       }).unwrap();
     } catch {
       try {
-        await customerApi.patchCustomer(customer.id, { status: nextStatus as any });
+        await customerApi.patchCustomer(id, { status: newStatus as any });
       } catch {
         // Fallback
       }
     }
-    setActiveDropdownId(null);
-    setDropdownPos(null);
   };
 
-  const handleDeleteCustomerItem = async (id: string) => {
-    if (window.confirm('Are you sure you want to deactivate/delete this client?')) {
+  const handleDeleteClient = async (id: string) => {
+    try {
+      await deletePlatformClient(id).unwrap();
+    } catch {
       try {
-        await deletePlatformClient(id).unwrap();
+        await customerApi.deleteCustomer(id);
       } catch {
-        try {
-          await customerApi.deleteCustomer(id);
-        } catch {
-          // Fallback
-        }
+        // Fallback
       }
     }
-    setActiveDropdownId(null);
-    setDropdownPos(null);
   };
 
-  const handleToggleLeadStatus = async (lead: any) => {
-    const nextStatus = (lead.status === 'Lost' || lead.status === 'Inactive') ? 'New' : 'Lost';
+  const handleUpdateLeadStatus = async (id: string, newStatus: string) => {
     try {
       await updatePlatformLeadStatus({
-        id: lead.id,
-        payload: { status: nextStatus, notes: `Status toggled to ${nextStatus}` },
+        id,
+        payload: { status: newStatus, notes: `Status changed to ${newStatus}` },
       }).unwrap();
     } catch (err: any) {
       console.error('Failed to update lead status:', err);
     }
-    setActiveDropdownId(null);
-    setDropdownPos(null);
   };
 
-  const handleDeleteLeadItem = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this lead?')) {
-      try {
-        await deletePlatformLead(id).unwrap();
-      } catch (err: any) {
-        console.error('Failed to delete lead:', err);
-      }
+  const handleDeleteLead = async (id: string) => {
+    try {
+      await deletePlatformLead(id).unwrap();
+    } catch (err: any) {
+      console.error('Failed to delete lead:', err);
     }
-    setActiveDropdownId(null);
-    setDropdownPos(null);
   };
 
   // Handle direct create modal trigger if initialCreateOpen is passed
@@ -2185,7 +2189,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     {/* 3. Inactive (Slate circle) */}
                     <button
                       type="button"
-                      onClick={() => handleToggleLeadStatus(currentLead)}
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        setConfirmAction({
+                          type: 'Inactive',
+                          category: 'lead',
+                          id: currentLead.id,
+                          name: currentLead.name,
+                        });
+                      }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
                     >
                       <div className="w-[26px] h-[26px] rounded-full bg-[#5A6E85] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -2202,7 +2215,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     {/* 4. Delete (Rose red circle) */}
                     <button
                       type="button"
-                      onClick={() => handleDeleteLeadItem(currentLead.id)}
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        setConfirmAction({
+                          type: 'Delete',
+                          category: 'lead',
+                          id: currentLead.id,
+                          name: currentLead.name,
+                        });
+                      }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-rose-50/50 transition-colors cursor-pointer"
                     >
                       <div className="w-[26px] h-[26px] rounded-full bg-[#E11D48] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -2256,7 +2278,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     {/* 3. Inactive (Slate circle) */}
                     <button
                       type="button"
-                      onClick={() => handleToggleCustomerStatus(currentClient)}
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        setConfirmAction({
+                          type: 'Inactive',
+                          category: 'client',
+                          id: currentClient.id,
+                          name: currentClient.name,
+                        });
+                      }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
                     >
                       <div className="w-[26px] h-[26px] rounded-full bg-[#5A6E85] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -2273,7 +2304,16 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     {/* 4. Delete (Rose red circle) */}
                     <button
                       type="button"
-                      onClick={() => handleDeleteCustomerItem(currentClient.id)}
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        setConfirmAction({
+                          type: 'Delete',
+                          category: 'client',
+                          id: currentClient.id,
+                          name: currentClient.name,
+                        });
+                      }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-rose-50/50 transition-colors cursor-pointer"
                     >
                       <div className="w-[26px] h-[26px] rounded-full bg-[#E11D48] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -2289,6 +2329,42 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
             </>
           );
         })()}
+
+      {/* Reusable Confirmation Modal: Inactive / Suspend / Delete */}
+      <ConfirmationModal
+        isOpen={!!confirmAction}
+        onClose={() => {
+          if (!isProcessingAction) setConfirmAction(null);
+        }}
+        type={confirmAction?.type}
+        itemTypeLabel={confirmAction?.category === 'client' ? 'Client' : 'Lead'}
+        itemName={confirmAction?.name}
+        isLoading={isProcessingAction}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          setIsProcessingAction(true);
+          try {
+            if (confirmAction.category === 'client') {
+              if (confirmAction.type === 'Delete') {
+                await handleDeleteClient(confirmAction.id);
+              } else {
+                await handleUpdateClientStatus(confirmAction.id, confirmAction.type);
+              }
+            } else {
+              if (confirmAction.type === 'Delete') {
+                await handleDeleteLead(confirmAction.id);
+              } else {
+                await handleUpdateLeadStatus(confirmAction.id, confirmAction.type === 'Inactive' ? 'Lost' : 'Suspended');
+              }
+            }
+            setConfirmAction(null);
+          } catch (err: any) {
+            console.error('Action failed:', err);
+          } finally {
+            setIsProcessingAction(false);
+          }
+        }}
+      />
     </div>
   );
 };

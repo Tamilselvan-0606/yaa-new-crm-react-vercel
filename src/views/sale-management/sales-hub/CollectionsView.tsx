@@ -58,6 +58,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { toast } from 'sonner';
+import { SaleActionDropdown } from '../utils';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
 import { calculateCustomerOutstanding } from '../../../utils/outstandingBalance';
@@ -1606,114 +1607,51 @@ export const CollectionsView: React.FC = () => {
                             </span>
                           )}
 
-                        {/* 3-dots action menu trigger */}
-                        <div className="relative">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeActionId === item.id) {
-                                setActiveActionId(null);
-                                setDropdownPosition(null);
-                              } else {
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                setDropdownPosition({
-                                  top: rect.bottom + 4,
-                                  right: window.innerWidth - rect.right,
-                                });
-                                setActiveActionId(item.id);
-                              }
-                            }}
-                            className="action-menu-trigger w-7 h-7 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-100 flex items-center justify-center text-slate-500 cursor-pointer"
-                          >
-                            <MoreVertical className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Portal-like dropdown menu */}
-                          {activeActionId === item.id && dropdownPosition && (
-                            <div
-                              style={{
-                                position: 'fixed',
-                                top: `${dropdownPosition.top}px`,
-                                right: `${dropdownPosition.right}px`,
-                                zIndex: 9999,
-                              }}
-                              className="action-menu-dropdown w-48 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1.5 text-xs animate-in fade-in zoom-in-95 duration-100"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => handleOpenInvoicePreview(item)}
-                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                              >
-                                <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>View Invoice</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleOpenContact(item)}
-                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                              >
-                                <Phone className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Contact Customer</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleOpenFollowUp(item)}
-                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                              >
-                                <Clock className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Add Follow-up</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveActionId(null);
-                                  handleOpenAssignCustomer(item.customer);
-                                }}
-                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                              >
-                                <UserCheck className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Assign / Change Rep</span>
-                              </button>
-
-                              {item.outstandingAmount > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenPromiseToPay(item)}
-                                  className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                                >
-                                  <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>Record Promise to Pay</span>
-                                </button>
-                              )}
-
-                              {item.outstandingAmount > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenRecordPayment(item)}
-                                  className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                                >
-                                  <CreditCard className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>Record Payment</span>
-                                </button>
-                              )}
-
-                              <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
-
-                              <button
-                                type="button"
-                                onClick={() => handleOpenTimeline(item)}
-                                className="w-full px-3 py-2 text-left flex items-center gap-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer group"
-                              >
-                                <TrendingUp className="w-3.5 h-3.5 text-slate-400 group-hover:text-white transition-colors" />
-                                <span>Collection Timeline</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        {/* Action menu dropdown */}
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View Invoice',
+                              onClick: () => handleOpenInvoicePreview(item),
+                              variant: 'view',
+                            },
+                            {
+                              label: 'Contact Customer',
+                              onClick: () => handleOpenContact(item),
+                              icon: <Phone style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />,
+                              badgeBg: 'bg-emerald-600',
+                            },
+                            {
+                              label: 'Add Follow-up',
+                              onClick: () => handleOpenFollowUp(item),
+                              icon: <Clock style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />,
+                              badgeBg: 'bg-amber-500',
+                            },
+                            {
+                              label: 'Assign / Change Rep',
+                              onClick: () => handleOpenAssignCustomer(item.customer),
+                              variant: 'assign',
+                            },
+                            item.outstandingAmount > 0 && {
+                              label: 'Record Promise to Pay',
+                              onClick: () => handleOpenPromiseToPay(item),
+                              icon: <Calendar style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />,
+                              badgeBg: 'bg-sky-500',
+                            },
+                            item.outstandingAmount > 0 && {
+                              label: 'Record Payment',
+                              onClick: () => handleOpenRecordPayment(item),
+                              variant: 'payment',
+                            },
+                            {
+                              label: 'Collection Timeline',
+                              onClick: () => handleOpenTimeline(item),
+                              icon: <TrendingUp style={{ width: '13px', height: '13px' }} className="text-white stroke-[2.2]" />,
+                              badgeBg: 'bg-purple-600',
+                              dividerBefore: true,
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>

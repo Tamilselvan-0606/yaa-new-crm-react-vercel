@@ -29,6 +29,8 @@ import {
   MapPin,
   UserRound,
   Check,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
@@ -36,6 +38,7 @@ import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
 const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
@@ -118,6 +121,13 @@ export const BranchesView: React.FC = () => {
   const [viewBranch, setViewBranch] = useState<Branch | null>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
 
+  // Confirmation Modal State (Inactive / Suspend / Delete)
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'Inactive' | 'Suspend' | 'Delete';
+    branch: Branch;
+  } | null>(null);
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+
   // Form State
   const [formData, setFormData] = useState({
     name: '',
@@ -134,6 +144,8 @@ export const BranchesView: React.FC = () => {
     location: '',
     status: 'Active' as BranchStatus,
   });
+
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Organizations & Sub-Organizations state
   const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
@@ -426,6 +438,7 @@ export const BranchesView: React.FC = () => {
   const handleOpenAddModal = () => {
     setEditingBranch(null);
     setShowPassword(false);
+    setFormErrors({});
     const activeOrgId = currentUser?.organizationId || getStoredOrganizationId() || '';
     setFormData({
       name: '',
@@ -448,6 +461,7 @@ export const BranchesView: React.FC = () => {
   const handleOpenEditModal = (branch: Branch) => {
     setEditingBranch(branch);
     setShowPassword(false);
+    setFormErrors({});
     const activeOrgId = branch.organizationId || currentUser?.organizationId || getStoredOrganizationId() || '';
     setFormData({
       name: branch.name || '',
@@ -474,34 +488,54 @@ export const BranchesView: React.FC = () => {
 
   const handleSaveBranch = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const errors: Record<string, string> = {};
+
     if (!formData.name.trim()) {
-      showToast?.('error', 'Validation Error', 'Branch Name is required');
-      return;
+      errors.name = 'Branch Name is required';
     }
     if (!formData.code.trim()) {
-      showToast?.('error', 'Validation Error', 'Branch Code is required');
-      return;
+      errors.code = 'Branch Code is required';
     }
-    if (!formData.email.trim()) {
-      showToast?.('error', 'Validation Error', 'Login Email is required for branch creation');
-      return;
-    }
-    if (!editingBranch && !formData.password.trim()) {
-      showToast?.('error', 'Validation Error', 'Login Password is required (12-128 characters)');
-      return;
-    }
-    if (!editingBranch && formData.password.trim().length < 12) {
-      showToast?.('error', 'Validation Error', 'Password must be at least 12 characters');
-      return;
-    }
-    if (!formData.status) {
-      showToast?.('error', 'Validation Error', 'Please select a status');
-      return;
+    if (!formData.organizationId && !defaultOrgName.trim()) {
+      errors.organizationId = 'Select Organization is required';
     }
     if (subOrganizations.length > 0 && !formData.subOrganizationId) {
-      showToast?.('error', 'Validation Error', 'Please select a Sub-Organization');
+      errors.subOrganizationId = 'Select Sub-Organization is required';
+    }
+    if (!formData.contactPerson.trim()) {
+      errors.contactPerson = 'Contact Person Name is required';
+    }
+    if (!formData.mobileNumber.trim()) {
+      errors.mobileNumber = 'Mobile Number is required';
+    } else if (formData.mobileNumber.trim().length !== 10) {
+      errors.mobileNumber = 'Mobile Number must be exactly 10 digits';
+    }
+    if (formData.whatsapp.trim() && formData.whatsapp.trim().length !== 10) {
+      errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
+    }
+    if (!formData.location.trim()) {
+      errors.location = 'Location is required';
+    }
+    if (!formData.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      errors.email = 'Please enter a valid email address';
+    }
+    if (!editingBranch && !formData.password.trim()) {
+      errors.password = 'Password is required';
+    } else if (!editingBranch && formData.password.trim().length < 12) {
+      errors.password = 'Password must be at least 12 characters';
+    }
+    if (!formData.status) {
+      errors.status = 'Status is required';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
       return;
     }
+    setFormErrors({});
 
     try {
       setSubmitting(true);
@@ -677,7 +711,6 @@ export const BranchesView: React.FC = () => {
   };
 
   const handleDeleteBranch = async (branch: Branch) => {
-    if (!window.confirm(`Are you sure you want to delete branch "${branch.name}"? This action cannot be undone.`)) return;
     try {
       try {
         await branchApi.deleteBranch(branch.id);
@@ -1113,7 +1146,10 @@ export const BranchesView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleUpdateStatus(branch, branch.status === 'Inactive' ? 'Active' : 'Inactive');
+                                  setConfirmAction({
+                                    type: 'Inactive',
+                                    branch,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-700 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -1135,7 +1171,10 @@ export const BranchesView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleUpdateStatus(branch, branch.status === 'Suspended' ? 'Active' : 'Suspended');
+                                  setConfirmAction({
+                                    type: 'Suspend',
+                                    branch,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-amber-800 hover:bg-amber-50/60 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -1159,7 +1198,10 @@ export const BranchesView: React.FC = () => {
                                 type="button"
                                 onClick={() => {
                                   setActiveDropdownId(null);
-                                  handleDeleteBranch(branch);
+                                  setConfirmAction({
+                                    type: 'Delete',
+                                    branch,
+                                  });
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
                               >
@@ -1221,7 +1263,7 @@ export const BranchesView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Organization
+                Select Organization <span className="text-rose-500 font-bold">*</span>
               </label>
               <div className="relative">
                 <input
@@ -1230,19 +1272,30 @@ export const BranchesView: React.FC = () => {
                   disabled
                   value={defaultOrgName}
                   title="Default organization cannot be modified"
-                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                  className={`w-full h-11 px-4 bg-slate-100/80 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none ${
+                    formErrors.organizationId
+                      ? 'border border-red-500'
+                      : 'border border-slate-200'
+                  }`}
                 />
               </div>
-              <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
+              {formErrors.organizationId ? (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organizationId}</p>
+              ) : (
+                <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
+              )}
             </div>
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Sub-Organization <span className="text-rose-500">*</span>
+                Select Sub-Organization {subOrganizations.length > 0 && <span className="text-rose-500 font-bold">*</span>}
               </label>
               <CustomSelect
                 value={formData.subOrganizationId}
-                onChange={(val) => setFormData({ ...formData, subOrganizationId: val })}
+                onChange={(val) => {
+                  setFormData({ ...formData, subOrganizationId: val });
+                  if (formErrors.subOrganizationId) setFormErrors((prev) => ({ ...prev, subOrganizationId: '' }));
+                }}
                 options={
                   subOrganizations.length > 0
                     ? subOrganizations.map((sub) => ({
@@ -1252,20 +1305,34 @@ export const BranchesView: React.FC = () => {
                     : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
                 }
                 placeholder="Select Sub-Organization"
+                error={!!formErrors.subOrganizationId}
               />
+              {formErrors.subOrganizationId && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganizationId}</p>
+              )}
             </div>
 
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Branch Name <span className="text-rose-500">*</span>
+                Branch Name <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
-                required
                 value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, name: e.target.value });
+                  if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
+                }}
+                placeholder="Enter branch name"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.name
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.name && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
+              )}
             </div>
           </div>
 
@@ -1273,36 +1340,72 @@ export const BranchesView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Branch Code
+                Branch Code <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={formData.code}
-                onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, code: e.target.value.toUpperCase() });
+                  if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
+                }}
+                placeholder="e.g. BR-001"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                  formErrors.code
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.code && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Contact Person Name
+                Contact Person Name <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={formData.contactPerson}
-                onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, contactPerson: e.target.value });
+                  if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
+                }}
+                placeholder="Enter contact person name"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.contactPerson
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.contactPerson && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Mobile Number
+                Mobile Number <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="e.g. 9876543210"
                 value={formData.mobileNumber}
-                onChange={(e) => setFormData({ ...formData, mobileNumber: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setFormData({ ...formData, mobileNumber: val });
+                  if (formErrors.mobileNumber) setFormErrors((prev) => ({ ...prev, mobileNumber: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.mobileNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.mobileNumber && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.mobileNumber}</p>
+              )}
             </div>
           </div>
 
@@ -1314,32 +1417,68 @@ export const BranchesView: React.FC = () => {
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="e.g. 9876543210"
                 value={formData.whatsapp}
-                onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setFormData({ ...formData, whatsapp: val });
+                  if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: '' }));
+                }}
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.whatsapp
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.whatsapp && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.whatsapp}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Email
+                Email <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="email"
                 value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, email: e.target.value });
+                  if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: '' }));
+                }}
+                placeholder="e.g. branch@organization.com"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.email
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.email && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.email}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Location
+                Location <span className="text-rose-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={formData.location}
-                onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                onChange={(e) => {
+                  setFormData({ ...formData, location: e.target.value });
+                  if (formErrors.location) setFormErrors((prev) => ({ ...prev, location: '' }));
+                }}
+                placeholder="e.g. Chennai, Tamil Nadu"
+                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                  formErrors.location
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
               />
+              {formErrors.location && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.location}</p>
+              )}
             </div>
           </div>
 
@@ -1347,31 +1486,44 @@ export const BranchesView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Status <span className="text-rose-500">*</span>
+                Status <span className="text-rose-500 font-bold">*</span>
               </label>
               <CustomSelect
                 value={formData.status}
-                onChange={(val) => setFormData({ ...formData, status: val as BranchStatus })}
+                onChange={(val) => {
+                  setFormData({ ...formData, status: val as BranchStatus });
+                  if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
+                }}
                 options={[
                   { label: 'Active', value: 'Active' },
                   { label: 'Inactive', value: 'Inactive' },
                   { label: 'Suspended', value: 'Suspended' },
                 ]}
                 placeholder="Select Status"
+                error={!!formErrors.status}
               />
+              {formErrors.status && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
+              )}
             </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Password {!editingBranch && <span className="text-rose-500">*</span>}
+                Password {!editingBranch && <span className="text-rose-500 font-bold">*</span>}
               </label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  required={!editingBranch}
                   placeholder={editingBranch ? 'Leave empty to keep unchanged' : '••••••••••••'}
                   value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full h-11 pl-4 pr-10 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                  onChange={(e) => {
+                    setFormData({ ...formData, password: e.target.value });
+                    if (formErrors.password) setFormErrors((prev) => ({ ...prev, password: '' }));
+                  }}
+                  className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    formErrors.password
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
                 <button
                   type="button"
@@ -1382,6 +1534,9 @@ export const BranchesView: React.FC = () => {
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              {formErrors.password && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.password}</p>
+              )}
             </div>
           </div>
 
@@ -1593,6 +1748,71 @@ export const BranchesView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Reusable Confirmation Modal: Suspend / Inactive / Delete */}
+      <ConfirmationModal
+        isOpen={!!confirmAction}
+        onClose={() => {
+          if (!isProcessingAction) setConfirmAction(null);
+        }}
+        type={confirmAction?.type}
+        itemTypeLabel="Branch"
+        itemName={confirmAction?.branch.name}
+        title={
+          confirmAction?.type === 'Delete'
+            ? 'Delete Branch'
+            : confirmAction?.type === 'Suspend'
+              ? (confirmAction.branch.status === 'Suspended' ? 'Resume Branch' : 'Suspend Branch')
+              : (confirmAction?.branch.status === 'Inactive' ? 'Activate Branch' : 'Deactivate Branch')
+        }
+        description={
+          confirmAction?.type === 'Delete' ? (
+            <>
+              Are you sure you want to delete <span className="font-semibold text-slate-700">{confirmAction.branch.name}</span>? This action cannot be undone.
+            </>
+          ) : confirmAction?.type === 'Suspend' ? (
+            <>
+              Are you sure you want to {confirmAction.branch.status === 'Suspended' ? 'resume' : 'mark'} <span className="font-semibold text-slate-700">{confirmAction.branch.name}</span> {confirmAction.branch.status === 'Suspended' ? 'as Active' : 'as Suspended'}?
+            </>
+          ) : confirmAction?.type === 'Inactive' ? (
+            <>
+              Are you sure you want to mark <span className="font-semibold text-slate-700">{confirmAction.branch.name}</span> as <span className="font-semibold text-slate-700">{confirmAction.branch.status === 'Inactive' ? 'Active' : 'Inactive'}</span>?
+            </>
+          ) : undefined
+        }
+        confirmButtonText={
+          confirmAction?.type === 'Delete'
+            ? 'Yes, Delete'
+            : confirmAction?.type === 'Suspend'
+              ? (confirmAction.branch.status === 'Suspended' ? 'Yes, Resume' : 'Yes, Suspend')
+              : (confirmAction?.branch.status === 'Inactive' ? 'Yes, Activate' : 'Yes, Inactive')
+        }
+        isLoading={isProcessingAction}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          setIsProcessingAction(true);
+          try {
+            if (confirmAction.type === 'Delete') {
+              await handleDeleteBranch(confirmAction.branch);
+            } else if (confirmAction.type === 'Suspend') {
+              await handleUpdateStatus(
+                confirmAction.branch,
+                confirmAction.branch.status === 'Suspended' ? 'Active' : 'Suspended'
+              );
+            } else if (confirmAction.type === 'Inactive') {
+              await handleUpdateStatus(
+                confirmAction.branch,
+                confirmAction.branch.status === 'Inactive' ? 'Active' : 'Inactive'
+              );
+            }
+            setConfirmAction(null);
+          } catch (err: any) {
+            console.error('Action failed:', err);
+          } finally {
+            setIsProcessingAction(false);
+          }
+        }}
+      />
     </div>
   );
 };

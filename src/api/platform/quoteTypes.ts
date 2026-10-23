@@ -19,6 +19,11 @@ export interface QuoteApiItem {
   date: string; // ISO string: '2026-10-06T00:00:00.000Z' or date string
   expiryDate: string;
   organizationId: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
+  createdScope?: 'SUPER_ADMIN' | 'ORGANIZATION' | 'SUB_ORGANIZATION' | 'BRANCH' | string;
+  createdBy?: string;
+  updatedBy?: string | null;
   customerId: string;
   customerName: string;
   customerCompany: string;
@@ -107,7 +112,13 @@ export interface QuoteListParams {
   search?: string;
   sortOrder?: 'asc' | 'desc';
   status?: QuoteStatus | 'ALL';
+  filter?: 'all' | string;
+  organization_id?: string;
   organizationId?: string;
+  sub_organization_id?: string;
+  subOrganizationId?: string;
+  branch_id?: string;
+  branchId?: string;
   customerId?: string;
   fromDate?: string;
   toDate?: string;

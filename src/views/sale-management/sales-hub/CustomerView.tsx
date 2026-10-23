@@ -65,6 +65,7 @@ import {
   formatCustomerShare,
 } from "../../../utils/shareUtils";
 import { toast } from "sonner";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   customerApi,
   CustomerLedgerData,
@@ -2001,41 +2002,72 @@ export const CustomerView: React.FC = () => {
                           />
 
                           {/* 3. 3-Dots Floating Menu Button */}
-                          <div className="action-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === cust.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - rect.bottom;
-                                  const menuHeight = 240;
-                                  if (spaceBelow < menuHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(cust.id);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                              title="More options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-                          </div>
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: "View",
+                                variant: "view",
+                                onClick: () => handleOpenDetailModal(cust),
+                              },
+                              {
+                                label: "Edit",
+                                variant: "edit",
+                                onClick: () => handleOpenEditModal(cust),
+                              },
+                              {
+                                label: "Assign Sales Rep",
+                                variant: "assign",
+                                onClick: () => handleOpenChangeRepModal(cust),
+                              },
+                              {
+                                label: "Create Sale",
+                                variant: "sale",
+                                onClick: () =>
+                                  navigate(
+                                    `/sale-management/sales/sale?customerId=${cust.id}&createSale=true`
+                                  ),
+                              },
+                              {
+                                label:
+                                  cust.status === "Active"
+                                    ? "Set as Inactive"
+                                    : "Set as Active",
+                                variant:
+                                  cust.status === "Active"
+                                    ? "deactivate"
+                                    : "activate",
+                                onClick: () =>
+                                  handleUpdateCustomerStatus(
+                                    cust,
+                                    cust.status === "Active"
+                                      ? "Inactive"
+                                      : "Active"
+                                  ),
+                              },
+                              {
+                                label:
+                                  cust.status === "Blocked"
+                                    ? "Unblock Customer"
+                                    : "Block Customer",
+                                variant:
+                                  cust.status === "Blocked"
+                                    ? "activate"
+                                    : "suspend",
+                                onClick: () =>
+                                  handleUpdateCustomerStatus(
+                                    cust,
+                                    cust.status === "Blocked"
+                                      ? "Active"
+                                      : "Blocked"
+                                  ),
+                              },
+                              {
+                                label: "Delete Customer",
+                                variant: "delete",
+                                onClick: () => handleOpenDeleteModal(cust),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -2067,150 +2099,6 @@ export const CustomerView: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* Fixed Action Dropdown Menu */}
-      {activeDropdownId && dropdownPos && (
-        <div
-          style={{
-            position: "fixed",
-            top:
-              dropdownPos.top !== undefined ? `${dropdownPos.top}px` : "auto",
-            bottom:
-              dropdownPos.bottom !== undefined
-                ? `${dropdownPos.bottom}px`
-                : "auto",
-            right: `${dropdownPos.right}px`,
-            zIndex: 9999,
-          }}
-          className="action-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {(() => {
-            const target = (
-              isApiConnected && liveCustomers.length > 0
-                ? liveCustomers
-                : customers
-            ).find((c) => c.id === activeDropdownId);
-            if (!target) return null;
-
-            return (
-              <>
-                {/* 1. View Details */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenDetailModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  View
-                </button>
-
-                {/* 2. Edit Profile */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenEditModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  Edit
-                </button>
-
-                {/* 2.5 Assign / Change Sales Rep */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenChangeRepModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  Assign Sales Rep
-                </button>
-
-                {/* 3. Create Sale */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate(
-                      `/sale-management/sales/sale?customerId=${target.id}&createSale=true`,
-                    );
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                >
-                  Create Sale
-                </button>
-
-                {/* 4. Set as Active / Inactive */}
-                {target.status === "Active" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateCustomerStatus(target, "Inactive");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Set as Inactive
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateCustomerStatus(target, "Active");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Set as Active
-                  </button>
-                )}
-
-                {/* 5. Block / Unblock Customer */}
-                {target.status === "Blocked" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateCustomerStatus(target, "Active");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Unblock Customer
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleUpdateCustomerStatus(target, "Blocked");
-                      setActiveDropdownId(null);
-                    }}
-                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                  >
-                    Block Customer
-                  </button>
-                )}
-
-                {/* 6. Delete Customer */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenDeleteModal(target);
-                    setActiveDropdownId(null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                >
-                  Delete Customer
-                </button>
-              </>
-            );
-          })()}
-        </div>
-      )}
 
       {/* ========================================== */}
       {/* 1. ADD / EDIT CUSTOMER MODAL               */}

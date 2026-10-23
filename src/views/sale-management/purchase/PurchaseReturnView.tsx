@@ -17,9 +17,10 @@ import {
   Forward,
   FileSpreadsheet,
   Loader2,
-  Trash2,
   PackageCheck,
   Building2,
+  History,
+  Trash2,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -48,6 +49,7 @@ import { workPurchaseOrderApi } from '../../../api';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import { SaleActionDropdown } from '../utils';
 
 export const PurchaseReturnView: React.FC = () => {
   const navigate = useNavigate();
@@ -104,7 +106,28 @@ export const PurchaseReturnView: React.FC = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingReturn, setEditingReturn] = useState<PurchaseReturn | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [historyReturn, setHistoryReturn] = useState<PurchaseReturn | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedReturn, setSelectedReturn] = useState<PurchaseReturn | null>(null);
+
+  const handleOpenHistory = async (pret: PurchaseReturn) => {
+    setActiveDropdownId(null);
+    setHistoryReturn(pret);
+    setIsLoadingHistory(true);
+    try {
+      if (pret.id) {
+        const res = await commercePurchaseReturnApi.getPurchaseReturnById(pret.id);
+        if (res?.data) {
+          const freshReturn = mapApiPurchaseReturnToUi(res.data);
+          setHistoryReturn(freshReturn);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load live purchase return history from API:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   type RefundStatusType = 'Pending' | 'Refunded' | 'Supplier Credit' | 'Adjusted';
 
@@ -118,21 +141,22 @@ export const PurchaseReturnView: React.FC = () => {
   const [returnStatus, setReturnStatus] = useState<string>('Requested');
   const [notes, setNotes] = useState('');
 
-  // On-demand product search: only calls products API when user is actively searching
-  const handleProductSearch = useCallback(async (query: string) => {
+  // On-demand product search: calls products API when user is searching or opening product selector
+  const handleProductSearch = useCallback(async (query = '') => {
     const trimmed = query.trim();
-    if (!trimmed) return;
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
+        search: trimmed || undefined,
+        page_size: 50,
         pagination_required: false,
       });
       if (res && res.data && Array.isArray(res.data)) {
         setAvailableProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          prev.forEach((p) => map.set(p.id, p));
+          if (trimmed) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
           res.data.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
@@ -143,6 +167,13 @@ export const PurchaseReturnView: React.FC = () => {
       setIsSearchingProducts(false);
     }
   }, []);
+
+  // Automatically load initial products list when return form modal opens
+  useEffect(() => {
+    if (isCreateModalOpen) {
+      handleProductSearch('');
+    }
+  }, [isCreateModalOpen, handleProductSearch]);
 
   // Product options combining searched API products, returnItems, and local stocks
   const productOptions = useMemo(() => {
@@ -328,17 +359,6 @@ export const PurchaseReturnView: React.FC = () => {
     fetchPurchaseReturns();
   }, [fetchPurchaseReturns]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // Close dropdowns on outside click or scroll
   useEffect(() => {
@@ -1019,12 +1039,32 @@ export const PurchaseReturnView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by return #, purchase #, supplier..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedStatus === pendingStatus &&
+            appliedRefundStatus === pendingRefundStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedStatus(pendingStatus);
           setAppliedRefundStatus(pendingRefundStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchPurchaseReturns(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedStatus === 'All' &&
+            pendingStatus === 'All' &&
+            appliedRefundStatus === 'All' &&
+            pendingRefundStatus === 'All' &&
+            currentPage === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingStatus('All');
@@ -1032,6 +1072,10 @@ export const PurchaseReturnView: React.FC = () => {
           setPendingRefundStatus('All');
           setAppliedRefundStatus('All');
           setCurrentPage(1);
+
+          if (isSame) {
+            fetchPurchaseReturns(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1040,8 +1084,6 @@ export const PurchaseReturnView: React.FC = () => {
               value={pendingStatus}
               onChange={(val) => {
                 setPendingStatus(val);
-                setAppliedStatus(val);
-                setCurrentPage(1);
               }}
               options={[
                 { label: 'Status : All', value: 'All' },
@@ -1059,8 +1101,6 @@ export const PurchaseReturnView: React.FC = () => {
               value={pendingRefundStatus}
               onChange={(val) => {
                 setPendingRefundStatus(val);
-                setAppliedRefundStatus(val);
-                setCurrentPage(1);
               }}
               options={[
                 { label: 'Refund : All', value: 'All' },
@@ -1216,18 +1256,6 @@ export const PurchaseReturnView: React.FC = () => {
                     {/* 7. Actions */}
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
-                        {/* Print Action */}
-                        <button
-                          type="button"
-                          title="Print Purchase Return"
-                          onClick={() => {
-                            toast.info(`Preparing print for ${pret.returnNo}...`);
-                            window.print();
-                          }}
-                          className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
 
                         {/* Share / Forward Popover */}
                         <UniversalShareDropdown
@@ -1241,126 +1269,50 @@ export const PurchaseReturnView: React.FC = () => {
                         />
 
                         {/* 3-dots Actions Dropdown */}
-                        <div className="relative inline-block text-left action-dropdown-container">
-                          <button
-                            type="button"
-                            title="More Options"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === pret.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                setActiveShareId(null);
-                                const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const dropdownHeight = 260;
-                                if (spaceBelow < dropdownHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - btnRect.top + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: btnRect.bottom + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                }
-                                setActiveDropdownId(pret.id);
-                              }
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-
-                          {activeDropdownId === pret.id && dropdownPos && (
-                            <div
-                              className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                              style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                right: `${dropdownPos.right}px`,
-                              }}
-                            >
-                              {/* 1. View / Edit */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenEditModal(pret);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                View / Edit
-                              </button>
-
-                              {/* 2. Quick Status Change Options */}
-                              {pret.returnStatus !== 'Completed' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleQuickStatusChange(pret, 'Completed');
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Mark as Completed
-                                </button>
-                              )}
-
-                              {pret.returnStatus === 'Requested' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleQuickStatusChange(pret, 'Approved');
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Mark as Approved
-                                </button>
-                              )}
-
-                              {/* 3. Duplicate */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDuplicateReturn(pret);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Duplicate
-                              </button>
-
-                              {/* 4. Delete */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDeleteReturn(pret);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Delete
-                              </button>
-
-                              {/* 5. Print */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(`Preparing print for ${pret.returnNo}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Print Voucher
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View / Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(pret),
+                            },
+                            {
+                              label: 'Duplicate',
+                              variant: 'duplicate',
+                              onClick: () => handleDuplicateReturn(pret),
+                            },
+                            pret.returnStatus !== 'Completed' && {
+                              label: 'Mark as Completed',
+                              variant: 'activate',
+                              onClick: () => handleQuickStatusChange(pret, 'Completed'),
+                            },
+                            pret.returnStatus === 'Requested' && {
+                              label: 'Mark as Approved',
+                              variant: 'approve',
+                              onClick: () => handleQuickStatusChange(pret, 'Approved'),
+                            },
+                            {
+                              label: 'Preview',
+                              variant: 'preview',
+                              onClick: () => {
+                                setSelectedReturn(pret);
+                                setIsDetailModalOpen(true);
+                              },
+                            },
+                            {
+                              label: 'View History',
+                              variant: 'view',
+                              onClick: () => handleOpenHistory(pret),
+                            },
+                            {
+                              label: 'Delete',
+                              variant: 'delete',
+                              danger: true,
+                              dividerBefore: true,
+                              onClick: () => handleDeleteReturn(pret),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1553,12 +1505,17 @@ export const PurchaseReturnView: React.FC = () => {
                         <SearchableSelect
                           value={it.productId || ''}
                           onChange={(val) => handleProductSelect(idx, val)}
+                          onOpen={() => {
+                            if (availableProducts.length === 0) {
+                              handleProductSearch('');
+                            }
+                          }}
                           onSearch={handleProductSearch}
                           isLoading={isSearchingProducts}
                           options={productOptions}
                           placeholder="Select Product..."
                           searchPlaceholder="Search product..."
-                          emptyText="Type to search products..."
+                          emptyText={isSearchingProducts ? "Searching products..." : "No products found"}
                           allowClear
                           size="sm"
                         />
@@ -1835,26 +1792,180 @@ export const PurchaseReturnView: React.FC = () => {
             </div>
 
             {/* Footer Buttons */}
-            <div className="pt-4 flex flex-col-reverse sm:flex-row justify-between items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+              >
+                Close
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   toast.info(`Preparing print for ${selectedReturn.returnNo}...`);
                   window.print();
                 }}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
-                <Printer className="w-4 h-4 text-slate-500" />
-                <span>Print Voucher</span>
+                <Printer className="w-4 h-4" />
+                <span>Print Order</span>
               </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
+      {/* ==========================================
+          MODAL 3: PURCHASE RETURN HISTORY & AUDIT TRAIL
+         ========================================== */}
+      {historyReturn && (
+        <Modal
+          isOpen={Boolean(historyReturn)}
+          onClose={() => setHistoryReturn(null)}
+          title={`Debit Note History & Audit Trail: ${historyReturn.returnNo}`}
+          subtitle={
+            isLoadingHistory
+              ? 'Syncing live history from Commerce API...'
+              : 'Complete lifecycle progression and timeline audit log'
+          }
+          maxWidth="md"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryReturn(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            {/* Header Card */}
+            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
+                  Debit Note / Return No
+                </div>
+                <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                  {historyReturn.returnNo}
+                </div>
+                <div className="text-xs text-slate-600 font-medium mt-0.5">
+                  Supplier: <span className="font-semibold text-slate-800">{historyReturn.supplierName}</span>
+                </div>
+                {historyReturn.purchaseNo && (
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    Original PO: {historyReturn.purchaseNo}
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Adjustment Value
+                </div>
+                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
+                  ₹{(Number(historyReturn.returnAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </div>
+                <div className="mt-1.5 flex justify-end">
+                  <span
+                    className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      historyReturn.returnStatus === 'Completed'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : historyReturn.returnStatus === 'Approved'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}
+                  >
+                    {historyReturn.returnStatus}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Audit Timeline */}
+            <div className="space-y-3 pt-1">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                Lifecycle & Activity Timeline
+              </div>
+
+              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
+                {/* Event 1: Return Created */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Debit Note Issued
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Return Date: <span className="font-medium text-slate-700">{historyReturn.returnDate}</span>
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Items Returned: {historyReturn.items.length} product item(s)
+                    </div>
+                  </div>
+                </div>
+
+                {/* Event 2: Return Status */}
+                <div className="relative">
+                  <div
+                    className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
+                      historyReturn.returnStatus === 'Completed'
+                        ? 'bg-emerald-500 ring-4 ring-emerald-100'
+                        : historyReturn.returnStatus === 'Approved'
+                        ? 'bg-blue-500 ring-4 ring-blue-100'
+                        : 'bg-amber-500 ring-4 ring-amber-100'
+                    }`}
+                  />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Status: {historyReturn.returnStatus}
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      {historyReturn.returnStatus === 'Completed'
+                        ? 'Refund / Credit note finalized with vendor ledger adjustment.'
+                        : historyReturn.returnStatus === 'Approved'
+                        ? 'Return verified and acknowledged by vendor.'
+                        : 'Return submitted, awaiting vendor confirmation.'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Event 3: Reason */}
+                {(historyReturn.notes || (historyReturn.items && historyReturn.items[0]?.reason)) && (
+                  <div className="relative">
+                    <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 ring-4 ring-amber-100" />
+                    <div>
+                      <div className="font-bold text-slate-800 text-xs">
+                        Return Reason / Notes
+                      </div>
+                      <div className="text-slate-600 text-[11px] mt-0.5 italic">
+                        "{historyReturn.notes || historyReturn.items[0]?.reason}"
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Event 4: System Audit Log */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-400 ring-4 ring-slate-100" />
+                  <div>
+                    <div className="font-bold text-slate-700 text-xs">
+                      System Audit Log Entry
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Record ID: <span className="font-mono text-slate-600">{historyReturn.id}</span>
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Last Verified: {new Date(historyReturn.updatedAt || Date.now()).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end pt-4 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setIsDetailModalOpen(false)}
-                className="h-10 px-5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs sm:text-[13px] font-bold transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
+                onClick={() => setHistoryReturn(null)}
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
               >
-                <X className="w-4 h-4 text-slate-200" />
-                <span>Close</span>
+                Close
               </button>
             </div>
           </div>

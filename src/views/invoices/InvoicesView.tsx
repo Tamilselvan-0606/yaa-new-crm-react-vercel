@@ -39,6 +39,7 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { Pagination } from '../../components/common/Pagination';
 import { Button } from '../../components/common/Button';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
   proformaInvoiceApi,
   ProformaInvoiceApiItem,
@@ -49,6 +50,9 @@ import {
   InvoiceStatus,
   UpdateInvoiceRequest,
   RecordPaymentRequest,
+  getStoredOrganizationId,
+  organizationApi,
+  OrganizationApiItem,
 } from '../../api';
 
 interface InvoicesViewProps {
@@ -105,7 +109,14 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
       email: 'billing@yaacreations.com',
       phone: '+91 98765 43210',
     },
-    bank: (api as any).bank || undefined,
+    bank: (api as any).bank || {
+      bankName: 'HDFC Bank',
+      accountName: 'Yaa Creations Tech Pvt Ltd',
+      accountNumber: '50200012345678',
+      ifscCode: 'HDFC0001234',
+      branchName: 'Guindy Branch, Chennai',
+      upiId: 'yaacreations@hdfcbank',
+    },
     items: (api.items || []).map((it, idx) => {
       const qty = Number(it.quantity) || 1;
       const price = Number(it.unitPrice) || 0;
@@ -187,7 +198,14 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
       email: 'billing@yaacreations.com',
       phone: '+91 98765 43210',
     },
-    bank: (api as any).bank || undefined,
+    bank: (api as any).bank || {
+      bankName: 'HDFC Bank',
+      accountName: 'Yaa Creations Tech Pvt Ltd',
+      accountNumber: '50200012345678',
+      ifscCode: 'HDFC0001234',
+      branchName: 'Guindy Branch, Chennai',
+      upiId: 'yaacreations@hdfcbank',
+    },
     items: (api.items || []).map((it, idx) => {
       const qty = Number(it.quantity) || 1;
       const price = Number(it.unitPrice) || 0;
@@ -223,7 +241,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
 
 export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }) => {
   const navigate = useNavigate();
-  const { showToast, isSuperAdmin } = useAuth();
+  const { showToast, isSuperAdmin, currentUser } = useAuth();
   const { addInvoice: addStandardInvoice, deleteInvoice: deleteStandardInvoice } = useInvoiceStore();
   const { addProformaInvoice, deleteProformaInvoice } = useProformaInvoiceStore();
 
@@ -246,6 +264,29 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [appliedSearch, setAppliedSearch] = useState('');
   const [pendingStatus, setPendingStatus] = useState<string>('All');
   const [appliedStatus, setAppliedStatus] = useState<string>('All');
+  const [pendingBilledOrgId, setPendingBilledOrgId] = useState<string>('');
+  const [appliedBilledOrgId, setAppliedBilledOrgId] = useState<string>('');
+  const [availableOrganizations, setAvailableOrganizations] = useState<OrganizationApiItem[]>([]);
+
+  // Load registered organizations for Super Admin filter
+  useEffect(() => {
+    let isMounted = true;
+    if (isSuperAdmin) {
+      organizationApi
+        .getOrganizations(1, 100)
+        .then((res) => {
+          if (isMounted && res && Array.isArray(res.data)) {
+            setAvailableOrganizations(res.data);
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load organizations for Super Admin filter:', err);
+        });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [isSuperAdmin]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -263,20 +304,51 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [isDuplicateMode, setIsDuplicateMode] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
+  // Confirmation Modal State for Delete
+  const [deleteInvoiceConfirm, setDeleteInvoiceConfirm] = useState<{ id: string; number: string } | null>(null);
+  const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
+
   // Fetch live invoices / proformas from backend API
   const fetchLiveInvoices = useCallback(async () => {
     if (isProforma) {
       setIsLoadingProformas(true);
       try {
         const statusParam = appliedStatus === 'All' ? 'ALL' : appliedStatus;
-        const res = await proformaInvoiceApi.getProformaInvoices({
+        const orgId = currentUser?.organizationId || getStoredOrganizationId();
+        const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+        const activeSubOrgName = localStorage.getItem('active_sub_organization');
+        const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+        const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
+
+        const params: any = {
           page: currentPage,
           limit: pageSize,
           search: appliedSearch.trim() || undefined,
           status: statusParam,
           sortBy: 'createdAt',
           sortOrder: 'desc',
-        });
+        };
+
+        if (isSuperAdmin) {
+          // Super Admin: sees only documents they created.
+          // Passing organization_id narrows documents to those billed to that organization.
+          if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
+            params.organization_id = appliedBilledOrgId;
+          }
+        } else {
+          // Tenant logins (Organization / Sub-Organization / Branch):
+          if (orgId) {
+            params.organization_id = orgId;
+          }
+          if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
+            params.sub_organization_id = activeSubOrgId;
+          }
+          if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
+            params.branch_id = activeBranchId;
+          }
+        }
+
+        const res = await proformaInvoiceApi.getProformaInvoices(params);
         if (res.data) {
           const mapped = res.data.map(mapApiProformaToSavedInvoice);
           setLiveProformas(mapped);
@@ -292,14 +364,38 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       setIsLoadingInvoices(true);
       try {
         const statusParam = appliedStatus === 'All' ? 'ALL' : appliedStatus;
-        const res = await invoiceApi.getInvoices({
+        const orgId = currentUser?.organizationId || getStoredOrganizationId();
+        const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+        const activeSubOrgName = localStorage.getItem('active_sub_organization');
+        const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+        const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
+
+        const params: any = {
           page: currentPage,
           limit: pageSize,
           search: appliedSearch.trim() || undefined,
           status: statusParam,
           sortBy: 'createdAt',
           sortOrder: 'desc',
-        });
+        };
+
+        if (isSuperAdmin) {
+          if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
+            params.organization_id = appliedBilledOrgId;
+          }
+        } else {
+          if (orgId) {
+            params.organization_id = orgId;
+          }
+          if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
+            params.sub_organization_id = activeSubOrgId;
+          }
+          if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
+            params.branch_id = activeBranchId;
+          }
+        }
+
+        const res = await invoiceApi.getInvoices(params);
         if (res.data) {
           const mapped = res.data.map(mapApiInvoiceToSavedInvoice);
           setLiveInvoices(mapped);
@@ -312,7 +408,17 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         setIsLoadingInvoices(false);
       }
     }
-  }, [isProforma, currentPage, pageSize, appliedSearch, appliedStatus, showToast]);
+  }, [
+    isProforma,
+    currentPage,
+    pageSize,
+    appliedSearch,
+    appliedStatus,
+    appliedBilledOrgId,
+    isSuperAdmin,
+    currentUser?.organizationId,
+    showToast,
+  ]);
 
   useEffect(() => {
     fetchLiveInvoices();
@@ -383,6 +489,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const handleApply = () => {
     setAppliedSearch(pendingSearch);
     setAppliedStatus(pendingStatus);
+    setAppliedBilledOrgId(pendingBilledOrgId);
     setCurrentPage(1);
   };
 
@@ -391,6 +498,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
     setAppliedSearch('');
     setPendingStatus('All');
     setAppliedStatus('All');
+    setPendingBilledOrgId('');
+    setAppliedBilledOrgId('');
     setCurrentPage(1);
   };
 
@@ -1241,29 +1350,31 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <span>Account Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank.accountName || activeInvoice.company.name}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.accountName || activeInvoice.company.name}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Bank Account</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank.accountNumber} ({activeInvoice.bank.bankName})</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.accountNumber || '50200012345678'} ({activeInvoice.bank?.bankName || 'HDFC Bank'})</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>IFSC Code</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank.ifscCode}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.ifscCode || 'HDFC0001234'}</span>
                 </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>Instant UPI VPA</span>
-                    <span>:</span>
-                  </span>
-                  {activeInvoice.bank.upiId && <span className="text-slate-700 flex-1">{activeInvoice.bank.upiId}</span>}
-                </div>
+                {activeInvoice.bank?.upiId && (
+                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                      <span>Instant UPI VPA</span>
+                      <span>:</span>
+                    </span>
+                    <span className="text-slate-700 flex-1">{activeInvoice.bank.upiId}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1405,30 +1516,45 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         onSubmit={handleApply}
         onReset={handleReset}
         filterSlot={
-          <FilterDropdown
-            options={
-              isProforma
-                ? [
-                    { label: 'Status : All', value: 'All' },
-                    { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
-                    { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
-                    { label: 'Approved', value: 'Approved', dotColor: '#10b981' },
-                    { label: 'Converted', value: 'Converted', dotColor: '#8b5cf6' },
-                    { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
-                  ]
-                : [
-                    { label: 'Status : All', value: 'All' },
-                    { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
-                    { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
-                    { label: 'Partially Paid', value: 'Partially Paid', dotColor: '#f59e0b' },
-                    { label: 'Paid', value: 'Paid', dotColor: '#10b981' },
-                    { label: 'Overdue', value: 'Overdue', dotColor: '#ef4444' },
-                    { label: 'Cancelled', value: 'Cancelled', dotColor: '#64748b' },
-                  ]
-            }
-            value={pendingStatus}
-            onChange={(val) => setPendingStatus(val as any)}
-          />
+          <div className="flex items-center gap-2 flex-wrap">
+            {isSuperAdmin && (
+              <FilterDropdown
+                options={[
+                  { label: 'Organization : All', value: '' },
+                  ...availableOrganizations.map((o) => ({
+                    label: o.name,
+                    value: o.id,
+                  })),
+                ]}
+                value={pendingBilledOrgId}
+                onChange={(val) => setPendingBilledOrgId(val)}
+              />
+            )}
+            <FilterDropdown
+              options={
+                isProforma
+                  ? [
+                      { label: 'Status : All', value: 'All' },
+                      { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
+                      { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
+                      { label: 'Approved', value: 'Approved', dotColor: '#10b981' },
+                      { label: 'Converted', value: 'Converted', dotColor: '#8b5cf6' },
+                      { label: 'Cancelled', value: 'Cancelled', dotColor: '#ef4444' },
+                    ]
+                  : [
+                      { label: 'Status : All', value: 'All' },
+                      { label: 'Draft', value: 'Draft', dotColor: '#94a3b8' },
+                      { label: 'Sent', value: 'Sent', dotColor: '#3b82f6' },
+                      { label: 'Partially Paid', value: 'Partially Paid', dotColor: '#f59e0b' },
+                      { label: 'Paid', value: 'Paid', dotColor: '#10b981' },
+                      { label: 'Overdue', value: 'Overdue', dotColor: '#ef4444' },
+                      { label: 'Cancelled', value: 'Cancelled', dotColor: '#64748b' },
+                    ]
+              }
+              value={pendingStatus}
+              onChange={(val) => setPendingStatus(val as any)}
+            />
+          </div>
         }
         rightSlot={
           <span className="text-xs font-semibold text-slate-500 pr-2">
@@ -1920,9 +2046,10 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 onClick={() => {
                   setOpenActionMenuId(null);
                   setActionDropdownPos(null);
-                  if (window.confirm(`Delete ${isProforma ? 'proforma invoice' : 'invoice'} ${inv.invoiceNumber}?`)) {
-                    handleDeleteInvoice(inv.id, inv.invoiceNumber);
-                  }
+                  setDeleteInvoiceConfirm({
+                    id: inv.id,
+                    number: inv.invoiceNumber,
+                  });
                 }}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
               >
@@ -2609,6 +2736,29 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           </form>
         </div>
       )}
+
+      {/* Reusable Delete Invoice / Proforma Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!deleteInvoiceConfirm}
+        onClose={() => {
+          if (!isDeletingInvoice) setDeleteInvoiceConfirm(null);
+        }}
+        type="Delete"
+        itemTypeLabel={isProforma ? 'Proforma Invoice' : 'Invoice'}
+        itemName={deleteInvoiceConfirm ? `#${deleteInvoiceConfirm.number}` : undefined}
+        confirmButtonText="Yes, Delete"
+        isLoading={isDeletingInvoice}
+        onConfirm={async () => {
+          if (!deleteInvoiceConfirm) return;
+          setIsDeletingInvoice(true);
+          try {
+            await handleDeleteInvoice(deleteInvoiceConfirm.id, deleteInvoiceConfirm.number);
+            setDeleteInvoiceConfirm(null);
+          } finally {
+            setIsDeletingInvoice(false);
+          }
+        }}
+      />
     </div>
   );
 };

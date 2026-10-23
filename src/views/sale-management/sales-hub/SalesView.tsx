@@ -1,4 +1,10 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useCallback,
+} from "react";
 import {
   ShoppingCart,
   Plus,
@@ -64,8 +70,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { SalesCustomer } from "../../../store/useSalesManagementStore";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport, printHtmlElement } from "../../../utils/printUtils";
-import { UniversalShareDropdown, formatInvoiceShare } from "../../../utils/shareUtils";
+import {
+  UniversalShareDropdown,
+  formatInvoiceShare,
+} from "../../../utils/shareUtils";
 import { SalesGraphModal } from "./SalesGraphModal";
+import { SaleActionDropdown } from "../utils";
 import {
   commerceInvoiceApi,
   mapApiInvoiceToSaleTransaction,
@@ -80,7 +90,12 @@ import {
 } from "../../../api";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import { initializeWorkflowIntegrity } from "../../../utils/salesDocumentWorkflow";
-import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
+import {
+  FormLabel,
+  FORM_INPUT_CLS,
+  FORM_SELECT_CLS,
+  FORM_TEXTAREA_CLS,
+} from "../utils/formUtils";
 
 // Helper functions for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -344,7 +359,9 @@ export const SalesView: React.FC = () => {
     if (hasLoadedCustomersRef.current) return;
     hasLoadedCustomersRef.current = true;
     try {
-      const custRes = await customerApi.getCustomers({ pagination_required: false, page_size: 100 }).catch(() => null);
+      const custRes = await customerApi
+        .getCustomers({ pagination_required: false, page_size: 100 })
+        .catch(() => null);
       if (custRes?.data && Array.isArray(custRes.data)) {
         const mapped = custRes.data.map(mapApiCustomerToSalesCustomer);
         setCustomerList(mapped);
@@ -358,10 +375,6 @@ export const SalesView: React.FC = () => {
   useEffect(() => {
     loadCustomersData();
   }, [loadCustomersData]);
-
-
-
-
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
@@ -449,12 +462,43 @@ export const SalesView: React.FC = () => {
     if (hasLoadedProductsRef.current) return;
     hasLoadedProductsRef.current = true;
     try {
-      const stockRes = await stockApi.getStocks({ pagination_required: false });
-      if (stockRes && stockRes.data && Array.isArray(stockRes.data)) {
-        setStocksList(stockRes.data.map(mapApiStockToInventoryStockItem));
+      const [stockRes, prodRes] = await Promise.allSettled([
+        stockApi.getStocks({ pagination_required: false }),
+        productApi.getProducts({ page_size: 100, pagination_required: false }),
+      ]);
+      if (
+        stockRes.status === "fulfilled" &&
+        stockRes.value?.data &&
+        Array.isArray(stockRes.value.data)
+      ) {
+        setStocksList(stockRes.value.data.map(mapApiStockToInventoryStockItem));
+      }
+      if (
+        prodRes.status === "fulfilled" &&
+        prodRes.value?.data &&
+        Array.isArray(prodRes.value.data)
+      ) {
+        setProductList((prev) => {
+          const map = new Map<string, any>();
+          prev.forEach((p) => map.set(p.id, p));
+          prodRes.value.data.forEach((p: any) => {
+            map.set(p.id, {
+              id: p.id,
+              name: p.productName || p.name,
+              code: p.productCode || p.sku || p.code || p.id,
+              sku: p.productCode || p.sku || p.code || p.id,
+              price: Number(p.salePrice ?? p.sellingPrice ?? p.unitPrice ?? 0),
+              cost: Number(p.purchasePrice ?? p.costPrice ?? 0),
+              unit: p.unit || "PCS",
+              batches: p.batches || [],
+              hsnCode: p.hsnCode || "",
+            });
+          });
+          return Array.from(map.values());
+        });
       }
     } catch (err) {
-      console.warn("Failed to load stocks for form modal:", err);
+      console.warn("Failed to load stocks/products for form modal:", err);
     }
   }, [setStocksList]);
 
@@ -518,19 +562,24 @@ export const SalesView: React.FC = () => {
     const foundStock = (stocks || []).find(
       (s) =>
         (s.sku && item.sku && s.sku.toLowerCase() === item.sku.toLowerCase()) ||
-        (s.productName && item.productName && s.productName.toLowerCase() === item.productName.toLowerCase()) ||
+        (s.productName &&
+          item.productName &&
+          s.productName.toLowerCase() === item.productName.toLowerCase()) ||
         s.id === item.productId ||
-        s.productId === item.productId
+        s.productId === item.productId,
     );
     if (foundStock) {
-      if (foundStock.productId && UUID_REGEX.test(foundStock.productId)) return foundStock.productId;
+      if (foundStock.productId && UUID_REGEX.test(foundStock.productId))
+        return foundStock.productId;
       if (foundStock.id && UUID_REGEX.test(foundStock.id)) return foundStock.id;
     }
     const foundProd = (productList as any[]).find(
       (p: any) =>
         (p.sku && item.sku && p.sku.toLowerCase() === item.sku.toLowerCase()) ||
-        (p.name && item.productName && p.name.toLowerCase() === item.productName.toLowerCase()) ||
-        p.id === item.productId
+        (p.name &&
+          item.productName &&
+          p.name.toLowerCase() === item.productName.toLowerCase()) ||
+        p.id === item.productId,
     );
     if (foundProd && UUID_REGEX.test(foundProd.id)) {
       return foundProd.id;
@@ -554,15 +603,22 @@ export const SalesView: React.FC = () => {
   };
 
   // Helper to ensure Customer UUID
-  const ensureCustomerUUID = (custId?: string, custName?: string): string | undefined => {
+  const ensureCustomerUUID = (
+    custId?: string,
+    custName?: string,
+  ): string | undefined => {
     if (custId && UUID_REGEX.test(custId)) {
       return custId;
     }
     const foundCust = (customers || []).find(
       (c) =>
         c.id === custId ||
-        (c.name && custName && c.name.toLowerCase() === custName.toLowerCase()) ||
-        (c.company && custName && c.company.toLowerCase() === custName.toLowerCase())
+        (c.name &&
+          custName &&
+          c.name.toLowerCase() === custName.toLowerCase()) ||
+        (c.company &&
+          custName &&
+          c.company.toLowerCase() === custName.toLowerCase()),
     );
     if (foundCust && UUID_REGEX.test(foundCust.id)) {
       return foundCust.id;
@@ -570,7 +626,7 @@ export const SalesView: React.FC = () => {
     const foundInList = (customerList as any[]).find(
       (c: any) =>
         c.id === custId ||
-        (c.name && custName && c.name.toLowerCase() === custName.toLowerCase())
+        (c.name && custName && c.name.toLowerCase() === custName.toLowerCase()),
     );
     if (foundInList && UUID_REGEX.test(foundInList.id)) {
       return foundInList.id;
@@ -588,7 +644,7 @@ export const SalesView: React.FC = () => {
       const params: InvoiceFilterParams = {
         page_no: currentPage,
         page_size: pageSize,
-        pagination_required: 'true',
+        pagination_required: "true",
         sortOrder: "desc",
       };
       if (appliedSearch && appliedSearch.trim()) {
@@ -597,25 +653,40 @@ export const SalesView: React.FC = () => {
       if (appliedSaleStatus && appliedSaleStatus.toUpperCase() !== "ALL") {
         params.status = appliedSaleStatus;
       }
-      if (appliedPaymentStatus && appliedPaymentStatus.toUpperCase() !== "ALL") {
+      if (
+        appliedPaymentStatus &&
+        appliedPaymentStatus.toUpperCase() !== "ALL"
+      ) {
         params.paymentStatus = appliedPaymentStatus;
       }
-      if (appliedCustomer && appliedCustomer.toUpperCase() !== "ALL" && UUID_REGEX.test(appliedCustomer)) {
+      if (
+        appliedCustomer &&
+        appliedCustomer.toUpperCase() !== "ALL" &&
+        UUID_REGEX.test(appliedCustomer)
+      ) {
         params.customerId = appliedCustomer;
       }
 
       const res = await commerceInvoiceApi.getInvoices(params);
       if (res && res.data && Array.isArray(res.data)) {
-        const mapped = res.data.map((inv) => mapApiInvoiceToSaleTransaction(inv));
+        const mapped = res.data.map((inv) =>
+          mapApiInvoiceToSaleTransaction(inv),
+        );
         const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
-        const localSales: SaleTransaction[] = rawLocal ? JSON.parse(rawLocal) : [];
+        const localSales: SaleTransaction[] = rawLocal
+          ? JSON.parse(rawLocal)
+          : [];
         const apiInvoiceNos = new Set(mapped.map((m) => m.invoiceNo || m.id));
-        const extraLocals = localSales.filter((l) => !apiInvoiceNos.has(l.invoiceNo) && !apiInvoiceNos.has(l.id));
+        const extraLocals = localSales.filter(
+          (l) => !apiInvoiceNos.has(l.invoiceNo) && !apiInvoiceNos.has(l.id),
+        );
         const merged = [...extraLocals, ...mapped];
 
         setSalesList(merged);
         if (res.pagination) {
-          setTotalApiRecords((res.pagination.totalRecords ?? mapped.length) + extraLocals.length);
+          setTotalApiRecords(
+            (res.pagination.totalRecords ?? mapped.length) + extraLocals.length,
+          );
           setTotalApiPages(Math.max(1, Math.ceil(merged.length / pageSize)));
         } else {
           setTotalApiRecords(merged.length);
@@ -626,7 +697,9 @@ export const SalesView: React.FC = () => {
     } catch (err: any) {
       console.error("Failed to fetch invoices:", err);
       const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
-      const localSales: SaleTransaction[] = rawLocal ? JSON.parse(rawLocal) : [];
+      const localSales: SaleTransaction[] = rawLocal
+        ? JSON.parse(rawLocal)
+        : [];
       if (localSales.length > 0) {
         setSalesList(localSales);
       }
@@ -635,28 +708,41 @@ export const SalesView: React.FC = () => {
       setIsApiLoading(false);
       isFetchingInvoicesRef.current = false;
     }
-  }, [currentPage, pageSize, appliedSearch, appliedSaleStatus, appliedPaymentStatus, appliedCustomer, setSalesList]);
+  }, [
+    currentPage,
+    pageSize,
+    appliedSearch,
+    appliedSaleStatus,
+    appliedPaymentStatus,
+    appliedCustomer,
+    setSalesList,
+  ]);
 
   useEffect(() => {
     fetchSalesInvoices();
   }, [fetchSalesInvoices]);
 
   // Quick Assign Sales Rep Modal State (Table Row Action)
-  const [isAssignInvoiceModalOpen, setIsAssignInvoiceModalOpen] = useState(false);
-  const [assignInvoiceTarget, setAssignInvoiceTarget] = useState<SaleTransaction | null>(null);
+  const [isAssignInvoiceModalOpen, setIsAssignInvoiceModalOpen] =
+    useState(false);
+  const [assignInvoiceTarget, setAssignInvoiceTarget] =
+    useState<SaleTransaction | null>(null);
   const [assignRepId, setAssignRepId] = useState("");
   const [assignStatus, setAssignStatus] = useState("Pending Follow-up");
   const [assignNextFollowUp, setAssignNextFollowUp] = useState("");
 
   // Invoice Details Modal Assignment Card State
   const [detailRepId, setDetailRepId] = useState("");
-  const [detailCollectionStatus, setDetailCollectionStatus] = useState("Pending Follow-up");
+  const [detailCollectionStatus, setDetailCollectionStatus] =
+    useState("Pending Follow-up");
   const [detailNextFollowUp, setDetailNextFollowUp] = useState("");
 
   useEffect(() => {
     if (selectedSale) {
       setDetailRepId(selectedSale.salesRepresentativeId || "");
-      setDetailCollectionStatus(selectedSale.collectionStatus || "Pending Follow-up");
+      setDetailCollectionStatus(
+        selectedSale.collectionStatus || "Pending Follow-up",
+      );
       setDetailNextFollowUp(selectedSale.nextFollowUpDate || "");
     }
   }, [selectedSale]);
@@ -672,7 +758,7 @@ export const SalesView: React.FC = () => {
     state: "",
     pincode: "",
     gstNumber: "",
-    creditLimit: '',
+    creditLimit: "",
     paymentTerms: "",
   });
 
@@ -1396,7 +1482,9 @@ export const SalesView: React.FC = () => {
     }
     const cleanPhone = quickCustomerForm.phone.replace(/[\s\-()]/g, "");
     if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
-      toast.error("Phone number must be a valid 10-digit Indian mobile number (e.g. 9876543210).");
+      toast.error(
+        "Phone number must be a valid 10-digit Indian mobile number (e.g. 9876543210).",
+      );
       return;
     }
     const newCust: SalesCustomer = {
@@ -1490,9 +1578,19 @@ export const SalesView: React.FC = () => {
         item.productName = prod.name;
         item.sku = prod.sku;
         item.batch = activeBatch?.batchNo || "";
-        item.purchasePrice = activeBatch?.costPrice ?? prod.cost ?? 0;
-        item.salesPrice = activeBatch?.sellingPrice ?? prod.price ?? 98;
-        item.unitPrice = activeBatch?.sellingPrice ?? prod.price ?? 98;
+        const defaultSalePrice = Number(
+          activeBatch?.sellingPrice ??
+            prod.price ??
+            (prod as any).salePrice ??
+            0,
+        );
+        item.salesPrice = defaultSalePrice;
+        item.unitPrice = defaultSalePrice;
+        if (defaultSalePrice === 0) {
+          toast.warning(
+            `Product "${prod.name}" has no default Sale Price configured.`,
+          );
+        }
         item.taxPercent =
           item.taxPercent !== undefined && item.taxPercent !== null
             ? item.taxPercent
@@ -1692,10 +1790,13 @@ export const SalesView: React.FC = () => {
             ...it,
             productId: validProdId,
           };
-        })
+        }),
       );
 
-      const resolvedCustomerId = ensureCustomerUUID(formData.customerId, formData.customerName);
+      const resolvedCustomerId = ensureCustomerUUID(
+        formData.customerId,
+        formData.customerName,
+      );
 
       const grandTotal = calculatedTotals.grandTotal;
       const currentPaid = editingSale?.paidAmount || formData.paidAmount || 0;
@@ -1707,7 +1808,9 @@ export const SalesView: React.FC = () => {
         formData.paymentMethod ||
         "Bank Transfer";
 
-      const isEdit = Boolean(editingSale && editingSale.id && UUID_REGEX.test(editingSale.id));
+      const isEdit = Boolean(
+        editingSale && editingSale.id && UUID_REGEX.test(editingSale.id),
+      );
 
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
@@ -1739,7 +1842,9 @@ export const SalesView: React.FC = () => {
         paidAmount: currentPaid,
         balance: balance,
         paymentMethod: primaryPaymentMethod as any,
-        paymentSplits: formData.paymentSplits.filter((p) => Number(p.amount) > 0),
+        paymentSplits: formData.paymentSplits.filter(
+          (p) => Number(p.amount) > 0,
+        ),
         paymentRecords:
           editingSale?.paymentRecords || formData.paymentRecords || [],
         paymentTerms: formData.paymentTerms || "Net 15 Days",
@@ -1748,7 +1853,9 @@ export const SalesView: React.FC = () => {
         createdBy: editingSale ? editingSale.createdBy : "James Wilson",
         salesperson: formData.salesperson || "Alex Rivera",
         notes: formData.notes || undefined,
-        createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
+        createdAt: editingSale
+          ? editingSale.createdAt
+          : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 
@@ -1756,14 +1863,19 @@ export const SalesView: React.FC = () => {
 
       let savedApiSale: SaleTransaction;
       if (isEdit) {
-        const updateRes = await commerceInvoiceApi.updateInvoice(editingSale!.id, apiPayload);
+        const updateRes = await commerceInvoiceApi.updateInvoice(
+          editingSale!.id,
+          apiPayload,
+        );
         if (updateRes.data) {
           savedApiSale = mapApiInvoiceToSaleTransaction(updateRes.data);
         } else {
           savedApiSale = salePayload;
         }
       } else {
-        const createRes = await commerceInvoiceApi.createInvoice(apiPayload as any);
+        const createRes = await commerceInvoiceApi.createInvoice(
+          apiPayload as any,
+        );
         if (createRes.data) {
           savedApiSale = mapApiInvoiceToSaleTransaction(createRes.data);
         } else {
@@ -1786,7 +1898,7 @@ export const SalesView: React.FC = () => {
       }));
 
       toast.success(
-        `Invoice ${savedApiSale.invoiceNo} ${isEdit ? "updated" : "generated"} successfully! Payment Status: ${savedApiSale.paymentStatus.toUpperCase()}`
+        `Invoice ${savedApiSale.invoiceNo} ${isEdit ? "updated" : "generated"} successfully! Payment Status: ${savedApiSale.paymentStatus.toUpperCase()}`,
       );
       await fetchSalesInvoices();
     } catch (err: any) {
@@ -1820,10 +1932,13 @@ export const SalesView: React.FC = () => {
             ...it,
             productId: validProdId,
           };
-        })
+        }),
       );
 
-      const resolvedCustomerId = ensureCustomerUUID(formData.customerId, formData.customerName);
+      const resolvedCustomerId = ensureCustomerUUID(
+        formData.customerId,
+        formData.customerName,
+      );
 
       const grandTotal = calculatedTotals.grandTotal;
       const currentPaid = formData.paidAmount || 0;
@@ -1835,7 +1950,9 @@ export const SalesView: React.FC = () => {
         formData.paymentMethod ||
         "Bank Transfer";
 
-      const isEdit = Boolean(editingSale && editingSale.id && UUID_REGEX.test(editingSale.id));
+      const isEdit = Boolean(
+        editingSale && editingSale.id && UUID_REGEX.test(editingSale.id),
+      );
 
       const salePayload: SaleTransaction = {
         id: isEdit ? editingSale!.id : `sale_${Date.now()}`,
@@ -1867,7 +1984,9 @@ export const SalesView: React.FC = () => {
         paidAmount: currentPaid,
         balance: balance,
         paymentMethod: primaryPaymentMethod as any,
-        paymentSplits: formData.paymentSplits.filter((p) => Number(p.amount) > 0),
+        paymentSplits: formData.paymentSplits.filter(
+          (p) => Number(p.amount) > 0,
+        ),
         paymentRecords: formData.paymentRecords || [],
         paymentTerms: formData.paymentTerms || "Net 15 Days",
         paymentStatus: paymentStatus,
@@ -1875,7 +1994,9 @@ export const SalesView: React.FC = () => {
         createdBy: editingSale ? editingSale.createdBy : "James Wilson",
         salesperson: formData.salesperson || "Alex Rivera",
         notes: formData.notes || undefined,
-        createdAt: editingSale ? editingSale.createdAt : new Date().toISOString(),
+        createdAt: editingSale
+          ? editingSale.createdAt
+          : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 
@@ -1883,14 +2004,19 @@ export const SalesView: React.FC = () => {
 
       let savedApiSale: SaleTransaction;
       if (isEdit) {
-        const updateRes = await commerceInvoiceApi.updateInvoice(editingSale!.id, apiPayload);
+        const updateRes = await commerceInvoiceApi.updateInvoice(
+          editingSale!.id,
+          apiPayload,
+        );
         if (updateRes.data) {
           savedApiSale = mapApiInvoiceToSaleTransaction(updateRes.data);
         } else {
           savedApiSale = salePayload;
         }
       } else {
-        const createRes = await commerceInvoiceApi.createInvoice(apiPayload as any);
+        const createRes = await commerceInvoiceApi.createInvoice(
+          apiPayload as any,
+        );
         if (createRes.data) {
           savedApiSale = mapApiInvoiceToSaleTransaction(createRes.data);
         } else {
@@ -1904,7 +2030,9 @@ export const SalesView: React.FC = () => {
       saveSale(savedApiSale);
       setEditingSale(savedApiSale);
       setSelectedSale(savedApiSale);
-      toast.success(`Draft invoice ${savedApiSale.invoiceNo} saved successfully!`);
+      toast.success(
+        `Draft invoice ${savedApiSale.invoiceNo} saved successfully!`,
+      );
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to save draft invoice:", err);
@@ -1919,7 +2047,11 @@ export const SalesView: React.FC = () => {
     setIsActionLoading(true);
     try {
       const cleanId = (sale.id || "").trim();
-      if (cleanId && !cleanId.startsWith("mock_") && !cleanId.startsWith("local_")) {
+      if (
+        cleanId &&
+        !cleanId.startsWith("mock_") &&
+        !cleanId.startsWith("local_")
+      ) {
         await commerceInvoiceApi.updateStatus(cleanId, "Cancelled");
       }
       const updatedSale: SaleTransaction = {
@@ -1943,7 +2075,11 @@ export const SalesView: React.FC = () => {
     setIsActionLoading(true);
     try {
       const cleanId = (sale.id || "").trim();
-      if (cleanId && !cleanId.startsWith("mock_") && !cleanId.startsWith("local_")) {
+      if (
+        cleanId &&
+        !cleanId.startsWith("mock_") &&
+        !cleanId.startsWith("local_")
+      ) {
         await commerceInvoiceApi.deleteInvoice(cleanId);
       }
       deleteSale(sale.id);
@@ -2320,7 +2456,9 @@ export const SalesView: React.FC = () => {
   const handleOpenAssignInvoiceModal = (sale: SaleTransaction) => {
     setAssignInvoiceTarget(sale);
     const cust = customers.find((c) => c.id === sale.customerId);
-    setAssignRepId(cust?.salesRepresentativeId || sale.salesRepresentativeId || "");
+    setAssignRepId(
+      cust?.salesRepresentativeId || sale.salesRepresentativeId || "",
+    );
     setAssignStatus(sale.collectionStatus || "Pending Follow-up");
     setAssignNextFollowUp(sale.nextFollowUpDate || "");
     setIsAssignInvoiceModalOpen(true);
@@ -2339,9 +2477,12 @@ export const SalesView: React.FC = () => {
     }
     const rep = salesRepresentatives.find((r) => r.id === assignRepId);
 
-    toast.success(`Sales Rep assigned to customer ${cust?.name || assignInvoiceTarget.customerName}!`, {
-      description: `Assigned ${rep?.name || 'Representative'} across all customer invoices.`,
-    });
+    toast.success(
+      `Sales Rep assigned to customer ${cust?.name || assignInvoiceTarget.customerName}!`,
+      {
+        description: `Assigned ${rep?.name || "Representative"} across all customer invoices.`,
+      },
+    );
     setIsAssignInvoiceModalOpen(false);
     setAssignInvoiceTarget(null);
   };
@@ -2362,14 +2503,17 @@ export const SalesView: React.FC = () => {
     setSelectedSale({
       ...selectedSale,
       salesRepresentativeId: detailRepId,
-      salesRepresentativeName: rep?.name || 'Unassigned',
+      salesRepresentativeName: rep?.name || "Unassigned",
       collectionStatus: detailCollectionStatus,
       nextFollowUpDate: detailNextFollowUp,
     });
 
-    toast.success(`Sales Rep assigned to customer ${cust?.name || selectedSale.customerName}!`, {
-      description: `Assigned ${rep?.name || 'Representative'} across all customer invoices.`,
-    });
+    toast.success(
+      `Sales Rep assigned to customer ${cust?.name || selectedSale.customerName}!`,
+      {
+        description: `Assigned ${rep?.name || "Representative"} across all customer invoices.`,
+      },
+    );
   };
 
   // Export Sales to Excel Report
@@ -2486,8 +2630,7 @@ export const SalesView: React.FC = () => {
       date: s.saleDate,
       dueDate: s.dueDate || "-",
       customerName:
-        s.customerName +
-        (s.customerCompany ? ` (${s.customerCompany})` : ""),
+        s.customerName + (s.customerCompany ? ` (${s.customerCompany})` : ""),
       customerPhone: s.customerPhone || "-",
       itemsList:
         (s.items || [])
@@ -2688,8 +2831,6 @@ export const SalesView: React.FC = () => {
     return name.slice(0, 2).toUpperCase();
   };
 
-
-
   // =========================================================================
   // FULL PAGE CREATE / EDIT SALE VIEW (Matching New Quotation Page Layout)
   // =========================================================================
@@ -2721,7 +2862,9 @@ export const SalesView: React.FC = () => {
 
           {/* Full-Page Form Canvas */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden p-6 sm:p-8">
-            <form noValidate onSubmit={(e) => {
+            <form
+              noValidate
+              onSubmit={(e) => {
                 e.preventDefault();
                 handleSaveSale("confirm");
               }}
@@ -4181,58 +4324,59 @@ export const SalesView: React.FC = () => {
       ) : (
         <div className="space-y-6 pb-12 font-sans">
           {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-            <ShoppingCart className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                Sales Invoice
-              </h1>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
-                {sales.length} total
-              </span>
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+                <ShoppingCart className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                    Sales Invoice
+                  </h1>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-[#33077C] border border-purple-200">
+                    {sales.length} total
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
+                  Create, process, track sales transactions, manage invoice
+                  lifecycles, and monitor payment settlements.
+                </p>
+              </div>
             </div>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-              Create, process, track sales transactions, manage invoice lifecycles, and monitor payment settlements.
-            </p>
+
+            <div className="flex items-center gap-3 self-end sm:self-auto flex-wrap">
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
+                onClick={handleExportExcel}
+                className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
+              >
+                Excel Report
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={() => setIsSalesGraphModalOpen(true)}
+                icon={<BarChart2 className="w-4 h-4 text-[#33077C]" />}
+                className="hover:border-[#33077C]/40 transition-colors"
+              >
+                Sales Graph
+              </Button>
+
+              <Button
+                variant="primary"
+                size="md"
+                icon={<Plus className="w-4 h-4 text-white stroke-[2.5]" />}
+                onClick={handleOpenCreateModal}
+                className="bg-[#33077C] hover:bg-[#280563] text-white shadow-sm hover:shadow transition-all"
+              >
+                Add Invoice
+              </Button>
+            </div>
           </div>
-        </div>
-
-        <div className="flex items-center gap-3 self-end sm:self-auto flex-wrap">
-          <Button
-            variant="secondary"
-            size="md"
-            icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
-            onClick={handleExportExcel}
-            className="hover:border-emerald-500 hover:text-emerald-700 transition-colors"
-          >
-            Excel Report
-          </Button>
-
-          <Button
-            variant="secondary"
-            size="md"
-            onClick={() => setIsSalesGraphModalOpen(true)}
-            icon={<BarChart2 className="w-4 h-4 text-[#33077C]" />}
-            className="hover:border-[#33077C]/40 transition-colors"
-          >
-            Sales Graph
-          </Button>
-
-          <Button
-            variant="primary"
-            size="md"
-            icon={<Plus className="w-4 h-4 text-white stroke-[2.5]" />}
-            onClick={handleOpenCreateModal}
-            className="bg-[#33077C] hover:bg-[#280563] text-white shadow-sm hover:shadow transition-all"
-          >
-            Add Invoice
-          </Button>
-        </div>
-      </div>
 
           {/* 2. KPI Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3.5 sm:gap-4">
@@ -4618,14 +4762,20 @@ export const SalesView: React.FC = () => {
                                     Ref: {sale.referenceNo}
                                   </span>
                                 )}
-                                <DocumentLineageBadges docRef={sale.invoiceNo || sale.referenceNo} currentType="Invoice" className="justify-start mt-1" />
+                                <DocumentLineageBadges
+                                  docRef={sale.invoiceNo || sale.referenceNo}
+                                  currentType="Invoice"
+                                  className="justify-start mt-1"
+                                />
                               </div>
                             </div>
                           </td>
 
                           {/* 3. Date */}
                           <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle font-medium text-slate-700">
-                            <div className="font-semibold text-slate-800">{sale.saleDate}</div>
+                            <div className="font-semibold text-slate-800">
+                              {sale.saleDate}
+                            </div>
                             {sale.dueDate && (
                               <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">
                                 Due: {sale.dueDate}
@@ -4723,9 +4873,11 @@ export const SalesView: React.FC = () => {
                           {/* 8. Sales Rep */}
                           <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                             <div className="flex flex-col gap-0.5">
-                              {sale.salesRepresentativeName || sale.salesperson ? (
+                              {sale.salesRepresentativeName ||
+                              sale.salesperson ? (
                                 <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
-                                  {sale.salesRepresentativeName || sale.salesperson}
+                                  {sale.salesRepresentativeName ||
+                                    sale.salesperson}
                                 </span>
                               ) : (
                                 <button
@@ -4745,20 +4897,7 @@ export const SalesView: React.FC = () => {
                           {/* 9. Actions */}
                           <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
                             <div className="flex items-center justify-center gap-1.5 action-dropdown-container">
-                              {/* 1. Print Action Button */}
-                              <button
-                                type="button"
-                                title="Print Invoice"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePrintSaleInvoice(sale);
-                                }}
-                                className="w-8 h-8 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                              >
-                                <Printer className="w-4 h-4" />
-                              </button>
-
-                              {/* 2. Share Action Button with Floating Popover */}
+                              {/* 1. Share Action Button with Floating Popover */}
                               <UniversalShareDropdown
                                 id={sale.id}
                                 activeShareId={activeShareDropdownId}
@@ -4769,250 +4908,123 @@ export const SalesView: React.FC = () => {
                                 title="Share Invoice"
                               />
 
-                              {/* 3. 3-Dots More Actions Button */}
-                              <div className="relative inline-block text-left">
-                                <button
-                                  type="button"
-                                  title="More Actions"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveShareDropdownId(null);
-                                    setShareDropdownPos(null);
-                                    if (activeDropdownId === sale.id) {
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                    } else {
-                                      const btnRect = (
-                                        e.currentTarget as HTMLElement
-                                      ).getBoundingClientRect();
-                                      const spaceBelow =
-                                        window.innerHeight - btnRect.bottom;
-                                      const dropdownHeight = 380;
-                                      if (spaceBelow < dropdownHeight) {
-                                        setDropdownPos({
-                                          bottom:
-                                            window.innerHeight -
-                                            btnRect.top +
-                                            4,
-                                          right:
-                                            window.innerWidth - btnRect.right,
-                                        });
-                                      } else {
-                                        setDropdownPos({
-                                          top: btnRect.bottom + 4,
-                                          right:
-                                            window.innerWidth - btnRect.right,
-                                        });
-                                      }
-                                      setActiveDropdownId(sale.id);
-                                    }
-                                  }}
-                                  className="w-8 h-8 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <MoreVertical className="w-4 h-4 text-slate-600" />
-                                </button>
-
-                                {/* Actions Dropdown Menu - 12 Action Buttons as per Screenshot */}
-                                {activeDropdownId === sale.id &&
-                                  dropdownPos && (
-                                    <div
-                                      className="action-dropdown-menu fixed z-[9999] w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left overflow-hidden"
-                                      style={{
-                                        top:
-                                          dropdownPos.top !== undefined
-                                            ? `${dropdownPos.top}px`
-                                            : "auto",
-                                        bottom:
-                                          dropdownPos.bottom !== undefined
-                                            ? `${dropdownPos.bottom}px`
-                                            : "auto",
-                                        right: `${dropdownPos.right}px`,
-                                      }}
-                                    >
-                                      {/* 1. View/Edit */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handleOpenEditModal(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        View/Edit
-                                      </button>
-
-                                      {/* Assign Sales Rep */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handleOpenAssignInvoiceModal(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-purple-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer flex items-center justify-between font-semibold"
-                                      >
-                                        <span>Assign Sales Rep</span>
-                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-[#33077C] font-bold">Rep</span>
-                                      </button>
-
-                                      {/* 2. Generate e-Invoice */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          const irn = `IRN${Date.now().toString(36).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
-                                          toast.success(
-                                            `e-Invoice generated for ${sale.invoiceNo}!`,
-                                            {
-                                              description: `Ack No: ${Date.now()} | IRN: ${irn}`,
-                                            },
-                                          );
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Generate e-Invoice
-                                      </button>
-
-                                      {/* 3. Receive Payment */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handleOpenAddPayment(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Receive Payment
-                                      </button>
-
-                                      {/* 4. Convert To Return */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          navigate("/sale-management/sales/return");
-                                          toast.info(
-                                            `Converting invoice ${sale.invoiceNo} to Sales Return / Credit Note`,
-                                          );
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Convert To Return
-                                      </button>
-
-                                      {/* 5. Preview Delivery Challan */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          navigate("/sale-management/sales/delivery-challan");
-                                          toast.info(
-                                            `Opening Delivery Challan preview for ${sale.invoiceNo}`,
-                                          );
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Preview Delivery Challan
-                                      </button>
-
-                                      {/* 6. Cancel Invoice */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handleCancelInvoice(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Cancel Invoice
-                                      </button>
-
-                                      {/* 7. Delete */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          handleDeleteSaleInvoice(sale);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
-                                      >
-                                        Delete
-                                      </button>
-
-                                      {/* 8. Duplicate */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          const newInvoiceNo = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-                                          const duplicatedSale: SaleTransaction = {
-                                            ...sale,
-                                            id: `sale_${Date.now()}`,
-                                            invoiceNo: newInvoiceNo,
-                                            saleDate: new Date()
-                                              .toISOString()
-                                              .split("T")[0],
-                                            paidAmount: 0,
-                                            balance: sale.grandTotal,
-                                            paymentStatus: "Unpaid",
-                                            saleStatus: "Draft",
-                                            paymentRecords: [],
-                                            paymentSplits: [],
-                                            createdAt: new Date().toISOString(),
-                                            updatedAt: new Date().toISOString(),
-                                          };
-                                          saveSale(duplicatedSale);
-                                          toast.success(
-                                            `Duplicated ${sale.invoiceNo} as new Invoice ${newInvoiceNo}!`,
-                                          );
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Duplicate
-                                      </button>
-
-
-
-                                      {/* 10. Preview */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          setSelectedSale(sale);
-                                          setIsInvoiceModalOpen(true);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        Preview
-                                      </button>
-
-
-
-                                      {/* 12. View History */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setActiveDropdownId(null);
-                                          setSelectedSale(sale);
-                                          setIsPaymentHistoryModalOpen(true);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                      >
-                                        View History
-                                      </button>
-                                    </div>
-                                  )}
-                              </div>
+                              {/* 3. Actions Dropdown */}
+                              <SaleActionDropdown
+                                items={[
+                                  {
+                                    label: "View/Edit",
+                                    variant: "edit",
+                                    onClick: () => handleOpenEditModal(sale),
+                                  },
+                                  {
+                                    label: "Assign Sales Rep",
+                                    variant: "assign",
+                                    onClick: () => handleOpenAssignInvoiceModal(sale),
+                                  },
+                                  {
+                                    label: "Generate e-Invoice",
+                                    variant: "invoice",
+                                    onClick: () => {
+                                      const irn = `IRN${Date.now().toString(36).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
+                                      toast.success(
+                                        `e-Invoice generated for ${sale.invoiceNo}!`,
+                                        {
+                                          description: `Ack No: ${Date.now()} | IRN: ${irn}`,
+                                        },
+                                      );
+                                    },
+                                  },
+                                  {
+                                    label: "Receive Payment",
+                                    variant: "payment",
+                                    onClick: () => handleOpenAddPayment(sale),
+                                  },
+                                  {
+                                    label: "Convert To Return",
+                                    variant: "return",
+                                    onClick: () => {
+                                      navigate(
+                                        "/sale-management/sales/return",
+                                      );
+                                      toast.info(
+                                        `Converting invoice ${sale.invoiceNo} to Sales Return / Credit Note`,
+                                      );
+                                    },
+                                  },
+                                  {
+                                    label: "Preview Delivery Challan",
+                                    variant: "challan",
+                                    onClick: () => {
+                                      navigate(
+                                        "/sale-management/sales/delivery-challan",
+                                      );
+                                      toast.info(
+                                        `Opening Delivery Challan preview for ${sale.invoiceNo}`,
+                                      );
+                                    },
+                                  },
+                                  {
+                                    label: "Print Invoice",
+                                    variant: "print",
+                                    onClick: () => handlePrintSaleInvoice(sale),
+                                  },
+                                  {
+                                    label: "Duplicate",
+                                    variant: "duplicate",
+                                    onClick: () => {
+                                      const newInvoiceNo = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+                                      const duplicatedSale: SaleTransaction = {
+                                        ...sale,
+                                        id: `sale_${Date.now()}`,
+                                        invoiceNo: newInvoiceNo,
+                                        saleDate: new Date()
+                                          .toISOString()
+                                          .split("T")[0],
+                                        paidAmount: 0,
+                                        balance: sale.grandTotal,
+                                        paymentStatus: "Unpaid",
+                                        saleStatus: "Draft",
+                                        paymentRecords: [],
+                                        paymentSplits: [],
+                                        createdAt: new Date().toISOString(),
+                                        updatedAt: new Date().toISOString(),
+                                      };
+                                      saveSale(duplicatedSale);
+                                      toast.success(
+                                        `Duplicated ${sale.invoiceNo} as new Invoice ${newInvoiceNo}!`,
+                                      );
+                                    },
+                                  },
+                                  {
+                                    label: "Preview",
+                                    variant: "preview",
+                                    onClick: () => {
+                                      setSelectedSale(sale);
+                                      setIsInvoiceModalOpen(true);
+                                    },
+                                  },
+                                  {
+                                    label: "View History",
+                                    variant: "view",
+                                    onClick: () => {
+                                      setSelectedSale(sale);
+                                      setIsPaymentHistoryModalOpen(true);
+                                    },
+                                  },
+                                  {
+                                    label: "Cancel Invoice",
+                                    variant: "cancel",
+                                    dividerBefore: true,
+                                    onClick: () => handleCancelInvoice(sale),
+                                  },
+                                  {
+                                    label: "Delete",
+                                    variant: "delete",
+                                    danger: true,
+                                    onClick: () => handleDeleteSaleInvoice(sale),
+                                  },
+                                ]}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -5776,7 +5788,8 @@ export const SalesView: React.FC = () => {
                       Customer Sales Representative
                     </h4>
                     <p className="text-[11px] text-slate-500">
-                      Representative assigned to customer {selectedSale.customerName} (applies across all invoices)
+                      Representative assigned to customer{" "}
+                      {selectedSale.customerName} (applies across all invoices)
                     </p>
                   </div>
                 </div>
@@ -5813,7 +5826,10 @@ export const SalesView: React.FC = () => {
                     Outstanding Amount
                   </label>
                   <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center font-bold text-rose-600 text-sm">
-                    ₹{selectedSale.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                    ₹
+                    {selectedSale.balance.toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                    })}
                   </div>
                 </div>
 
@@ -5838,7 +5854,9 @@ export const SalesView: React.FC = () => {
                     className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
                   >
                     <option value="Pending Follow-up">Pending Follow-up</option>
-                    <option value="Customer Contacted">Customer Contacted</option>
+                    <option value="Customer Contacted">
+                      Customer Contacted
+                    </option>
                     <option value="Promise to Pay">Promise to Pay</option>
                     <option value="Dispute Raised">Dispute Raised</option>
                     <option value="Collected">Collected</option>
@@ -5899,10 +5917,14 @@ export const SalesView: React.FC = () => {
           subtitle={`Assigning a sales representative to ${assignInvoiceTarget.customerName} applies across all customer transactions.`}
           maxWidth="lg"
         >
-          <form noValidate onSubmit={(e) => {
+          <form
+            noValidate
+            onSubmit={(e) => {
               e.preventDefault();
               handleSaveQuickAssignInvoice();
-            }} className="space-y-4 p-1 text-xs">
+            }}
+            className="space-y-4 p-1 text-xs"
+          >
             {/* Invoice Quick Summary Banner */}
             <div className="p-3.5 bg-purple-50/60 rounded-xl border border-purple-200/80 flex items-center justify-between">
               <div>
@@ -5910,7 +5932,9 @@ export const SalesView: React.FC = () => {
                   {assignInvoiceTarget.customerName}
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium">
-                  Invoice #{assignInvoiceTarget.invoiceNo} • Grand Total: ₹{assignInvoiceTarget.grandTotal.toLocaleString('en-IN')} | Due: ₹{assignInvoiceTarget.balance.toLocaleString('en-IN')}
+                  Invoice #{assignInvoiceTarget.invoiceNo} • Grand Total: ₹
+                  {assignInvoiceTarget.grandTotal.toLocaleString("en-IN")} |
+                  Due: ₹{assignInvoiceTarget.balance.toLocaleString("en-IN")}
                 </span>
               </div>
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white text-[#33077C] border border-purple-200 font-bold text-xs shadow-2xs">
@@ -5998,10 +6022,14 @@ export const SalesView: React.FC = () => {
           subtitle={`Record a payment against invoice ${selectedSale.invoiceNo}.`}
           maxWidth="5xl"
         >
-          <form noValidate onSubmit={(e) => {
+          <form
+            noValidate
+            onSubmit={(e) => {
               e.preventDefault();
               handleConfirmPayment();
-            }} className="space-y-5 pt-1 text-xs font-sans">
+            }}
+            className="space-y-5 pt-1 text-xs font-sans"
+          >
             {/* 2-Column Responsive Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
               {/* LEFT SIDE: Payment Details (7 cols) */}
@@ -6416,10 +6444,14 @@ export const SalesView: React.FC = () => {
         subtitle="Add a new customer profile without losing your current sale progress"
         maxWidth="lg"
       >
-        <form noValidate onSubmit={(e) => {
+        <form
+          noValidate
+          onSubmit={(e) => {
             e.preventDefault();
             handleSaveQuickCustomer();
-          }} className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
+          }}
+          className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150"
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             <div className="sm:col-span-2">
               <FormLabel required>Customer / Client Name</FormLabel>

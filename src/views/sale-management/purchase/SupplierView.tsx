@@ -1,6 +1,12 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import React, {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+} from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
   UsersRound,
   Plus,
@@ -29,16 +35,16 @@ import {
   Ban,
   Check,
   X,
-  Printer,
   Forward,
   FileSpreadsheet,
   Loader2,
-} from 'lucide-react';
+  History,
+} from "lucide-react";
 import {
   useSalesManagementStore,
   Supplier,
   SupplierStatus,
-} from '../../../store/useSalesManagementStore';
+} from "../../../store/useSalesManagementStore";
 import {
   supplierApi,
   mapApiSupplierToSupplier,
@@ -46,19 +52,29 @@ import {
   ApiSupplier,
   CreateSupplierPayload,
   UpdateSupplierPayload,
-} from '../../../api';
-import { SupplierSchema, SupplierFormData } from '../../../validations';
-import { FormError } from '../../../components/common/FormError';
-import { Badge } from '../../../components/common/Badge';
-import { Button } from '../../../components/common/Button';
-import { Modal } from '../../../components/common/Modal';
-import { Pagination } from '../../../components/common/Pagination';
-import { SearchBar } from '../../../components/common/SearchBar';
-import { FilterDropdown } from '../../../components/common/FilterDropdown';
-import { exportTableToExcel } from '../../../utils/excelExport';
-import { UniversalShareDropdown, formatSupplierShare } from '../../../utils/shareUtils';
-import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
-import { toast } from 'sonner';
+} from "../../../api";
+import { SupplierSchema, SupplierFormData } from "../../../validations";
+import { FormError } from "../../../components/common/FormError";
+import { Badge } from "../../../components/common/Badge";
+import { Button } from "../../../components/common/Button";
+import { Modal } from "../../../components/common/Modal";
+import { Pagination } from "../../../components/common/Pagination";
+import { SearchBar } from "../../../components/common/SearchBar";
+import { FilterDropdown } from "../../../components/common/FilterDropdown";
+import { exportTableToExcel } from "../../../utils/excelExport";
+import {
+  UniversalShareDropdown,
+  formatSupplierShare,
+} from "../../../utils/shareUtils";
+import {
+  FormLabel,
+  FORM_INPUT_CLS,
+  FORM_INPUT_DISABLED_CLS,
+  FORM_SELECT_CLS,
+  getFormInputCls,
+} from "../utils/formUtils";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { toast } from "sonner";
 
 export const SupplierView: React.FC = () => {
   const {
@@ -81,46 +97,48 @@ export const SupplierView: React.FC = () => {
   const [totalPages, setTotalPages] = useState<number>(1);
 
   // Search & Filter State
-  const [pendingSearch, setPendingSearch] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
-  const [pendingStatus, setPendingStatus] = useState('All');
-  const [appliedStatus, setAppliedStatus] = useState('All');
+  const [pendingSearch, setPendingSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [pendingStatus, setPendingStatus] = useState("All");
+  const [appliedStatus, setAppliedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
-
   // Fetch tracking refs to prevent duplicate concurrent calls
-  const lastFetchKeyRef = useRef<string>('');
+  const lastFetchKeyRef = useRef<string>("");
   const isFetchingRef = useRef<boolean>(false);
 
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+  } | null>(null);
 
   // Share Popover State
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
+  const [sharePos, setSharePos] = useState<{
+    top?: number;
+    bottom?: number;
+    right?: number;
+  } | null>(null);
 
   // Close action dropdown & share popover on click outside or scroll
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.action-dropdown-container') && !target.closest('.action-dropdown-menu')) {
+      if (
+        !target.closest(".action-dropdown-container") &&
+        !target.closest(".action-dropdown-menu")
+      ) {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
-      if (!target.closest('.share-popover-container') && !target.closest('.share-popover-menu')) {
+      if (
+        !target.closest(".share-popover-container") &&
+        !target.closest(".share-popover-menu")
+      ) {
         setActiveShareId(null);
         setSharePos(null);
       }
@@ -135,20 +153,50 @@ export const SupplierView: React.FC = () => {
         setSharePos(null);
       }
     };
-    window.addEventListener('click', handleOutside);
-    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener("click", handleOutside);
+    window.addEventListener("scroll", handleScroll, true);
     return () => {
-      window.removeEventListener('click', handleOutside);
-      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener("click", handleOutside);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [activeDropdownId, activeShareId]);
 
   // Modals
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
+  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(
+    null,
+  );
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'purchases' | 'returns' | 'outstanding'>('overview');
+  const [activeTab, setActiveTab] = useState<
+    "overview" | "purchases" | "returns" | "outstanding"
+  >("overview");
+  const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Open History Modal with live API sync
+  const handleOpenHistory = async (sup: Supplier) => {
+    setActiveDropdownId(null);
+    setHistorySupplier(sup);
+    setIsLoadingHistory(true);
+
+    if (sup.id) {
+      try {
+        const res = await supplierApi.getSupplierById(sup.id);
+        if (res && res.data) {
+          const live = mapApiSupplierToSupplier(res.data);
+          setHistorySupplier(live);
+        }
+      } catch (err) {
+        console.warn(
+          "Could not fetch latest supplier audit data from API:",
+          err,
+        );
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    }
+  };
 
   const {
     register,
@@ -158,26 +206,26 @@ export const SupplierView: React.FC = () => {
   } = useForm<SupplierFormData>({
     resolver: zodResolver(SupplierSchema),
     defaultValues: {
-      supplierCode: '',
-      name: '',
-      contactPerson: '',
-      phone: '',
-      email: '',
-      address: '',
-      city: '',
-      state: '',
-      country: 'India',
-      pincode: '',
-      gstNumber: '',
-      panNumber: '',
-      paymentTerms: 'Net 30 Days',
+      supplierCode: "",
+      name: "",
+      contactPerson: "",
+      phone: "",
+      email: "",
+      address: "",
+      city: "",
+      state: "",
+      country: "India",
+      pincode: "",
+      gstNumber: "",
+      panNumber: "",
+      paymentTerms: "Net 30 Days",
       creditLimit: 500000,
-      bankName: '',
-      accountNumber: '',
-      ifscCode: '',
-      branchName: '',
-      status: 'Active',
-      notes: '',
+      bankName: "",
+      accountNumber: "",
+      ifscCode: "",
+      branchName: "",
+      status: "Active",
+      notes: "",
     },
   });
 
@@ -204,30 +252,40 @@ export const SupplierView: React.FC = () => {
           page: currentPage,
           limit: pageSize,
           search: appliedSearch.trim() || undefined,
-          status: appliedStatus !== 'All' ? appliedStatus : undefined,
+          status: appliedStatus !== "All" ? appliedStatus : undefined,
           pagination_required: true,
         });
 
         if (res && res.data && Array.isArray(res.data)) {
           const mapped = res.data.map(mapApiSupplierToSupplier);
           setApiSuppliers(mapped);
+          if (
+            currentPage === 1 &&
+            !appliedSearch.trim() &&
+            appliedStatus === "All"
+          ) {
+            setSuppliersList(mapped);
+          }
 
           if (res.pagination) {
             setTotalRecords(res.pagination.totalRecords ?? mapped.length);
-            setTotalPages(res.pagination.totalPages ?? (Math.ceil(mapped.length / pageSize) || 1));
+            setTotalPages(
+              res.pagination.totalPages ??
+                (Math.ceil(mapped.length / pageSize) || 1),
+            );
           } else {
             setTotalRecords(mapped.length);
             setTotalPages(Math.ceil(mapped.length / pageSize) || 1);
           }
         } else {
-          setApiSuppliers([]);
-          setTotalRecords(0);
+          setApiSuppliers(storeSuppliers.length > 0 ? storeSuppliers : []);
+          setTotalRecords(storeSuppliers.length);
           setTotalPages(1);
         }
       } catch (err: any) {
-        console.error('Failed to load suppliers from API:', err);
-        setApiSuppliers([]);
-        setTotalRecords(0);
+        console.error("Failed to load suppliers from API:", err);
+        setApiSuppliers(storeSuppliers.length > 0 ? storeSuppliers : []);
+        setTotalRecords(storeSuppliers.length);
         setTotalPages(1);
 
         if (forceRefresh) {
@@ -235,7 +293,7 @@ export const SupplierView: React.FC = () => {
             err?.response?.data?.error?.message ||
             err?.response?.data?.message ||
             err?.message ||
-            'Failed to fetch suppliers from server';
+            "Failed to fetch suppliers from server";
           toast.error(errMsg);
         }
       } finally {
@@ -244,7 +302,14 @@ export const SupplierView: React.FC = () => {
         isFetchingRef.current = false;
       }
     },
-    [currentPage, pageSize, appliedSearch, appliedStatus]
+    [
+      currentPage,
+      pageSize,
+      appliedSearch,
+      appliedStatus,
+      storeSuppliers,
+      setSuppliersList,
+    ],
   );
 
   // Single effect to load suppliers on query/page changes
@@ -258,9 +323,16 @@ export const SupplierView: React.FC = () => {
   // Summary Metrics
   const summary = useMemo(() => {
     const totalCount = totalRecords || displaySuppliers.length;
-    const activeCount = displaySuppliers.filter((s) => s.status === 'Active').length;
-    const inactiveCount = displaySuppliers.filter((s) => s.status === 'Inactive' || s.status === 'Blocked').length;
-    const totalPayables = displaySuppliers.reduce((acc, s) => acc + (s.payable || 0), 0);
+    const activeCount = displaySuppliers.filter(
+      (s) => s.status === "Active",
+    ).length;
+    const inactiveCount = displaySuppliers.filter(
+      (s) => s.status === "Inactive" || s.status === "Blocked",
+    ).length;
+    const totalPayables = displaySuppliers.reduce(
+      (acc, s) => acc + (s.payable || 0),
+      0,
+    );
     const newSuppliersCount = displaySuppliers.filter((s) => {
       const monthAgo = new Date(Date.now() - 30 * 86400000);
       return new Date(s.createdAt) >= monthAgo;
@@ -280,25 +352,25 @@ export const SupplierView: React.FC = () => {
     const nextCode = `SUP-${Math.floor(1000 + Math.random() * 9000)}`;
     reset({
       supplierCode: nextCode,
-      name: '',
-      contactPerson: '',
-      phone: '',
-      email: '',
-      address: '',
-      city: '',
-      state: '',
-      country: 'India',
-      pincode: '',
-      gstNumber: '',
-      panNumber: '',
-      paymentTerms: 'Net 30 Days',
+      name: "",
+      contactPerson: "",
+      phone: "",
+      email: "",
+      address: "",
+      city: "",
+      state: "",
+      country: "India",
+      pincode: "",
+      gstNumber: "",
+      panNumber: "",
+      paymentTerms: "Net 30 Days",
       creditLimit: 0,
-      bankName: '',
-      accountNumber: '',
-      ifscCode: '',
-      branchName: '',
-      status: 'Active',
-      notes: '',
+      bankName: "",
+      accountNumber: "",
+      ifscCode: "",
+      branchName: "",
+      status: "Active",
+      notes: "",
     });
     setEditingSupplier(null);
     setIsFormModalOpen(true);
@@ -311,31 +383,34 @@ export const SupplierView: React.FC = () => {
       name: sup.name,
       contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
-      email: sup.email || '',
-      address: sup.address || '',
-      city: sup.city || '',
-      state: sup.state || '',
-      country: sup.country || 'India',
-      pincode: sup.pincode || '',
-      gstNumber: sup.gstNumber || '',
-      panNumber: sup.panNumber || '',
-      paymentTerms: sup.paymentTerms || 'Net 30 Days',
+      email: sup.email || "",
+      address: sup.address || "",
+      city: sup.city || "",
+      state: sup.state || "",
+      country: sup.country || "India",
+      pincode: sup.pincode || "",
+      gstNumber: sup.gstNumber || "",
+      panNumber: sup.panNumber || "",
+      paymentTerms: sup.paymentTerms || "Net 30 Days",
       creditLimit: sup.creditLimit || 0,
-      bankName: sup.bankName || '',
-      accountNumber: sup.accountNumber || '',
-      ifscCode: sup.ifscCode || '',
-      branchName: sup.branchName || '',
-      status: (sup.status as 'Active' | 'Inactive' | 'Blocked') || 'Active',
-      notes: sup.notes || '',
+      bankName: sup.bankName || "",
+      accountNumber: sup.accountNumber || "",
+      ifscCode: sup.ifscCode || "",
+      branchName: sup.branchName || "",
+      status: (sup.status as "Active" | "Inactive" | "Blocked") || "Active",
+      notes: sup.notes || "",
     });
     setEditingSupplier(sup);
     setIsFormModalOpen(true);
   };
 
   // Open Details Modal with API refresh
-  const handleOpenDetailModal = async (sup: Supplier) => {
+  const handleOpenDetailModal = async (
+    sup: Supplier,
+    tab: "overview" | "purchases" | "returns" | "outstanding" = "overview",
+  ) => {
     setSelectedSupplier(sup);
-    setActiveTab('overview');
+    setActiveTab(tab);
     setIsDetailModalOpen(true);
 
     try {
@@ -360,22 +435,24 @@ export const SupplierView: React.FC = () => {
       name: `${sup.name} (Copy)`,
       contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
-      email: sup.email ? `copy_${sup.email}` : '',
+      email: sup.email ? `copy_${sup.email}` : "",
       address: sup.address,
       city: sup.city,
       state: sup.state,
-      country: sup.country || 'India',
+      country: sup.country || "India",
       pincode: sup.pincode,
-      gstNumber: sup.gstNumber || '',
-      panNumber: sup.panNumber || '',
+      gstNumber: sup.gstNumber || "",
+      panNumber: sup.panNumber || "",
       paymentTerms: sup.paymentTerms,
       creditLimit: sup.creditLimit,
-      bankName: sup.bankName || '',
-      accountNumber: sup.accountNumber || '',
-      ifscCode: sup.ifscCode || '',
-      branchName: sup.branchName || '',
-      status: 'Active',
-      notes: sup.notes ? `[Duplicate of ${sup.supplierCode}] ${sup.notes}` : `Duplicate of ${sup.supplierCode}`,
+      bankName: sup.bankName || "",
+      accountNumber: sup.accountNumber || "",
+      ifscCode: sup.ifscCode || "",
+      branchName: sup.branchName || "",
+      status: "Active",
+      notes: sup.notes
+        ? `[Duplicate of ${sup.supplierCode}] ${sup.notes}`
+        : `Duplicate of ${sup.supplierCode}`,
     });
     setIsFormModalOpen(true);
     toast.info(`Cloned details from "${sup.name}" into form.`);
@@ -393,19 +470,25 @@ export const SupplierView: React.FC = () => {
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
-          country: data.country?.trim() || 'India',
+          country: data.country?.trim() || "India",
           pincode: data.pincode.trim(),
-          status: data.status || 'Active',
+          status: data.status || "Active",
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
         if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
         if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
-        if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
+        if (data.paymentTerms?.trim())
+          payload.paymentTerms = data.paymentTerms.trim();
 
-        const res = await supplierApi.updateSupplier(editingSupplier.id, payload);
+        const res = await supplierApi.updateSupplier(
+          editingSupplier.id,
+          payload,
+        );
         if (!res || !res.data) {
-          throw new Error((res as any)?.error?.message || 'Failed to update supplier.');
+          throw new Error(
+            (res as any)?.error?.message || "Failed to update supplier.",
+          );
         }
         const updated = mapApiSupplierToSupplier(res.data);
         saveSupplier(updated);
@@ -417,19 +500,22 @@ export const SupplierView: React.FC = () => {
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
-          country: data.country?.trim() || 'India',
+          country: data.country?.trim() || "India",
           pincode: data.pincode.trim(),
-          status: data.status || 'Active',
+          status: data.status || "Active",
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
         if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
         if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
-        if (data.paymentTerms?.trim()) payload.paymentTerms = data.paymentTerms.trim();
+        if (data.paymentTerms?.trim())
+          payload.paymentTerms = data.paymentTerms.trim();
 
         const res = await supplierApi.createSupplier(payload);
         if (!res || !res.data) {
-          throw new Error((res as any)?.error?.message || 'Failed to create supplier.');
+          throw new Error(
+            (res as any)?.error?.message || "Failed to create supplier.",
+          );
         }
         const created = mapApiSupplierToSupplier(res.data);
         saveSupplier(created);
@@ -439,15 +525,17 @@ export const SupplierView: React.FC = () => {
       setIsFormModalOpen(false);
       loadSuppliers(true);
     } catch (error: any) {
-      console.error('Error saving supplier:', error);
+      console.error("Error saving supplier:", error);
       const fieldErrors = error?.response?.data?.error?.fields;
       let msg =
         error?.response?.data?.error?.message ||
         error?.response?.data?.message ||
         error?.message ||
-        'Failed to save supplier. Please check required fields.';
+        "Failed to save supplier. Please check required fields.";
       if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
-        msg = fieldErrors.map((f: any) => `${f.path?.join('.') || 'field'}: ${f.message}`).join(' | ');
+        msg = fieldErrors
+          .map((f: any) => `${f.path?.join(".") || "field"}: ${f.message}`)
+          .join(" | ");
       }
       toast.error(msg);
     } finally {
@@ -463,12 +551,12 @@ export const SupplierView: React.FC = () => {
       toast.success(`Supplier "${sup.name}" deleted successfully.`);
       loadSuppliers(true);
     } catch (error: any) {
-      console.error('Error deleting supplier:', error);
+      console.error("Error deleting supplier:", error);
       const msg =
         error?.response?.data?.error?.message ||
         error?.response?.data?.message ||
         error?.message ||
-        'Failed to delete supplier.';
+        "Failed to delete supplier.";
       toast.error(msg);
     } finally {
       setIsDeletingId(null);
@@ -487,7 +575,7 @@ export const SupplierView: React.FC = () => {
   }, [purchaseReturns, selectedSupplier]);
 
   const getSupplierInitials = (name?: string): string => {
-    if (!name) return 'SU';
+    if (!name) return "SU";
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) {
       return (parts[0][0] + parts[1][0]).toUpperCase();
@@ -498,7 +586,7 @@ export const SupplierView: React.FC = () => {
   // Export Suppliers to Excel
   const handleExportExcel = () => {
     if (displaySuppliers.length === 0) {
-      toast.error('No supplier records available to export.');
+      toast.error("No supplier records available to export.");
       return;
     }
 
@@ -506,10 +594,10 @@ export const SupplierView: React.FC = () => {
       sNo: idx + 1,
       supplierCode: s.supplierCode,
       name: s.name,
-      contactPerson: s.contactPerson || '-',
+      contactPerson: s.contactPerson || "-",
       phone: s.phone,
-      email: s.email || '-',
-      gstNumber: s.gstNumber || '-',
+      email: s.email || "-",
+      gstNumber: s.gstNumber || "-",
       creditLimit: Number(s.creditLimit || 0),
       totalPurchase: Number(s.totalPurchase || 0),
       paid: Number(s.paid || 0),
@@ -518,33 +606,69 @@ export const SupplierView: React.FC = () => {
     }));
 
     exportTableToExcel({
-      filename: `Suppliers_Report_${new Date().toISOString().split('T')[0]}`,
-      sheetName: 'Suppliers Master',
-      title: 'YAA CREATIONS CRM - SUPPLIERS & VENDORS DIRECTORY',
-      subtitle: `Total Suppliers: ${displaySuppliers.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      filename: `Suppliers_Report_${new Date().toISOString().split("T")[0]}`,
+      sheetName: "Suppliers Master",
+      title: "YAA CREATIONS CRM - SUPPLIERS & VENDORS DIRECTORY",
+      subtitle: `Total Suppliers: ${displaySuppliers.length} | Generated: ${new Date().toLocaleDateString("en-IN")}`,
       columns: [
-        { header: '#', key: 'sNo', align: 'center', width: 8 },
-        { header: 'Supplier Code', key: 'supplierCode', align: 'center', width: 14 },
-        { header: 'Supplier Name', key: 'name', align: 'left', width: 26 },
-        { header: 'Contact Person', key: 'contactPerson', align: 'left', width: 20 },
-        { header: 'Phone', key: 'phone', align: 'left', width: 18 },
-        { header: 'Email', key: 'email', align: 'left', width: 24 },
-        { header: 'GSTIN', key: 'gstNumber', align: 'left', width: 18 },
-        { header: 'Credit Limit (₹)', key: 'creditLimit', align: 'right', type: 'currency', width: 16 },
-        { header: 'Total Purchase (₹)', key: 'totalPurchase', align: 'right', type: 'currency', width: 18 },
-        { header: 'Paid (₹)', key: 'paid', align: 'right', type: 'currency', width: 16 },
-        { header: 'Payable (₹)', key: 'payable', align: 'right', type: 'currency', width: 16 },
-        { header: 'Status', key: 'status', align: 'center', width: 14 },
+        { header: "#", key: "sNo", align: "center", width: 8 },
+        {
+          header: "Supplier Code",
+          key: "supplierCode",
+          align: "center",
+          width: 14,
+        },
+        { header: "Supplier Name", key: "name", align: "left", width: 26 },
+        {
+          header: "Contact Person",
+          key: "contactPerson",
+          align: "left",
+          width: 20,
+        },
+        { header: "Phone", key: "phone", align: "left", width: 18 },
+        { header: "Email", key: "email", align: "left", width: 24 },
+        { header: "GSTIN", key: "gstNumber", align: "left", width: 18 },
+        {
+          header: "Credit Limit (₹)",
+          key: "creditLimit",
+          align: "right",
+          type: "currency",
+          width: 16,
+        },
+        {
+          header: "Total Purchase (₹)",
+          key: "totalPurchase",
+          align: "right",
+          type: "currency",
+          width: 18,
+        },
+        {
+          header: "Paid (₹)",
+          key: "paid",
+          align: "right",
+          type: "currency",
+          width: 16,
+        },
+        {
+          header: "Payable (₹)",
+          key: "payable",
+          align: "right",
+          type: "currency",
+          width: 16,
+        },
+        { header: "Status", key: "status", align: "center", width: 14 },
       ],
       data: excelRows,
       summaryRow: {
-        sNo: 'TOTAL',
+        sNo: "TOTAL",
         name: `${displaySuppliers.length} Suppliers`,
         payable: summary.totalPayables,
       },
     });
 
-    toast.success(`Suppliers Excel report downloaded (${displaySuppliers.length} records)!`);
+    toast.success(
+      `Suppliers Excel report downloaded (${displaySuppliers.length} records)!`,
+    );
   };
 
   return (
@@ -561,7 +685,8 @@ export const SupplierView: React.FC = () => {
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            Manage vendor directories, credit limits, bank profiles, and accounts payable
+            Manage vendor directories, credit limits, bank profiles, and
+            accounts payable
           </p>
         </div>
 
@@ -592,68 +717,99 @@ export const SupplierView: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3.5 sm:gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total Suppliers</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Total Suppliers
+            </span>
             <div className="w-8 h-8 rounded-lg bg-purple-50 text-[#33077C] flex items-center justify-center">
               <UsersRound className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold text-slate-900">{summary.totalCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Active vendors catalog</div>
+            <div className="text-xl font-bold text-slate-900">
+              {summary.totalCount}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Active vendors catalog
+            </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Active</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Active
+            </span>
             <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold text-slate-900">{summary.activeCount}</div>
-            <div className="text-xs text-emerald-600 font-medium mt-0.5">Eligible for POs</div>
+            <div className="text-xl font-bold text-slate-900">
+              {summary.activeCount}
+            </div>
+            <div className="text-xs text-emerald-600 font-medium mt-0.5">
+              Eligible for POs
+            </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Inactive / Blocked</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Inactive / Blocked
+            </span>
             <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center">
               <XCircle className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold text-slate-900">{summary.inactiveCount}</div>
-            <div className="text-xs text-slate-500 mt-0.5">Procurement paused</div>
+            <div className="text-xl font-bold text-slate-900">
+              {summary.inactiveCount}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">
+              Procurement paused
+            </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total Payables</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Total Payables
+            </span>
             <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
               <IndianRupee className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
             <div className="text-xl font-bold text-slate-900">
-              ₹{summary.totalPayables.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              ₹
+              {summary.totalPayables.toLocaleString("en-IN", {
+                minimumFractionDigits: 2,
+              })}
             </div>
-            <div className="text-xs text-amber-600 font-medium mt-0.5">Pending vendor payments</div>
+            <div className="text-xs text-amber-600 font-medium mt-0.5">
+              Pending vendor payments
+            </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs hover:border-slate-300 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">New (30 Days)</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              New (30 Days)
+            </span>
             <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
               <Building className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-xl font-bold text-slate-900">{summary.newSuppliersCount}</div>
-            <div className="text-xs text-indigo-600 font-medium mt-0.5">Recently onboarded</div>
+            <div className="text-xl font-bold text-slate-900">
+              {summary.newSuppliersCount}
+            </div>
+            <div className="text-xs text-indigo-600 font-medium mt-0.5">
+              Recently onboarded
+            </div>
           </div>
         </div>
       </div>
@@ -664,32 +820,51 @@ export const SupplierView: React.FC = () => {
         value={pendingSearch}
         onChange={(val) => setPendingSearch(val)}
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedStatus === pendingStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedStatus(pendingStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            loadSuppliers(true);
+          }
         }}
         onReset={() => {
-          setPendingSearch('');
-          setAppliedSearch('');
-          setPendingStatus('All');
-          setAppliedStatus('All');
+          const isSame =
+            appliedSearch === "" &&
+            pendingSearch === "" &&
+            appliedStatus === "All" &&
+            pendingStatus === "All" &&
+            currentPage === 1;
+
+          setPendingSearch("");
+          setAppliedSearch("");
+          setPendingStatus("All");
+          setAppliedStatus("All");
           setCurrentPage(1);
+
+          if (isSame) {
+            loadSuppliers(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Status : All"
-              value={appliedStatus}
+              value={pendingStatus}
               onChange={(val) => {
                 setPendingStatus(val);
-                setAppliedStatus(val);
-                setCurrentPage(1);
               }}
               options={[
-                { label: 'Status : All', value: 'All' },
-                { label: 'Active', value: 'Active', dotColor: '#10b981' },
-                { label: 'Inactive', value: 'Inactive', dotColor: '#64748b' },
-                { label: 'Blocked', value: 'Blocked', dotColor: '#ef4444' },
+                { label: "Status : All", value: "All" },
+                { label: "Active", value: "Active", dotColor: "#10b981" },
+                { label: "Inactive", value: "Inactive", dotColor: "#64748b" },
+                { label: "Blocked", value: "Blocked", dotColor: "#ef4444" },
               ]}
             />
           </div>
@@ -703,8 +878,10 @@ export const SupplierView: React.FC = () => {
               </div>
             )}
             <span className="text-xs font-semibold text-slate-500">
-              Total Suppliers :{' '}
-              <span className="text-[#33077C] font-bold">{totalRecords || displaySuppliers.length}</span>
+              Total Suppliers :{" "}
+              <span className="text-[#33077C] font-bold">
+                {totalRecords || displaySuppliers.length}
+              </span>
             </span>
           </div>
         }
@@ -716,31 +893,61 @@ export const SupplierView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUPPLIER & CODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL PURCHASE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PAID / PAYABLE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
+                  SUPPLIER & CODE
+                </th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
+                  CONTACT PERSON
+                </th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                  CONTACT INFO
+                </th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
+                  LOCATION
+                </th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                  TOTAL PURCHASE
+                </th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                  PAID / PAYABLE
+                </th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                  STATUS
+                </th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                  ACTIONS
+                </th>
               </tr>
             </thead>
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td
+                    colSpan={8}
+                    className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
+                  >
                     <Loader2 className="w-8 h-8 mx-auto mb-2 text-[#33077C] animate-spin stroke-[2]" />
-                    <p className="font-semibold text-slate-700 text-sm">Loading suppliers...</p>
-                    <p className="text-xs text-slate-400 mt-1">Fetching live vendor directory from server</p>
+                    <p className="font-semibold text-slate-700 text-sm">
+                      Loading suppliers...
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Fetching live vendor directory from server
+                    </p>
                   </td>
                 </tr>
               ) : displaySuppliers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                  <td
+                    colSpan={8}
+                    className="py-16 text-center text-slate-400 border border-slate-200 font-medium"
+                  >
                     <UsersRound className="w-10 h-10 mx-auto mb-2 text-slate-300 stroke-[1.5]" />
-                    <p className="font-semibold text-slate-600 text-sm">No suppliers found</p>
-                    <p className="text-xs text-slate-400 mt-1">Add a new supplier to begin purchasing goods.</p>
+                    <p className="font-semibold text-slate-600 text-sm">
+                      No suppliers found
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Add a new supplier to begin purchasing goods.
+                    </p>
                   </td>
                 </tr>
               ) : (
@@ -748,7 +955,10 @@ export const SupplierView: React.FC = () => {
                   const initials = getSupplierInitials(sup.name);
 
                   return (
-                    <tr key={sup.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
+                    <tr
+                      key={sup.id}
+                      className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
+                    >
                       {/* 1. Supplier & Code */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                         <div className="flex items-center gap-3">
@@ -814,37 +1024,51 @@ export const SupplierView: React.FC = () => {
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                         <div className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
                           <MapPin className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
-                          <span>{sup.city || sup.address || 'N/A'}{sup.state ? `, ${sup.state}` : ''}</span>
+                          <span>
+                            {sup.city || sup.address || "N/A"}
+                            {sup.state ? `, ${sup.state}` : ""}
+                          </span>
                         </div>
                       </td>
 
                       {/* 5. Total Purchase */}
                       <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap font-bold text-slate-900 text-xs sm:text-[13px]">
-                        ₹{(sup.totalPurchase || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        ₹
+                        {(sup.totalPurchase || 0).toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                        })}
                       </td>
 
                       {/* 6. Paid / Payable */}
                       <td className="py-4 px-4 border border-slate-200 text-right whitespace-nowrap">
                         <div className="font-bold text-emerald-600 text-xs">
-                          ₹{(sup.paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹
+                          {(sup.paid || 0).toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
                         </div>
                         {(sup.payable || 0) > 0 ? (
                           <div className="text-[10px] text-amber-600 font-semibold mt-0.5">
-                            Due: ₹{sup.payable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            Due: ₹
+                            {sup.payable.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                            })}
                           </div>
                         ) : (
-                          <div className="text-[10px] text-slate-400">Clear</div>
+                          <div className="text-[10px] text-slate-400">
+                            Clear
+                          </div>
                         )}
                       </td>
 
                       {/* 7. Status */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
-                        {sup.status === 'Active' ? (
+                        {sup.status === "Active" ? (
                           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                             <span>Active</span>
                           </span>
-                        ) : sup.status === 'Blocked' ? (
+                        ) : sup.status === "Blocked" ? (
                           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-300 text-xs font-bold shadow-2xs">
                             <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
                             <span>Blocked</span>
@@ -860,19 +1084,6 @@ export const SupplierView: React.FC = () => {
                       {/* 8. Actions */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Print Button */}
-                          <button
-                            type="button"
-                            title="Print Supplier Profile"
-                            onClick={() => {
-                              toast.info(`Preparing print for ${sup.name}...`);
-                              window.print();
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
                           {/* Share / Forward Button with Popover */}
                           <UniversalShareDropdown
                             id={sup.id}
@@ -885,142 +1096,37 @@ export const SupplierView: React.FC = () => {
                           />
 
                           {/* 3-dots Actions Dropdown */}
-                          <div className="relative inline-block text-left action-dropdown-container">
-                            <button
-                              type="button"
-                              title="More Options"
-                              disabled={isDeletingId === sup.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === sup.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - btnRect.bottom;
-                                  const dropdownHeight = 220;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - btnRect.top + 4,
-                                      right: window.innerWidth - btnRect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: btnRect.bottom + 4,
-                                      right: window.innerWidth - btnRect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(sup.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50"
-                            >
-                              {isDeletingId === sup.id ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
-                              ) : (
-                                <MoreVertical className="w-4 h-4" />
-                              )}
-                            </button>
-                          </div>
-
-                          {activeDropdownId === sup.id && dropdownPos && (
-                            <div
-                              className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                              style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                right: `${dropdownPos.right}px`,
-                              }}
-                            >
-                              {/* 1. View/Edit */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenEditModal(sup);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                View/Edit
-                              </button>
-
-                              {/* 2. Duplicate */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDuplicateSupplier(sup);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Duplicate
-                              </button>
-
-                              {/* 3. Delete */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleDeleteSupplier(sup);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Delete
-                              </button>
-
-                              {/* 4. Open PDF */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(`Opening PDF for ${sup.name}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Open PDF
-                              </button>
-
-                              {/* 5. Preview */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  handleOpenDetailModal(sup);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Preview
-                              </button>
-
-                              {/* 6. Print */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  toast.info(`Preparing print for ${sup.name}...`);
-                                  window.print();
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                Print
-                              </button>
-
-                              {/* 7. View History */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveDropdownId(null);
-                                  setSelectedSupplier(sup);
-                                  setActiveTab('purchases');
-                                  setIsDetailModalOpen(true);
-                                }}
-                                className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                              >
-                                View History
-                              </button>
-                            </div>
-                          )}
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: "View/Edit",
+                                variant: "edit",
+                                onClick: () => handleOpenEditModal(sup),
+                              },
+                              {
+                                label: "Duplicate",
+                                variant: "duplicate",
+                                onClick: () => handleDuplicateSupplier(sup),
+                              },
+                              {
+                                label: "Preview",
+                                variant: "preview",
+                                onClick: () => handleOpenDetailModal(sup),
+                              },
+                              {
+                                label: "View History",
+                                variant: "view",
+                                onClick: () => handleOpenHistory(sup),
+                              },
+                              {
+                                label: "Delete",
+                                variant: "delete",
+                                danger: true,
+                                dividerBefore: true,
+                                onClick: () => handleDeleteSupplier(sup),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -1053,15 +1159,23 @@ export const SupplierView: React.FC = () => {
       <Modal
         isOpen={isFormModalOpen}
         onClose={() => setIsFormModalOpen(false)}
-        title={editingSupplier ? 'Edit Supplier' : 'Add Supplier'}
-        subtitle={editingSupplier ? 'Update supplier details, contact info, and tax profile' : 'Set supplier details, contact info, and registration numbers'}
+        title={editingSupplier ? "Edit Supplier" : "Add Supplier"}
+        subtitle={
+          editingSupplier
+            ? "Update supplier details, contact info, and tax profile"
+            : "Set supplier details, contact info, and registration numbers"
+        }
         maxWidth="4xl"
         headerGradient={true}
         showBackIcon={true}
         hideCloseButton={true}
         onBack={() => setIsFormModalOpen(false)}
       >
-        <form noValidate onSubmit={handleSubmit(onSaveSupplier)} className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs">
+        <form
+          noValidate
+          onSubmit={handleSubmit(onSaveSupplier)}
+          className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs"
+        >
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
@@ -1070,7 +1184,7 @@ export const SupplierView: React.FC = () => {
                 type="text"
                 readOnly
                 disabled
-                {...register('supplierCode')}
+                {...register("supplierCode")}
                 className={FORM_INPUT_DISABLED_CLS}
               />
               <FormError message={errors.supplierCode?.message} />
@@ -1079,7 +1193,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Supplier / Company Name</FormLabel>
               <input
                 type="text"
-                {...register('name')}
+                {...register("name")}
                 placeholder="e.g. Agarwal Components Pvt Ltd"
                 className={getFormInputCls(!!errors.name)}
               />
@@ -1089,7 +1203,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Contact Person Name</FormLabel>
               <input
                 type="text"
-                {...register('contactPerson')}
+                {...register("contactPerson")}
                 placeholder="e.g. Ramesh Agarwal"
                 className={getFormInputCls(!!errors.contactPerson)}
               />
@@ -1103,7 +1217,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Phone Number</FormLabel>
               <input
                 type="text"
-                {...register('phone')}
+                {...register("phone")}
                 placeholder="e.g. 9988776655"
                 className={getFormInputCls(!!errors.phone)}
               />
@@ -1113,7 +1227,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Email Address</FormLabel>
               <input
                 type="email"
-                {...register('email')}
+                {...register("email")}
                 placeholder="e.g. procurement@agarwal.in"
                 className={getFormInputCls(!!errors.email)}
               />
@@ -1123,7 +1237,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Street Address</FormLabel>
               <input
                 type="text"
-                {...register('address')}
+                {...register("address")}
                 placeholder="e.g. 45 Industrial Area, Phase 2"
                 className={getFormInputCls(!!errors.address)}
               />
@@ -1137,7 +1251,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>City</FormLabel>
               <input
                 type="text"
-                {...register('city')}
+                {...register("city")}
                 placeholder="e.g. Delhi"
                 className={getFormInputCls(!!errors.city)}
               />
@@ -1147,7 +1261,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>State</FormLabel>
               <input
                 type="text"
-                {...register('state')}
+                {...register("state")}
                 placeholder="e.g. Delhi"
                 className={getFormInputCls(!!errors.state)}
               />
@@ -1157,7 +1271,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Pincode</FormLabel>
               <input
                 type="text"
-                {...register('pincode')}
+                {...register("pincode")}
                 placeholder="e.g. 110041"
                 className={getFormInputCls(!!errors.pincode)}
               />
@@ -1171,7 +1285,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Country</FormLabel>
               <input
                 type="text"
-                {...register('country')}
+                {...register("country")}
                 className={getFormInputCls(!!errors.country)}
               />
               <FormError message={errors.country?.message} />
@@ -1180,7 +1294,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>GST Number</FormLabel>
               <input
                 type="text"
-                {...register('gstNumber')}
+                {...register("gstNumber")}
                 placeholder="e.g. 07AAACA1234A1ZV"
                 className={getFormInputCls(!!errors.gstNumber)}
               />
@@ -1190,7 +1304,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>PAN Number</FormLabel>
               <input
                 type="text"
-                {...register('panNumber')}
+                {...register("panNumber")}
                 placeholder="e.g. AAACA1234A"
                 className={getFormInputCls(!!errors.panNumber)}
               />
@@ -1204,7 +1318,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Payment Terms</FormLabel>
               <input
                 type="text"
-                {...register('paymentTerms')}
+                {...register("paymentTerms")}
                 placeholder="e.g. Net 30"
                 className={getFormInputCls(!!errors.paymentTerms)}
               />
@@ -1215,17 +1329,14 @@ export const SupplierView: React.FC = () => {
               <input
                 type="number"
                 min="0"
-                {...register('creditLimit', { valueAsNumber: true })}
+                {...register("creditLimit", { valueAsNumber: true })}
                 className={getFormInputCls(!!errors.creditLimit)}
               />
               <FormError message={errors.creditLimit?.message} />
             </div>
             <div>
               <FormLabel>Status</FormLabel>
-              <select
-                {...register('status')}
-                className={FORM_SELECT_CLS}
-              >
+              <select {...register("status")} className={FORM_SELECT_CLS}>
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive</option>
                 <option value="Blocked">Blocked</option>
@@ -1240,7 +1351,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Bank Name</FormLabel>
               <input
                 type="text"
-                {...register('bankName')}
+                {...register("bankName")}
                 placeholder="e.g. HDFC Bank"
                 className={getFormInputCls(!!errors.bankName)}
               />
@@ -1250,7 +1361,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>Account Number</FormLabel>
               <input
                 type="text"
-                {...register('accountNumber')}
+                {...register("accountNumber")}
                 placeholder="e.g. 50200012345678"
                 className={getFormInputCls(!!errors.accountNumber)}
               />
@@ -1260,7 +1371,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel>IFSC Code</FormLabel>
               <input
                 type="text"
-                {...register('ifscCode')}
+                {...register("ifscCode")}
                 placeholder="e.g. HDFC0000123"
                 className={getFormInputCls(!!errors.ifscCode)}
               />
@@ -1330,8 +1441,12 @@ export const SupplierView: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-xs font-semibold text-slate-500 mt-1 flex items-center gap-1.5">
-                    <span className="text-slate-400 font-normal">Contact Person:</span>
-                    <span className="text-slate-700">{selectedSupplier.contactPerson || '-'}</span>
+                    <span className="text-slate-400 font-normal">
+                      Contact Person:
+                    </span>
+                    <span className="text-slate-700">
+                      {selectedSupplier.contactPerson || "-"}
+                    </span>
                   </p>
                 </div>
               </div>
@@ -1341,19 +1456,19 @@ export const SupplierView: React.FC = () => {
                 {isDetailLoading && (
                   <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
                 )}
-                {selectedSupplier.status === 'Active' && (
+                {selectedSupplier.status === "Active" && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200/90 shadow-2xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     Active
                   </span>
                 )}
-                {selectedSupplier.status === 'Blocked' && (
+                {selectedSupplier.status === "Blocked" && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200 shadow-2xs">
                     <span className="w-2 h-2 rounded-full bg-rose-500" />
                     Blocked
                   </span>
                 )}
-                {selectedSupplier.status === 'Inactive' && (
+                {selectedSupplier.status === "Inactive" && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-300 shadow-2xs">
                     <span className="w-2 h-2 rounded-full bg-slate-400" />
                     Inactive
@@ -1365,10 +1480,10 @@ export const SupplierView: React.FC = () => {
             {/* Nav Tabs - Standalone Button Style */}
             <div className="flex flex-wrap items-center gap-2.5">
               {[
-                { id: 'overview', label: 'Overview' },
-                { id: 'purchases', label: 'Purchases' },
-                { id: 'returns', label: 'Returns' },
-                { id: 'outstanding', label: 'Outstanding Balance' },
+                { id: "overview", label: "Overview" },
+                { id: "purchases", label: "Purchases" },
+                { id: "returns", label: "Returns" },
+                { id: "outstanding", label: "Outstanding Balance" },
               ].map((tab) => {
                 const isActive = activeTab === tab.id;
                 return (
@@ -1378,8 +1493,8 @@ export const SupplierView: React.FC = () => {
                     onClick={() => setActiveTab(tab.id as any)}
                     className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
                       isActive
-                        ? 'bg-[#33077C] text-white shadow-sm'
-                        : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs'
+                        ? "bg-[#33077C] text-white shadow-sm"
+                        : "bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 shadow-2xs"
                     }`}
                   >
                     {isActive && (
@@ -1392,35 +1507,49 @@ export const SupplierView: React.FC = () => {
             </div>
 
             {/* TAB: OVERVIEW */}
-            {activeTab === 'overview' && (
+            {activeTab === "overview" && (
               <div className="space-y-5">
                 {/* 4 Top Metric Cards */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
                   <div className="p-4 bg-purple-50/40 rounded-2xl border border-purple-100 shadow-2xs">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Purchase</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Total Purchase
+                    </span>
                     <div className="text-xl font-bold text-slate-900 mt-1">
-                      ₹{(selectedSupplier.totalPurchase || 0).toLocaleString('en-IN')}
+                      ₹
+                      {(selectedSupplier.totalPurchase || 0).toLocaleString(
+                        "en-IN",
+                      )}
                     </div>
                   </div>
 
                   <div className="p-4 bg-emerald-50/40 rounded-2xl border border-emerald-100 shadow-2xs">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Paid</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Total Paid
+                    </span>
                     <div className="text-xl font-bold text-emerald-600 mt-1">
-                      ₹{(selectedSupplier.paid || 0).toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.paid || 0).toLocaleString("en-IN")}
                     </div>
                   </div>
 
                   <div className="p-4 bg-amber-50/40 rounded-2xl border border-amber-100 shadow-2xs">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Payable</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Current Payable
+                    </span>
                     <div className="text-xl font-bold text-amber-500 mt-1">
-                      ₹{(selectedSupplier.payable || 0).toLocaleString('en-IN')}
+                      ₹{(selectedSupplier.payable || 0).toLocaleString("en-IN")}
                     </div>
                   </div>
 
                   <div className="p-4 bg-slate-50/60 rounded-2xl border border-slate-200 shadow-2xs">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Credit Limit</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Credit Limit
+                    </span>
                     <div className="text-xl font-bold text-slate-900 mt-1">
-                      ₹{(selectedSupplier.creditLimit || 0).toLocaleString('en-IN')}
+                      ₹
+                      {(selectedSupplier.creditLimit || 0).toLocaleString(
+                        "en-IN",
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1438,28 +1567,52 @@ export const SupplierView: React.FC = () => {
 
                     <div className="space-y-3 text-xs sm:text-[13px]">
                       <div className="flex items-center justify-between gap-4">
-                        <span className="text-slate-400 font-medium shrink-0">GSTIN</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.gstNumber || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          GSTIN
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.gstNumber || "-"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">PAN Number</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.panNumber || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          PAN Number
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.panNumber || "-"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Bank Name</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.bankName || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Bank Name
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.bankName || "-"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Account Number</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.accountNumber || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Account Number
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.accountNumber || "-"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">IFSC Code</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.ifscCode || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          IFSC Code
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.ifscCode || "-"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Branch Name</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.branchName || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Branch Name
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.branchName || "-"}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1475,30 +1628,55 @@ export const SupplierView: React.FC = () => {
 
                     <div className="space-y-3 text-xs sm:text-[13px]">
                       <div className="flex items-center justify-between gap-4">
-                        <span className="text-slate-400 font-medium shrink-0">Contact Person</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.contactPerson || '-'}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Phone Number</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.phone || '-'}</span>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Email Address</span>
-                        <span className="font-bold text-slate-800 text-right break-all">{selectedSupplier.email || '-'}</span>
-                      </div>
-
-                      <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Street Address</span>
-                        <span className="font-bold text-slate-800 text-right leading-snug">
-                          {[selectedSupplier.address, selectedSupplier.city, selectedSupplier.state, selectedSupplier.pincode].filter(Boolean).join(', ') || '-'}
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Contact Person
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.contactPerson || "-"}
                         </span>
                       </div>
 
                       <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-medium shrink-0">Payment Terms</span>
-                        <span className="font-bold text-slate-800 text-right">{selectedSupplier.paymentTerms || '-'}</span>
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Phone Number
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.phone || "-"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Email Address
+                        </span>
+                        <span className="font-bold text-slate-800 text-right break-all">
+                          {selectedSupplier.email || "-"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Street Address
+                        </span>
+                        <span className="font-bold text-slate-800 text-right leading-snug">
+                          {[
+                            selectedSupplier.address,
+                            selectedSupplier.city,
+                            selectedSupplier.state,
+                            selectedSupplier.pincode,
+                          ]
+                            .filter(Boolean)
+                            .join(", ") || "-"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                        <span className="text-slate-400 font-medium shrink-0">
+                          Payment Terms
+                        </span>
+                        <span className="font-bold text-slate-800 text-right">
+                          {selectedSupplier.paymentTerms || "-"}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1507,43 +1685,75 @@ export const SupplierView: React.FC = () => {
             )}
 
             {/* TAB: PURCHASES */}
-            {activeTab === 'purchases' && (
+            {activeTab === "purchases" && (
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[720px]">
                     <thead>
                       <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white uppercase tracking-wider">
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PURCHASE NO</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">GRAND TOTAL</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PAID AMOUNT</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">BALANCE</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          PURCHASE NO
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          DATE
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                          GRAND TOTAL
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                          PAID AMOUNT
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                          BALANCE
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                          STATUS
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs sm:text-[13px] font-sans">
                       {supplierPurchases.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="py-12 text-center text-slate-400 font-medium border border-slate-200">
+                          <td
+                            colSpan={6}
+                            className="py-12 text-center text-slate-400 font-medium border border-slate-200"
+                          >
                             No purchase orders recorded with this supplier.
                           </td>
                         </tr>
                       ) : (
                         supplierPurchases.map((p) => {
-                          const paidAmount = p.paidAmount ?? (p.grandTotal - (p.balance || 0));
+                          const paidAmount =
+                            p.paidAmount ?? p.grandTotal - (p.balance || 0);
                           return (
-                            <tr key={p.id} className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">
-                              <td className="py-3.5 px-4 font-bold text-[#33077C] border border-slate-200 whitespace-nowrap">{p.purchaseNo}</td>
-                              <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">{p.purchaseDate}</td>
-                              <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">₹{p.grandTotal.toLocaleString('en-IN')}</td>
-                              <td className="py-3.5 px-4 text-right font-bold text-emerald-600 border border-slate-200 whitespace-nowrap">₹{paidAmount.toLocaleString('en-IN')}</td>
-                              <td className="py-3.5 px-4 text-right font-bold text-amber-600 border border-slate-200 whitespace-nowrap">₹{p.balance.toLocaleString('en-IN')}</td>
+                            <tr
+                              key={p.id}
+                              className="hover:bg-slate-50/70 transition-colors border-b border-slate-200"
+                            >
+                              <td className="py-3.5 px-4 font-bold text-[#33077C] border border-slate-200 whitespace-nowrap">
+                                {p.purchaseNo}
+                              </td>
+                              <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">
+                                {p.purchaseDate}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">
+                                ₹{p.grandTotal.toLocaleString("en-IN")}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-bold text-emerald-600 border border-slate-200 whitespace-nowrap">
+                                ₹{paidAmount.toLocaleString("en-IN")}
+                              </td>
+                              <td className="py-3.5 px-4 text-right font-bold text-amber-600 border border-slate-200 whitespace-nowrap">
+                                ₹{p.balance.toLocaleString("en-IN")}
+                              </td>
                               <td className="py-3.5 px-4 text-center border border-slate-200 whitespace-nowrap">
-                                <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${
-                                  p.purchaseStatus === 'Completed' || p.purchaseStatus === 'Received'
-                                    ? 'bg-purple-50/80 text-[#33077C] border-purple-200'
-                                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                }`}>
+                                <span
+                                  className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold border shadow-2xs ${
+                                    p.purchaseStatus === "Completed" ||
+                                    p.purchaseStatus === "Received"
+                                      ? "bg-purple-50/80 text-[#33077C] border-purple-200"
+                                      : "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                  }`}
+                                >
                                   {p.purchaseStatus}
                                 </span>
                               </td>
@@ -1558,33 +1768,57 @@ export const SupplierView: React.FC = () => {
             )}
 
             {/* TAB: RETURNS */}
-            {activeTab === 'returns' && (
+            {activeTab === "returns" && (
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[650px]">
                     <thead>
                       <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white uppercase tracking-wider">
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">RETURN NO</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">PURCHASE NO</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">RETURN AMOUNT</th>
-                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          RETURN NO
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          PURCHASE NO
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          DATE
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                          RETURN AMOUNT
+                        </th>
+                        <th className="py-3.5 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
+                          STATUS
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs sm:text-[13px] font-sans">
                       {supplierReturns.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="py-12 text-center text-slate-400 font-medium border border-slate-200">
+                          <td
+                            colSpan={5}
+                            className="py-12 text-center text-slate-400 font-medium border border-slate-200"
+                          >
                             No purchase returns on record.
                           </td>
                         </tr>
                       ) : (
                         supplierReturns.map((r) => (
-                          <tr key={r.id} className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">
-                            <td className="py-3.5 px-4 font-bold text-[#33077C] border border-slate-200 whitespace-nowrap">{r.returnNo}</td>
-                            <td className="py-3.5 px-4 text-slate-700 font-medium border border-slate-200 whitespace-nowrap">{r.purchaseNo}</td>
-                            <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">{r.returnDate}</td>
-                            <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">₹{r.returnAmount.toLocaleString('en-IN')}</td>
+                          <tr
+                            key={r.id}
+                            className="hover:bg-slate-50/70 transition-colors border-b border-slate-200"
+                          >
+                            <td className="py-3.5 px-4 font-bold text-[#33077C] border border-slate-200 whitespace-nowrap">
+                              {r.returnNo}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-700 font-medium border border-slate-200 whitespace-nowrap">
+                              {r.purchaseNo}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">
+                              {r.returnDate}
+                            </td>
+                            <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">
+                              ₹{r.returnAmount.toLocaleString("en-IN")}
+                            </td>
                             <td className="py-3.5 px-4 text-center border border-slate-200 whitespace-nowrap">
                               <span className="inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold bg-purple-50/80 text-[#33077C] border border-purple-200 shadow-2xs">
                                 {r.returnStatus}
@@ -1600,14 +1834,18 @@ export const SupplierView: React.FC = () => {
             )}
 
             {/* TAB: OUTSTANDING */}
-            {activeTab === 'outstanding' && (
+            {activeTab === "outstanding" && (
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[650px]">
                     <thead>
                       <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white uppercase tracking-wider">
-                        <th className="py-3.5 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">METRIC / FIELD</th>
-                        <th className="py-3.5 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">VALUE / DETAILS</th>
+                        <th className="py-3.5 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
+                          METRIC / FIELD
+                        </th>
+                        <th className="py-3.5 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
+                          VALUE / DETAILS
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs sm:text-[13px] font-sans">
@@ -1616,7 +1854,11 @@ export const SupplierView: React.FC = () => {
                           Current Outstanding Payable
                         </td>
                         <td className="py-3.5 px-5 text-right font-bold text-amber-600 border border-slate-200">
-                          ₹{(selectedSupplier.payable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹
+                          {(selectedSupplier.payable || 0).toLocaleString(
+                            "en-IN",
+                            { minimumFractionDigits: 2 },
+                          )}
                         </td>
                       </tr>
                       <tr className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">
@@ -1624,7 +1866,11 @@ export const SupplierView: React.FC = () => {
                           Agreed Credit Limit
                         </td>
                         <td className="py-3.5 px-5 text-right font-bold text-slate-900 border border-slate-200">
-                          ₹{(selectedSupplier.creditLimit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          ₹
+                          {(selectedSupplier.creditLimit || 0).toLocaleString(
+                            "en-IN",
+                            { minimumFractionDigits: 2 },
+                          )}
                         </td>
                       </tr>
                       <tr className="hover:bg-slate-50/70 transition-colors border-b border-slate-200">
@@ -1632,7 +1878,7 @@ export const SupplierView: React.FC = () => {
                           Standard Payment Terms
                         </td>
                         <td className="py-3.5 px-5 text-right font-bold text-[#33077C] border border-slate-200">
-                          {selectedSupplier.paymentTerms || 'Net 30 Days'}
+                          {selectedSupplier.paymentTerms || "Net 30 Days"}
                         </td>
                       </tr>
                     </tbody>
@@ -1645,24 +1891,236 @@ export const SupplierView: React.FC = () => {
             <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setIsDetailModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
-              >
-                <X className="w-4 h-4 text-slate-500" />
-                <span>Close</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => {
                   const supToEdit = selectedSupplier;
                   setIsDetailModalOpen(false);
                   handleOpenEditModal(supToEdit);
                 }}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+                className="h-10 px-4 rounded-lg border border-purple-200 hover:border-purple-300 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center gap-2"
               >
-                <Pencil className="w-4 h-4" />
+                <Pencil className="w-4 h-4 text-[#33077C]" />
                 <span>Edit Supplier</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setIsDetailModalOpen(false)}
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center shadow-2xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ==========================================
+          MODAL 3: SUPPLIER HISTORY & AUDIT TRAIL
+         ========================================== */}
+      {historySupplier && (
+        <Modal
+          isOpen={Boolean(historySupplier)}
+          onClose={() => setHistorySupplier(null)}
+          title={`Supplier History & Audit Trail: ${historySupplier.name}`}
+          subtitle={
+            isLoadingHistory
+              ? "Syncing live history from Work API..."
+              : "Complete lifecycle progression and vendor audit log"
+          }
+          maxWidth="md"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistorySupplier(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            {/* Header Card */}
+            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
+              <div>
+                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
+                  Supplier Code
+                </div>
+                <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                  {historySupplier.supplierCode}
+                </div>
+                <div className="text-xs text-slate-700 font-bold mt-0.5">
+                  {historySupplier.name}
+                </div>
+                {historySupplier.contactPerson && (
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Contact:{" "}
+                    <span className="font-semibold text-slate-700">
+                      {historySupplier.contactPerson}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Outstanding Payable
+                </div>
+                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
+                  ₹
+                  {(Number(historySupplier.payable) || 0).toLocaleString(
+                    "en-IN",
+                    { minimumFractionDigits: 2 },
+                  )}
+                </div>
+                <div className="mt-1.5 flex justify-end">
+                  <span
+                    className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      historySupplier.status === "Active"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : historySupplier.status === "Blocked"
+                          ? "bg-rose-100 text-rose-700"
+                          : "bg-slate-100 text-slate-700"
+                    }`}
+                  >
+                    {historySupplier.status}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Audit Timeline */}
+            <div className="space-y-3 pt-1">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                Lifecycle & Activity Timeline
+              </div>
+
+              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
+                {/* Event 1: Onboarded */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Supplier Onboarded & Master Record Created
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Code:{" "}
+                      <span className="font-medium text-slate-700">
+                        {historySupplier.supplierCode}
+                      </span>{" "}
+                      • Status:{" "}
+                      <span className="font-medium text-slate-700">
+                        {historySupplier.status}
+                      </span>
+                    </div>
+                    <div className="text-slate-400 text-[10px] mt-0.5">
+                      Location:{" "}
+                      {[
+                        historySupplier.city,
+                        historySupplier.state,
+                        historySupplier.country || "India",
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Event 2: Tax & Compliance */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-blue-500 ring-4 ring-blue-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Tax & Statutory Compliance
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      GSTIN:{" "}
+                      <span className="font-mono text-slate-700 font-semibold">
+                        {historySupplier.gstNumber ||
+                          "Not Registered / Unspecified"}
+                      </span>
+                    </div>
+                    {historySupplier.panNumber && (
+                      <div className="text-slate-400 text-[10px] mt-0.5">
+                        PAN:{" "}
+                        <span className="font-mono text-slate-700">
+                          {historySupplier.panNumber}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Event 3: Banking & Terms */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Commercial & Settlement Terms
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Payment Terms:{" "}
+                      <span className="font-semibold text-slate-700">
+                        {historySupplier.paymentTerms || "Net 30 Days"}
+                      </span>{" "}
+                      • Credit Limit:{" "}
+                      <span className="font-semibold text-slate-700">
+                        ₹
+                        {(
+                          Number(historySupplier.creditLimit) || 0
+                        ).toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                    {historySupplier.bankName && (
+                      <div className="text-slate-400 text-[10px] mt-0.5">
+                        Bank: {historySupplier.bankName} (A/C:{" "}
+                        {historySupplier.accountNumber
+                          ? `••••${historySupplier.accountNumber.slice(-4)}`
+                          : "N/A"}
+                        )
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Event 4: Procurement Summary */}
+                <div className="relative">
+                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 ring-4 ring-amber-100" />
+                  <div>
+                    <div className="font-bold text-slate-800 text-xs">
+                      Procurement & Ledger Summary
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Total Purchases:{" "}
+                      <span className="font-semibold text-slate-800">
+                        ₹
+                        {(
+                          Number(historySupplier.totalPurchase) || 0
+                        ).toLocaleString("en-IN")}
+                      </span>{" "}
+                      • Total Paid:{" "}
+                      <span className="font-semibold text-emerald-600">
+                        ₹
+                        {(Number(historySupplier.paid) || 0).toLocaleString(
+                          "en-IN",
+                        )}
+                      </span>
+                    </div>
+                    <div className="text-slate-500 text-[11px] mt-0.5">
+                      Current Payable:{" "}
+                      <span className="font-semibold text-amber-600">
+                        ₹
+                        {(Number(historySupplier.payable) || 0).toLocaleString(
+                          "en-IN",
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end">
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() => setHistorySupplier(null)}
+              >
+                Close History
+              </Button>
             </div>
           </div>
         </Modal>

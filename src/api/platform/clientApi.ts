@@ -1,4 +1,5 @@
 import { baseClient, baseApi } from '../baseApi';
+import { getStoredOrganizationId } from '../config';
 import {
   PlatformClientListParams,
   PlatformClientListResponse,
@@ -15,6 +16,11 @@ export const clientEndpoints = baseApi.injectEndpoints({
     getPlatformClients: builder.query<PlatformClientListResponse, PlatformClientListParams | void>({
       query: (params) => {
         const queryParams: Record<string, any> = {};
+        const targetOrgId =
+          (params && typeof params === 'object' && 'organization_id' in params && params.organization_id)
+            ? params.organization_id
+            : getStoredOrganizationId() || undefined;
+
         if (params) {
           if (params.page !== undefined) queryParams.page = params.page;
           if (params.limit !== undefined) queryParams.limit = params.limit;
@@ -31,15 +37,13 @@ export const clientEndpoints = baseApi.injectEndpoints({
           }
           if (params.sortBy) queryParams.sortBy = params.sortBy;
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
-          if (params.organization_id) queryParams.organization_id = params.organization_id;
+          if (targetOrgId) queryParams.organization_id = targetOrgId;
         }
 
         return {
           url: '/platform/clients',
           params: queryParams,
-          headers: {
-            'x-organization-id': (params && typeof params === 'object' && 'organization_id' in params && params.organization_id) ? params.organization_id : '',
-          },
+          headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
         };
       },
       providesTags: (result) =>
@@ -51,56 +55,66 @@ export const clientEndpoints = baseApi.injectEndpoints({
           : [{ type: 'PlatformClient', id: 'LIST' }],
     }),
 
-    getPlatformClientById: builder.query<PlatformClientSingleResponse, string>({
-      query: (id) => ({
-        url: `/platform/clients/${id}`,
-        headers: {
-          'x-organization-id': '',
-        },
-      }),
-      providesTags: (_result, _error, id) => [{ type: 'PlatformClient', id }],
+    getPlatformClientById: builder.query<PlatformClientSingleResponse, { id: string; organizationId?: string } | string>({
+      query: (arg) => {
+        const id = typeof arg === 'string' ? arg : arg.id;
+        const orgId = typeof arg === 'object' ? arg.organizationId : getStoredOrganizationId();
+        return {
+          url: `/platform/clients/${id}`,
+          headers: orgId ? { 'x-organization-id': orgId } : undefined,
+        };
+      },
+      providesTags: (_result, _error, arg) => [
+        { type: 'PlatformClient', id: typeof arg === 'string' ? arg : arg.id },
+      ],
     }),
 
     createPlatformClient: builder.mutation<PlatformClientSingleResponse, CreatePlatformClientRequest>({
-      query: (payload) => ({
-        url: '/platform/clients',
-        method: 'POST',
-        body: payload,
-        headers: {
-          'x-organization-id': '',
-        },
-      }),
+      query: (payload) => {
+        const targetOrgId = payload.organizationId || getStoredOrganizationId() || undefined;
+        return {
+          url: '/platform/clients',
+          method: 'POST',
+          body: payload,
+          headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
+          params: targetOrgId ? { organization_id: targetOrgId } : undefined,
+        };
+      },
       invalidatesTags: [{ type: 'PlatformClient', id: 'LIST' }, 'Dashboard'],
     }),
 
     updatePlatformClient: builder.mutation<
       PlatformClientSingleResponse,
-      { id: string; payload: UpdatePlatformClientRequest }
+      { id: string; payload: UpdatePlatformClientRequest; organizationId?: string }
     >({
-      query: ({ id, payload }) => ({
-        url: `/platform/clients/${id}`,
-        method: 'PATCH',
-        body: payload,
-        headers: {
-          'x-organization-id': '',
-        },
-      }),
+      query: ({ id, payload, organizationId }) => {
+        const targetOrgId = organizationId || payload.organizationId || getStoredOrganizationId() || undefined;
+        return {
+          url: `/platform/clients/${id}`,
+          method: 'PATCH',
+          body: payload,
+          headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
+          params: targetOrgId ? { organization_id: targetOrgId } : undefined,
+        };
+      },
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PlatformClient', id },
         { type: 'PlatformClient', id: 'LIST' },
       ],
     }),
 
-    deletePlatformClient: builder.mutation<{ success: boolean; message: string }, string>({
-      query: (id) => ({
-        url: `/platform/clients/${id}`,
-        method: 'DELETE',
-        headers: {
-          'x-organization-id': '',
-        },
-      }),
-      invalidatesTags: (_result, _error, id) => [
-        { type: 'PlatformClient', id },
+    deletePlatformClient: builder.mutation<{ success: boolean; message: string }, { id: string; organizationId?: string } | string>({
+      query: (arg) => {
+        const id = typeof arg === 'string' ? arg : arg.id;
+        const orgId = typeof arg === 'object' ? arg.organizationId : getStoredOrganizationId();
+        return {
+          url: `/platform/clients/${id}`,
+          method: 'DELETE',
+          headers: orgId ? { 'x-organization-id': orgId } : undefined,
+        };
+      },
+      invalidatesTags: (_result, _error, arg) => [
+        { type: 'PlatformClient', id: typeof arg === 'string' ? arg : arg.id },
         { type: 'PlatformClient', id: 'LIST' },
       ],
     }),
@@ -118,50 +132,48 @@ export const {
 
 export const platformClientApi = {
   getClients: async (params?: PlatformClientListParams): Promise<PlatformClientListResponse> => {
+    const targetOrgId = params?.organization_id || getStoredOrganizationId() || undefined;
     const res = await baseClient.get<PlatformClientListResponse>('/platform/clients', {
       params,
-      headers: {
-        'x-organization-id': params?.organization_id || '',
-      },
+      headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
     });
     return res.data;
   },
 
-  getClientById: async (id: string): Promise<PlatformClientSingleResponse> => {
+  getClientById: async (id: string, organizationId?: string): Promise<PlatformClientSingleResponse> => {
+    const targetOrgId = organizationId || getStoredOrganizationId() || undefined;
     const res = await baseClient.get<PlatformClientSingleResponse>(`/platform/clients/${id}`, {
-      headers: {
-        'x-organization-id': '',
-      },
+      headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
     });
     return res.data;
   },
 
   createClient: async (payload: CreatePlatformClientRequest): Promise<PlatformClientSingleResponse> => {
+    const targetOrgId = payload.organizationId || getStoredOrganizationId() || undefined;
     const res = await baseClient.post<PlatformClientSingleResponse>('/platform/clients', payload, {
-      headers: {
-        'x-organization-id': '',
-      },
+      headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
+      params: targetOrgId ? { organization_id: targetOrgId } : undefined,
     });
     return res.data;
   },
 
   updateClient: async (
     id: string,
-    payload: UpdatePlatformClientRequest
+    payload: UpdatePlatformClientRequest,
+    organizationId?: string
   ): Promise<PlatformClientSingleResponse> => {
+    const targetOrgId = organizationId || payload.organizationId || getStoredOrganizationId() || undefined;
     const res = await baseClient.patch<PlatformClientSingleResponse>(`/platform/clients/${id}`, payload, {
-      headers: {
-        'x-organization-id': '',
-      },
+      headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
+      params: targetOrgId ? { organization_id: targetOrgId } : undefined,
     });
     return res.data;
   },
 
-  deleteClient: async (id: string): Promise<{ success: boolean; message: string }> => {
+  deleteClient: async (id: string, organizationId?: string): Promise<{ success: boolean; message: string }> => {
+    const targetOrgId = organizationId || getStoredOrganizationId() || undefined;
     const res = await baseClient.delete<{ success: boolean; message: string }>(`/platform/clients/${id}`, {
-      headers: {
-        'x-organization-id': '',
-      },
+      headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
     });
     return res.data;
   },

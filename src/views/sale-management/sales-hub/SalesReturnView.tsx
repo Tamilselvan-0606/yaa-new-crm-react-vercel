@@ -55,8 +55,9 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printTableReport } from '../../../utils/printUtils';
+import { printTableReport, printBusinessDocument } from '../../../utils/printUtils';
 import { UniversalShareDropdown, formatCreditNoteShare } from '../../../utils/shareUtils';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { toast } from 'sonner';
 import {
   commerceSalesReturnApi,
@@ -839,13 +840,63 @@ export const SalesReturnView: React.FC = () => {
     setIsViewModalOpen(true);
   };
 
+  // Print Credit Note / Sales Return
+  const handlePrintCreditNote = (txOrReturn: UnifiedTransactionRecord | SalesReturn) => {
+    setActiveMenuId(null);
+    const isTx = 'refNo' in txOrReturn;
+    const docNo = isTx ? txOrReturn.refNo : txOrReturn.returnNo;
+    const date = isTx ? isoToDdmmyyyy(txOrReturn.date) : isoToDdmmyyyy(txOrReturn.returnDate);
+    const partyName = isTx ? txOrReturn.partyName : txOrReturn.customerName;
+    const origReturn = isTx ? txOrReturn.originalReturn : txOrReturn;
+    const customer = customers.find((c) => c.name.toLowerCase() === partyName.toLowerCase());
+
+    const items = origReturn?.items && origReturn.items.length > 0
+      ? origReturn.items.map((it) => ({
+          name: it.productName,
+          batch: it.batch,
+          quantity: it.returnQuantity,
+          unitPrice: it.unitPrice,
+          total: it.returnAmount || (it.returnQuantity * it.unitPrice),
+          remarks: it.reason ? `Reason: ${it.reason}${it.remarks || it.notes ? ` - ${it.remarks || it.notes}` : ''}` : undefined,
+        }))
+      : [];
+
+    const grandTotal = isTx ? txOrReturn.total : Number(txOrReturn.returnAmount || 0);
+    const paidAmount = isTx ? txOrReturn.receivedPaid : 0;
+    const balance = isTx ? txOrReturn.balance : grandTotal;
+
+    printBusinessDocument({
+      docTypeTitle: 'CREDIT NOTE / SALES RETURN',
+      docNo,
+      docDate: date,
+      status: (origReturn?.returnStatus || (isTx ? txOrReturn.status : 'Approved')) as string,
+      statusColor: 'rose',
+      referenceNo: origReturn?.invoiceNo || undefined,
+      partyTitle: 'Customer Details',
+      partyName,
+      partyCompany: customer?.company,
+      partyPhone: customer?.phone,
+      partyEmail: customer?.email,
+      partyAddress: customer?.billingAddress || customer?.address,
+      extraMeta: [
+        ...(origReturn?.invoiceNo ? [{ label: 'Original Invoice', value: origReturn.invoiceNo }] : []),
+        ...(origReturn?.refundMethod ? [{ label: 'Refund Method', value: origReturn.refundMethod }] : []),
+      ],
+      items,
+      grandTotal,
+      paidAmount,
+      balance,
+      paidAmountLabel: 'Refunded / Adjusted',
+      balanceLabel: 'Credit Balance',
+      notes: origReturn?.notes,
+      primarySignatoryLabel: 'Authorized Signatory',
+      secondarySignatoryLabel: "Customer's Signature",
+    });
+  };
+
   // Print Row
   const handlePrintRow = (tx: UnifiedTransactionRecord) => {
-    setActiveMenuId(null);
-    handleOpenPdf(tx);
-    setTimeout(() => {
-      window.print();
-    }, 300);
+    handlePrintCreditNote(tx);
   };
 
   // Share Handlers (Email, WhatsApp)
@@ -1237,113 +1288,46 @@ export const SalesReturnView: React.FC = () => {
                           />
 
                           {/* 3. 3-Dots Floating Menu */}
-                          <div className="sales-return-action-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isActionOpen) {
-                                  setActiveMenuId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 260;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveMenuId(row.id);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                              title="More options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-
-                            {/* 3-Dots Floating Dropdown Menu */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: 'fixed',
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
-                                }}
-                                className="sales-return-action-dropdown-menu w-48 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEdit(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
-
-                                {/* 2. Update Status (For original returns) */}
-                                {row.originalReturn && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenStatusModal(row.originalReturn!)}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                  >
-                                    Change Status...
-                                  </button>
-                                )}
-
-                                {/* 3. Generate e-Invoice */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleGenerateEInvoice(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Generate e-Invoice
-                                </button>
-
-
-                                {/* 6. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteTransaction(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Void / Delete
-                                </button>
-
-                                {/* 7. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleDuplicate(row)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-                                {/* 8. View History */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveMenuId(null);
-                                    setHistoryTx(row);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View History
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: 'View/Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEdit(row),
+                              },
+                              {
+                                label: 'Change Status...',
+                                variant: 'adjust',
+                                hidden: !row.originalReturn,
+                                onClick: () => handleOpenStatusModal(row.originalReturn!),
+                              },
+                              {
+                                label: 'Generate e-Invoice',
+                                variant: 'invoice',
+                                onClick: () => handleGenerateEInvoice(row),
+                              },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicate(row),
+                              },
+                              {
+                                label: 'Print Credit Note',
+                                variant: 'print',
+                                onClick: () => handlePrintCreditNote(row),
+                              },
+                              {
+                                label: 'View History',
+                                variant: 'view',
+                                onClick: () => setHistoryTx(row),
+                              },
+                              {
+                                label: 'Void / Delete',
+                                variant: 'delete',
+                                onClick: () => handleDeleteTransaction(row),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>

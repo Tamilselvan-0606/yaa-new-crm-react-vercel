@@ -9,26 +9,28 @@ export const LoginSchema = z.object({
 export type LoginFormData = z.infer<typeof LoginSchema>;
 
 export const LeadSchema = z.object({
-  leadId: z.string().optional(),
-  leadDate: z.string().optional(),
-  name: z.string().min(2, 'Contact Person Name is required'),
-  company: z.string().min(2, 'Lead / Business Name is required'),
+  leadId: z.string().trim().min(1, 'Lead ID is required'),
+  leadDate: z.string().trim().min(1, 'Date is required'),
+  name: z.string().trim().min(1, 'Contact Person Name is required'),
+  company: z.string().trim().min(1, 'Lead Name is required'),
   designation: z.string().optional(),
-  phone: z
-    .string()
-    .min(1, 'Phone number is required')
-    .refine(
-      (val) => isValidIndianPhone(val),
-      INDIAN_PHONE_ERROR_MESSAGE
-    ),
+  phone: z.string().optional(),
   whatsapp: z
     .string()
-    .optional()
+    .trim()
+    .min(1, 'WhatsApp number is required')
     .refine(
-      (val) => !val || !val.trim() || isValidIndianPhone(val),
-      'Enter a valid 10-digit Indian WhatsApp number'
+      (val) => {
+        const clean = val.replace(/\D/g, '');
+        return clean.length === 10;
+      },
+      'WhatsApp number must be exactly 10 digits'
     ),
-  email: z.string().email('Invalid email format').or(z.literal('')),
+  email: z
+    .string()
+    .trim()
+    .min(1, 'Email is required')
+    .email('Please enter a valid email address'),
   alternatePhone: z
     .string()
     .optional()
@@ -36,14 +38,14 @@ export const LeadSchema = z.object({
       (val) => !val || !val.trim() || isValidIndianPhone(val),
       'Enter a valid 10-digit Indian alternate phone number'
     ),
-  address: z.string().optional(),
+  address: z.string().trim().min(1, 'Address is required'),
   city: z.string().optional(),
   state: z.string().optional(),
   pincode: z.string().optional(),
   location: z.string().optional(),
   leadSource: z.string().optional(),
   interestedProducts: z.array(z.string()).optional(),
-  interestedProductOrService: z.string().optional(),
+  interestedProductOrService: z.string().trim().min(1, 'Product Interest is required'),
   assignedStaffId: z.string().optional(),
   status: z.enum(['New', 'Contacted', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost', 'Follow-up', 'Interested', 'Onboarding', 'Converted', 'Not Interested', 'All']).optional(),
   priority: z.enum(['High', 'Medium', 'Low']).optional(),
@@ -117,28 +119,60 @@ export const PaymentSchema = z.object({
 export type PaymentFormData = z.infer<typeof PaymentSchema>;
 
 export const CustomerSchema = z.object({
-  clientId: z.string().min(1, 'Client ID is required'),
-  clientName: z.string().min(2, 'Client Name is required'),
-  businessName: z.string().min(2, 'Client Business Name is required'),
-  contactPerson: z.string().min(2, 'Contact Person Name is required'),
+  clientId: z.string().trim().min(1, 'Client ID is required'),
+  clientName: z.string().trim().min(1, 'Client Name is required'),
+  businessName: z.string().trim().min(1, 'Client Business is required'),
+  contactPerson: z.string().trim().min(1, 'Contact Person is required'),
   phone: z
     .string()
+    .trim()
     .min(1, 'Phone Number is required')
     .refine(
-      (val) => isValidIndianPhone(val),
-      INDIAN_PHONE_ERROR_MESSAGE
+      (val) => {
+        const clean = val.replace(/\D/g, '');
+        return clean.length === 10;
+      },
+      'Phone Number must be exactly 10 digits'
     ),
   whatsapp: z
     .string()
     .optional()
     .refine(
-      (val) => !val || !val.trim() || isValidIndianPhone(val),
-      'Enter a valid 10-digit Indian WhatsApp number'
+      (val) => {
+        if (!val || !val.trim()) return true;
+        const clean = val.replace(/\D/g, '');
+        return clean.length === 10;
+      },
+      'WhatsApp Number must be exactly 10 digits'
     ),
-  email: z.string().email('Invalid email address'),
-  gstNumber: z.string().optional(),
-  panNumber: z.string().optional(),
-  address: z.string().min(2, 'Address is required'),
+  email: z
+    .string()
+    .trim()
+    .min(1, 'Email is required')
+    .email('Please enter a valid email address'),
+  gstNumber: z
+    .string()
+    .trim()
+    .min(1, 'GST Number is required')
+    .refine(
+      (val) => {
+        const clean = val.replace(/[^a-zA-Z0-9]/g, '');
+        return clean.length === 15;
+      },
+      'GST Number must be exactly 15 alphanumeric characters'
+    ),
+  panNumber: z
+    .string()
+    .trim()
+    .min(1, 'PAN Number is required')
+    .refine(
+      (val) => {
+        const clean = val.replace(/[^a-zA-Z0-9]/g, '');
+        return clean.length === 10;
+      },
+      'PAN Number must be exactly 10 alphanumeric characters'
+    ),
+  address: z.string().trim().min(1, 'Address is required'),
   city: z.string().optional(),
   state: z.string().optional(),
   pincode: z.string().optional(),

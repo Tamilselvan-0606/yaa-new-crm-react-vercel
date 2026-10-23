@@ -31,6 +31,7 @@ import {
   Loader2,
   ChevronDown,
   FileText,
+  History,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -49,6 +50,7 @@ import {
   mapUiToUpdatePurchaseOrderPayload,
   productApi,
   ApiProduct,
+  CreateProductPayload,
   supplierApi,
   ApiSupplier,
   stockApi,
@@ -64,6 +66,7 @@ import {
 } from '../../../api/commerce/purchaseReturnApi';
 import { Badge } from '../../../components/common/Badge';
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS } from '../utils/formUtils';
+import { SaleActionDropdown } from '../utils';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
 import { Pagination } from '../../../components/common/Pagination';
@@ -151,7 +154,28 @@ export const PurchaseOrderView: React.FC = () => {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [historyPurchase, setHistoryPurchase] = useState<PurchaseOrder | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [selectedPurchase, setSelectedPurchase] = useState<PurchaseOrder | null>(null);
+
+  const handleOpenHistory = async (po: PurchaseOrder) => {
+    setActiveDropdownId(null);
+    setHistoryPurchase(po);
+    setIsLoadingHistory(true);
+    try {
+      if (po.id) {
+        const res = await workPurchaseOrderApi.getPurchaseOrderById(po.id);
+        if (res?.data) {
+          const fresh = mapApiPurchaseOrderToUi(res.data);
+          setHistoryPurchase(fresh);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load purchase order history from API:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
   const [editingPurchase, setEditingPurchase] = useState<PurchaseOrder | null>(null);
 
   // Payment Recording State
@@ -174,6 +198,141 @@ export const PurchaseOrderView: React.FC = () => {
     transactionId: '',
     remarks: '',
   });
+
+  // Quick Add Product Modal state
+  const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
+  const [addProductTargetRowIdx, setAddProductTargetRowIdx] = useState<number | null>(null);
+  const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [quickProductForm, setQuickProductForm] = useState({
+    productName: '',
+    productCode: '',
+    category: 'General',
+    unit: 'PCS',
+    purchasePrice: '',
+    salePrice: '',
+    taxRate: 'GST @ 18%',
+    hsnCode: '',
+  });
+
+  const handleOpenAddProductModal = (targetRowIndex: number | null = null) => {
+    setAddProductTargetRowIdx(targetRowIndex);
+    setQuickProductForm({
+      productName: '',
+      productCode: `PRD-${Date.now().toString().slice(-6)}`,
+      category: 'General',
+      unit: 'PCS',
+      purchasePrice: '',
+      salePrice: '',
+      taxRate: 'GST @ 18%',
+      hsnCode: '',
+    });
+    setIsAddProductModalOpen(true);
+  };
+
+  const handleSaveQuickProduct = async () => {
+    if (!quickProductForm.productName.trim()) {
+      toast.error('Product Name is required.');
+      return;
+    }
+
+    const purchasePriceNum = Number(quickProductForm.purchasePrice) || 0;
+    const salePriceNum = Number(quickProductForm.salePrice) || 0;
+
+    if (purchasePriceNum < 0 || salePriceNum < 0) {
+      toast.error('Prices cannot be negative.');
+      return;
+    }
+
+    setIsCreatingProduct(true);
+    try {
+      const payload: CreateProductPayload = {
+        itemType: 'Product',
+        productName: quickProductForm.productName.trim(),
+        productCode: quickProductForm.productCode.trim() || `PRD-${Date.now().toString().slice(-6)}`,
+        category: quickProductForm.category.trim() || 'General',
+        unit: quickProductForm.unit || 'PCS',
+        purchasePrice: purchasePriceNum,
+        salePrice: salePriceNum,
+        taxRate: quickProductForm.taxRate,
+        hsnCode: quickProductForm.hsnCode.trim() || undefined,
+        openingStock: 0,
+        status: 'Active',
+      };
+
+      const res = await productApi.createProduct(payload);
+      if (res && res.data) {
+        const newProd = res.data;
+        setAvailableProducts((prev) => [newProd, ...prev]);
+
+        setFormData((prev) => {
+          const items = [...prev.items];
+          let targetIdx = addProductTargetRowIdx;
+          if (targetIdx === null || targetIdx < 0 || targetIdx >= items.length) {
+            const emptyIdx = items.findIndex((it) => !it.productId);
+            if (emptyIdx >= 0) {
+              targetIdx = emptyIdx;
+            } else {
+              targetIdx = items.length;
+              items.push({
+                id: `po_it_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                productId: '',
+                productName: '',
+                batch: '',
+                quantity: 1,
+                freeQuantity: 0,
+                unit: 'NONE',
+                packingUnit: '',
+                expDate: '',
+                purchasePrice: 0,
+                salePrice: 0,
+                discountPercent: 0,
+                discountAmount: 0,
+                taxPercent: 18,
+                total: 0,
+              });
+            }
+          }
+
+          const currentItem = { ...items[targetIdx] };
+          currentItem.productId = newProd.id;
+          currentItem.productName = newProd.productName;
+          currentItem.purchasePrice = purchasePriceNum;
+          currentItem.salePrice = salePriceNum;
+          currentItem.unit = newProd.unit || 'PCS';
+          currentItem.quantity = currentItem.quantity || 1;
+
+          const taxMatch = String(newProd.taxRate || quickProductForm.taxRate).match(/(\d+(\.\d+)?)/);
+          if (taxMatch) {
+            currentItem.taxPercent = parseFloat(taxMatch[1]);
+          }
+
+          const sub = (currentItem.quantity || 1) * purchasePriceNum;
+          const disc =
+            currentItem.discountAmount !== undefined && currentItem.discountAmount > 0
+              ? currentItem.discountAmount
+              : sub * ((currentItem.discountPercent || 0) / 100);
+          const tax = prev.withGst ? (sub - disc) * ((currentItem.taxPercent || 18) / 100) : 0;
+          currentItem.total = Math.round((sub - disc + tax) * 100) / 100;
+
+          items[targetIdx] = currentItem;
+          return { ...prev, items };
+        });
+
+        toast.success(`Product "${newProd.productName}" created and added to bill!`);
+        setIsAddProductModalOpen(false);
+      }
+    } catch (err: any) {
+      console.error('Failed to create product from purchase bill:', err);
+      toast.error(
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to create product'
+      );
+    } finally {
+      setIsCreatingProduct(false);
+    }
+  };
 
   // Form State
   const [formData, setFormData] = useState<{
@@ -214,60 +373,64 @@ export const PurchaseOrderView: React.FC = () => {
     notes: '',
   });
 
-  // Load suppliers, stock batches, and purchase requests from API
-  useEffect(() => {
-    let isMounted = true;
-    supplierApi
-      .getSuppliers({ page_size: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailableSuppliers(res.data);
-        }
-      })
-      .catch(() => { });
+  // On-demand master data loader for form modal (products, suppliers, batches, purchase requests)
+  // ONLY loaded when the user actually opens the Create / Edit purchase bill form modal.
+  const hasLoadedFormMasterDataRef = useRef(false);
+  const loadFormMasterData = useCallback(async () => {
+    if (hasLoadedFormMasterDataRef.current) return;
+    hasLoadedFormMasterDataRef.current = true;
 
-    stockApi
-      .getStockBatches({ page_size: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailableBatches(res.data);
-        }
-      })
-      .catch(() => { });
+    try {
+      setIsLoadingRequests(true);
+      const [suppRes, stockBatchRes, prRes, prodRes] = await Promise.allSettled([
+        supplierApi.getSuppliers({ page_size: 100, pagination_required: false }),
+        stockApi.getStockBatches({ page_size: 100, pagination_required: false }),
+        commercePurchaseRequestApi.getPurchaseRequests({ page_size: 100, pagination_required: false }),
+        productApi.getProducts({ page_size: 100, pagination_required: false }),
+      ]);
 
-    setIsLoadingRequests(true);
-    commercePurchaseRequestApi
-      .getPurchaseRequests({ page_size: 100, pagination_required: false })
-      .then((res) => {
-        if (isMounted && res?.data && Array.isArray(res.data)) {
-          setAvailableRequests(res.data.map(mapApiPurchaseRequestToUi));
-        }
-      })
-      .catch(() => { })
-      .finally(() => {
-        if (isMounted) setIsLoadingRequests(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
+      if (suppRes.status === 'fulfilled' && suppRes.value?.data && Array.isArray(suppRes.value.data)) {
+        setAvailableSuppliers(suppRes.value.data);
+      }
+      if (stockBatchRes.status === 'fulfilled' && stockBatchRes.value?.data && Array.isArray(stockBatchRes.value.data)) {
+        setAvailableBatches(stockBatchRes.value.data);
+      }
+      if (prRes.status === 'fulfilled' && prRes.value?.data && Array.isArray(prRes.value.data)) {
+        setAvailableRequests(prRes.value.data.map(mapApiPurchaseRequestToUi));
+      }
+      if (prodRes.status === 'fulfilled' && prodRes.value?.data && Array.isArray(prodRes.value.data)) {
+        setAvailableProducts(prodRes.value.data);
+      }
+    } catch (err) {
+      console.warn('Error loading form master data in Purchase Bills:', err);
+    } finally {
+      setIsLoadingRequests(false);
+    }
   }, []);
 
-  // On-demand product search: only calls products API when user is searching
-  const handleProductSearch = useCallback(async (query: string) => {
+  // Trigger form master data ONLY when the form modal is active
+  useEffect(() => {
+    if (isFormModalOpen) {
+      loadFormMasterData();
+    }
+  }, [isFormModalOpen, loadFormMasterData]);
+
+  // On-demand product search: calls products API when user is searching or opening product selector
+  const handleProductSearch = useCallback(async (query = '') => {
     const trimmed = query.trim();
-    if (!trimmed) return;
     setIsSearchingProducts(true);
     try {
       const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
+        search: trimmed || undefined,
+        page_size: 50,
         pagination_required: false,
       });
       if (res && res.data && Array.isArray(res.data)) {
         setAvailableProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          prev.forEach((p) => map.set(p.id, p));
+          if (trimmed) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
           res.data.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
@@ -310,11 +473,14 @@ export const PurchaseOrderView: React.FC = () => {
 
     availableProducts.forEach((p) => {
       const prodName = p.productName || (p as any).name || 'Product';
-      const prodCost = Number(p.purchasePrice || (p as any).costPrice || 0);
-      const prodSale = Number(p.salePrice || 0);
+      const prodCost = Number(p.purchasePrice ?? (p as any).costPrice ?? 0);
+      const prodSale = Number(p.salePrice ?? (p as any).sellingPrice ?? 0);
+      const sku = p.productCode || p.sku || '';
       map.set(p.id, {
         value: p.id,
         label: prodName,
+        subLabel: sku ? `SKU: ${sku} • Cost: ₹${prodCost} • Sale: ₹${prodSale}` : `Cost: ₹${prodCost} • Sale: ₹${prodSale}`,
+        badge: sku || undefined,
         unitCost: prodCost,
         salePrice: prodSale,
         unit: p.unit || 'PCS',
@@ -350,6 +516,7 @@ export const PurchaseOrderView: React.FC = () => {
   }, [availableProducts, formData.items, stocks]);
 
   // Combined Eligible Purchase Requests (API + Store fallback)
+  // Only shows pending/approved purchase requests that have not yet been converted into purchase bills
   const eligiblePurchaseRequests = useMemo(() => {
     const map = new Map<string, PurchaseRequest>();
     availableRequests.forEach((r) => {
@@ -360,10 +527,41 @@ export const PurchaseOrderView: React.FC = () => {
         map.set(r.id, r);
       }
     });
-    return Array.from(map.values()).filter(
-      (r) => (r.status as string) !== 'Cancelled' && r.status !== 'Rejected'
-    );
-  }, [availableRequests, purchaseRequests]);
+
+    const editingMatch =
+      editingPurchase?.notes?.match(/PR-\d+-\d+/i) ||
+      editingPurchase?.purchaseInvoiceNo?.match(/PR-\d+-\d+/i);
+    const editingRequestNo = editingMatch ? editingMatch[0].toLowerCase() : '';
+
+    return Array.from(map.values()).filter((r) => {
+      // Retain currently selected request or the one linked to the purchase bill being edited
+      if (selectedRequestId && r.id === selectedRequestId) return true;
+      if (editingRequestNo && r.requestNo.toLowerCase() === editingRequestNo) return true;
+
+      const rawStatus = (r.status || '').toLowerCase().trim();
+
+      // Exclude requests that already had a purchase created, or are completed/cancelled/rejected
+      if (
+        rawStatus === 'purchase created' ||
+        rawStatus === 'completed' ||
+        rawStatus === 'rejected' ||
+        rawStatus === 'cancelled' ||
+        Boolean(r.createdPurchaseId)
+      ) {
+        return false;
+      }
+
+      // Include pending/approved requests waiting for purchase bill creation
+      return (
+        rawStatus === 'approved' ||
+        rawStatus === 'pending approval' ||
+        rawStatus === 'submitted' ||
+        rawStatus === 'pending' ||
+        rawStatus === 'draft' ||
+        rawStatus === ''
+      );
+    });
+  }, [availableRequests, purchaseRequests, selectedRequestId, editingPurchase]);
 
   // Current selected purchase request details
   const selectedPurchaseRequest = useMemo(() => {
@@ -616,17 +814,6 @@ export const PurchaseOrderView: React.FC = () => {
     fetchPurchaseOrders();
   }, [fetchPurchaseOrders]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // 3-Dots Action dropdown & Share Popover State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -695,6 +882,7 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Open Create Modal (No mock data: uses live products/suppliers if available or clean empty inputs)
   const handleOpenCreateModal = () => {
+    loadFormMasterData();
     const nextPoNo = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const initialItem: PurchaseProductItem = {
@@ -768,12 +956,14 @@ export const PurchaseOrderView: React.FC = () => {
       po.purchaseInvoiceNo?.startsWith('INV-REQ-') ||
       po.notes?.includes('Converted from')
     );
+    loadFormMasterData();
     setPurchaseType(hasLinkedPr ? 'with_request' : 'without_request');
     let matchedPrId = '';
     if (hasLinkedPr) {
+      const allRequests = [...availableRequests, ...purchaseRequests];
       const match = po.notes?.match(/PR-\d+-\d+/i) || po.purchaseInvoiceNo?.match(/PR-\d+-\d+/i);
       if (match) {
-        const found = eligiblePurchaseRequests.find((r) => r.requestNo.toLowerCase() === match[0].toLowerCase());
+        const found = allRequests.find((r) => r.requestNo.toLowerCase() === match[0].toLowerCase());
         if (found) matchedPrId = found.id;
       }
     }
@@ -1804,8 +1994,8 @@ export const PurchaseOrderView: React.FC = () => {
                       />
                       <p className="text-[11px] text-slate-500 mt-1 font-medium">
                         {eligiblePurchaseRequests.length === 0
-                          ? 'No active purchase requests found. You can switch to "Without Purchase Request".'
-                          : `${eligiblePurchaseRequests.length} eligible request(s) found in system`}
+                          ? 'No pending purchase requests found. You can switch to "Without Purchase Request".'
+                          : `${eligiblePurchaseRequests.length} pending request(s) found in system`}
                       </p>
                     </div>
                   )}
@@ -2017,7 +2207,20 @@ export const PurchaseOrderView: React.FC = () => {
                     <thead>
                       <tr className="bg-[#33077C] text-white font-bold uppercase text-[11px] border-b border-[#33077C] tracking-wider select-none">
                         <th className="py-2.5 px-2.5 text-center border-r border-white/20 w-10 text-white/80 font-extrabold">#</th>
-                        <th className="py-2.5 px-3 text-left border-r border-white/20 min-w-[190px] text-white">Product Name</th>
+                        <th className="py-2.5 px-3 text-left border-r border-white/20 min-w-[210px] text-white">
+                          <div className="flex items-center justify-between">
+                            <span>Product Name</span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenAddProductModal()}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/30 text-[10px] font-semibold tracking-normal normal-case text-white cursor-pointer transition-colors"
+                              title="Create new product master record"
+                            >
+                              <Plus className="w-3 h-3 stroke-[2.5]" />
+                              <span>+ Add Product</span>
+                            </button>
+                          </div>
+                        </th>
                         <th className="py-2.5 px-2 text-center border-r border-white/20 min-w-[150px] text-[11px] text-white">Batch No</th>
                         <th className="py-2.5 px-2 text-center border-r border-white/20 w-20 text-white">Quantity</th>
                         <th className="py-2.5 px-2 text-center border-r border-white/20 w-20 text-white">Free Quantity</th>
@@ -2096,12 +2299,17 @@ export const PurchaseOrderView: React.FC = () => {
                                 <SearchableSelect
                                   value={it.productId}
                                   onChange={(val) => handleItemProductChange(idx, val)}
+                                  onOpen={() => {
+                                    if (availableProducts.length === 0) {
+                                      handleProductSearch('');
+                                    }
+                                  }}
                                   onSearch={handleProductSearch}
                                   isLoading={isSearchingProducts}
                                   options={productOptions}
                                   placeholder="Select Product..."
                                   searchPlaceholder="Search product..."
-                                  emptyText="Type to search products..."
+                                  emptyText={isSearchingProducts ? "Searching products..." : "No products found"}
                                   allowClear
                                   triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                                   size="sm"
@@ -2336,7 +2544,7 @@ export const PurchaseOrderView: React.FC = () => {
               {/* Bottom Table Bar: Add Item Button on left, Financial Breakdown below */}
               <div className="flex flex-col md:flex-row items-start justify-between gap-5 !mt-2.5">
                 <div className="w-full md:w-1/2 flex flex-col">
-                  <div>
+                  <div className="flex items-center gap-2">
                     <Button
                       type="button"
                       variant="primary"
@@ -2345,6 +2553,16 @@ export const PurchaseOrderView: React.FC = () => {
                       icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
                     >
                       Add Item
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      onClick={() => handleOpenAddProductModal()}
+                      icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
+                      className="!text-[#33077C] !border-[#33077C]/30 hover:!bg-[#33077C]/5 font-semibold"
+                    >
+                      + Add Product
                     </Button>
                   </div>
 
@@ -2835,6 +3053,168 @@ export const PurchaseOrderView: React.FC = () => {
                   </div>
                 </div>
               </Modal>
+
+              {/* Quick Add Product Modal */}
+              <Modal
+                isOpen={isAddProductModalOpen}
+                onClose={() => setIsAddProductModalOpen(false)}
+                title="Add New Product"
+                subtitle={
+                  <span className="text-white/80 text-xs font-normal">
+                    Create product master record and add directly to this purchase bill
+                  </span>
+                }
+                maxWidth="2xl"
+                headerGradient={true}
+                showBackIcon={true}
+                hideCloseButton={true}
+                onBack={() => setIsAddProductModalOpen(false)}
+              >
+                <div className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+                  {/* Row 1: Product Name */}
+                  <div>
+                    <FormLabel required>Product Name</FormLabel>
+                    <input
+                      type="text"
+                      placeholder="e.g. Wireless Mouse"
+                      value={quickProductForm.productName}
+                      onChange={(e) => setQuickProductForm((prev) => ({ ...prev, productName: e.target.value }))}
+                      className={FORM_INPUT_CLS}
+                      autoFocus
+                    />
+                  </div>
+
+                  {/* Row 2: Product Code / SKU & Category */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <FormLabel>Product Code / SKU</FormLabel>
+                      <input
+                        type="text"
+                        placeholder="e.g. PRD-001"
+                        value={quickProductForm.productCode}
+                        onChange={(e) => setQuickProductForm((prev) => ({ ...prev, productCode: e.target.value }))}
+                        className={FORM_INPUT_CLS}
+                      />
+                    </div>
+                    <div>
+                      <FormLabel>Category</FormLabel>
+                      <input
+                        type="text"
+                        placeholder="General"
+                        value={quickProductForm.category}
+                        onChange={(e) => setQuickProductForm((prev) => ({ ...prev, category: e.target.value }))}
+                        className={FORM_INPUT_CLS}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 3: Unit & HSN Code */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <FormLabel>Unit of Measurement</FormLabel>
+                      <select
+                        value={quickProductForm.unit}
+                        onChange={(e) => setQuickProductForm((prev) => ({ ...prev, unit: e.target.value }))}
+                        className={FORM_SELECT_CLS}
+                      >
+                        <option value="PCS">PCS (Pieces)</option>
+                        <option value="BOX">BOX</option>
+                        <option value="KG">KG (Kilograms)</option>
+                        <option value="GM">GM (Grams)</option>
+                        <option value="LTR">LTR (Liters)</option>
+                        <option value="MTR">MTR (Meters)</option>
+                        <option value="PACK">PACK</option>
+                        <option value="SET">SET</option>
+                        <option value="NOS">NOS</option>
+                      </select>
+                    </div>
+                    <div>
+                      <FormLabel>HSN / SAC Code</FormLabel>
+                      <input
+                        type="text"
+                        placeholder="e.g. 8471"
+                        value={quickProductForm.hsnCode}
+                        onChange={(e) => setQuickProductForm((prev) => ({ ...prev, hsnCode: e.target.value }))}
+                        className={FORM_INPUT_CLS}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 4: Pricing Section (Purchase Price, Sale Price, Tax Rate) */}
+                  <div className="p-4 bg-purple-50/50 rounded-xl border border-purple-100 space-y-3">
+                    <div className="text-xs font-bold text-[#33077C] flex items-center gap-1.5">
+                      <span>Pricing & Tax Configuration</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <FormLabel required>Purchase Price (₹)</FormLabel>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={quickProductForm.purchasePrice}
+                          onChange={(e) => setQuickProductForm((prev) => ({ ...prev, purchasePrice: e.target.value }))}
+                          className={FORM_INPUT_CLS}
+                        />
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">Supplier cost price</span>
+                      </div>
+                      <div>
+                        <FormLabel required>Sale Price (₹)</FormLabel>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={quickProductForm.salePrice}
+                          onChange={(e) => setQuickProductForm((prev) => ({ ...prev, salePrice: e.target.value }))}
+                          className={FORM_INPUT_CLS}
+                        />
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">Default customer price</span>
+                      </div>
+                      <div>
+                        <FormLabel>GST Tax Rate</FormLabel>
+                        <select
+                          value={quickProductForm.taxRate}
+                          onChange={(e) => setQuickProductForm((prev) => ({ ...prev, taxRate: e.target.value }))}
+                          className={FORM_SELECT_CLS}
+                        >
+                          <option value="None">None (0%)</option>
+                          <option value="GST @ 0%">GST @ 0%</option>
+                          <option value="GST @ 5%">GST @ 5%</option>
+                          <option value="GST @ 12%">GST @ 12%</option>
+                          <option value="GST @ 18%">GST @ 18%</option>
+                          <option value="GST @ 28%">GST @ 28%</option>
+                        </select>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">Applicable tax rate</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      onClick={() => setIsAddProductModalOpen(false)}
+                      disabled={isCreatingProduct}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="md"
+                      onClick={handleSaveQuickProduct}
+                      disabled={isCreatingProduct}
+                      icon={isCreatingProduct ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Check className="w-4 h-4 stroke-[2.5]" />}
+                    >
+                      {isCreatingProduct ? 'Creating...' : 'Save & Select Product'}
+                    </Button>
+                  </div>
+                </div>
+              </Modal>
             </form>
           </div>
         </div>
@@ -2959,13 +3339,36 @@ export const PurchaseOrderView: React.FC = () => {
             onChange={(val) => setPendingSearch(val)}
             placeholder="Search by PO #, invoice #, supplier, product..."
             onSubmit={() => {
-              setAppliedSearch(pendingSearch);
+              const trimmed = pendingSearch.trim();
+              const isSame =
+                appliedSearch === trimmed &&
+                appliedPurchaseStatus === pendingPurchaseStatus &&
+                appliedPaymentStatus === pendingPaymentStatus &&
+                appliedSupplier === pendingSupplier &&
+                currentPage === 1;
+
+              setAppliedSearch(trimmed);
               setAppliedPurchaseStatus(pendingPurchaseStatus);
               setAppliedPaymentStatus(pendingPaymentStatus);
               setAppliedSupplier(pendingSupplier);
               setCurrentPage(1);
+
+              if (isSame) {
+                fetchPurchaseOrders(true);
+              }
             }}
             onReset={() => {
+              const isSame =
+                appliedSearch === '' &&
+                pendingSearch === '' &&
+                appliedPurchaseStatus === 'All' &&
+                pendingPurchaseStatus === 'All' &&
+                appliedPaymentStatus === 'All' &&
+                pendingPaymentStatus === 'All' &&
+                appliedSupplier === 'All' &&
+                pendingSupplier === 'All' &&
+                currentPage === 1;
+
               setPendingSearch('');
               setAppliedSearch('');
               setPendingPurchaseStatus('All');
@@ -2975,16 +3378,18 @@ export const PurchaseOrderView: React.FC = () => {
               setPendingSupplier('All');
               setAppliedSupplier('All');
               setCurrentPage(1);
+
+              if (isSame) {
+                fetchPurchaseOrders(true);
+              }
             }}
             filterSlot={
               <div className="flex items-center gap-2.5 flex-wrap">
                 <FilterDropdown
                   placeholder="Purchase Status : All"
-                  value={appliedPurchaseStatus}
+                  value={pendingPurchaseStatus}
                   onChange={(val) => {
                     setPendingPurchaseStatus(val);
-                    setAppliedPurchaseStatus(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: 'Purchase Status : All', value: 'All' },
@@ -2998,11 +3403,9 @@ export const PurchaseOrderView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Payment Status : All"
-                  value={appliedPaymentStatus}
+                  value={pendingPaymentStatus}
                   onChange={(val) => {
                     setPendingPaymentStatus(val);
-                    setAppliedPaymentStatus(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: 'Payment Status : All', value: 'All' },
@@ -3015,11 +3418,9 @@ export const PurchaseOrderView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Supplier : All"
-                  value={appliedSupplier}
+                  value={pendingSupplier}
                   onChange={(val) => {
                     setPendingSupplier(val);
-                    setAppliedSupplier(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: 'Supplier : All', value: 'All' },
@@ -3212,18 +3613,6 @@ export const PurchaseOrderView: React.FC = () => {
                           {/* 9. Actions */}
                           <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
-                              {/* Print Action */}
-                              <button
-                                type="button"
-                                title="Print Purchase Bill"
-                                onClick={() => {
-                                  toast.info(`Preparing print for ${po.purchaseNo}...`);
-                                  window.print();
-                                }}
-                                className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                              >
-                                <Printer className="w-4 h-4" />
-                              </button>
 
                               {/* Share / Forward Popover */}
                               <UniversalShareDropdown
@@ -3237,204 +3626,65 @@ export const PurchaseOrderView: React.FC = () => {
                               />
 
                               {/* 3-dots Actions Dropdown */}
-                              <div className="relative inline-block text-left action-dropdown-container">
-                                <button
-                                  type="button"
-                                  title="More Options"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (activeDropdownId === po.id) {
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                    } else {
-                                      setActiveShareId(null);
-                                      const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                      const spaceBelow = window.innerHeight - btnRect.bottom;
-                                      const dropdownHeight = 220;
-                                      if (spaceBelow < dropdownHeight) {
-                                        setDropdownPos({
-                                          bottom: window.innerHeight - btnRect.top + 4,
-                                          right: window.innerWidth - btnRect.right,
-                                        });
-                                      } else {
-                                        setDropdownPos({
-                                          top: btnRect.bottom + 4,
-                                          right: window.innerWidth - btnRect.right,
-                                        });
-                                      }
-                                      setActiveDropdownId(po.id);
-                                    }
-                                  }}
-                                  className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <MoreVertical className="w-4 h-4" />
-                                </button>
-
-                                {activeDropdownId === po.id && dropdownPos && (
-                                  <div
-                                    className="action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                    style={{
-                                      top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                      bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                      right: `${dropdownPos.right}px`,
-                                    }}
-                                  >
-                                    {/* 1. View/Edit */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        handleOpenEditModal(po);
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                    >
-                                      View/Edit
-                                    </button>
-
-                                    {/* 2. Duplicate */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        handleDuplicatePurchase(po);
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                    >
-                                      Duplicate
-                                    </button>
-
-                                    {/* 3. Delete */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        handleDeletePurchase(po);
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                                    >
-                                      Delete
-                                    </button>
-
-                                    {/* Status Transitions */}
-                                    {po.purchaseStatus === 'Pending' && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveDropdownId(null);
-                                          handleUpdateStatus(po, 'Approved');
-                                        }}
-                                        className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                      >
-                                        Mark as Approved
-                                      </button>
-                                    )}
-
-                                    {(po.purchaseStatus === 'Approved' || po.purchaseStatus === 'Pending') && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveDropdownId(null);
-                                          handleUpdateStatus(po, 'Ordered');
-                                        }}
-                                        className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                      >
-                                        Mark as Ordered
-                                      </button>
-                                    )}
-
-                                    {po.purchaseStatus === 'Ordered' && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveDropdownId(null);
-                                          handleUpdateStatus(po, 'Received');
-                                        }}
-                                        className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                      >
-                                        Mark as Received
-                                      </button>
-                                    )}
-
-                                    {po.purchaseStatus !== 'Received' && po.purchaseStatus !== 'Cancelled' && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveDropdownId(null);
-                                          handleUpdateStatus(po, 'Cancelled');
-                                        }}
-                                        className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                      >
-                                        Cancel Order
-                                      </button>
-                                    )}
-
-                                    {/* 4. Open PDF */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        toast.info(`Opening PDF for ${po.purchaseNo}...`);
-                                        window.print();
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                    >
-                                      Open PDF
-                                    </button>
-
-                                    {/* 5. Preview */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        setSelectedPurchase(po);
-                                        setIsDetailModalOpen(true);
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                    >
-                                      Preview
-                                    </button>
-
-                                    {/* 6. Print */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        toast.info(`Preparing print for ${po.purchaseNo}...`);
-                                        window.print();
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                    >
-                                      Print
-                                    </button>
-
-                                    {/* 7. View History */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        toast.info(`Purchase Bill ${po.purchaseNo} created on ${po.purchaseDate} for supplier ${po.supplierName}. Status: ${po.purchaseStatus}, Payment: ${po.paymentStatus}.`);
-                                      }}
-                                      className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                    >
-                                      View History
-                                    </button>
-
-                                    {/* 8. Convert to Return (hidden once already returned) */}
-                                    {(po.purchaseStatus as string) !== 'Returned' && (po.purchaseStatus as string)?.toLowerCase() !== 'returned' && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveDropdownId(null);
-                                          handleConvertToReturn(po);
-                                        }}
-                                        className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer block"
-                                      >
-                                        Convert to Return
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
+                              <SaleActionDropdown
+                                items={[
+                                  {
+                                    label: 'View/Edit',
+                                    variant: 'edit',
+                                    onClick: () => handleOpenEditModal(po),
+                                  },
+                                  {
+                                    label: 'Duplicate',
+                                    variant: 'duplicate',
+                                    onClick: () => handleDuplicatePurchase(po),
+                                  },
+                                  po.purchaseStatus === 'Pending' && {
+                                    label: 'Mark as Approved',
+                                    variant: 'approve',
+                                    onClick: () => handleUpdateStatus(po, 'Approved'),
+                                  },
+                                  (po.purchaseStatus === 'Approved' || po.purchaseStatus === 'Pending') && {
+                                    label: 'Mark as Ordered',
+                                    variant: 'order',
+                                    onClick: () => handleUpdateStatus(po, 'Ordered'),
+                                  },
+                                  po.purchaseStatus === 'Ordered' && {
+                                    label: 'Mark as Received',
+                                    variant: 'activate',
+                                    onClick: () => handleUpdateStatus(po, 'Received'),
+                                  },
+                                  po.purchaseStatus !== 'Received' && po.purchaseStatus !== 'Cancelled' && {
+                                    label: 'Cancel Order',
+                                    variant: 'cancel',
+                                    onClick: () => handleUpdateStatus(po, 'Cancelled'),
+                                  },
+                                  {
+                                    label: 'Preview',
+                                    variant: 'preview',
+                                    onClick: () => {
+                                      setSelectedPurchase(po);
+                                      setIsDetailModalOpen(true);
+                                    },
+                                  },
+                                  {
+                                    label: 'View History',
+                                    variant: 'view',
+                                    onClick: () => handleOpenHistory(po),
+                                  },
+                                  (po.purchaseStatus as string) !== 'Returned' && (po.purchaseStatus as string)?.toLowerCase() !== 'returned' && {
+                                    label: 'Convert to Return',
+                                    variant: 'return',
+                                    onClick: () => handleConvertToReturn(po),
+                                  },
+                                  {
+                                    label: 'Delete',
+                                    variant: 'delete',
+                                    danger: true,
+                                    dividerBefore: true,
+                                    onClick: () => handleDeletePurchase(po),
+                                  },
+                                ]}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -3647,22 +3897,32 @@ export const PurchaseOrderView: React.FC = () => {
                 <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => setIsDetailModalOpen(false)}
-                    className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
-                  >
-                    <X className="w-4 h-4 text-slate-500" />
-                    <span>Close</span>
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => {
                       setIsDetailModalOpen(false);
                       navigate('/sale-management/purchase/return');
                     }}
-                    className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                    className="h-10 px-4 rounded-lg border border-purple-200 hover:border-purple-300 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center justify-center gap-2"
                   >
                     <RotateCcw className="w-4 h-4" />
                     <span>Create Purchase Return</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsDetailModalOpen(false)}
+                    className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.info(`Preparing print for ${selectedPurchase.purchaseNo}...`);
+                      window.print();
+                    }}
+                    className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Print Order</span>
                   </button>
                 </div>
               </div>
@@ -3758,6 +4018,197 @@ export const PurchaseOrderView: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </Modal>
+          )}
+
+          {/* ==========================================
+              MODAL 4: PURCHASE ORDER HISTORY & AUDIT TRAIL
+             ========================================== */}
+          {historyPurchase && (
+            <Modal
+              isOpen={Boolean(historyPurchase)}
+              onClose={() => setHistoryPurchase(null)}
+              title={`Order History & Audit Trail: ${historyPurchase.purchaseNo}`}
+              subtitle={
+                isLoadingHistory
+                  ? 'Syncing live history from Work API...'
+                  : 'Complete lifecycle progression and timeline audit log'
+              }
+              maxWidth="md"
+              headerGradient={true}
+              showBackIcon={true}
+              hideCloseButton={true}
+              onBack={() => setHistoryPurchase(null)}
+            >
+              <div className="space-y-4 text-xs font-sans">
+                {/* Header Card */}
+                <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
+                  <div>
+                    <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
+                      Purchase Order No
+                    </div>
+                    <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                      {historyPurchase.purchaseNo}
+                    </div>
+                    <div className="text-xs text-slate-600 font-medium mt-0.5">
+                      Supplier: <span className="font-semibold text-slate-800">{historyPurchase.supplierName}</span>
+                    </div>
+                    {historyPurchase.purchaseInvoiceNo && (
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        Inv Ref: {historyPurchase.purchaseInvoiceNo}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      Total Amount
+                    </div>
+                    <div className="text-base font-extrabold text-[#33077C] mt-0.5">
+                      ₹{historyPurchase.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </div>
+                    <div className="flex items-center gap-1.5 justify-end mt-1.5 flex-wrap">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          historyPurchase.paymentStatus === 'Paid'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : historyPurchase.paymentStatus === 'Partial'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-rose-100 text-rose-700'
+                        }`}
+                      >
+                        {historyPurchase.paymentStatus}
+                      </span>
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          historyPurchase.purchaseStatus === 'Completed' || historyPurchase.purchaseStatus === 'Received'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : historyPurchase.purchaseStatus === 'Approved'
+                            ? 'bg-blue-100 text-blue-700'
+                            : historyPurchase.purchaseStatus === 'Ordered'
+                            ? 'bg-purple-100 text-purple-700'
+                            : historyPurchase.purchaseStatus === 'Cancelled'
+                            ? 'bg-rose-100 text-rose-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {historyPurchase.purchaseStatus}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audit Timeline */}
+                <div className="space-y-3 pt-1">
+                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Lifecycle & Activity Timeline
+                  </div>
+
+                  <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
+                    {/* Event 1: Creation */}
+                    <div className="relative">
+                      <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
+                      <div>
+                        <div className="font-bold text-slate-800 text-xs">
+                          Purchase Order Created
+                        </div>
+                        <div className="text-slate-500 text-[11px] mt-0.5">
+                          Order Date: <span className="font-medium text-slate-700">{historyPurchase.purchaseDate}</span> • Due Date: <span className="font-medium text-slate-700">{historyPurchase.dueDate}</span>
+                        </div>
+                        <div className="text-slate-400 text-[10px] mt-0.5">
+                          Items: {historyPurchase.items.length} product(s) registered
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Event 2: Order Fulfillment State */}
+                    <div className="relative">
+                      <div
+                        className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
+                          historyPurchase.purchaseStatus === 'Completed' || historyPurchase.purchaseStatus === 'Received'
+                            ? 'bg-emerald-500 ring-4 ring-emerald-100'
+                            : historyPurchase.purchaseStatus === 'Approved'
+                            ? 'bg-blue-500 ring-4 ring-blue-100'
+                            : historyPurchase.purchaseStatus === 'Ordered'
+                            ? 'bg-purple-500 ring-4 ring-purple-100'
+                            : historyPurchase.purchaseStatus === 'Cancelled'
+                            ? 'bg-rose-500 ring-4 ring-rose-100'
+                            : 'bg-amber-500 ring-4 ring-amber-100'
+                        }`}
+                      />
+                      <div>
+                        <div className="font-bold text-slate-800 text-xs">
+                          Status: {historyPurchase.purchaseStatus}
+                        </div>
+                        <div className="text-slate-500 text-[11px] mt-0.5">
+                          {historyPurchase.purchaseStatus === 'Received' || historyPurchase.purchaseStatus === 'Completed'
+                            ? 'Goods delivered and stocked into warehouse inventory.'
+                            : historyPurchase.purchaseStatus === 'Ordered'
+                            ? 'Dispatched to supplier; awaiting shipment arrival.'
+                            : historyPurchase.purchaseStatus === 'Approved'
+                            ? 'Order authorized and cleared for supplier dispatch.'
+                            : historyPurchase.purchaseStatus === 'Cancelled'
+                            ? 'Purchase order voided/cancelled.'
+                            : 'Order drafted, pending authorization.'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Event 3: Payment & Settlement */}
+                    <div className="relative">
+                      <div
+                        className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
+                          historyPurchase.balance <= 0
+                            ? 'bg-emerald-500 ring-4 ring-emerald-100'
+                            : historyPurchase.paidAmount > 0
+                            ? 'bg-amber-500 ring-4 ring-amber-100'
+                            : 'bg-rose-500 ring-4 ring-rose-100'
+                        }`}
+                      />
+                      <div>
+                        <div className="font-bold text-slate-800 text-xs">
+                          Payment Settlement: {historyPurchase.paymentStatus}
+                        </div>
+                        <div className="text-slate-500 text-[11px] mt-0.5">
+                          Paid: <strong className="text-emerald-700">₹{historyPurchase.paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+                          {historyPurchase.balance > 0 && (
+                            <span> • Balance: <strong className="text-amber-700">₹{historyPurchase.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></span>
+                          )}
+                        </div>
+                        <div className="text-slate-400 text-[10px] mt-0.5">
+                          Terms: {historyPurchase.paymentTerms || 'Net 30 Days'} • Mode: {historyPurchase.paymentMethod || 'Bank Transfer'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Event 4: System Audit Log */}
+                    <div className="relative">
+                      <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-400 ring-4 ring-slate-100" />
+                      <div>
+                        <div className="font-bold text-slate-700 text-xs">
+                          System Audit Log Entry
+                        </div>
+                        <div className="text-slate-400 text-[10px] mt-0.5">
+                          Record ID: <span className="font-mono text-slate-600">{historyPurchase.id}</span>
+                        </div>
+                        <div className="text-slate-400 text-[10px] mt-0.5">
+                          Last Verified: {new Date(historyPurchase.updatedAt || Date.now()).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="flex justify-end pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setHistoryPurchase(null)}
+                    className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
             </Modal>
           )}
         </div>

@@ -41,10 +41,12 @@ import { Modal } from "../../../components/common/Modal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
+import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "sonner";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { FileSpreadsheet } from "lucide-react";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
 import {
@@ -69,8 +71,9 @@ import {
   initializeWorkflowIntegrity,
 } from "../../../utils/salesDocumentWorkflow";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
-import { SearchableSelect } from "../../../components/common/SearchableSelect";
-import { FormLabel, FORM_INPUT_CLS } from "../utils/formUtils";
+import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown } from "../utils/formUtils";
+import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
+import { FormError } from "../../../components/common/FormError";
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -384,6 +387,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [quickCustCompany, setQuickCustCompany] = useState("");
   const [quickCustAddress, setQuickCustAddress] = useState("");
   const [quickCustOpeningBal, setQuickCustOpeningBal] = useState("0");
+  const [quickCustPhoneError, setQuickCustPhoneError] = useState("");
 
   // Load Customers and Products masters from Live API ONLY when Form Mode is active
   const hasLoadedMasterDataRef = useRef(false);
@@ -555,9 +559,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         productId: p.id,
         productName: p.productName || (p as any).name || "Unnamed Product",
         sku: p.productCode || (p as any).sku || "",
-        unitPrice: Number(p.salePrice || (p as any).price || 0),
+        unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).price ?? (p as any).unitPrice ?? 0),
         unit: p.unit || "PCS",
         taxPercent: tax,
+        hsnCode: p.hsnCode || "",
         category: p.category || "",
         batches: (p as any).batches || (p as any).stockBatches || [],
       });
@@ -571,9 +576,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           productId: pid,
           productName: s.productName || (s as any).name || "Unnamed Product",
           sku: s.sku || (s as any).itemCode || "",
-          unitPrice: Number(s.unitPrice || (s as any).price || 0),
+          unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
           unit: s.unit || "PCS",
           taxPercent: 5,
+          hsnCode: (s as any).hsnCode || "",
           category: s.category || "",
           batches: s.batches || [],
         });
@@ -783,14 +789,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       return;
     }
     if (quickCustPhone.trim()) {
-      const cleanPhone = quickCustPhone.replace(/[\s\-()]/g, "");
-      if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
+      const cleanPhone = normalizeIndianPhoneTo10Digits(quickCustPhone);
+      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
         toast.error(
-          "Please enter a valid 10-digit Indian phone number (e.g. 9876543210)",
+          "Please enter a valid 10-digit Indian phone number (starts with 6, 7, 8, or 9)",
         );
+        setQuickCustPhoneError("Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)");
         return;
       }
     }
+    setQuickCustPhoneError("");
 
     try {
       setIsActionLoading(true);
@@ -883,7 +891,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           target.unit = foundStock.unit || "PCS";
           target.category = foundStock.category;
           target.sku = foundStock.sku;
+          target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || "";
           target.taxPercent = (foundStock as any).taxPercent ?? 5;
+          if (target.unitPrice === 0) {
+            toast.warning(`Product "${foundStock.productName}" has no default Sale Price configured.`);
+          }
         }
       }
 
@@ -2023,14 +2035,17 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     </label>
                     <input
                       type="tel"
-                      placeholder="Phone No."
+                      placeholder="e.g. 9876543210"
+                      maxLength={10}
                       value={activeTab.formData.customerPhone}
-                      onChange={(e) =>
+                      onKeyDown={handleNumberOnlyKeyDown}
+                      onChange={(e) => {
+                        const clean = normalizeIndianPhoneTo10Digits(e.target.value);
                         updateActiveTabFormData((prev) => ({
                           ...prev,
-                          customerPhone: e.target.value,
-                        }))
-                      }
+                          customerPhone: clean,
+                        }));
+                      }}
                       className="w-full h-11 px-3 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
                     />
                   </div>
@@ -2669,11 +2684,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   <FormLabel>Phone Number</FormLabel>
                   <input
                     type="tel"
-                    placeholder="7839396753"
+                    placeholder="e.g. 9876543210"
+                    maxLength={10}
                     value={quickCustPhone}
-                    onChange={(e) => setQuickCustPhone(e.target.value)}
-                    className={FORM_INPUT_CLS}
+                    onKeyDown={handleNumberOnlyKeyDown}
+                    onChange={(e) => {
+                      const clean = normalizeIndianPhoneTo10Digits(e.target.value);
+                      setQuickCustPhone(clean);
+                      if (clean && !/^[6-9]\d{9}$/.test(clean)) {
+                        setQuickCustPhoneError("Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)");
+                      } else {
+                        setQuickCustPhoneError("");
+                      }
+                    }}
+                    className={getFormInputCls(Boolean(quickCustPhoneError))}
                   />
+                  {quickCustPhoneError && <FormError message={quickCustPhoneError} />}
                 </div>
                 <div>
                   <FormLabel>Opening Balance</FormLabel>
@@ -3200,167 +3226,57 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             </button>
 
                             {/* 3-Dots Actions Menu */}
-                            <div className="sale-order-action-dropdown-container relative inline-block text-left">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (isActionOpen) {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  } else {
-                                    const rect =
-                                      e.currentTarget.getBoundingClientRect();
-                                    const spaceBelow =
-                                      window.innerHeight - rect.bottom;
-                                    const dropdownHeight = 260;
-                                    if (spaceBelow < dropdownHeight) {
-                                      setDropdownPos({
-                                        bottom:
-                                          window.innerHeight - rect.top + 4,
-                                        right: window.innerWidth - rect.right,
-                                      });
-                                    } else {
-                                      setDropdownPos({
-                                        top: rect.bottom + 4,
-                                        right: window.innerWidth - rect.right,
-                                      });
-                                    }
-                                    setActiveDropdownId(item.id);
-                                  }
-                                }}
-                                className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                                title="More options"
-                              >
-                                <MoreVertical className="w-4 h-4 text-slate-600" />
-                              </button>
-
-                              {/* 3-Dots Floating Dropdown Menu */}
-                              {isActionOpen && dropdownPos && (
-                                <div
-                                  style={{
-                                    position: "fixed",
-                                    top:
-                                      dropdownPos.top !== undefined
-                                        ? `${dropdownPos.top}px`
-                                        : "auto",
-                                    bottom:
-                                      dropdownPos.bottom !== undefined
-                                        ? `${dropdownPos.bottom}px`
-                                        : "auto",
-                                    right: `${dropdownPos.right}px`,
-                                    zIndex: 9999,
-                                  }}
-                                  className="sale-order-action-dropdown-menu w-52 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {/* Convert to Delivery Challan */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleConvertExistingToChallan(item);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Convert to Delivery Challan
-                                  </button>
-
-                                  {/* Convert to Sales Invoice */}
-                                  {item.status !== "Converted" && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        handleConvertExistingToSale(item);
-                                      }}
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                    >
-                                      Convert to Sales Invoice
-                                    </button>
-                                  )}
-
-                                  <div className="h-px bg-slate-100 my-1" />
-
-                                  {/* 1. View/Edit */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleOpenEditForm(item);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    View/Edit
-                                  </button>
-
-                                  {/* 2. Delete */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleDeleteOrder(item.id);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
-                                  >
-                                    Delete
-                                  </button>
-
-                                  {/* 3. Duplicate */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      handleDuplicateOrder(item);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Duplicate
-                                  </button>
-
-
-
-                                  {/* 5. Preview */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      setPreviewOrder(item);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Preview
-                                  </button>
-
-
-                                  {/* 7. View History */}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveDropdownId(null);
-                                      setHistoryOrder(item);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    View History
-                                  </button>
-
-                                  {/* 8. Cancel Order (Last Option) */}
-                                  {item.status === "Open" && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setActiveDropdownId(null);
-                                        handleCancelOrder(item);
-                                      }}
-                                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                    >
-                                      Mark as Cancelled
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
+                            <SaleActionDropdown
+                              items={[
+                                {
+                                  label: "Convert to Delivery Challan",
+                                  variant: "challan",
+                                  onClick: () => handleConvertExistingToChallan(item),
+                                },
+                                {
+                                  label: "Convert to Sales Invoice",
+                                  variant: "invoice",
+                                  hidden: item.status === "Converted",
+                                  onClick: () => handleConvertExistingToSale(item),
+                                },
+                                {
+                                  label: "View/Edit",
+                                  variant: "edit",
+                                  onClick: () => handleOpenEditForm(item),
+                                },
+                                {
+                                  label: "Duplicate",
+                                  variant: "duplicate",
+                                  onClick: () => handleDuplicateOrder(item),
+                                },
+                                {
+                                  label: "Preview",
+                                  variant: "preview",
+                                  onClick: () => setPreviewOrder(item),
+                                },
+                                {
+                                  label: "Print Order",
+                                  variant: "print",
+                                  onClick: () => handlePrintOrder(item),
+                                },
+                                {
+                                  label: "View History",
+                                  variant: "view",
+                                  onClick: () => setHistoryOrder(item),
+                                },
+                                {
+                                  label: "Mark as Cancelled",
+                                  variant: "cancel",
+                                  hidden: item.status !== "Open",
+                                  onClick: () => handleCancelOrder(item),
+                                },
+                                {
+                                  label: "Delete",
+                                  variant: "delete",
+                                  onClick: () => handleDeleteOrder(item.id),
+                                },
+                              ]}
+                            />
                           </div>
                         </td>
                       </tr>

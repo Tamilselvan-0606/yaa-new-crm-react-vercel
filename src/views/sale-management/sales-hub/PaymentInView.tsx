@@ -45,6 +45,7 @@ import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { UniversalShareDropdown, formatPaymentInShare } from "../../../utils/shareUtils";
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
+import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "sonner";
 import {
   commercePaymentInApi,
@@ -1585,116 +1586,35 @@ export const PaymentInView: React.FC = () => {
                           />
 
                           {/* 3. 3-Dots Menu Button */}
-                          <div className="payment-in-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveShareDropdownId(null);
-                                setShareDropdownPos(null);
-                                if (isActionOpen) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 240;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
-                              title="More Options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-
-                            {/* Floating Dropdown Menu matching exact reference list */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: "fixed",
-                                  top:
-                                    dropdownPos.top !== undefined
-                                      ? `${dropdownPos.top}px`
-                                      : "auto",
-                                  bottom:
-                                    dropdownPos.bottom !== undefined
-                                      ? `${dropdownPos.bottom}px`
-                                      : "auto",
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
-                                }}
-                                className="payment-in-dropdown-menu w-44 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleOpenEditModal(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
-
-
-                                {/* 4. Delete / Void */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDeletePayment(
-                                      item.id,
-                                      item.receiptNo,
-                                    );
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Void / Delete
-                                </button>
-
-                                {/* 5. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDuplicatePayment(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-                                {/* 6. View History */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setHistoryPaymentIn(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-normal text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer block"
-                                >
-                                  View History
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: 'View/Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEditModal(item),
+                              },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicatePayment(item),
+                              },
+                              {
+                                label: 'Print Receipt',
+                                variant: 'print',
+                                onClick: () => handlePrintReceipt(item),
+                              },
+                              {
+                                label: 'View History',
+                                variant: 'view',
+                                onClick: () => setHistoryPaymentIn(item),
+                              },
+                              {
+                                label: 'Void / Delete',
+                                variant: 'delete',
+                                onClick: () => handleDeletePayment(item.id, item.receiptNo),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>

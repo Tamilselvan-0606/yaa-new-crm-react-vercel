@@ -58,6 +58,7 @@ import { SaleManagementReportsView } from './views/sale-management/reports/SaleM
 import { SalesRepresentativeView } from './views/sale-management/sales-hub/SalesRepresentativeView';
 import { CollectionsView } from './views/sale-management/sales-hub/CollectionsView';
 import { PendingDuesView } from './views/pending-dues/PendingDuesView';
+import { SaleManagementAutoCapitalize } from './views/sale-management/utils/textUtils';
 
 const MainLayout: React.FC = () => {
   const { currentUser, isAdmin, isSuperAdmin, isOrgSuperAdmin, isAuthenticated, isLoading } = useAuth();
@@ -88,6 +89,9 @@ const MainLayout: React.FC = () => {
 
   return (
     <div className="flex h-screen w-full bg-[#F5F7FA] overflow-hidden font-sans print:block print:h-auto print:overflow-visible print:bg-white">
+      {/* Auto-capitalize first letter of text inputs while typing in Sale Management */}
+      <SaleManagementAutoCapitalize />
+
       {/* Primary Left Navigation */}
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 

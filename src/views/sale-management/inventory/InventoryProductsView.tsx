@@ -27,8 +27,6 @@ import {
   RotateCcw,
   Save,
   ArrowLeft,
-  Printer,
-  Forward,
   FileSpreadsheet,
   Loader2,
   Eye,
@@ -41,8 +39,8 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { Button } from '../../../components/common/Button';
 import { Pagination } from '../../../components/common/Pagination';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { UniversalShareDropdown, formatProductShare } from '../../../utils/shareUtils';
 import { toast } from 'sonner';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   baseClient,
   productApi,
@@ -128,7 +126,7 @@ export const defaultProductFormValues: ProductFormValues = {
   asOfDate: new Date().toISOString().split('T')[0],
   minStockAlert: '',
   location: '',
-  isBatchTracking: false,
+  isBatchTracking: true,
   batchNo: '',
   mfgDate: '',
   expDate: '',
@@ -1134,11 +1132,9 @@ export const InventoryProductsView: React.FC = () => {
     setDeleteConfirmItem(null);
   };
 
-  // 3-Dots Action Dropdown State & Share Popover
+  // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1427,10 +1423,6 @@ export const InventoryProductsView: React.FC = () => {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
-      if (!target.closest('.share-popover-container') && !target.closest('.share-popover-menu')) {
-        setActiveShareId(null);
-        setSharePos(null);
-      }
       if (bulkMenuRef.current && !bulkMenuRef.current.contains(target)) {
         setIsBulkMenuOpen(false);
       }
@@ -1439,10 +1431,6 @@ export const InventoryProductsView: React.FC = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
       if (isBulkMenuOpen) {
         setIsBulkMenuOpen(false);
@@ -1454,7 +1442,7 @@ export const InventoryProductsView: React.FC = () => {
       document.removeEventListener('mousedown', handleOutsideClick);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId, isBulkMenuOpen]);
+  }, [activeDropdownId, isBulkMenuOpen]);
 
   // Auto-fetch salePrice (or purchasePrice) into atPrice when Stock tab is activated
   useEffect(() => {
@@ -1574,7 +1562,7 @@ export const InventoryProductsView: React.FC = () => {
       asOfDate: prod.asOfDate || new Date().toISOString().split('T')[0],
       minStockAlert: prod.minStockAlert || '',
       location: prod.location || '',
-      isBatchTracking: Boolean(prod.isBatchTracking),
+      isBatchTracking: prod.isBatchTracking !== undefined ? Boolean(prod.isBatchTracking) : true,
       batchNo: prod.batchNo || '',
       mfgDate: prod.mfgDate || '',
       expDate: prod.expDate || '',
@@ -1756,10 +1744,10 @@ export const InventoryProductsView: React.FC = () => {
       asOfDate: data.asOfDate,
       minStockAlert: minStockAlertNum,
       location: data.location || undefined,
-      isBatchTracking: Boolean(data.isBatchTracking),
-      batchNo: data.isBatchTracking ? (data.batchNo?.trim() || undefined) : undefined,
-      mfgDate: data.isBatchTracking ? (data.mfgDate?.trim() || undefined) : undefined,
-      expDate: data.isBatchTracking ? (data.expDate?.trim() || undefined) : undefined,
+      isBatchTracking: Boolean(data.isBatchTracking !== undefined ? data.isBatchTracking : true),
+      batchNo: data.batchNo?.trim() || undefined,
+      mfgDate: data.mfgDate?.trim() || undefined,
+      expDate: data.expDate?.trim() || undefined,
       status: finalStatus,
     };
 
@@ -2752,7 +2740,7 @@ export const InventoryProductsView: React.FC = () => {
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-32 whitespace-nowrap">
                   STATUS
                 </th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24 whitespace-nowrap">
+                <th className="py-4 px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-20 whitespace-nowrap">
                   ACTIONS
                 </th>
               </tr>
@@ -2943,140 +2931,31 @@ export const InventoryProductsView: React.FC = () => {
                       </td>
 
                       {/* ACTIONS */}
-                      <td className="py-4 px-5 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          {/* Print Icon Button */}
-                          <button
-                            type="button"
-                            title="Print"
-                            onClick={() => {
-                              toast.info(`Preparing print for ${item.productName}...`);
-                              window.print();
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          {/* Share Popover Button */}
-                          <UniversalShareDropdown
-                            id={item.id}
-                            activeShareId={activeShareId}
-                            setActiveShareId={setActiveShareId}
-                            sharePos={sharePos}
-                            setSharePos={setSharePos}
-                            getShareData={() => formatProductShare(item)}
-                            title="Share Product"
-                          />
-
-                          {/* 3-dots Actions Dropdown */}
-                          <div className="relative inline-block text-left product-action-dropdown-container">
-                            <button
-                              type="button"
-                              title="More Options"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === item.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  setActiveShareId(null);
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 160;
-                                  const rightPos = window.innerWidth - rect.right;
-
-                                  if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: rightPos,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: rightPos,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {/* Dropdown Menu */}
-                            {isDropdownOpen && dropdownPos && (
-                              <div
-                                className="product-action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                style={{
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                }}
-                              >
-                                {/* 1. View Details */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenDetailModal(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Eye className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>View Details</span>
-                                </button>
-
-                                {/* 2. Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleOpenEditModal(item);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Pencil className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>Edit</span>
-                                </button>
-
-                                {/* 3. Inactive / Active */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleStatus(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  {item.status === 'Active' ? (
-                                    <>
-                                      <Ban className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                      <span>Deactivate</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <CheckCircle2 className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                      <span>Activate</span>
-                                    </>
-                                  )}
-                                </button>
-
-                                <div className="my-1 border-t border-slate-100" />
-
-                                {/* 4. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleDeleteProduct(item.id);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Trash2 className="w-4 h-4 text-rose-500 group-hover:text-white transition-colors" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                      <td className="py-4 px-3 text-center">
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View Details',
+                              variant: 'view',
+                              onClick: () => handleOpenDetailModal(item),
+                            },
+                            {
+                              label: 'Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(item),
+                            },
+                            {
+                              label: item.status === 'Active' ? 'Deactivate' : 'Activate',
+                              variant: item.status === 'Active' ? 'deactivate' : 'activate',
+                              onClick: () => handleToggleStatus(item),
+                            },
+                            {
+                              label: 'Delete',
+                              variant: 'delete',
+                              onClick: () => handleDeleteProduct(item.id),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );
@@ -3340,44 +3219,48 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Tabs: Pricing | Stock */}
-              <div className="border-b border-slate-200 flex items-center gap-8 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('Pricing')}
-                  className={`pb-3 text-sm font-bold tracking-tight transition-all relative cursor-pointer ${
-                    activeTab === 'Pricing'
-                      ? 'text-[#33077C] border-b-2 border-[#33077C] font-black'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  Pricing
-                </button>
-
-                {formData.itemType === 'Product' && (
+              {/* Tabs: Pricing | Stock - Segmented Button Switching */}
+              <div className="flex items-center pt-1 pb-1">
+                <div className="inline-flex items-center p-1 bg-slate-100/90 rounded-xl border border-slate-200/80 shadow-2xs">
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveTab('Stock');
-                      const currentAtPrice = getValues('atPrice');
-                      const currentSalePrice = getValues('salePrice');
-                      const currentPurchasePrice = getValues('purchasePrice');
-                      if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
-                        const fallbackPrice = currentSalePrice || currentPurchasePrice || '';
-                        if (fallbackPrice) {
-                          setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
-                        }
-                      }
-                    }}
-                    className={`pb-3 text-sm font-bold tracking-tight transition-all relative cursor-pointer ${
-                      activeTab === 'Stock'
-                        ? 'text-[#33077C] border-b-2 border-[#33077C] font-black'
-                        : 'text-slate-500 hover:text-slate-800'
+                    onClick={() => setActiveTab('Pricing')}
+                    className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                      activeTab === 'Pricing'
+                        ? 'bg-[#33077C] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                     }`}
                   >
-                    Stock
+                    <IndianRupee className="w-3.5 h-3.5" />
+                    <span>Pricing</span>
                   </button>
-                )}
+
+                  {formData.itemType === 'Product' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('Stock');
+                        const currentAtPrice = getValues('atPrice');
+                        const currentSalePrice = getValues('salePrice');
+                        const currentPurchasePrice = getValues('purchasePrice');
+                        if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
+                          const fallbackPrice = currentSalePrice || currentPurchasePrice || '';
+                          if (fallbackPrice) {
+                            setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
+                          }
+                        }
+                      }}
+                      className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                        activeTab === 'Stock'
+                          ? 'bg-[#33077C] text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
+                      }`}
+                    >
+                      <Boxes className="w-3.5 h-3.5" />
+                      <span>Stock</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* TAB 1: PRICING TAB CONTENT */}
@@ -3676,90 +3559,8 @@ export const InventoryProductsView: React.FC = () => {
               {/* TAB 2: STOCK TAB CONTENT */}
               {activeTab === 'Stock' && (
                 <div className="space-y-4 pt-1 animate-in fade-in duration-100">
-                  {/* Row 1: Opening Quantity | At Price | As Of Date */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* 1. Opening Quantity */}
-                    <div>
-                      <FormLabel>Opening Quantity</FormLabel>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="0"
-                        {...register('openingStock', {
-                          validate: (val) =>
-                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                        })}
-                        value={formData.openingStock ?? ''}
-                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                        onInput={(e) => {
-                          const sanitized = e.currentTarget.value
-                            .replace(/[^0-9.]/g, '')
-                            .replace(/(\..*?)\..*/g, '$1');
-                          e.currentTarget.value = sanitized;
-                          setValue('openingStock', sanitized as any, { shouldValidate: true });
-                          const currentAtPrice = getValues('atPrice');
-                          if (!currentAtPrice || Number(currentAtPrice) === 0 || !isAtPriceManuallyEdited.current) {
-                            const fallbackPrice = getValues('salePrice') || getValues('purchasePrice') || '';
-                            if (fallbackPrice) {
-                              setValue('atPrice', fallbackPrice as any, { shouldValidate: true });
-                            }
-                          }
-                        }}
-                        className={errors.openingStock ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
-                      />
-                      {errors.openingStock && (
-                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{errors.openingStock.message}</span>
-                        </p>
-                      )}
-                    </div>
-
-                    {/* 2. At Price */}
-                    <div>
-                      <FormLabel>At Price</FormLabel>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="0.00"
-                        {...register('atPrice', {
-                          validate: (val) =>
-                            val === '' || val === undefined || Number(val) >= 0 || 'Must be a valid positive number',
-                        })}
-                        value={formData.atPrice ?? ''}
-                        onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
-                        onInput={(e) => {
-                          const sanitized = e.currentTarget.value
-                            .replace(/[^0-9.]/g, '')
-                            .replace(/(\..*?)\..*/g, '$1');
-                          e.currentTarget.value = sanitized;
-                          setValue('atPrice', sanitized as any, { shouldValidate: true });
-                          isAtPriceManuallyEdited.current = sanitized.trim() !== '' && Number(sanitized) > 0;
-                        }}
-                        className={errors.atPrice ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
-                      />
-                      {errors.atPrice && (
-                        <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{errors.atPrice.message}</span>
-                        </p>
-                      )}
-                    </div>
-
-                    {/* 3. As Of Date */}
-                    <div>
-                      <FormLabel>As Of Date</FormLabel>
-                      <input
-                        type="date"
-                        value={formData.asOfDate}
-                        onChange={(e) => setValue('asOfDate', e.target.value)}
-                        className={`${FORM_INPUT_CLS} cursor-pointer`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Row 2: Min Stock To Maintain | Location */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Min Stock To Maintain | Location */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* 1. Min Stock To Maintain */}
                     <div>
                       <FormLabel>Min Stock To Maintain</FormLabel>
@@ -3812,89 +3613,60 @@ export const InventoryProductsView: React.FC = () => {
 
                   {/* Row 3: Batch & Lot Tracking Card */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-                          <Tag className="w-4.5 h-4.5 text-[#33077C]" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-xs sm:text-sm font-bold text-slate-900">
-                              Batch & Lot Tracking
-                            </h4>
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
-                              {formData.isBatchTracking ? 'Enabled' : 'Disabled'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                            Enable if this product requires batch/lot number and expiry date tracking (e.g. food, medicines, cosmetics).
-                          </p>
-                        </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+                        <Tag className="w-4.5 h-4.5 text-[#33077C]" />
                       </div>
-
-                      {/* Custom Toggle Switch */}
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={formData.isBatchTracking}
-                        onClick={() => setValue('isBatchTracking', !formData.isBatchTracking, { shouldDirty: true })}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          formData.isBatchTracking ? 'bg-[#33077C]' : 'bg-slate-200'
-                        }`}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                            formData.isBatchTracking ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900">
+                          Batch & Lot Tracking
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                          Batch/lot number and expiry date tracking for inventory management.
+                        </p>
+                      </div>
                     </div>
 
-                    {/* Batch Fields (Shown when Batch Tracking is enabled) */}
-                    {formData.isBatchTracking && (
-                      <div className="pt-3 border-t border-slate-100 animate-in fade-in duration-150">
-                        <p className="text-[11px] font-semibold text-slate-600 mb-3">
-                          Initial Batch Information (For opening stock)
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                          {/* 1. Initial Batch Number */}
-                          <div>
-                            <FormLabel>Initial Batch No</FormLabel>
-                            <input
-                              type="text"
-                              placeholder="e.g. BAT-2026-001"
-                              {...register('batchNo')}
-                              className={`${FORM_INPUT_CLS} font-mono`}
-                            />
-                            <span className="text-[10px] text-slate-400 mt-1 block">Batch code for opening quantity</span>
-                          </div>
+                    {/* Batch Fields (Default visible) */}
+                    <div className="pt-3 border-t border-slate-100">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {/* 1. Initial Batch Number */}
+                        <div>
+                          <FormLabel>Initial Batch No</FormLabel>
+                          <input
+                            type="text"
+                            placeholder="e.g. BAT-2026-001"
+                            {...register('batchNo')}
+                            className={`${FORM_INPUT_CLS} font-mono`}
+                          />
+                          <span className="text-[10px] text-slate-400 mt-1 block">Batch code identifier</span>
+                        </div>
 
-                          {/* 2. Manufacturing Date (MFG) */}
-                          <div>
-                            <FormLabel>Mfg Date</FormLabel>
-                            <input
-                              type="date"
-                              value={formData.mfgDate || ''}
-                              onChange={(e) => setValue('mfgDate', e.target.value)}
-                              className={`${FORM_INPUT_CLS} cursor-pointer`}
-                            />
-                            <span className="text-[10px] text-slate-400 mt-1 block">Manufacturing date</span>
-                          </div>
+                        {/* 2. Manufacturing Date (MFG) */}
+                        <div>
+                          <FormLabel>Mfg Date</FormLabel>
+                          <input
+                            type="date"
+                            value={formData.mfgDate || ''}
+                            onChange={(e) => setValue('mfgDate', e.target.value)}
+                            className={`${FORM_INPUT_CLS} cursor-pointer`}
+                          />
+                          <span className="text-[10px] text-slate-400 mt-1 block">Manufacturing date</span>
+                        </div>
 
-                          {/* 3. Expiry Date (EXP) */}
-                          <div>
-                            <FormLabel>Expiry Date</FormLabel>
-                            <input
-                              type="date"
-                              value={formData.expDate || ''}
-                              onChange={(e) => setValue('expDate', e.target.value)}
-                              className={`${FORM_INPUT_CLS} cursor-pointer`}
-                            />
-                            <span className="text-[10px] text-slate-400 mt-1 block">Expiry / Best before date</span>
-                          </div>
+                        {/* 3. Expiry Date (EXP) */}
+                        <div>
+                          <FormLabel>Expiry Date</FormLabel>
+                          <input
+                            type="date"
+                            value={formData.expDate || ''}
+                            onChange={(e) => setValue('expDate', e.target.value)}
+                            className={`${FORM_INPUT_CLS} cursor-pointer`}
+                          />
+                          <span className="text-[10px] text-slate-400 mt-1 block">Expiry / Best before date</span>
                         </div>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               )}

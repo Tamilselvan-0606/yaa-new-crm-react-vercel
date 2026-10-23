@@ -38,6 +38,7 @@ import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
   quoteApi,
   organizationApi,
@@ -351,6 +352,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   // Applied state - what actually drives the filter (set only on Apply)
   const [appliedSearch, setAppliedSearch] = useState('');
   const [appliedStatus, setAppliedStatus] = useState<'ALL' | 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED'>('ALL');
+  // Super Admin: organization filter to narrow documents billed to a specific organization
+  const [pendingBilledOrgId, setPendingBilledOrgId] = useState<string>('');
+  const [appliedBilledOrgId, setAppliedBilledOrgId] = useState<string>('');
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -461,12 +465,25 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         sortOrder: 'desc' as const,
       };
 
-      // Only filter by organization_id for tenant / organization admins, NOT platform administrator
-      if (orgId && (!isSuperAdmin || isOrgSuperAdmin)) {
-        params.organization_id = orgId;
-      }
-      if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
-        params.customerId = activeSubOrgId;
+      // Parameter scoping according to API spec:
+      // - Super Admin: sees only documents they created. Passing organization_id narrows documents billed to that organization.
+      // - Tenant logins: must pass own organization_id (outside scope returns 403).
+      if (isSuperAdmin && !isOrgSuperAdmin) {
+        if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
+          params.organization_id = appliedBilledOrgId;
+        }
+      } else {
+        if (orgId) {
+          params.organization_id = orgId;
+        }
+        if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
+          params.sub_organization_id = activeSubOrgId;
+        }
+        const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+        const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
+        if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
+          params.branch_id = activeBranchId;
+        }
       }
 
       const res = await quoteApi.getQuotes(params);
@@ -489,7 +506,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   useEffect(() => {
     fetchQuotes();
-  }, [currentPage, pageSize, appliedSearch, appliedStatus]);
+  }, [currentPage, pageSize, appliedSearch, appliedStatus, appliedBilledOrgId]);
 
   useEffect(() => {
     const handleFilterChange = () => {
@@ -515,14 +532,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const handleApply = () => {
     setAppliedSearch(pendingSearch);
     setAppliedStatus(pendingStatus);
+    setAppliedBilledOrgId(pendingBilledOrgId);
     setCurrentPage(1);
   };
 
   const handleReset = () => {
     setPendingSearch('');
     setPendingStatus('ALL');
+    setPendingBilledOrgId('');
     setAppliedSearch('');
     setAppliedStatus('ALL');
+    setAppliedBilledOrgId('');
     setCurrentPage(1);
   };
 
@@ -595,6 +615,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerGstId, setCustomerGstId] = useState('');
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  // Confirmation Modal State for Delete
+  const [deleteQuoteConfirm, setDeleteQuoteConfirm] = useState<{ id: string; estimateNumber: string } | null>(null);
+  const [isDeletingQuote, setIsDeletingQuote] = useState(false);
 
   // Quotation From (seller) details
   const [quotationFromCompany, setQuotationFromCompany] = useState('Yaa Creations');
@@ -2605,18 +2629,33 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         onSubmit={handleApply}
         onReset={handleReset}
         filterSlot={
-          <FilterDropdown
-            options={[
-              { label: 'Status : All', value: 'ALL' },
-              { label: 'Draft', value: 'DRAFT', dotColor: '#94a3b8' },
-              { label: 'Sent', value: 'SENT', dotColor: '#33077C' },
-              { label: 'Accepted', value: 'ACCEPTED', dotColor: '#10b981' },
-              { label: 'Expired', value: 'EXPIRED', dotColor: '#f59e0b' },
-              { label: 'Declined', value: 'DECLINED', dotColor: '#f43f5e' },
-            ]}
-            value={pendingStatus}
-            onChange={handleStatusFilter}
-          />
+          <div className="flex items-center gap-2 flex-wrap">
+            {isSuperAdmin && (
+              <FilterDropdown
+                options={[
+                  { label: 'Organization : All', value: '' },
+                  ...availableClients.map((c) => ({
+                    label: c.company || c.name,
+                    value: c.id,
+                  })),
+                ]}
+                value={pendingBilledOrgId}
+                onChange={(val) => setPendingBilledOrgId(val)}
+              />
+            )}
+            <FilterDropdown
+              options={[
+                { label: 'Status : All', value: 'ALL' },
+                { label: 'Draft', value: 'DRAFT', dotColor: '#94a3b8' },
+                { label: 'Sent', value: 'SENT', dotColor: '#33077C' },
+                { label: 'Accepted', value: 'ACCEPTED', dotColor: '#10b981' },
+                { label: 'Expired', value: 'EXPIRED', dotColor: '#f59e0b' },
+                { label: 'Declined', value: 'DECLINED', dotColor: '#f43f5e' },
+              ]}
+              value={pendingStatus}
+              onChange={handleStatusFilter}
+            />
+          </div>
         }
         rightSlot={
           <div className="flex items-center gap-3 pr-2">
@@ -3049,7 +3088,35 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               <span className="group-hover:text-slate-900 transition-colors text-[13px]">Print</span>
             </button>
 
-            {/* 4. Convert to Invoice */}
+            {/* 4a. Convert to Proforma Invoice */}
+            {targetQuote.status !== 'DECLINED' && targetQuote.status !== 'EXPIRED' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setOpenActionMenuId(null);
+                    setActionDropdownPos(null);
+                    showToast('info', 'Converting Quotation', `Converting #${targetQuote.estimateNumber} to proforma invoice...`);
+                    const res = await quoteApi.convertToProformaInvoice(targetQuote.id);
+                    if (res) {
+                      showToast('success', 'Quotation Converted', `Successfully converted #${targetQuote.estimateNumber} to Proforma Invoice.`);
+                      fetchQuotes();
+                    }
+                  } catch (err: any) {
+                    console.error('Failed to convert quotation:', err);
+                    showToast('error', 'Conversion Failed', err?.response?.data?.error?.message || 'Could not convert quote.');
+                  }
+                }}
+                className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
+              >
+                <span className="w-7 h-7 rounded-full bg-[#6366F1] text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <FileText className="w-3.5 h-3.5 stroke-[2.2]" />
+                </span>
+                <span className="group-hover:text-slate-900 transition-colors text-[13px]">Convert to Proforma</span>
+              </button>
+            )}
+
+            {/* 4b. Convert to Invoice */}
             {targetQuote.status !== 'DECLINED' && targetQuote.status !== 'EXPIRED' && (
               <button
                 type="button"
@@ -3082,17 +3149,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             {/* 5. Delete */}
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setOpenActionMenuId(null);
-                  setActionDropdownPos(null);
-                  await quoteApi.deleteQuote(targetQuote.id);
-                  showToast('info', 'Quotation Deleted', `Quotation #${targetQuote.estimateNumber} removed.`);
-                  fetchQuotes();
-                } catch (err: any) {
-                  console.error('Failed to delete quote:', err);
-                  showToast('error', 'Delete Failed', err?.response?.data?.error?.message || 'Could not delete quote.');
-                }
+              onClick={() => {
+                setOpenActionMenuId(null);
+                setActionDropdownPos(null);
+                setDeleteQuoteConfirm({
+                  id: targetQuote.id,
+                  estimateNumber: targetQuote.estimateNumber,
+                });
               }}
               className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer group"
             >
@@ -3155,6 +3218,34 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           </div>
         );
       })()}
+
+      {/* Reusable Delete Quotation Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!deleteQuoteConfirm}
+        onClose={() => {
+          if (!isDeletingQuote) setDeleteQuoteConfirm(null);
+        }}
+        type="Delete"
+        itemTypeLabel="Quotation"
+        itemName={deleteQuoteConfirm ? `#${deleteQuoteConfirm.estimateNumber}` : undefined}
+        confirmButtonText="Yes, Delete"
+        isLoading={isDeletingQuote}
+        onConfirm={async () => {
+          if (!deleteQuoteConfirm) return;
+          setIsDeletingQuote(true);
+          try {
+            await quoteApi.deleteQuote(deleteQuoteConfirm.id);
+            showToast('success', 'Quotation Deleted', `Quotation #${deleteQuoteConfirm.estimateNumber} removed successfully.`);
+            setDeleteQuoteConfirm(null);
+            fetchQuotes();
+          } catch (err: any) {
+            console.error('Failed to delete quote:', err);
+            showToast('error', 'Delete Failed', err?.response?.data?.error?.message || err?.message || 'Could not delete quote.');
+          } finally {
+            setIsDeletingQuote(false);
+          }
+        }}
+      />
     </div>
   );
 };

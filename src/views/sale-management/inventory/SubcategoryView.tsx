@@ -9,8 +9,6 @@ import {
   X,
   Check,
   Ban,
-  Printer,
-  Forward,
   FileSpreadsheet,
   Loader2,
   Eye,
@@ -27,7 +25,7 @@ import { Pagination } from '../../../components/common/Pagination';
 import { Modal } from '../../../components/common/Modal';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { UniversalShareDropdown, formatSubcategoryShare } from '../../../utils/shareUtils';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   subcategoryApi,
   mapApiSubcategoryToSubcategoryItem,
@@ -91,11 +89,9 @@ export const SubcategoryView: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // 3-Dots Action Dropdown State & Share Popover
+  // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -144,19 +140,11 @@ export const SubcategoryView: React.FC = () => {
         setActiveDropdownId(null);
         setDropdownPos(null);
       }
-      if (!target.closest('.share-popover-container') && !target.closest('.share-popover-menu')) {
-        setActiveShareId(null);
-        setSharePos(null);
-      }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -165,7 +153,7 @@ export const SubcategoryView: React.FC = () => {
       document.removeEventListener('mousedown', handleOutsideClick);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
   /**
    * Fetch live categories to populate dropdowns in Add/Edit modal and filter
@@ -644,7 +632,7 @@ export const SubcategoryView: React.FC = () => {
                 <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24 sm:w-32">
                   STATUS
                 </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-20 sm:w-28">
+                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-16 sm:w-20">
                   ACTIONS
                 </th>
               </tr>
@@ -719,141 +707,32 @@ export const SubcategoryView: React.FC = () => {
                         </span>
                       </td>
 
-                      {/* 5. ACTIONS: Print, Share, 3-dots dropdown */}
+                      {/* 5. ACTIONS */}
                       <td className="py-4 px-3 sm:px-4 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-1.5">
-                          {/* Print Action */}
-                          <button
-                            type="button"
-                            title="Print Subcategory"
-                            onClick={() => {
-                              toast.info(`Preparing print for subcategory ${item.subcategory}...`);
-                              window.print();
-                            }}
-                            className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          {/* Share / Forward Popover */}
-                          <UniversalShareDropdown
-                            id={item.id}
-                            activeShareId={activeShareId}
-                            setActiveShareId={setActiveShareId}
-                            sharePos={sharePos}
-                            setSharePos={setSharePos}
-                            getShareData={() => formatSubcategoryShare(item)}
-                            title="Share Subcategory"
-                          />
-
-                          {/* 3-dots Actions Dropdown */}
-                          <div className="relative inline-block text-left subcategory-action-dropdown-container">
-                            <button
-                              type="button"
-                              title="More Options"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === item.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  setActiveShareId(null);
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 180;
-                                  const rightPos = window.innerWidth - rect.right;
-
-                                  if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: rightPos,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: rightPos,
-                                    });
-                                  }
-                                  setActiveDropdownId(item.id);
-                                }
-                              }}
-                              className="w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {/* Dropdown Menu */}
-                            {isDropdownOpen && dropdownPos && (
-                              <div
-                                className="subcategory-action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
-                                style={{
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                }}
-                              >
-                                {/* 1. View Details */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenDetailModal(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Eye className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>View Details</span>
-                                </button>
-
-                                {/* 2. Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleOpenEditModal(item);
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Pencil className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                  <span>Edit</span>
-                                </button>
-
-                                {/* 3. Inactive / Active */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleStatus(item)}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-slate-700 hover:bg-[#33077C] hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  {item.status === 'Active' ? (
-                                    <>
-                                      <Ban className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                      <span>Deactivate</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <CheckCircle2 className="w-4 h-4 text-slate-400 group-hover:text-white transition-colors" />
-                                      <span>Activate</span>
-                                    </>
-                                  )}
-                                </button>
-
-                                <div className="my-1 border-t border-slate-100" />
-
-                                {/* 4. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    setDropdownPos(null);
-                                    setDeleteConfirmItem(item);
-                                  }}
-                                  className="w-full px-4 py-2 text-left text-[13px] font-medium text-rose-600 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer flex items-center gap-2 group"
-                                >
-                                  <Trash2 className="w-4 h-4 text-rose-500 group-hover:text-white transition-colors" />
-                                  <span>Delete</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <SaleActionDropdown
+                          items={[
+                            {
+                              label: 'View Details',
+                              variant: 'view',
+                              onClick: () => handleOpenDetailModal(item),
+                            },
+                            {
+                              label: 'Edit',
+                              variant: 'edit',
+                              onClick: () => handleOpenEditModal(item),
+                            },
+                            {
+                              label: item.status === 'Active' ? 'Deactivate' : 'Activate',
+                              variant: item.status === 'Active' ? 'deactivate' : 'activate',
+                              onClick: () => handleToggleStatus(item),
+                            },
+                            {
+                              label: 'Delete',
+                              variant: 'delete',
+                              onClick: () => setDeleteConfirmItem(item),
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );

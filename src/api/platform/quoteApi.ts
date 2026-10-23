@@ -70,6 +70,15 @@ export const quoteEndpoints = baseApi.injectEndpoints({
       }),
       invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, { type: 'SalesInvoice', id: 'LIST' }],
     }),
+
+    convertToProformaInvoice: builder.mutation<QuoteConvertResponse, { id: string; payload: { dueDate?: string } }>({
+      query: ({ id, payload }) => ({
+        url: `/platform/quotes/${id}/convert-to-proforma-invoice`,
+        method: 'POST',
+        body: payload,
+      }),
+      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, { type: 'SalesInvoice', id: 'LIST' }],
+    }),
   }),
   overrideExisting: false,
 });
@@ -81,6 +90,7 @@ export const {
   useUpdatePlatformQuoteMutation,
   useDeletePlatformQuoteMutation,
   useConvertPlatformQuoteMutation,
+  useConvertToProformaInvoiceMutation,
 } = quoteEndpoints;
 
 export const quoteApi = {
@@ -113,6 +123,11 @@ export const quoteApi = {
 
   convertQuote: async (id: string, payload: ConvertQuoteRequest): Promise<QuoteConvertResponse> => {
     const res = await baseClient.post<QuoteConvertResponse>(`/platform/quotes/${id}/convert`, payload);
+    return res.data;
+  },
+
+  convertToProformaInvoice: async (id: string, payload?: { dueDate?: string }): Promise<QuoteConvertResponse> => {
+    const res = await baseClient.post<QuoteConvertResponse>(`/platform/quotes/${id}/convert-to-proforma-invoice`, payload || {});
     return res.data;
   },
 };

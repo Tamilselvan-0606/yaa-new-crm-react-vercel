@@ -198,8 +198,9 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
   const isSuperAdmin = propIsSuperAdmin !== undefined ? propIsSuperAdmin : contextIsSuperAdmin;
 
   const [selectedProductId, setSelectedProductId] = useState<string>(
-    initialProductId || products[0]?.id || 'prod_1'
+    initialProductId || ''
   );
+  const [productError, setProductError] = useState<string>('');
   const [isCustomPlanSelected, setIsCustomPlanSelected] = useState(false);
   const [customPlanName, setCustomPlanName] = useState('');
   const [features, setFeatures] = useState<string[]>([]);
@@ -347,8 +348,12 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
         features: [],
       });
       setFeatures([]);
-      const effectiveProdId = initialProductId || products[0]?.id || 'prod_1';
-      setSpecs(getInitialProductSpecs(effectiveProdId));
+      setProductError('');
+      const effectiveProdId = initialProductId || '';
+      setSelectedProductId(effectiveProdId);
+      if (effectiveProdId) {
+        setSpecs(getInitialProductSpecs(effectiveProdId));
+      }
 
       const defaultPerms: Record<string, 'all' | 'none'> = {};
       APPLICATION_MODULES.forEach((mod) => {
@@ -361,6 +366,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
   useEffect(() => {
     if (initialProductId) {
       setSelectedProductId(initialProductId);
+      setProductError('');
       if (!initialPlan) {
         setSpecs(getInitialProductSpecs(initialProductId));
       }
@@ -369,6 +375,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
 
   const handleProductChange = (prodId: string) => {
     setSelectedProductId(prodId);
+    setProductError('');
     if (!initialPlan) {
       setFeatures([]);
       setSpecs(getInitialProductSpecs(prodId));
@@ -425,6 +432,14 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
 
   const onSubmit = async (data: PlanFormData) => {
     setSubmitError(null);
+    if (!selectedProductId) {
+      setProductError('Product is required');
+      return;
+    }
+    if (isSuperAdmin && (data.gstRate === '' || data.gstRate === undefined || data.gstRate === null)) {
+      setSubmitError('GST Rate is required');
+      return;
+    }
     const finalPlanName = isCustomPlanSelected ? customPlanName.trim() : (data.name || '').trim();
     if (!finalPlanName) {
       setSubmitError('Plan Name is required');
@@ -840,10 +855,11 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className={labelClass}>
-                  Product <span className="text-slate-500">*</span>
+                  Product <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={selectedProductId}
+                  error={!!productError}
                   onChange={(val) => !initialPlan && handleProductChange(val)}
                   options={products.map((p) => ({
                     value: p.id,
@@ -852,11 +868,14 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   placeholder="Select Product"
                   activeColor="brand"
                 />
+                {productError && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{productError}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Plan Name <span className="text-slate-500">*</span>
+                  Plan Name <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={
@@ -868,6 +887,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                       ? name
                       : 'Custom'
                   }
+                  error={!!errors.name}
                   onChange={(val) => {
                     if (val === 'Custom') {
                       setIsCustomPlanSelected(true);
@@ -887,12 +907,14 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   placeholder="Select Plan Name"
                   activeColor="brand"
                 />
-                <FormError message={errors.name?.message} />
+                {errors.name?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.name.message}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Enter Plan Name {isCustomPlanSelected && <span className="text-slate-500">*</span>}
+                  Enter Plan Name {isCustomPlanSelected && <span className="text-rose-500 font-bold">*</span>}
                 </label>
                 <input
                   type="text"
@@ -901,33 +923,41 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   onChange={(e) => {
                     setCustomPlanName(e.target.value);
                     if (isCustomPlanSelected) {
-                      setValue('name', e.target.value);
+                      setValue('name', e.target.value, { shouldValidate: true });
                     }
                   }}
-                  className={`${inputClass} ${
+                  className={`w-full h-11 px-4 rounded-xl text-xs sm:text-[13px] font-medium outline-none transition-all ${
                     !isCustomPlanSelected
-                      ? 'bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed select-none'
-                      : 'bg-white'
+                      ? 'bg-slate-100/70 border border-slate-200 text-slate-400 cursor-not-allowed select-none'
+                      : errors.name
+                      ? 'bg-white border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10 text-slate-700'
+                      : 'bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 text-slate-700'
                   }`}
                 />
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Price ({currency}) <span className="text-slate-500">*</span>
+                  Price ({currency}) <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
                   type="number"
                   step="any"
                   {...register('price', { valueAsNumber: true })}
-                  className={inputClass}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.price
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
                 />
-                <FormError message={errors.price?.message} />
+                {errors.price?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.price.message}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Billing Cycle <span className="text-slate-500">*</span>
+                  Billing Cycle <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <Controller
                   control={control}
@@ -935,6 +965,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   render={({ field }) => (
                     <CustomSelect
                       value={field.value}
+                      error={!!errors.billingCycle}
                       onChange={(val) => field.onChange(val as any)}
                       options={BILLING_CYCLE_OPTIONS}
                       placeholder="Select Billing Cycle"
@@ -942,12 +973,14 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                     />
                   )}
                 />
-                <FormError message={errors.billingCycle?.message} />
+                {errors.billingCycle?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.billingCycle.message}</p>
+                )}
               </div>
 
               <div>
                 <label className={labelClass}>
-                  Status <span className="text-slate-500">*</span>
+                  Status <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <Controller
                   control={control}
@@ -955,6 +988,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   render={({ field }) => (
                     <CustomSelect
                       value={field.value}
+                      error={!!errors.status}
                       onChange={(val) => field.onChange(val as any)}
                       options={PLAN_STATUS_OPTIONS}
                       placeholder="Select Status"
@@ -962,6 +996,9 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                     />
                   )}
                 />
+                {errors.status?.message && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{errors.status.message}</p>
+                )}
               </div>
             </div>
 

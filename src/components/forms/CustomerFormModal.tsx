@@ -198,6 +198,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
   const generateClientId = () => `CLI-${Math.floor(1000 + Math.random() * 9000)}`;
 
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
   const {
     register,
     handleSubmit,
@@ -330,6 +332,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           },
         ]);
       }
+      setFormErrors({});
     }
   }, [isOpen, initialCustomer, reset]);
 
@@ -373,6 +376,26 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   const clientDocuments = documents.filter((d) => d.type === 'shared_by_client');
 
   const onSubmit = async (data: CustomerFormData) => {
+    const customErrors: Record<string, string> = {};
+    if (isSuperAdmin && !selectedOrgId) {
+      customErrors.organization = 'Organization is required';
+    }
+    if (subOrganizations.length > 0 && !selectedSubOrgId) {
+      customErrors.subOrganization = 'Sub-Organization is required';
+    }
+    if (branches.length > 0 && !selectedBranchId) {
+      customErrors.branch = 'Branch is required';
+    }
+    if (!selectedProductId) {
+      customErrors.product = 'Product Selection is required';
+    }
+
+    if (Object.keys(customErrors).length > 0) {
+      setFormErrors(customErrors);
+      return;
+    }
+    setFormErrors({});
+
     try {
       const selectedProductItem = products.find((p) => p.name === selectedProductId);
       const linkedProducts: Customer['linkedProducts'] = selectedProductId
@@ -404,12 +427,20 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         documents,
       };
 
+      const effectiveOrgId = (isSuperAdmin ? selectedOrgId : activeOrgId) || undefined;
+
       if (initialCustomer) {
         let updated = false;
         try {
+          const resolvedProdId =
+            selectedProductItem?.id ||
+            products.find((p) => p.name === selectedProductId || p.id === selectedProductId)?.id ||
+            selectedProductId ||
+            undefined;
+
           await platformClientApi.updateClient(initialCustomer.id, {
             name: data.businessName || data.clientName,
-            legalName: data.businessName,
+            legalName: data.businessName || data.clientName,
             contactPerson: data.contactPerson || data.clientName,
             phone: data.phone,
             whatsapp: data.whatsapp || data.phone,
@@ -417,6 +448,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             address: data.address,
             gstNumber: data.gstNumber,
             panNumber: data.panNumber,
+            registrationType: 'Pvt Ltd',
+            organizationType: 1,
+            status: 'Active',
+            subOrganizationSupport: true,
+            organizationId: effectiveOrgId,
+            subOrganizationId: selectedSubOrgId || undefined,
+            branchId: selectedBranchId || undefined,
+            productId: resolvedProdId,
           });
           updated = true;
         } catch (platformErr: any) {
@@ -442,18 +481,28 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       } else {
         let created = false;
         try {
+          const resolvedProdId =
+            selectedProductItem?.id ||
+            products.find((p) => p.name === selectedProductId || p.id === selectedProductId)?.id ||
+            selectedProductId ||
+            undefined;
+
           await platformClientApi.createClient({
-            name: data.businessName || data.clientName,
             code: data.clientId,
-            legalName: data.businessName,
-            email: data.email,
-            password: 'ClientInitialPassword123!@#',
+            name: data.businessName || data.clientName,
+            legalName: data.businessName || `${data.clientName} Private Limited`,
+            contactPerson: data.contactPerson || data.clientName,
             phone: data.phone,
             whatsapp: data.whatsapp || data.phone,
-            contactPerson: data.contactPerson || data.clientName,
-            address: data.address,
+            email: data.email,
+            password: 'Password@123',
             gstNumber: data.gstNumber,
             panNumber: data.panNumber,
+            address: data.address,
+            organizationId: effectiveOrgId,
+            subOrganizationId: selectedSubOrgId || undefined,
+            branchId: selectedBranchId || undefined,
+            productId: resolvedProdId,
             registrationType: 'Pvt Ltd',
             organizationType: 1,
             status: 'Active',
@@ -521,24 +570,33 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
           {/* Organization */}
           <div>
-            <label className={labelClass}>Organization</label>
+            <label className={labelClass}>
+              Organization <span className="text-rose-500 font-bold">*</span>
+            </label>
             {isSuperAdmin ? (
-              <CustomSelect
-                value={selectedOrgId}
-                onChange={(val) => {
-                  setSelectedOrgId(val);
-                  const matched = organizations.find((o) => o.id === val);
-                  if (matched) setSelectedOrgName(matched.name);
-                  setSelectedSubOrgId('');
-                  setSelectedBranchId('');
-                }}
-                options={
-                  organizations.length > 0
-                    ? organizations.map((org) => ({ value: org.id, label: org.name }))
-                    : [{ value: '', label: 'No Organizations found' }]
-                }
-                placeholder="Select Organization"
-              />
+              <>
+                <CustomSelect
+                  value={selectedOrgId}
+                  error={!!formErrors.organization}
+                  onChange={(val) => {
+                    setSelectedOrgId(val);
+                    const matched = organizations.find((o) => o.id === val);
+                    if (matched) setSelectedOrgName(matched.name);
+                    setSelectedSubOrgId('');
+                    setSelectedBranchId('');
+                    if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
+                  }}
+                  options={
+                    organizations.length > 0
+                      ? organizations.map((org) => ({ value: org.id, label: org.name }))
+                      : [{ value: '', label: 'No Organizations found' }]
+                  }
+                  placeholder="Select Organization"
+                />
+                {formErrors.organization && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organization}</p>
+                )}
+              </>
             ) : (
               <div>
                 <input
@@ -556,7 +614,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
           {/* Sub-Organization */}
           <div>
-            <label className={labelClass}>Sub-Organization</label>
+            <label className={labelClass}>
+              Sub-Organization <span className="text-rose-500 font-bold">*</span>
+            </label>
             {isSubOrgAdmin ? (
               <div>
                 <input
@@ -570,30 +630,43 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                 <span className="text-[11px] text-slate-400 mt-1 block">Default sub-organization (non-editable)</span>
               </div>
             ) : (
-              <CustomSelect
-                value={selectedSubOrgId}
-                onChange={(val) => {
-                  setSelectedSubOrgId(val);
-                  const matched = subOrganizations.find((s) => s.id === val);
-                  if (matched) setSelectedSubOrgName(matched.name);
-                  setSelectedBranchId('');
-                }}
-                options={
-                  subOrganizations.length > 0
-                    ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
-                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
-                }
-                placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
-              />
+              <>
+                <CustomSelect
+                  value={selectedSubOrgId}
+                  error={!!formErrors.subOrganization}
+                  onChange={(val) => {
+                    setSelectedSubOrgId(val);
+                    const matched = subOrganizations.find((s) => s.id === val);
+                    if (matched) setSelectedSubOrgName(matched.name);
+                    setSelectedBranchId('');
+                    if (formErrors.subOrganization) setFormErrors((prev) => ({ ...prev, subOrganization: '' }));
+                  }}
+                  options={
+                    subOrganizations.length > 0
+                      ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
+                      : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
+                  }
+                  placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
+                />
+                {formErrors.subOrganization && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganization}</p>
+                )}
+              </>
             )}
           </div>
 
           {/* Branch */}
           <div>
-            <label className={labelClass}>Branch</label>
+            <label className={labelClass}>
+              Branch <span className="text-rose-500 font-bold">*</span>
+            </label>
             <CustomSelect
               value={selectedBranchId}
-              onChange={(val) => setSelectedBranchId(val)}
+              error={!!formErrors.branch}
+              onChange={(val) => {
+                setSelectedBranchId(val);
+                if (formErrors.branch) setFormErrors((prev) => ({ ...prev, branch: '' }));
+              }}
               options={
                 branches.length > 0
                   ? branches.map((b) => ({
@@ -604,6 +677,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               }
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
             />
+            {formErrors.branch && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branch}</p>
+            )}
           </div>
         </div>
 
@@ -611,57 +687,57 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Client ID <span className="text-slate-500">*</span>
+              Client ID <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('clientId')}
               type="text"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.clientId
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.clientId && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.clientId.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.clientId.message}</p>
             )}
           </div>
 
           <div>
             <label className={labelClass}>
-              Client Name <span className="text-slate-500">*</span>
+              Client Name <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('clientName')}
               type="text"
               placeholder="e.g. John Doe"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.clientName
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.clientName && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.clientName.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.clientName.message}</p>
             )}
           </div>
 
           <div>
             <label className={labelClass}>
-              Client Business <span className="text-slate-500">*</span>
+              Client Business <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('businessName')}
               type="text"
               placeholder="Company / Business Name"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.businessName
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.businessName && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.businessName.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.businessName.message}</p>
             )}
           </div>
         </div>
@@ -670,50 +746,81 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Contact Person <span className="text-slate-500">*</span>
+              Contact Person <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('contactPerson')}
               type="text"
               placeholder="Contact Person Full Name"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.contactPerson
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.contactPerson && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.contactPerson.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.contactPerson.message}</p>
             )}
           </div>
 
           <div>
             <label className={labelClass}>
-              Phone Number <span className="text-slate-500">*</span>
+              Phone Number <span className="text-rose-500 font-bold">*</span>
             </label>
-            <input
-              {...register('phone')}
-              type="text"
-              placeholder="e.g. +91 98765 43210"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.phone
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
+            <Controller
+              name="phone"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="e.g. 9876543210"
+                  value={field.value || ''}
+                  onChange={(e) => {
+                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    field.onChange(clean);
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.phone
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+              )}
             />
             {errors.phone && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.phone.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.phone.message}</p>
             )}
           </div>
 
           <div>
             <label className={labelClass}>WhatsApp Number</label>
-            <input
-              {...register('whatsapp')}
-              type="text"
-              placeholder="e.g. +91 98765 43210"
-              className={inputClass}
+            <Controller
+              name="whatsapp"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="e.g. 9876543210"
+                  value={field.value || ''}
+                  onChange={(e) => {
+                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    field.onChange(clean);
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.whatsapp
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+              )}
             />
+            {errors.whatsapp && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.whatsapp.message}</p>
+            )}
           </div>
         </div>
 
@@ -721,41 +828,81 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Email <span className="text-slate-500">*</span>
+              Email <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('email')}
               type="email"
               placeholder="client@company.com"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.email
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.email && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.email.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.email.message}</p>
             )}
           </div>
 
           <div>
-            <label className={labelClass}>GST Number</label>
-            <input
-              {...register('gstNumber')}
-              type="text"
-              placeholder="e.g. 33AAAAA0000A1Z5"
-              className={inputClass}
+            <label className={labelClass}>
+              GST Number <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <Controller
+              name="gstNumber"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="text"
+                  maxLength={15}
+                  placeholder="e.g. 33AAAAA0000A1Z5"
+                  value={field.value || ''}
+                  onChange={(e) => {
+                    const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15);
+                    field.onChange(clean);
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                    errors.gstNumber
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+              )}
             />
+            {errors.gstNumber && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.gstNumber.message}</p>
+            )}
           </div>
 
           <div>
-            <label className={labelClass}>PAN Number</label>
-            <input
-              {...register('panNumber')}
-              type="text"
-              placeholder="e.g. ABCDE1234F"
-              className={inputClass}
+            <label className={labelClass}>
+              PAN Number <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <Controller
+              name="panNumber"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="text"
+                  maxLength={10}
+                  placeholder="e.g. ABCDE1234F"
+                  value={field.value || ''}
+                  onChange={(e) => {
+                    const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
+                    field.onChange(clean);
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
+                    errors.panNumber
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+              )}
             />
+            {errors.panNumber && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.panNumber.message}</p>
+            )}
           </div>
         </div>
 
@@ -763,28 +910,34 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Address <span className="text-slate-500">*</span>
+              Address <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('address')}
               type="text"
               placeholder="Street Address, City, State, Pincode"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.address
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.address && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.address.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.address.message}</p>
             )}
           </div>
 
           <div>
-            <label className={labelClass}>Product Selection</label>
+            <label className={labelClass}>
+              Product Selection <span className="text-rose-500 font-bold">*</span>
+            </label>
             <CustomSelect
               value={selectedProductId}
-              onChange={(val) => setSelectedProductId(val)}
+              error={!!formErrors.product}
+              onChange={(val) => {
+                setSelectedProductId(val);
+                if (formErrors.product) setFormErrors((prev) => ({ ...prev, product: '' }));
+              }}
               options={
                 productOptions.length > 0
                   ? productOptions
@@ -792,6 +945,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               }
               placeholder={loadingProducts ? 'Loading products...' : 'Select Product'}
             />
+            {formErrors.product && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.product}</p>
+            )}
           </div>
         </div>
 

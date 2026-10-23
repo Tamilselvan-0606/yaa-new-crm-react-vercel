@@ -211,10 +211,47 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
     fetchBranches();
   }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin]);
 
+  // Load products from API
+  useEffect(() => {
+    if (!isOpen) return;
+    const loadProducts = async () => {
+      try {
+        setLoadingProducts(true);
+        const orgToQuery = isSuperAdmin ? selectedOrgId : activeOrgId;
+        const res = await clientProductApi.getProducts(
+          {
+            page: 1,
+            limit: 100,
+            organizationId: orgToQuery || undefined,
+            subOrganizationId: selectedSubOrgId || undefined,
+            branchId: selectedBranchId || undefined,
+          },
+          orgToQuery || undefined
+        );
+        if (res && res.success && Array.isArray(res.data)) {
+          setProducts(res.data);
+        } else if (res && Array.isArray(res.data)) {
+          setProducts(res.data);
+        } else {
+          setProducts([]);
+        }
+      } catch (err) {
+        console.warn('Failed to load products in lead form:', err);
+        setProducts([]);
+      } finally {
+        setLoadingProducts(false);
+      }
+    };
+    loadProducts();
+  }, [isOpen, selectedOrgId, selectedSubOrgId, selectedBranchId, activeOrgId, isSuperAdmin]);
+
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
   const {
     register,
     handleSubmit,
     reset,
+    setValue,
     control,
     formState: { errors, isSubmitting },
   } = useForm<LeadFormData>({
@@ -335,6 +372,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           notes: '',
         });
       }
+      setFormErrors({});
     }
   }, [isOpen, initialLead, reset, currentUser]);
 
@@ -349,6 +387,23 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
   }));
 
   const onSubmit = async (data: LeadFormData) => {
+    const customErrors: Record<string, string> = {};
+    if (isSuperAdmin && !selectedOrgId) {
+      customErrors.organization = 'Organization is required';
+    }
+    if (subOrganizations.length > 0 && !selectedSubOrgId) {
+      customErrors.subOrganization = 'Sub-Organization is required';
+    }
+    if (branches.length > 0 && !selectedBranchId) {
+      customErrors.branch = 'Branch is required';
+    }
+
+    if (Object.keys(customErrors).length > 0) {
+      setFormErrors(customErrors);
+      return;
+    }
+    setFormErrors({});
+
     try {
       const chosenPlan = data.interestedProductOrService || '';
       const effectivePhone = data.whatsapp || data.phone || '';
@@ -407,24 +462,33 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
           {/* Organization */}
           <div>
-            <label className={labelClass}>Organization</label>
+            <label className={labelClass}>
+              Organization <span className="text-rose-500 font-bold">*</span>
+            </label>
             {isSuperAdmin ? (
-              <CustomSelect
-                value={selectedOrgId}
-                onChange={(val) => {
-                  setSelectedOrgId(val);
-                  const matched = organizations.find((o) => o.id === val);
-                  if (matched) setSelectedOrgName(matched.name);
-                  setSelectedSubOrgId('');
-                  setSelectedBranchId('');
-                }}
-                options={
-                  organizations.length > 0
-                    ? organizations.map((org) => ({ value: org.id, label: org.name }))
-                    : [{ value: '', label: 'No Organizations found' }]
-                }
-                placeholder="Select Organization"
-              />
+              <>
+                <CustomSelect
+                  value={selectedOrgId}
+                  error={!!formErrors.organization}
+                  onChange={(val) => {
+                    setSelectedOrgId(val);
+                    const matched = organizations.find((o) => o.id === val);
+                    if (matched) setSelectedOrgName(matched.name);
+                    setSelectedSubOrgId('');
+                    setSelectedBranchId('');
+                    if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
+                  }}
+                  options={
+                    organizations.length > 0
+                      ? organizations.map((org) => ({ value: org.id, label: org.name }))
+                      : [{ value: '', label: 'No Organizations found' }]
+                  }
+                  placeholder="Select Organization"
+                />
+                {formErrors.organization && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organization}</p>
+                )}
+              </>
             ) : (
               <div>
                 <input
@@ -440,7 +504,9 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
           {/* Sub-Organization */}
           <div>
-            <label className={labelClass}>Sub-Organization</label>
+            <label className={labelClass}>
+              Sub-Organization <span className="text-rose-500 font-bold">*</span>
+            </label>
             {isSubOrgAdmin ? (
               <div>
                 <input
@@ -454,30 +520,43 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                 <span className="text-[11px] text-slate-400 mt-1 block">Default sub-organization (non-editable)</span>
               </div>
             ) : (
-              <CustomSelect
-                value={selectedSubOrgId}
-                onChange={(val) => {
-                  setSelectedSubOrgId(val);
-                  const matched = subOrganizations.find((s) => s.id === val);
-                  if (matched) setSelectedSubOrgName(matched.name);
-                  setSelectedBranchId('');
-                }}
-                options={
-                  subOrganizations.length > 0
-                    ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
-                    : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
-                }
-                placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
-              />
+              <>
+                <CustomSelect
+                  value={selectedSubOrgId}
+                  error={!!formErrors.subOrganization}
+                  onChange={(val) => {
+                    setSelectedSubOrgId(val);
+                    const matched = subOrganizations.find((s) => s.id === val);
+                    if (matched) setSelectedSubOrgName(matched.name);
+                    setSelectedBranchId('');
+                    if (formErrors.subOrganization) setFormErrors((prev) => ({ ...prev, subOrganization: '' }));
+                  }}
+                  options={
+                    subOrganizations.length > 0
+                      ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
+                      : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
+                  }
+                  placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
+                />
+                {formErrors.subOrganization && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganization}</p>
+                )}
+              </>
             )}
           </div>
 
           {/* Branch */}
           <div>
-            <label className={labelClass}>Branch</label>
+            <label className={labelClass}>
+              Branch <span className="text-rose-500 font-bold">*</span>
+            </label>
             <CustomSelect
               value={selectedBranchId}
-              onChange={(val) => setSelectedBranchId(val)}
+              error={!!formErrors.branch}
+              onChange={(val) => {
+                setSelectedBranchId(val);
+                if (formErrors.branch) setFormErrors((prev) => ({ ...prev, branch: '' }));
+              }}
               options={
                 branches.length > 0
                   ? branches.map((b) => ({
@@ -488,6 +567,9 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
               }
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
             />
+            {formErrors.branch && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branch}</p>
+            )}
           </div>
         </div>
 
@@ -495,42 +577,56 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Lead ID <span className="text-slate-400 font-normal">(Auto)</span>
+              Lead ID <span className="text-rose-500 font-bold">*</span> <span className="text-slate-400 font-normal">(Auto)</span>
             </label>
             <input
               {...register('leadId')}
               type="text"
               readOnly
-              className={`${inputClass} bg-slate-100/80 cursor-not-allowed`}
+              className={`${inputClass} bg-slate-100/80 cursor-not-allowed ${
+                errors.leadId ? 'border-red-500' : ''
+              }`}
             />
+            {errors.leadId && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.leadId.message}</p>
+            )}
           </div>
 
           <div>
             <label className={labelClass}>
-              Lead Name <span className="text-slate-500">*</span>
+              Lead Name <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('company')}
               type="text"
               placeholder="Lead / Company Name"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.company
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.company && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.company.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.company.message}</p>
             )}
           </div>
 
           <div>
-            <label className={labelClass}>Date</label>
+            <label className={labelClass}>
+              Date <span className="text-rose-500 font-bold">*</span>
+            </label>
             <input
               {...register('leadDate')}
               type="date"
-              className={inputClass}
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                errors.leadDate
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+              }`}
             />
+            {errors.leadDate && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.leadDate.message}</p>
+            )}
           </div>
         </div>
 
@@ -538,20 +634,20 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>
-              Contact Person Name <span className="text-slate-500">*</span>
+              Contact Person Name <span className="text-rose-500 font-bold">*</span>
             </label>
             <input
               {...register('name')}
               type="text"
               placeholder="Full Name"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.name
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.name && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.name.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.name.message}</p>
             )}
           </div>
 
@@ -566,43 +662,75 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           </div>
 
           <div>
-            <label className={labelClass}>WhatsApp</label>
-            <input
-              {...register('whatsapp')}
-              type="text"
-              placeholder="e.g. +91 98765 43210"
-              className={inputClass}
+            <label className={labelClass}>
+              WhatsApp <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <Controller
+              name="whatsapp"
+              control={control}
+              render={({ field }) => (
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="e.g. 9876543210"
+                  value={field.value || ''}
+                  onChange={(e) => {
+                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    field.onChange(clean);
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    errors.whatsapp
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+              )}
             />
+            {errors.whatsapp && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.whatsapp.message}</p>
+            )}
           </div>
         </div>
 
         {/* Row 3: Email | Address | Lead Source */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>Email</label>
+            <label className={labelClass}>
+              Email <span className="text-rose-500 font-bold">*</span>
+            </label>
             <input
               {...register('email')}
               type="email"
               placeholder="name@company.com"
-              className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                 errors.email
-                  ? 'border-rose-400 focus:ring-4 focus:ring-rose-500/10'
-                  : 'border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
               }`}
             />
             {errors.email && (
-              <p className="text-xs text-rose-500 mt-1 font-medium">{errors.email.message}</p>
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.email.message}</p>
             )}
           </div>
 
           <div>
-            <label className={labelClass}>Address</label>
+            <label className={labelClass}>
+              Address <span className="text-rose-500 font-bold">*</span>
+            </label>
             <input
               {...register('address')}
               type="text"
               placeholder="City, State, Address"
-              className={inputClass}
+              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                errors.address
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+              }`}
             />
+            {errors.address && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.address.message}</p>
+            )}
           </div>
 
           <div>
@@ -625,13 +753,16 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
         {/* Row 4: Product Interest | Current Status | Assigned Staff */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>Product Interest</label>
+            <label className={labelClass}>
+              Product Interest <span className="text-rose-500 font-bold">*</span>
+            </label>
             <Controller
               name="interestedProductOrService"
               control={control}
               render={({ field }) => (
                 <CustomSelect
                   value={field.value || ''}
+                  error={!!errors.interestedProductOrService}
                   onChange={field.onChange}
                   options={
                     productOptions.length > 0
@@ -642,6 +773,9 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
                 />
               )}
             />
+            {errors.interestedProductOrService && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.interestedProductOrService.message}</p>
+            )}
           </div>
 
           <div>

@@ -25,6 +25,7 @@ interface SearchableSelectProps {
   allowClear?: boolean;
   emptyText?: string;
   onSearch?: (query: string) => void;
+  onOpen?: () => void;
   isLoading?: boolean;
 }
 
@@ -42,6 +43,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   allowClear = false,
   emptyText = 'No options found',
   onSearch,
+  onOpen,
   isLoading = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -122,6 +124,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     if (disabled) return;
     updatePosition();
     setIsOpen(true);
+    onOpen?.();
   };
 
   const handleClose = () => {

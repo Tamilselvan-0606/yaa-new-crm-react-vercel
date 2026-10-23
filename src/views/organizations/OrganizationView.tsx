@@ -43,6 +43,7 @@ import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
+import { ConfirmationModal } from '../../utils/confirmationModal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
@@ -147,10 +148,10 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     rawStatus.toLowerCase().startsWith('suspend')
       ? 'Suspend'
       : rawStatus.toLowerCase().startsWith('inact')
-      ? 'Inactive'
-      : rawStatus.toLowerCase().startsWith('pend')
-      ? 'Pending'
-      : 'Active';
+        ? 'Inactive'
+        : rawStatus.toLowerCase().startsWith('pend')
+          ? 'Pending'
+          : 'Active';
 
   return {
     id: sub.id,
@@ -700,29 +701,29 @@ export const OrganizationView: React.FC = () => {
         const t = (v: string) => v.trim();
 
         // String fields — send updated value (or empty string if cleared)
-        if (t(code).toUpperCase() !== editingOrg.code)                                             patch.code = t(code).toUpperCase();
-        if (t(name) !== editingOrg.name)                                                            patch.name = t(name);
+        if (t(code).toUpperCase() !== editingOrg.code) patch.code = t(code).toUpperCase();
+        if (t(name) !== editingOrg.name) patch.name = t(name);
         const resolvedLegal = t(legalName) || t(name);
-        if (resolvedLegal !== editingOrg.legalName)                                                 patch.legalName = resolvedLegal;
+        if (resolvedLegal !== editingOrg.legalName) patch.legalName = resolvedLegal;
         if ((organizationType || 'All') !== (editingOrg.organizationType || 'All')) {
           patch.organizationType = parseOrganizationTypeNumber(organizationType);
         }
-        if (t(industry) !== (editingOrg.industry || ''))                                            patch.industry = t(industry);
-        if (t(location) !== (editingOrg.location || ''))                                            patch.location = t(location);
-        if (!isSubOrgMode && t(subscriptionPlan) !== (editingOrg.subscriptionPlan || ''))          patch.subscriptionPlan = t(subscriptionPlan);
-        if (t(contactPerson) !== (editingOrg.contactPerson || ''))                                  patch.contactPerson = t(contactPerson);
-        if (t(email) !== (editingOrg.email || ''))                                                  patch.email = t(email);
-        if (t(phone) !== (editingOrg.phone || ''))                                                  patch.phone = t(phone);
-        if (t(whatsapp) !== (editingOrg.whatsapp || ''))                                            patch.whatsapp = t(whatsapp);
-        if (t(gstNumber) !== (editingOrg.gstNumber || ''))                                          patch.gstNumber = t(gstNumber);
-        if (t(panNumber) !== (editingOrg.panNumber || ''))                                          patch.panNumber = t(panNumber);
-        if ((registrationType || '') !== (editingOrg.registrationType || ''))                       patch.registrationType = registrationType || '';
-        if (t(address) !== (editingOrg.address || ''))                                              patch.address = t(address);
-        if (logo !== (editingOrg.logo || ''))                                                       patch.logo = logo || '';
+        if (t(industry) !== (editingOrg.industry || '')) patch.industry = t(industry);
+        if (t(location) !== (editingOrg.location || '')) patch.location = t(location);
+        if (t(subscriptionPlan) !== (editingOrg.subscriptionPlan || '')) patch.subscriptionPlan = t(subscriptionPlan);
+        if (t(contactPerson) !== (editingOrg.contactPerson || '')) patch.contactPerson = t(contactPerson);
+        if (t(email) !== (editingOrg.email || '')) patch.email = t(email);
+        if (t(phone) !== (editingOrg.phone || '')) patch.phone = t(phone);
+        if (t(whatsapp) !== (editingOrg.whatsapp || '')) patch.whatsapp = t(whatsapp);
+        if (t(gstNumber) !== (editingOrg.gstNumber || '')) patch.gstNumber = t(gstNumber);
+        if (t(panNumber) !== (editingOrg.panNumber || '')) patch.panNumber = t(panNumber);
+        if ((registrationType || '') !== (editingOrg.registrationType || '')) patch.registrationType = registrationType || '';
+        if (t(address) !== (editingOrg.address || '')) patch.address = t(address);
+        if (logo !== (editingOrg.logo || '')) patch.logo = logo || '';
 
         // Non-string fields
-        if (formStatus !== editingOrg.status)                                                       patch.status = formStatus;
-        if (subOrganizationSupport !== !!editingOrg.subOrganizationSupport)                         patch.subOrganizationSupport = subOrganizationSupport;
+        if (formStatus !== editingOrg.status) patch.status = formStatus;
+        if (subOrganizationSupport !== !!editingOrg.subOrganizationSupport) patch.subOrganizationSupport = subOrganizationSupport;
 
         // Password — only if a new one is entered
         if (t(password)) patch.password = t(password);
@@ -779,7 +780,7 @@ export const OrganizationView: React.FC = () => {
             try {
               const parsed = JSON.parse(savedCatalog);
               if (Array.isArray(parsed)) catalog = parsed;
-            } catch (e) {}
+            } catch (e) { }
           }
           catalog.push({
             id: `sub_${Date.now()}`,
@@ -820,7 +821,18 @@ export const OrganizationView: React.FC = () => {
       setIsModalOpen(false);
       await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
-      showToast('error', 'Operation Failed', err?.message || 'Could not save organization.');
+      const backendMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error?.message ||
+        (Array.isArray(err?.response?.data?.errors)
+          ? err.response.data.errors.map((e: any) => e.message || e).join(', ')
+          : null) ||
+        (Array.isArray(err?.response?.data?.fields)
+          ? err.response.data.fields.map((f: any) => `${f.path?.join('.') ? f.path.join('.') + ': ' : ''}${f.message}`).join(', ')
+          : null) ||
+        err?.message ||
+        'Could not save organization.';
+      showToast('error', 'Operation Failed', backendMsg);
     } finally {
       setIsSubmitting(false);
     }
@@ -1019,11 +1031,10 @@ export const OrganizationView: React.FC = () => {
                               type="button"
                               onClick={(e) => phone && handleCopy(e, phone, `${org.id}-phone`)}
                               disabled={!phone}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
-                                phone
-                                  ? 'bg-blue-50 hover:bg-blue-100 text-blue-600 cursor-pointer'
-                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                              }`}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${phone
+                                ? 'bg-blue-50 hover:bg-blue-100 text-blue-600 cursor-pointer'
+                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                                }`}
                             >
                               <Phone className="w-3.5 h-3.5" />
                             </button>
@@ -1043,11 +1054,10 @@ export const OrganizationView: React.FC = () => {
                               type="button"
                               onClick={(e) => whatsappVal && handleCopy(e, whatsappVal, `${org.id}-wa`)}
                               disabled={!whatsappVal}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
-                                whatsappVal
-                                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 cursor-pointer'
-                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                              }`}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${whatsappVal
+                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 cursor-pointer'
+                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                                }`}
                             >
                               <MessageCircle className="w-3.5 h-3.5" />
                             </button>
@@ -1067,11 +1077,10 @@ export const OrganizationView: React.FC = () => {
                               type="button"
                               onClick={(e) => email && handleCopy(e, email, `${org.id}-email`)}
                               disabled={!email}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
-                                email
-                                  ? 'bg-purple-50 hover:bg-purple-100 text-purple-600 cursor-pointer'
-                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                              }`}
+                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${email
+                                ? 'bg-purple-50 hover:bg-purple-100 text-purple-600 cursor-pointer'
+                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
+                                }`}
                             >
                               <Mail className="w-3.5 h-3.5" />
                             </button>
@@ -1365,9 +1374,8 @@ export const OrganizationView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className={`flex-1 h-11 px-3 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs sm:text-[13px] border ${
-                      formErrors.logo ? 'border-red-500' : 'border-slate-200 hover:border-slate-300'
-                    } transition-all cursor-pointer flex items-center justify-center gap-2 shadow-2xs`}
+                    className={`flex-1 h-11 px-3 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs sm:text-[13px] border ${formErrors.logo ? 'border-red-500' : 'border-slate-200 hover:border-slate-300'
+                      } transition-all cursor-pointer flex items-center justify-center gap-2 shadow-2xs`}
                   >
                     <Upload className="w-3.5 h-3.5 text-[#33077C]" />
                     <span>{logo ? 'Change' : 'Upload Logo'}</span>
@@ -1401,11 +1409,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
                   }}
                   placeholder="Enter organization name"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.name
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.name
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.name && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
@@ -1425,11 +1432,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
                   }}
                   placeholder="e.g. ORG-001"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                    formErrors.code
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.code
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.code && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
@@ -1540,11 +1546,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.gstNumber) setFormErrors((prev) => ({ ...prev, gstNumber: '' }));
                   }}
                   placeholder="e.g. 22AAAAA0000A1Z5"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                    formErrors.gstNumber
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.gstNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.gstNumber && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.gstNumber}</p>
@@ -1564,11 +1569,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.panNumber) setFormErrors((prev) => ({ ...prev, panNumber: '' }));
                   }}
                   placeholder="e.g. ABCDE1234F"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                    formErrors.panNumber
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.panNumber
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.panNumber && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.panNumber}</p>
@@ -1602,11 +1606,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.location) setFormErrors((prev) => ({ ...prev, location: '' }));
                   }}
                   placeholder="e.g. Chennai, Tamil Nadu"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.location
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.location
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.location && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.location}</p>
@@ -1626,11 +1629,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
                   }}
                   placeholder="Enter contact person name"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.contactPerson
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.contactPerson
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.contactPerson && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
@@ -1653,11 +1655,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.phone) setFormErrors((prev) => ({ ...prev, phone: '' }));
                   }}
                   placeholder="e.g. 9876543210"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.phone
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.phone
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.phone && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.phone}</p>
@@ -1680,11 +1681,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: '' }));
                   }}
                   placeholder="e.g. 9876543210"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.whatsapp
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.whatsapp
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.whatsapp && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.whatsapp}</p>
@@ -1704,11 +1704,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: '' }));
                   }}
                   placeholder="e.g. admin@organization.com"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.email
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.email
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.email && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.email}</p>
@@ -1729,11 +1728,10 @@ export const OrganizationView: React.FC = () => {
                       setPassword(e.target.value);
                       if (formErrors.password) setFormErrors((prev) => ({ ...prev, password: '' }));
                     }}
-                    className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      formErrors.password
-                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
+                    className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.password
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                      }`}
                   />
                   <button
                     type="button"
@@ -1762,11 +1760,10 @@ export const OrganizationView: React.FC = () => {
                     if (formErrors.address) setFormErrors((prev) => ({ ...prev, address: '' }));
                   }}
                   placeholder="Enter complete address"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    formErrors.address
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.address
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                    }`}
                 />
                 {formErrors.address && (
                   <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
@@ -1788,15 +1785,13 @@ export const OrganizationView: React.FC = () => {
                       role="switch"
                       aria-checked={subOrganizationSupport}
                       onClick={() => setSubOrganizationSupport(!subOrganizationSupport)}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                        subOrganizationSupport ? 'bg-[#33077C]' : 'bg-slate-300'
-                      }`}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${subOrganizationSupport ? 'bg-[#33077C]' : 'bg-slate-300'
+                        }`}
                     >
                       <span
                         aria-hidden="true"
-                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                          subOrganizationSupport ? 'translate-x-5' : 'translate-x-0'
-                        }`}
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${subOrganizationSupport ? 'translate-x-5' : 'translate-x-0'
+                          }`}
                       />
                     </button>
                   </div>
@@ -1871,11 +1866,10 @@ export const OrganizationView: React.FC = () => {
                       {viewingOrg.code}
                     </span>
                     {viewingOrg.organizationType && (
-                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-md border ${
-                        viewingOrg.organizationType === 'Sales Management'
-                          ? 'bg-purple-50 text-[#33077C] border-purple-200'
-                          : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                      }`}>
+                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-md border ${viewingOrg.organizationType === 'Sales Management'
+                        ? 'bg-purple-50 text-[#33077C] border-purple-200'
+                        : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                        }`}>
                         {viewingOrg.organizationType}
                       </span>
                     )}
@@ -2004,11 +1998,10 @@ export const OrganizationView: React.FC = () => {
                   {isSuperAdmin && (
                     <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
                       <span className="text-slate-400 font-medium shrink-0">Sub-Org Support</span>
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-bold border ${
-                        viewingOrg.subOrganizationSupport
-                          ? 'bg-purple-50 text-[#33077C] border-purple-200'
-                          : 'bg-slate-100 text-slate-600 border-slate-200'
-                      }`}>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-bold border ${viewingOrg.subOrganizationSupport
+                        ? 'bg-purple-50 text-[#33077C] border-purple-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                        }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${viewingOrg.subOrganizationSupport ? 'bg-[#33077C]' : 'bg-slate-400'}`} />
                         {viewingOrg.subOrganizationSupport ? 'Enabled' : 'Disabled'}
                       </span>
@@ -2045,106 +2038,24 @@ export const OrganizationView: React.FC = () => {
         </Modal>
       )}
 
-      {/* Confirmation Modal: Suspend / Inactive / Delete */}
-      {confirmAction && (
-        <div
-          className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
-          onClick={() => setConfirmAction(null)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden transform scale-100 p-6 text-center animate-in zoom-in-95 duration-150"
-          >
-            {/* Action Icon */}
-            <div className="mx-auto mb-4 w-14 h-14 rounded-full flex items-center justify-center shadow-inner">
-              {confirmAction.type === 'Delete' && (
-                <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center">
-                  <Trash2 className="w-7 h-7 stroke-[2.2]" />
-                </div>
-              )}
-              {confirmAction.type === 'Suspend' && (
-                <div className="w-14 h-14 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center">
-                  <AlertCircle className="w-7 h-7 stroke-[2.2]" />
-                </div>
-              )}
-              {confirmAction.type === 'Inactive' && (
-                <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center">
-                  <Ban className="w-7 h-7 stroke-[2.2]" />
-                </div>
-              )}
-            </div>
-
-            {/* Title */}
-            <h3 className="text-lg font-bold text-slate-800">
-              {confirmAction.type === 'Delete' && (isSubOrgMode ? 'Delete Sub Organization' : 'Delete Organization')}
-              {confirmAction.type === 'Suspend' && (isSubOrgMode ? 'Suspend Sub Organization' : 'Suspend Organization')}
-              {confirmAction.type === 'Inactive' && (isSubOrgMode ? 'Deactivate Sub Organization' : 'Deactivate Organization')}
-            </h3>
-
-            {/* Description */}
-            <p className="mt-2 text-sm text-slate-500 leading-relaxed">
-              {confirmAction.type === 'Delete' && (
-                <>
-                  Are you sure you want to delete <span className="font-semibold text-slate-700">{confirmAction.orgName}</span>? This action cannot be undone.
-                </>
-              )}
-              {confirmAction.type === 'Suspend' && (
-                <>
-                  Are you sure you want to mark <span className="font-semibold text-slate-700">{confirmAction.orgName}</span> as <span className="font-semibold text-amber-600">Suspended</span>?
-                </>
-              )}
-              {confirmAction.type === 'Inactive' && (
-                <>
-                  Are you sure you want to mark <span className="font-semibold text-slate-700">{confirmAction.orgName}</span> as <span className="font-semibold text-slate-700">Inactive</span>?
-                </>
-              )}
-            </p>
-
-            {/* Action Buttons */}
-            <div className="mt-6 flex items-center justify-center gap-3">
-              <button
-                type="button"
-                disabled={isProcessingAction}
-                onClick={() => setConfirmAction(null)}
-                className="flex-1 h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isProcessingAction}
-                onClick={async () => {
-                  if (confirmAction.type === 'Delete') {
-                    await handleDeleteOrganization(confirmAction.orgId, confirmAction.orgName);
-                  } else {
-                    await handleUpdateStatus(confirmAction.orgId, confirmAction.type);
-                    setConfirmAction(null);
-                  }
-                }}
-                className={`flex-1 h-10 px-4 rounded-xl text-white text-xs sm:text-[13px] font-bold shadow-sm hover:shadow transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 ${confirmAction.type === 'Delete'
-                  ? 'bg-rose-600 hover:bg-rose-700'
-                  : confirmAction.type === 'Suspend'
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-slate-700 hover:bg-slate-800'
-                  }`}
-              >
-                {isProcessingAction ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    {confirmAction.type === 'Delete' && 'Yes, Delete'}
-                    {confirmAction.type === 'Suspend' && 'Yes, Suspend'}
-                    {confirmAction.type === 'Inactive' && 'Yes, Inactive'}
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Reusable Confirmation Modal: Suspend / Inactive / Delete */}
+      <ConfirmationModal
+        isOpen={!!confirmAction}
+        onClose={() => setConfirmAction(null)}
+        type={confirmAction?.type}
+        itemTypeLabel={isSubOrgMode ? 'Sub Organization' : 'Organization'}
+        itemName={confirmAction?.orgName}
+        isLoading={isProcessingAction}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          if (confirmAction.type === 'Delete') {
+            await handleDeleteOrganization(confirmAction.orgId, confirmAction.orgName);
+          } else {
+            await handleUpdateStatus(confirmAction.orgId, confirmAction.type);
+            setConfirmAction(null);
+          }
+        }}
+      />
     </div>
   );
 };

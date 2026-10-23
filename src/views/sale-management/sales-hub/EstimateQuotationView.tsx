@@ -59,6 +59,7 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { exportTableToExcel } from '../../../utils/excelExport';
+import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import {
   quotationApi,
   mapApiQuotationToSaleQuotation,
@@ -68,6 +69,8 @@ import {
   mapApiCustomerToSalesCustomer,
   stockApi,
   mapApiStockToInventoryStockItem,
+  productApi,
+  ApiProduct,
 } from '../../../api';
 import {
   commerceProformaApi,
@@ -303,6 +306,7 @@ export const EstimateQuotationView: React.FC = () => {
   // Live Commerce API State
   const [liveQuotations, setLiveQuotations] = useState<SaleQuotation[]>([]);
   const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
+  const [liveProducts, setLiveProducts] = useState<ApiProduct[]>([]);
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
@@ -635,6 +639,15 @@ export const EstimateQuotationView: React.FC = () => {
       })
       .catch((err) => console.warn('Customer load error:', err));
 
+    productApi
+      .getProducts({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (isMounted && res.data && Array.isArray(res.data)) {
+          setLiveProducts(res.data);
+        }
+      })
+      .catch((err) => console.warn('Product load error:', err));
+
     stockApi
       .getStocks({ pagination_required: false, page_size: 100 })
       .then((res) => {
@@ -650,9 +663,68 @@ export const EstimateQuotationView: React.FC = () => {
     };
   }, [viewMode, setCustomersList]);
 
-  // Clean products list: only live products from Commerce API or real inventory items (filter out mock data)
+  // Clean products list: live products from Commerce API + inventory stocks
   const availableProducts = useMemo(() => {
-    const list = liveStocks.length > 0 ? liveStocks : stocks;
+    const list: Array<{
+      productId: string;
+      id: string;
+      productName: string;
+      sku: string;
+      unitPrice: number;
+      category?: string;
+      unit?: string;
+      taxPercent?: number;
+      hsnCode?: string;
+    }> = [];
+
+    const seenIds = new Set<string>();
+
+    const extractTaxPercent = (rateStr?: string | number): number => {
+      if (typeof rateStr === 'number') return rateStr;
+      if (!rateStr) return 0;
+      const numMatch = String(rateStr).match(/(\d+(\.\d+)?)/);
+      return numMatch ? parseFloat(numMatch[1]) : 0;
+    };
+
+    // 1. Live Products from /commerce/products
+    liveProducts.forEach((p) => {
+      const pid = String(p.id || '');
+      if (pid && !seenIds.has(pid)) {
+        seenIds.add(pid);
+        list.push({
+          productId: pid,
+          id: pid,
+          productName: p.productName || (p as any).name || 'Unnamed Product',
+          sku: p.productCode || (p as any).sku || '',
+          unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).unitPrice ?? 0),
+          category: (typeof p.category === 'string' ? p.category : (p.category as any)?.name) || '',
+          unit: p.unit || 'PCS',
+          taxPercent: extractTaxPercent((p as any).taxRate ?? (p as any).taxPercent),
+          hsnCode: p.hsnCode || '',
+        });
+      }
+    });
+
+    // 2. Live Stocks from /commerce/stocks
+    const sourceStocks = liveStocks.length > 0 ? liveStocks : stocks;
+    sourceStocks.forEach((s) => {
+      const pid = String(s.productId || s.id || '');
+      if (pid && !seenIds.has(pid)) {
+        seenIds.add(pid);
+        list.push({
+          productId: pid,
+          id: pid,
+          productName: s.productName || 'Unnamed Product',
+          sku: s.sku || '',
+          unitPrice: Number(s.unitPrice || 0),
+          category: s.category || '',
+          unit: s.unit || 'PCS',
+          taxPercent: extractTaxPercent((s as any).taxRate ?? (s as any).taxPercent),
+          hsnCode: (s as any).hsnCode || '',
+        });
+      }
+    });
+
     return list.filter((s) => {
       const pid = String(s.productId || s.id || '');
       const name = String(s.productName || '').toLowerCase();
@@ -669,7 +741,7 @@ export const EstimateQuotationView: React.FC = () => {
       }
       return true;
     });
-  }, [liveStocks, stocks]);
+  }, [liveProducts, liveStocks, stocks]);
 
   // Displayed quotations: Instant filtering for search, status, and period across live or local data
   const displayQuotations = useMemo(() => {
@@ -3396,142 +3468,66 @@ export const EstimateQuotationView: React.FC = () => {
                             )}
                           </div>
 
-                          {/* 3-Dots Action Menu Button (matching screenshot) */}
-                          <div className="quotation-action-dropdown-container relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isActionOpen) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 240;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 4,
-                                      right: window.innerWidth - rect.right,
-                                    });
+                          {/* 3-Dots Action Menu Button */}
+                          <SaleActionDropdown
+                            items={[
+                              {
+                                label: 'View/Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEditForm(item),
+                              },
+                              {
+                                label: 'Convert to Sales Invoice',
+                                variant: 'invoice',
+                                onClick: () => handleOpenConvertModal(item, 'Invoice'),
+                              },
+                              {
+                                label: 'Duplicate',
+                                variant: 'duplicate',
+                                onClick: () => handleDuplicate(item),
+                              },
+                              {
+                                label: 'Print Quotation',
+                                variant: 'print',
+                                onClick: () => handlePrintQuotation(item),
+                              },
+                              {
+                                label: 'Mark as Cancelled',
+                                variant: 'cancel',
+                                hidden: item.status !== 'Open',
+                                onClick: async () => {
+                                  try {
+                                    await quotationApi.updateStatus(item.id, { status: 'Cancelled' });
+                                    toast.success(`Quotation ${item.quotationNo} marked as Cancelled`);
+                                    updateQuotationStatus(item.id, 'Cancelled');
+                                    await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+                                  } catch (err: any) {
+                                    toast.error(err.message || 'Failed to cancel quotation');
                                   }
-                                  setActiveDropdownId(item.id);
-                                  setActiveConvertDropdownId(null);
-                                }
-                              }}
-                              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-all cursor-pointer"
-                              title="More Options"
-                            >
-                              <MoreVertical className="w-4 h-4 text-slate-600" />
-                            </button>
-
-                            {/* 3-Dots Floating Dropdown Menu */}
-                            {isActionOpen && dropdownPos && (
-                              <div
-                                style={{
-                                  position: 'fixed',
-                                  top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                  bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                  right: `${dropdownPos.right}px`,
-                                  zIndex: 9999,
-                                }}
-                                className="quotation-action-dropdown-menu w-48 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-2 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {/* 1. View/Edit */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleOpenEditForm(item);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  View/Edit
-                                </button>
-
-                                {/* 2. Direct Convert to Sales Invoice */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleOpenConvertModal(item, 'Invoice');
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Convert to Sales Invoice
-                                </button>
-
-                                {/* 3. Delete */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveDropdownId(null);
-                                    handleDelete(item.id, item.quotationNo);
-                                  }}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-rose-600 hover:text-white hover:bg-rose-600 transition-colors cursor-pointer block"
-                                >
-                                  Delete
-                                </button>
-
-                                {/* 4. Duplicate */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleDuplicate(item)}
-                                  className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                >
-                                  Duplicate
-                                </button>
-
-
-                                {/* 5. Mark as Cancelled (Last Option) */}
-                                {item.status === 'Open' && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      setActiveDropdownId(null);
-                                      try {
-                                        await quotationApi.updateStatus(item.id, { status: 'Cancelled' });
-                                        toast.success(`Quotation ${item.quotationNo} marked as Cancelled`);
-                                        updateQuotationStatus(item.id, 'Cancelled');
-                                        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-                                      } catch (err: any) {
-                                        toast.error(err.message || 'Failed to cancel quotation');
-                                      }
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Cancelled
-                                  </button>
-                                )}
-
-                                {item.status === 'Cancelled' && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      setActiveDropdownId(null);
-                                      try {
-                                        await quotationApi.updateStatus(item.id, { status: 'Open' });
-                                        toast.success(`Quotation ${item.quotationNo} reopened as Open`);
-                                        updateQuotationStatus(item.id, 'Open');
-                                        await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
-                                      } catch (err: any) {
-                                        toast.error(err.message || 'Failed to reopen quotation');
-                                      }
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:text-white hover:bg-[#33077C] transition-colors cursor-pointer block"
-                                  >
-                                    Mark as Open
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                                },
+                              },
+                              {
+                                label: 'Mark as Open',
+                                variant: 'activate',
+                                hidden: item.status !== 'Cancelled',
+                                onClick: async () => {
+                                  try {
+                                    await quotationApi.updateStatus(item.id, { status: 'Open' });
+                                    toast.success(`Quotation ${item.quotationNo} reopened as Open`);
+                                    updateQuotationStatus(item.id, 'Open');
+                                    await fetchQuotations(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+                                  } catch (err: any) {
+                                    toast.error(err.message || 'Failed to reopen quotation');
+                                  }
+                                },
+                              },
+                              {
+                                label: 'Delete',
+                                variant: 'delete',
+                                onClick: () => handleDelete(item.id, item.quotationNo),
+                              },
+                            ]}
+                          />
                         </div>
                       </td>
                     </tr>

@@ -197,6 +197,7 @@ export interface SalesReturnItem {
   returnAmount: number;
   reason: ReturnReason;
   notes?: string;
+  remarks?: string;
 }
 
 export interface SalesReturn {

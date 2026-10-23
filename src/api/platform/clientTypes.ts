@@ -152,6 +152,10 @@ export interface CreatePlatformClientRequest {
   organizationType?: number;
   status?: string;
   subOrganizationSupport?: boolean;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
+  productId?: string;
 }
 
 export interface UpdatePlatformClientRequest {
@@ -159,6 +163,7 @@ export interface UpdatePlatformClientRequest {
   code?: string;
   legalName?: string;
   email?: string;
+  password?: string;
   phone?: string;
   whatsapp?: string;
   contactPerson?: string;
@@ -172,4 +177,9 @@ export interface UpdatePlatformClientRequest {
   status?: string;
   subOrganizationSupport?: boolean;
   active?: boolean;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
+  productId?: string;
 }
+
