@@ -58,11 +58,14 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
     const rect = containerRef.current.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const openUpward = spaceBelow < 220 && rect.top > 220;
+    const viewportWidth = window.innerWidth;
+    const menuWidth = Math.min(Math.max(rect.width, 130), Math.max(120, viewportWidth - 16));
+    const clampedLeft = Math.max(8, Math.min(rect.left, viewportWidth - menuWidth - 8));
 
     setDropdownPos({
       top: openUpward ? rect.top - 6 : rect.bottom + 6,
-      left: rect.left,
-      width: Math.max(rect.width, 110),
+      left: clampedLeft,
+      width: menuWidth,
       openUpward,
     });
   };
@@ -200,6 +203,12 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                 {!value && (
                   <Check className="w-4 h-4 stroke-[2.5] ml-2 shrink-0 text-[#33077C]" />
                 )}
+              </div>
+            )}
+
+            {normalizedOptions.length === 0 && (
+              <div className="px-3 py-2.5 text-xs text-slate-400 text-center italic select-none">
+                No options available
               </div>
             )}
 

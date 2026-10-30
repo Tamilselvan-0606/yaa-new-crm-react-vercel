@@ -3,7 +3,8 @@ export type InvoiceStatus = 'Draft' | 'Sent' | 'Partially Paid' | 'Paid' | 'Over
 export interface InvoiceItemApi {
   id?: string;
   itemId?: string;
-  itemDescription: string;
+  title?: string;
+  itemDescription?: string;
   hsnCode?: string;
   quantity: number;
   unitPrice: number;
@@ -155,7 +156,8 @@ export interface InvoiceListParams {
 
 export interface CreateInvoiceItemPayload {
   itemId?: string;
-  itemDescription: string;
+  title: string;
+  itemDescription?: string;
   hsnCode?: string;
   quantity: number;
   unitPrice: number;
@@ -167,6 +169,8 @@ export interface CreateInvoiceRequest {
   dueDate: string; // YYYY-MM-DD
   customerId: string; // UUID
   organizationId?: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
   status?: 'Draft' | 'Sent' | InvoiceStatus;
   discountTotal?: number;
   billingAddress?: string;

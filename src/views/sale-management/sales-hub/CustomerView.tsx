@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
   useMemo,
@@ -45,6 +47,10 @@ import {
   RefreshCw,
   Loader2,
   Printer,
+  Upload,
+  Download,
+  FileUp,
+  Calendar,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -63,15 +69,13 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport } from "../../../utils/printUtils";
-import {
-  UniversalShareDropdown,
-  formatCustomerShare,
-} from "../../../utils/shareUtils";
 import { toast } from "sonner";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   customerApi,
   CustomerLedgerData,
+  CreateCustomerPayload,
+  CustomerBulkUploadResult,
   mapApiCustomerToSalesCustomer,
   mapSalesCustomerToPayload,
 } from "../../../api/commerce/customerApi";
@@ -79,13 +83,21 @@ import {
   salesRepresentativeApi,
   ApiSalesRepresentative,
 } from "../../../api/commerce/salesRepresentativeApi";
+import { SalesRepSearchableSelect } from "./SalesRepSearchableSelect";
 import { collectionApi } from "../../../api/commerce/collectionApi";
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { calculateCustomerOutstanding } from "../../../utils/outstandingBalance";
-import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from "../utils/formUtils";
+import {
+  FormLabel,
+  FORM_INPUT_CLS,
+  FORM_INPUT_ERROR_CLS,
+  FORM_SELECT_CLS,
+  FORM_TEXTAREA_CLS,
+} from "../utils/formUtils";
 
+import { formatDate } from '../utils/dateUtils';
 export const CustomerView: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -114,6 +126,29 @@ export const CustomerView: React.FC = () => {
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Bulk Upload State (Commerce POST /customers/bulk-upload)
+  const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkParsedCustomers, setBulkParsedCustomers] = useState<
+    Array<{
+      rowNumber: number;
+      customerCode: string;
+      fullName: string;
+      mobileNumber: string;
+      alternateMobile: string;
+      email: string;
+      dateOfBirth: string;
+      gender: string;
+      occupation: string;
+      status: string;
+      isValid: boolean;
+      errors: string[];
+    }>
+  >([]);
+  const [isProcessingBulkUpload, setIsProcessingBulkUpload] = useState(false);
+  const [bulkUploadResult, setBulkUploadResult] = useState<CustomerBulkUploadResult | null>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Live Sales Representatives API State
   const [liveSalesReps, setLiveSalesReps] = useState<ApiSalesRepresentative[]>(
@@ -182,14 +217,21 @@ export const CustomerView: React.FC = () => {
     }
   }, []);
 
-  // Single mount effect to load sales representatives once
-  useEffect(() => {
-    loadSalesReps();
-  }, [loadSalesReps]);
+  // Sales representatives loaded on demand when opening Change Rep modal
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState("All");
   const [appliedStatus, setAppliedStatus] = useState("All");
   const [pendingType, setPendingType] = useState("All");
@@ -198,8 +240,7 @@ export const CustomerView: React.FC = () => {
   const [appliedOutstanding, setAppliedOutstanding] = useState("All");
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -209,17 +250,10 @@ export const CustomerView: React.FC = () => {
     right: number;
   } | null>(null);
 
-  // Share Popover state
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{
-    top?: number;
-    bottom?: number;
-    right?: number;
-  } | null>(null);
-
   // Modals
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [reopenDetailAfterEdit, setReopenDetailAfterEdit] = useState(false);
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
   const [duplicateMatches, setDuplicateMatches] = useState<SalesCustomer[]>([]);
   const [pendingSavePayload, setPendingSavePayload] =
@@ -228,7 +262,9 @@ export const CustomerView: React.FC = () => {
     useState<SalesCustomer | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
-  const [deleteCustomerError, setDeleteCustomerError] = useState<string | null>(null);
+  const [deleteCustomerError, setDeleteCustomerError] = useState<string | null>(
+    null,
+  );
 
   const [selectedCustomer, setSelectedCustomer] =
     useState<SalesCustomer | null>(null);
@@ -298,7 +334,11 @@ export const CustomerView: React.FC = () => {
       });
       customerAssignmentsCacheRef.current = null;
     } catch (apiErr: any) {
-      const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || "Failed to assign sales representative.";
+      const errMsg =
+        apiErr?.response?.data?.error?.message ||
+        apiErr?.response?.data?.message ||
+        apiErr?.message ||
+        "Failed to assign sales representative.";
       toast.error(`Assignment failed: ${errMsg}`);
       return;
     }
@@ -344,12 +384,9 @@ export const CustomerView: React.FC = () => {
       });
     }
 
-    toast.success(
-      `Assigned ${repName} to ${changeRepTargetCustomer.name}!`,
-      {
-        description: `${repAssignmentType} Rep assignment active from ${repEffectiveFrom}.`,
-      },
-    );
+    toast.success(`Assigned ${repName} to ${changeRepTargetCustomer.name}!`, {
+      description: `${repAssignmentType} Rep assignment active from ${repEffectiveFrom}.`,
+    });
     store.dispatch(
       baseApi.util.invalidateTags([
         { type: "Customer", id: "LIST" },
@@ -482,18 +519,12 @@ export const CustomerView: React.FC = () => {
         !target.closest(".share-popover-container") &&
         !target.closest(".share-popover-menu")
       ) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     window.addEventListener("click", handleOutside);
@@ -502,7 +533,7 @@ export const CustomerView: React.FC = () => {
       window.removeEventListener("click", handleOutside);
       window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
   // Master API Loader with strict deduplication guards to ensure zero redundant calls
   const loadCustomers = useCallback(
@@ -518,38 +549,36 @@ export const CustomerView: React.FC = () => {
       setIsApiLoading(true);
 
       try {
-        const needAssignments = forceRefresh || !customerAssignmentsCacheRef.current;
-        const [res, assignmentsRes] = await Promise.allSettled([
+        const [res, assignRes] = await Promise.all([
           customerApi.getCustomers({
             page_no: currentPage,
             page_size: pageSize,
             pagination_required: true,
             search: appliedSearch.trim() || undefined,
             sortOrder: "desc",
-            status: appliedStatus.toUpperCase() !== "ALL" ? appliedStatus : undefined,
-            customerType: appliedType.toUpperCase() !== "ALL" ? appliedType : undefined,
+            status:
+              appliedStatus.toUpperCase() !== "ALL" ? appliedStatus : undefined,
+            customerType:
+              appliedType.toUpperCase() !== "ALL" ? appliedType : undefined,
           }),
-          needAssignments ? collectionApi.getCustomerAssignments({ limit: 1000 }) : Promise.resolve(null),
+          forceRefresh || !customerAssignmentsCacheRef.current
+            ? collectionApi.getCustomerAssignments({ limit: 200 }).catch(() => null)
+            : Promise.resolve(null),
         ]);
 
-        if (res.status === "fulfilled" && res.value && res.value.success && Array.isArray(res.value.data)) {
-          const apiData = res.value.data;
+        if (assignRes && assignRes.success && Array.isArray(assignRes.data)) {
+          const nextCache = new Map<string, any>();
+          assignRes.data.forEach((ca: any) => {
+            if (ca?.id) nextCache.set(ca.id, ca);
+            if (ca?.customerId) nextCache.set(ca.customerId, ca);
+          });
+          customerAssignmentsCacheRef.current = nextCache;
+        }
 
-          let assignmentMap = customerAssignmentsCacheRef.current || new Map<string, any>();
-          if (
-            assignmentsRes.status === "fulfilled" &&
-            assignmentsRes.value &&
-            assignmentsRes.value.success &&
-            Array.isArray(assignmentsRes.value.data)
-          ) {
-            assignmentMap = new Map<string, any>();
-            assignmentsRes.value.data.forEach((item: any) => {
-              const custId = item.id || item.customerId;
-              if (custId) assignmentMap.set(custId, item);
-            });
-            customerAssignmentsCacheRef.current = assignmentMap;
-          }
-
+        if (res && res.success && Array.isArray(res.data)) {
+          const apiData = res.data;
+          const assignmentMap =
+            customerAssignmentsCacheRef.current || new Map<string, any>();
           const storeCustMap = new Map<string, SalesCustomer>();
           customers.forEach((c) => storeCustMap.set(c.id, c));
 
@@ -582,8 +611,7 @@ export const CustomerView: React.FC = () => {
               existing?.assignedDate;
 
             const assignmentNotes =
-              base.assignmentNotes ||
-              existing?.assignmentNotes;
+              base.assignmentNotes || existing?.assignmentNotes;
 
             return {
               ...base,
@@ -599,9 +627,9 @@ export const CustomerView: React.FC = () => {
           setIsApiConnected(true);
           setApiErrorMessage(null);
 
-          if (res.value.pagination) {
-            setTotalApiRecords(res.value.pagination.totalRecords);
-            setTotalApiPages(res.value.pagination.totalPages);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords);
+            setTotalApiPages(res.pagination.totalPages);
           }
 
           // Keep local store in sync
@@ -639,29 +667,21 @@ export const CustomerView: React.FC = () => {
     const handleSidebarNav = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (
-        detail?.path === '/sale-management/sales/customer' ||
-        detail?.id === 'sales-hub-customer' ||
-        detail?.id === 'billing-customers'
+        detail?.path === "/sale-management/sales/customer" ||
+        detail?.id === "sales-hub-customer" ||
+        detail?.id === "billing-customers"
       ) {
         lastFetchKeyRef.current = null;
         loadCustomers(true);
         loadSalesReps(true);
       }
     };
-    window.addEventListener('crm:sidebar-navigate', handleSidebarNav);
-    return () => window.removeEventListener('crm:sidebar-navigate', handleSidebarNav);
+    window.addEventListener("crm:sidebar-navigate", handleSidebarNav);
+    return () =>
+      window.removeEventListener("crm:sidebar-navigate", handleSidebarNav);
   }, [loadCustomers, loadSalesReps]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      if (pendingSearch.trim() !== appliedSearch.trim()) {
-        setAppliedSearch(pendingSearch.trim());
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(handler);
-  }, [pendingSearch, appliedSearch]);
+
 
   const handleManualRefresh = () => {
     lastFetchKeyRef.current = null;
@@ -672,7 +692,10 @@ export const CustomerView: React.FC = () => {
 
   // Real-time calculation of customer summaries
   const customerFinancialMap = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof calculateCustomerOutstanding>>();
+    const map = new Map<
+      string,
+      ReturnType<typeof calculateCustomerOutstanding>
+    >();
     const allKnown =
       isApiConnected && liveCustomers.length > 0 ? liveCustomers : customers;
     allKnown.forEach((c) => {
@@ -695,6 +718,360 @@ export const CustomerView: React.FC = () => {
     salesReturns,
     paymentIns,
   ]);
+
+  // Paid Amount Date Resolver (from customer API object or customer's payment receipts)
+  const getCustomerPaidDate = useCallback(
+    (cust: SalesCustomer): string | null => {
+      if (cust.paidAmountDate) return cust.paidAmountDate;
+      if (cust.lastPaymentDate) return cust.lastPaymentDate;
+      if ((cust as any).paidDate) return (cust as any).paidDate;
+      if ((cust as any).lastPayment?.date)
+        return (cust as any).lastPayment.date;
+      if ((cust as any).paymentDate) return (cust as any).paymentDate;
+      // Fallback to customer's payments in paymentIns
+      const custPayments = paymentIns
+        .filter(
+          (p) =>
+            p.customerId === cust.id ||
+            (p as any).customerCode === cust.customerCode,
+        )
+        .sort((a, b) =>
+          (b.paymentDate || b.date || "").localeCompare(
+            a.paymentDate || a.date || "",
+          ),
+        );
+      if (custPayments.length > 0) {
+        return custPayments[0].paymentDate || custPayments[0].date || null;
+      }
+      return null;
+    },
+    [paymentIns],
+  );
+
+  // Download CSV sample template for Bulk Upload (matching POST /commerce/customers/bulk-upload)
+  const handleDownloadSampleCsv = () => {
+    const headers = [
+      "customer_code",
+      "full_name",
+      "mobile_number",
+      "alternate_mobile",
+      "email",
+      "date_of_birth",
+      "gender",
+      "occupation",
+      "status",
+    ];
+
+    const sampleRows = [
+      [
+        "CUS001",
+        "Arun Kumar",
+        "9876543210",
+        "9123456780",
+        "arun@example.com",
+        "1998-05-12",
+        "Male",
+        "Engineer",
+        "ACTIVE",
+      ],
+      [
+        "CUS002",
+        "Priya Devi",
+        "9876543211",
+        "",
+        "priya@example.com",
+        "2000-08-21",
+        "Female",
+        "Teacher",
+        "ACTIVE",
+      ],
+      [
+        "CUS003",
+        "Ravi Kumar",
+        "9876543212",
+        "",
+        "ravi@example.com",
+        "1995-02-15",
+        "Male",
+        "Business",
+        "ACTIVE",
+      ],
+    ];
+
+    const csvContent = [
+      headers.join(","),
+      ...sampleRows.map((r) =>
+        r
+          .map((c) =>
+            c.includes(",") || c.includes('"')
+              ? `"${c.replace(/"/g, '""')}"`
+              : c,
+          )
+          .join(","),
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "customer_bulk_upload_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success("Customer CSV template downloaded!");
+  };
+
+  // Parse CSV line handling quotes and commas
+  const parseCsvLine = (line: string): string[] => {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
+  // Handle file selection and parsing
+  const handleBulkFileSelected = (file: File) => {
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
+      toast.error("Invalid file type. Please select a valid CSV file (.csv).");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("CSV file size exceeds allowed limit (5 MB).");
+      return;
+    }
+
+    setBulkFile(file);
+    setBulkUploadResult(null);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = (e.target?.result as string) || "";
+      const rawLines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (rawLines.length <= 1) {
+        toast.error("File is empty or contains only header row");
+        setBulkParsedCustomers([]);
+        return;
+      }
+
+      const headerLine = rawLines[0];
+      const headers = parseCsvLine(headerLine).map((h) =>
+        h.toLowerCase().replace(/[^a-z0-9_]/g, ""),
+      );
+
+      const colIdx = {
+        code: headers.findIndex(
+          (h) =>
+            h.includes("customer_code") ||
+            h === "code" ||
+            h.includes("customercode") ||
+            h.includes("customer_id"),
+        ),
+        name: headers.findIndex(
+          (h) =>
+            h.includes("full_name") ||
+            h === "name" ||
+            h.includes("customer_name") ||
+            h.includes("fullname"),
+        ),
+        mobile: headers.findIndex(
+          (h) =>
+            h.includes("mobile_number") ||
+            h === "mobile" ||
+            h.includes("mobilenumber") ||
+            h === "phone" ||
+            h.includes("contact"),
+        ),
+        altMobile: headers.findIndex(
+          (h) =>
+            h.includes("alternate_mobile") ||
+            h.includes("alt_mobile") ||
+            h.includes("alternate_phone") ||
+            h.includes("alternatemobile"),
+        ),
+        email: headers.findIndex(
+          (h) => h.includes("email") || h === "mail",
+        ),
+        dob: headers.findIndex(
+          (h) =>
+            h.includes("date_of_birth") ||
+            h.includes("dob") ||
+            h.includes("birth"),
+        ),
+        gender: headers.findIndex((h) => h.includes("gender")),
+        occupation: headers.findIndex(
+          (h) =>
+            h.includes("occupation") ||
+            h.includes("profession") ||
+            h.includes("designation"),
+        ),
+        status: headers.findIndex((h) => h.includes("status")),
+      };
+
+      if (colIdx.name === -1 && colIdx.mobile === -1) {
+        toast.error("Expected CSV headers not found (full_name, mobile_number, etc.).");
+      }
+
+      const seenMobiles = new Set<string>();
+      const parsed: Array<{
+        rowNumber: number;
+        customerCode: string;
+        fullName: string;
+        mobileNumber: string;
+        alternateMobile: string;
+        email: string;
+        dateOfBirth: string;
+        gender: string;
+        occupation: string;
+        status: string;
+        isValid: boolean;
+        errors: string[];
+      }> = [];
+
+      for (let i = 1; i < rawLines.length; i++) {
+        const line = rawLines[i];
+        const cols = parseCsvLine(line);
+        if (cols.length === 0 || cols.every((c) => !c)) continue;
+
+        const getCol = (idx: number) =>
+          idx >= 0 && idx < cols.length ? cols[idx].trim() : "";
+
+        const customerCode = getCol(colIdx.code);
+        const fullName = getCol(colIdx.name);
+        const rawMobile = getCol(colIdx.mobile);
+        const cleanMobile = normalizeIndianPhoneTo10Digits(rawMobile);
+        const alternateMobile = getCol(colIdx.altMobile);
+        const email = getCol(colIdx.email);
+        const dateOfBirth = getCol(colIdx.dob);
+        const gender = getCol(colIdx.gender);
+        const occupation = getCol(colIdx.occupation);
+        const status = getCol(colIdx.status) || "ACTIVE";
+
+        const errors: string[] = [];
+        if (!fullName) errors.push("Full Name is required");
+        if (!cleanMobile || cleanMobile.length !== 10) {
+          errors.push("Valid 10-digit mobile number is required");
+        } else if (seenMobiles.has(cleanMobile)) {
+          errors.push(`Duplicate mobile "${cleanMobile}" in CSV`);
+        } else {
+          seenMobiles.add(cleanMobile);
+        }
+
+        parsed.push({
+          rowNumber: i + 1, // CSV Row number (Header = 1)
+          customerCode,
+          fullName,
+          mobileNumber: cleanMobile || rawMobile,
+          alternateMobile,
+          email,
+          dateOfBirth,
+          gender,
+          occupation,
+          status,
+          isValid: errors.length === 0,
+          errors,
+        });
+      }
+
+      setBulkParsedCustomers(parsed);
+      if (parsed.length === 0) {
+        toast.warning("No data rows found in the CSV file.");
+      } else {
+        const validCount = parsed.filter((p) => p.isValid).length;
+        toast.info(
+          `Parsed ${parsed.length} customer records (${validCount} valid). Ready to upload.`,
+        );
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Execute Bulk Upload via Commerce API (POST /commerce/customers/bulk-upload)
+  const handleExecuteBulkUpload = async () => {
+    if (!bulkFile) {
+      toast.error("Please select a CSV file to upload.");
+      return;
+    }
+
+    setIsProcessingBulkUpload(true);
+    setBulkUploadResult(null);
+
+    try {
+      const res = await customerApi.bulkUploadCustomers(bulkFile);
+
+      if (res && res.success) {
+        const result = res.data;
+        setBulkUploadResult(result);
+
+        // Invalidate RTK cache tags
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Customer", id: "LIST" },
+            "Dashboard",
+          ]),
+        );
+
+        // Reload live customers list from backend
+        await loadCustomers(true);
+
+        if (result.failed === 0) {
+          toast.success(
+            `Customer bulk upload completed! All ${result.created} customer record${result.created > 1 ? "s" : ""} imported successfully.`,
+          );
+        } else if (result.created > 0) {
+          toast.warning(
+            `Bulk upload completed: ${result.created} created, ${result.failed} failed. See error details below.`,
+          );
+        } else {
+          toast.error(
+            `All ${result.failed} customer records failed. Please review errors below.`,
+          );
+        }
+      } else {
+        toast.error(res?.message || "Customer bulk upload failed.");
+      }
+    } catch (err: any) {
+      console.error("Bulk upload error:", err);
+      const apiErrors =
+        err?.data?.data?.errors || err?.response?.data?.data?.errors;
+      if (Array.isArray(apiErrors) && apiErrors.length > 0) {
+        setBulkUploadResult({
+          total: bulkParsedCustomers.length,
+          created: 0,
+          failed: apiErrors.length,
+          errors: apiErrors,
+        });
+      }
+      toast.error(err?.message || "Failed to upload customers CSV file.");
+    } finally {
+      setIsProcessingBulkUpload(false);
+    }
+  };
 
   // Overall Summary Metrics (5 Cards)
   const summary = useMemo(() => {
@@ -739,11 +1116,20 @@ export const CustomerView: React.FC = () => {
     customerFinancialMap,
   ]);
 
+  const handleCloseFormModal = () => {
+    setIsFormModalOpen(false);
+    if (reopenDetailAfterEdit && selectedCustomer) {
+      setIsDetailModalOpen(true);
+    }
+    setReopenDetailAfterEdit(false);
+  };
+
   // Open Create Customer Modal
   const handleOpenCreateModal = () => {
     if (!hasLoadedRepsRef.current) {
       loadSalesReps();
     }
+    setReopenDetailAfterEdit(false);
     reset({
       ...defaultCustomerFormValues,
       customerCode: "",
@@ -753,7 +1139,11 @@ export const CustomerView: React.FC = () => {
   };
 
   // Open Edit Customer Modal
-  const handleOpenEditModal = (customer: SalesCustomer) => {
+  const handleOpenEditModal = (customer: SalesCustomer, fromDetail = false) => {
+    setReopenDetailAfterEdit(fromDetail);
+    if (fromDetail) {
+      setIsDetailModalOpen(false);
+    }
     if (!hasLoadedRepsRef.current) {
       loadSalesReps();
     }
@@ -781,7 +1171,14 @@ export const CustomerView: React.FC = () => {
         customer.creditLimit !== undefined && customer.creditLimit !== null
           ? customer.creditLimit
           : "",
-      paymentTerms: customer.paymentTerms || "",
+      paymentTerms: (() => {
+        const raw = customer.paymentDuePeriod || customer.paymentTerms || "";
+        if (!raw) return "";
+        const match = ["15", "30", "45", "60", "75", "90", "105", "120"].find(
+          (d) => raw.includes(d),
+        );
+        return match ? `${match} Days` : raw;
+      })(),
       openingBalance:
         customer.openingBalance !== undefined &&
         customer.openingBalance !== null
@@ -852,6 +1249,9 @@ export const CustomerView: React.FC = () => {
     const selectedRep = availableSalesReps.find(
       (r) => r.id === data.salesRepresentativeId,
     );
+    const cleanStr = (s?: string | null) =>
+      s && s.trim() ? s.trim() : undefined;
+
     const payload: SalesCustomer = {
       id: editingCustomer ? editingCustomer.id : `cust_${Date.now()}`,
       customerCode: (editingCustomer
@@ -859,41 +1259,46 @@ export const CustomerView: React.FC = () => {
         : data.customerCode || ""
       ).trim(),
       name: data.name.trim(),
-      company: data.company.trim() || undefined,
+      company: cleanStr(data.company),
       customerType: data.customerType,
       salesRepresentativeId: data.salesRepresentativeId || undefined,
       salesRepresentativeName: selectedRep ? selectedRep.name : undefined,
       phone: normalizeIndianPhoneTo10Digits(data.phone),
-      alternatePhone: data.alternatePhone.trim()
+      alternatePhone: cleanStr(data.alternatePhone)
         ? normalizeIndianPhoneTo10Digits(data.alternatePhone)
         : undefined,
-      email: data.email.trim(),
-      gender: data.gender || undefined,
-      dateOfBirth: data.dateOfBirth || undefined,
-      address: data.address.trim(),
-      city: data.city.trim(),
-      state: data.state.trim(),
-      country: data.country.trim(),
-      pincode: data.pincode.trim(),
-      gstNumber: data.gstNumber.trim().toUpperCase() || undefined,
-      panNumber: data.panNumber.trim().toUpperCase() || undefined,
-      billingAddress: data.billingAddress.trim() || data.address.trim(),
+      email: cleanStr(data.email) || "",
+      gender: cleanStr(data.gender),
+      dateOfBirth: cleanStr(data.dateOfBirth),
+      address: cleanStr(data.address) || "",
+      city: cleanStr(data.city) || "",
+      state: cleanStr(data.state) || "",
+      country: cleanStr(data.country) || "",
+      pincode: cleanStr(data.pincode) || "",
+      gstNumber: cleanStr(data.gstNumber)?.toUpperCase(),
+      panNumber: cleanStr(data.panNumber)?.toUpperCase(),
+      billingAddress:
+        cleanStr(data.billingAddress) || cleanStr(data.address) || "",
       shippingAddress: data.sameAsBilling
-        ? data.billingAddress.trim() || data.address.trim()
-        : data.shippingAddress.trim() || data.address.trim(),
+        ? cleanStr(data.billingAddress) || cleanStr(data.address) || ""
+        : cleanStr(data.shippingAddress) || cleanStr(data.address) || "",
       sameAsBilling: data.sameAsBilling,
       creditLimit:
-        data.creditLimit !== "" && !isNaN(Number(data.creditLimit))
+        data.creditLimit !== "" &&
+        !isNaN(Number(data.creditLimit)) &&
+        Number(data.creditLimit) > 0
           ? Number(data.creditLimit)
-          : 0,
-      paymentTerms: data.paymentTerms.trim(),
+          : undefined,
+      paymentTerms: cleanStr(data.paymentTerms) || "",
       openingBalance:
-        data.openingBalance !== "" && !isNaN(Number(data.openingBalance))
+        data.openingBalance !== "" &&
+        !isNaN(Number(data.openingBalance)) &&
+        Number(data.openingBalance) > 0
           ? Number(data.openingBalance)
-          : 0,
-      preferredPaymentMethod: data.preferredPaymentMethod || undefined,
+          : undefined,
+      preferredPaymentMethod: cleanStr(data.preferredPaymentMethod),
       status: data.status,
-      notes: data.notes.trim() || undefined,
+      notes: cleanStr(data.notes),
       tags: data.tags
         ? data.tags
             .split(",")
@@ -1023,6 +1428,10 @@ export const CustomerView: React.FC = () => {
             setPendingSavePayload(null);
             if (selectedCustomer && selectedCustomer.id === updated.id) {
               setSelectedCustomer(updated);
+            }
+            if (reopenDetailAfterEdit) {
+              setIsDetailModalOpen(true);
+              setReopenDetailAfterEdit(false);
             }
             return;
           }
@@ -1277,17 +1686,32 @@ export const CustomerView: React.FC = () => {
 
   // Display Customers: Use live Commerce dataset when connected, fallback to local paginated
   const displayCustomers = useMemo(() => {
+    let list: SalesCustomer[];
     if (isApiConnected && liveCustomers.length > 0) {
       if (appliedOutstanding === "With Outstanding") {
-        return liveCustomers.filter((c) => (c.outstandingAmount || 0) > 0);
+        list = liveCustomers.filter((c) => (c.outstandingAmount || 0) > 0);
+      } else if (appliedOutstanding === "Zero Balance") {
+        list = liveCustomers.filter((c) => (c.outstandingAmount || 0) === 0);
+      } else {
+        list = liveCustomers;
       }
-      if (appliedOutstanding === "Zero Balance") {
-        return liveCustomers.filter((c) => (c.outstandingAmount || 0) === 0);
-      }
-      return liveCustomers;
+    } else {
+      list = filteredCustomers;
     }
-    return paginatedCustomers;
-  }, [isApiConnected, liveCustomers, appliedOutstanding, paginatedCustomers]);
+
+    if (list.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return list.slice(start, start + pageSize);
+    }
+    return list;
+  }, [
+    isApiConnected,
+    liveCustomers,
+    appliedOutstanding,
+    filteredCustomers,
+    currentPage,
+    pageSize,
+  ]);
 
   const displayedTotalRecords = useMemo(() => {
     if (isApiConnected && totalApiRecords !== null) {
@@ -1509,18 +1933,25 @@ export const CustomerView: React.FC = () => {
       return;
     }
 
-    const excelRows = filteredCustomers.map((c, idx) => ({
-      sNo: idx + 1,
-      customerCode: c.customerCode,
-      name: c.name,
-      company: c.company || "-",
-      phone: c.phone,
-      email: c.email || "-",
-      customerType: c.customerType,
-      creditLimit: Number(c.creditLimit || 0),
-      outstanding: Number(c.outstandingAmount || 0),
-      status: c.status,
-    }));
+    const excelRows = filteredCustomers.map((c, idx) => {
+      const fin = customerFinancialMap.get(c.id);
+      return {
+        sNo: idx + 1,
+        customerCode: c.customerCode,
+        name: c.name,
+        company: c.company || "-",
+        phone: c.phone,
+        email: c.email || "-",
+        customerType: c.customerType,
+        paymentDuePeriod: c.paymentDuePeriod || c.paymentTerms || "Net 30 Days",
+        totalSales: fin?.totalSalesAmount || c.totalSales || 0,
+        paidAmount: fin?.totalPaidAmount || c.paidAmount || 0,
+        paidAmountDate: getCustomerPaidDate(c) || "-",
+        creditLimit: Number(c.creditLimit || 0),
+        outstanding: fin?.outstandingAmount || Number(c.outstandingAmount || 0),
+        status: c.status,
+      };
+    });
 
     exportTableToExcel({
       filename: `Customers_Report_${new Date().toISOString().split("T")[0]}`,
@@ -1540,6 +1971,32 @@ export const CustomerView: React.FC = () => {
         { header: "Phone", key: "phone", align: "left", width: 18 },
         { header: "Email", key: "email", align: "left", width: 24 },
         { header: "Type", key: "customerType", align: "center", width: 14 },
+        {
+          header: "Payment Due Period",
+          key: "paymentDuePeriod",
+          align: "center",
+          width: 18,
+        },
+        {
+          header: "Total Sales (₹)",
+          key: "totalSales",
+          align: "right",
+          type: "currency",
+          width: 18,
+        },
+        {
+          header: "Paid Amount (₹)",
+          key: "paidAmount",
+          align: "right",
+          type: "currency",
+          width: 18,
+        },
+        {
+          header: "Paid Date",
+          key: "paidAmountDate",
+          align: "center",
+          width: 16,
+        },
         {
           header: "Credit Limit (₹)",
           key: "creditLimit",
@@ -1576,30 +2033,65 @@ export const CustomerView: React.FC = () => {
       return;
     }
 
-    const printRows = filteredCustomers.map((c, idx) => ({
-      sNo: idx + 1,
-      customerCode: c.customerCode,
-      name: c.name,
-      company: c.company || "-",
-      phone: c.phone,
-      email: c.email || "-",
-      customerType: c.customerType,
-      creditLimit: Number(c.creditLimit || 0),
-      outstanding: Number(c.outstandingAmount || 0),
-      status: c.status,
-    }));
+    const printRows = filteredCustomers.map((c, idx) => {
+      const fin = customerFinancialMap.get(c.id);
+      return {
+        sNo: idx + 1,
+        customerCode: c.customerCode,
+        name: c.name,
+        company: c.company || "-",
+        phone: c.phone,
+        email: c.email || "-",
+        customerType: c.customerType,
+        paymentDuePeriod: c.paymentDuePeriod || c.paymentTerms || "Net 30 Days",
+        paidAmount: fin?.totalPaidAmount || c.paidAmount || 0,
+        paidAmountDate: getCustomerPaidDate(c) || "-",
+        creditLimit: Number(c.creditLimit || 0),
+        outstanding: fin?.outstandingAmount || Number(c.outstandingAmount || 0),
+        status: c.status,
+      };
+    });
 
     printTableReport({
       title: "CUSTOMER DIRECTORY & BALANCE REPORT",
       subtitle: `Total Customers: ${filteredCustomers.length}`,
       columns: [
-        { header: "#", key: "sNo", align: "center", width: "5%" },
-        { header: "Customer ID", key: "customerCode", align: "center", width: "12%" },
-        { header: "Customer Name", key: "name", align: "left", width: "22%" },
-        { header: "Company", key: "company", align: "left", width: "18%" },
-        { header: "Phone", key: "phone", align: "left", width: "13%" },
-        { header: "Type", key: "customerType", align: "center", width: "10%" },
-        { header: "Outstanding (₹)", key: "outstanding", align: "right", type: "currency", width: "12%" },
+        { header: "#", key: "sNo", align: "center", width: "4%" },
+        {
+          header: "Customer ID",
+          key: "customerCode",
+          align: "center",
+          width: "11%",
+        },
+        { header: "Customer Name", key: "name", align: "left", width: "18%" },
+        { header: "Company", key: "company", align: "left", width: "14%" },
+        { header: "Phone", key: "phone", align: "left", width: "11%" },
+        {
+          header: "Due Period",
+          key: "paymentDuePeriod",
+          align: "center",
+          width: "12%",
+        },
+        {
+          header: "Paid Amount (₹)",
+          key: "paidAmount",
+          align: "right",
+          type: "currency",
+          width: "11%",
+        },
+        {
+          header: "Paid Date",
+          key: "paidAmountDate",
+          align: "center",
+          width: "10%",
+        },
+        {
+          header: "Outstanding (₹)",
+          key: "outstanding",
+          align: "right",
+          type: "currency",
+          width: "11%",
+        },
         { header: "Status", key: "status", align: "center", width: "8%" },
       ],
       data: printRows,
@@ -1618,8 +2110,8 @@ export const CustomerView: React.FC = () => {
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* 1. TOP HEADER CARD */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <UsersRound className="w-4.5 h-4.5" />
@@ -1640,12 +2132,12 @@ export const CustomerView: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-2.5 w-full sm:w-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
             onClick={handleExportExcel}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
@@ -1655,17 +2147,27 @@ export const CustomerView: React.FC = () => {
             variant="secondary"
             size="md"
             onClick={handlePrintTableReport}
-            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            className="flex-1 sm:flex-initial justify-center hover:border-purple-300"
             icon={<Printer className="w-4 h-4 text-slate-600" />}
           >
             Print Report
           </Button>
 
           <Button
+            variant="secondary"
+            size="md"
+            onClick={() => setIsBulkUploadModalOpen(true)}
+            className="flex-1 sm:flex-initial justify-center hover:border-purple-300"
+            icon={<Upload className="w-4 h-4 text-[#33077C]" />}
+          >
+            Bulk Upload
+          </Button>
+
+          <Button
             variant="primary"
             size="md"
             onClick={handleOpenCreateModal}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<Plus className="w-4 h-4 text-white stroke-[2.5]" />}
           >
             Add Customer
@@ -1759,10 +2261,36 @@ export const CustomerView: React.FC = () => {
         }}
         placeholder="Search by customer name, code, phone, email, company..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch.trim());
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedStatus === pendingStatus &&
+            appliedType === pendingType &&
+            appliedOutstanding === pendingOutstanding &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
+          setAppliedStatus(pendingStatus);
+          setAppliedType(pendingType);
+          setAppliedOutstanding(pendingOutstanding);
           setCurrentPage(1);
+
+          if (isSame) {
+            loadCustomers(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === "" &&
+            pendingSearch === "" &&
+            appliedStatus === "All" &&
+            pendingStatus === "All" &&
+            appliedType === "All" &&
+            pendingType === "All" &&
+            appliedOutstanding === "All" &&
+            pendingOutstanding === "All" &&
+            currentPage === 1;
+
           setPendingSearch("");
           setAppliedSearch("");
           setPendingStatus("All");
@@ -1772,6 +2300,10 @@ export const CustomerView: React.FC = () => {
           setPendingOutstanding("All");
           setAppliedOutstanding("All");
           setCurrentPage(1);
+
+          if (isSame) {
+            loadCustomers(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1786,8 +2318,6 @@ export const CustomerView: React.FC = () => {
               ]}
               onChange={(val) => {
                 setPendingStatus(val);
-                setAppliedStatus(val);
-                setCurrentPage(1);
               }}
             />
             <FilterDropdown
@@ -1800,8 +2330,6 @@ export const CustomerView: React.FC = () => {
               ]}
               onChange={(val) => {
                 setPendingType(val);
-                setAppliedType(val);
-                setCurrentPage(1);
               }}
             />
             <FilterDropdown
@@ -1814,8 +2342,6 @@ export const CustomerView: React.FC = () => {
               ]}
               onChange={(val) => {
                 setPendingOutstanding(val);
-                setAppliedOutstanding(val);
-                setCurrentPage(1);
               }}
             />
           </div>
@@ -1836,29 +2362,24 @@ export const CustomerView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="overflow-x-auto min-h-[360px]">
           <table className="w-full text-left border-collapse text-sm">
-            <thead className="bg-[#33077C] text-white font-bold text-xs uppercase tracking-wider select-none">
-              <tr>
-                <th className="py-3.5 px-4 text-white min-w-[200px]">Customer Details</th>
-                <th className="py-3.5 px-3 text-center text-white min-w-[110px]">Customer ID</th>
-                <th className="py-3.5 px-3 text-white min-w-[160px]">Contact Info</th>
-                <th className="py-3.5 px-3 text-right text-white min-w-[120px]">
-                  Total Sales
-                </th>
-                <th className="py-3.5 px-3 text-right text-white min-w-[120px]">
-                  Paid Amount
-                </th>
-                <th className="py-3.5 px-3 text-right text-white min-w-[120px]">
-                  Outstanding
-                </th>
-                <th className="py-3.5 px-3 text-white min-w-[120px]">Credit Limit</th>
-                <th className="py-3.5 px-3 text-center text-white min-w-[110px]">Status</th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[120px]">Action</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "CUSTOMER ID", align: "center", minWidth: "110px" },
+                { label: "CUSTOMER NAME", align: "left", minWidth: "200px" },
+                { label: "CONTACT INFO", align: "left", minWidth: "160px" },
+                { label: "TOTAL SALES", align: "right", minWidth: "120px" },
+                { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
+                { label: "AMOUNT PAID DATE", align: "center", minWidth: "120px" },
+                { label: "OUTSTANDING", align: "right", minWidth: "120px" },
+                { label: "CREDIT LIMIT", align: "left", minWidth: "120px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTION", align: "center", minWidth: "120px" },
+              ]}
+            />
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700 text-slate-700 dark:text-slate-200">
               {isApiLoading ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-slate-400">
+                  <td colSpan={10} className="py-16 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <Loader2 className="w-8 h-8 text-[#4309A2] animate-spin" />
                       <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
@@ -1872,7 +2393,7 @@ export const CustomerView: React.FC = () => {
                 </tr>
               ) : displayCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400">
+                  <td colSpan={10} className="py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <UsersRound className="w-10 h-10 text-slate-300 dark:text-slate-600" />
                       <p className="text-sm font-medium">No customers found</p>
@@ -1927,7 +2448,14 @@ export const CustomerView: React.FC = () => {
                       className="hover:bg-slate-50/80 dark:hover:bg-slate-750/50 transition-colors group cursor-pointer"
                       onClick={() => handleOpenDetailModal(cust)}
                     >
-                      {/* Customer Details */}
+                      {/* 1. Customer ID */}
+                      <td className="py-3.5 px-3 text-center align-middle">
+                        <span className="font-mono text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200/60 dark:border-slate-700">
+                          {cust.customerCode}
+                        </span>
+                      </td>
+
+                      {/* 2. Customer Name */}
                       <td className="py-3.5 px-4 align-middle">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-xl bg-[#4309A2]/10 text-[#4309A2] dark:text-purple-300 font-bold flex items-center justify-center text-xs border border-[#4309A2]/20 flex-shrink-0">
@@ -1954,13 +2482,15 @@ export const CustomerView: React.FC = () => {
                                 {cust.company}
                               </p>
                             )}
-                            {cust.salesRepresentativeName && cust.salesRepresentativeName !== "Unassigned" ? (
+                            {cust.salesRepresentativeName &&
+                            cust.salesRepresentativeName !== "Unassigned" ? (
                               <div className="mt-1 flex items-center gap-1">
                                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#33077C] bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
                                   <UserCheck className="w-3 h-3 text-[#33077C]" />
                                   <span>{cust.salesRepresentativeName}</span>
                                 </span>
-                                {cust.salesRepresentativeType === "Temporary" && (
+                                {cust.salesRepresentativeType ===
+                                  "Temporary" && (
                                   <span className="text-[9px] px-1 py-0.2 rounded bg-amber-100 text-amber-800 font-bold">
                                     Temp
                                   </span>
@@ -1971,14 +2501,7 @@ export const CustomerView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Code */}
-                      <td className="py-3.5 px-3 text-center align-middle">
-                        <span className="font-mono text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200/60 dark:border-slate-700">
-                          {cust.customerCode}
-                        </span>
-                      </td>
-
-                      {/* Contact Info */}
+                      {/* 3. Contact Info */}
                       <td className="py-3.5 px-3 align-middle">
                         <div className="space-y-0.5 text-xs">
                           <p className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
@@ -1992,7 +2515,7 @@ export const CustomerView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* Total Sales */}
+                      {/* 4. Total Sales */}
                       <td className="py-3.5 px-3 text-right align-middle">
                         <span className="font-semibold text-slate-900 dark:text-white">
                           ₹
@@ -2003,9 +2526,9 @@ export const CustomerView: React.FC = () => {
                         </span>
                       </td>
 
-                      {/* Paid Amount */}
+                      {/* 5. Paid Amount */}
                       <td className="py-3.5 px-3 text-right align-middle">
-                        <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                           ₹
                           {fin.totalPaidAmount.toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
@@ -2014,7 +2537,32 @@ export const CustomerView: React.FC = () => {
                         </span>
                       </td>
 
-                      {/* Outstanding */}
+                      {/* 6. Paid Date (New Column) */}
+                      <td className="py-3.5 px-3 text-center align-middle">
+                        {(() => {
+                          const pDate = getCustomerPaidDate(cust);
+                          if (!pDate) {
+                            return (
+                              <span className="text-xs text-slate-400 font-normal">
+                                -
+                              </span>
+                            );
+                          }
+                          const d = new Date(pDate);
+                          const formatted = !isNaN(d.getTime()) ? formatDate(d) : pDate;
+                          return (
+                            <span
+                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700"
+                              title={`Paid Amount Date: ${pDate}`}
+                            >
+                              <Calendar className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              <span>{formatted}</span>
+                            </span>
+                          );
+                        })()}
+                      </td>
+
+                      {/* 7. Outstanding */}
                       <td className="py-3.5 px-3 text-right align-middle">
                         {fin.outstandingAmount > 0 ? (
                           <span className="font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded border border-rose-200/60 dark:border-rose-800">
@@ -2070,17 +2618,7 @@ export const CustomerView: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="inline-flex items-center justify-center gap-1">
-                          {/* Share Customer Profile */}
-                          <UniversalShareDropdown
-                            id={cust.id}
-                            activeShareId={activeShareId}
-                            setActiveShareId={setActiveShareId}
-                            sharePos={sharePos}
-                            setSharePos={setSharePos}
-                            getShareData={() => formatCustomerShare(cust)}
-                            buttonClassName="w-7 h-7 rounded-lg text-slate-500 hover:text-[#33077C] hover:bg-purple-50 flex items-center justify-center transition-colors cursor-pointer"
-                            title="Share Customer"
-                          />
+                          
 
                           {/* 3. 3-Dots Floating Menu Button */}
                           <SaleActionDropdown
@@ -2098,6 +2636,14 @@ export const CustomerView: React.FC = () => {
                               {
                                 label: "Assign Sales Rep",
                                 variant: "assign",
+                                hidden: Boolean(
+                                  (cust.salesRepresentativeId &&
+                                    cust.salesRepresentativeId.trim() !== "" &&
+                                    cust.salesRepresentativeId.trim().toLowerCase() !== "unassigned") ||
+                                    (cust.salesRepresentativeName &&
+                                      cust.salesRepresentativeName.trim() !== "" &&
+                                      cust.salesRepresentativeName.trim().toLowerCase() !== "unassigned"),
+                                ),
                                 onClick: () => handleOpenChangeRepModal(cust),
                               },
                               {
@@ -2105,7 +2651,7 @@ export const CustomerView: React.FC = () => {
                                 variant: "sale",
                                 onClick: () =>
                                   navigate(
-                                    `/sale-management/sales/sale?customerId=${cust.id}&createSale=true`
+                                    `/sale-management/sales/sale?customerId=${cust.id}&createSale=true`,
                                   ),
                               },
                               {
@@ -2122,7 +2668,7 @@ export const CustomerView: React.FC = () => {
                                     cust,
                                     cust.status === "Active"
                                       ? "Inactive"
-                                      : "Active"
+                                      : "Active",
                                   ),
                               },
                               {
@@ -2139,7 +2685,7 @@ export const CustomerView: React.FC = () => {
                                     cust,
                                     cust.status === "Blocked"
                                       ? "Active"
-                                      : "Blocked"
+                                      : "Blocked",
                                   ),
                               },
                               {
@@ -2158,35 +2704,29 @@ export const CustomerView: React.FC = () => {
             </tbody>
           </table>
         </div>
-
-        {/* Pagination Footer */}
-        {displayedTotalRecords > 0 && (
-          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <p className="text-xs text-slate-500">
-              Showing {(currentPage - 1) * pageSize + 1} to{" "}
-              {Math.min(currentPage * pageSize, displayedTotalRecords)} of{" "}
-              {displayedTotalRecords} customers
-            </p>
-            <Pagination
-              currentPage={currentPage}
-              total={displayedTotalRecords}
-              pageSize={pageSize}
-              onPageChange={setCurrentPage}
-              onPageSizeChange={(size) => {
-                setPageSize(size);
-                setCurrentPage(1);
-              }}
-            />
-          </div>
-        )}
       </div>
+
+      {/* Pagination Footer */}
+      {displayedTotalRecords > 0 && (
+        <Pagination
+          currentPage={currentPage}
+          total={displayedTotalRecords}
+          pageSize={pageSize}
+          pageSizeOptions={[5, 10, 20, 50]}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setCurrentPage(1);
+          }}
+        />
+      )}
 
       {/* ========================================== */}
       {/* 1. ADD / EDIT CUSTOMER MODAL               */}
       {/* ========================================== */}
       <Modal
         isOpen={isFormModalOpen}
-        onClose={() => setIsFormModalOpen(false)}
+        onClose={handleCloseFormModal}
         title={
           editingCustomer
             ? `Edit Customer: ${editingCustomer.name}`
@@ -2201,10 +2741,10 @@ export const CustomerView: React.FC = () => {
         headerGradient={true}
         showBackIcon={true}
         hideCloseButton={true}
-        onBack={() => setIsFormModalOpen(false)}
+        onBack={handleCloseFormModal}
       >
         <form onSubmit={handleSubmit(onFormSubmit, onFormInvalid)} noValidate>
-          <div className="space-y-6 max-h-[75vh] overflow-y-auto p-2 sm:p-4 text-xs animate-in fade-in duration-150">
+          <div className="space-y-6 p-1 sm:p-2 pb-4 text-xs animate-in fade-in duration-150">
             {/* Section 1: Basic Details */}
             <div>
               <div className="flex items-center gap-2 mb-3 pb-2 border-b border-purple-100">
@@ -2226,7 +2766,9 @@ export const CustomerView: React.FC = () => {
                       },
                     })}
                     placeholder="e.g. Marcus Vance or Acme Corp"
-                    className={errors.name ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.name ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.name && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2259,28 +2801,19 @@ export const CustomerView: React.FC = () => {
 
                 <div>
                   <FormLabel>Sales Representative</FormLabel>
-                  <select
-                    {...register("salesRepresentativeId")}
-                    className={FORM_SELECT_CLS}
-                  >
-                    <option value="">
-                      {isSalesRepsLoading && availableSalesReps.length === 0
-                        ? "Loading Sales Representatives..."
-                        : "Select Sales Representative"}
-                    </option>
-                    {availableSalesReps
-                      .filter(
-                        (r) =>
-                          r.status === "Active" ||
-                          r.id === watch("salesRepresentativeId"),
-                      )
-                      .map((rep) => (
-                        <option key={rep.id} value={rep.id}>
-                          {rep.name}
-                          {rep.designation ? ` (${rep.designation})` : ""}
-                        </option>
-                      ))}
-                  </select>
+                  <SalesRepSearchableSelect
+                    value={watch("salesRepresentativeId")}
+                    onChange={(repId) => {
+                      setValue("salesRepresentativeId", repId, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      });
+                    }}
+                    availableReps={availableSalesReps}
+                    isLoading={isSalesRepsLoading}
+                    onRefreshReps={() => loadSalesReps(true)}
+                    placeholder="Select Sales Representative"
+                  />
                 </div>
 
                 <div>
@@ -2301,7 +2834,9 @@ export const CustomerView: React.FC = () => {
                       );
                     }}
                     placeholder="e.g. 9876543210"
-                    className={errors.phone ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.phone ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.phone && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2330,7 +2865,11 @@ export const CustomerView: React.FC = () => {
                       );
                     }}
                     placeholder="e.g. 9876543211"
-                    className={errors.alternatePhone ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.alternatePhone
+                        ? FORM_INPUT_ERROR_CLS
+                        : FORM_INPUT_CLS
+                    }
                   />
                   {errors.alternatePhone && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2352,7 +2891,9 @@ export const CustomerView: React.FC = () => {
                         "Please enter a valid email address (e.g. client@company.com)",
                     })}
                     placeholder="e.g. client@company.com"
-                    className={errors.email ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.email ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.email && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2364,10 +2905,7 @@ export const CustomerView: React.FC = () => {
 
                 <div>
                   <FormLabel>Gender</FormLabel>
-                  <select
-                    {...register("gender")}
-                    className={FORM_SELECT_CLS}
-                  >
+                  <select {...register("gender")} className={FORM_SELECT_CLS}>
                     <option value="">Select Gender</option>
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
@@ -2377,10 +2915,7 @@ export const CustomerView: React.FC = () => {
 
                 <div>
                   <FormLabel>Account Status</FormLabel>
-                  <select
-                    {...register("status")}
-                    className={FORM_SELECT_CLS}
-                  >
+                  <select {...register("status")} className={FORM_SELECT_CLS}>
                     <option value="Active">Active</option>
                     <option value="Inactive">Inactive</option>
                     <option value="Blocked">Blocked</option>
@@ -2422,7 +2957,9 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("city")}
                     placeholder="e.g. Chennai"
-                    className={errors.city ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.city ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.city && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2438,7 +2975,9 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("state")}
                     placeholder="e.g. Tamil Nadu"
-                    className={errors.state ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.state ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.state && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2454,7 +2993,9 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("country")}
                     placeholder="e.g. India"
-                    className={errors.country ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.country ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.country && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2483,7 +3024,9 @@ export const CustomerView: React.FC = () => {
                         .slice(0, 6);
                     }}
                     placeholder="e.g. 600001"
-                    className={errors.pincode ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.pincode ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.pincode && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2645,7 +3188,9 @@ export const CustomerView: React.FC = () => {
                       );
                     }}
                     placeholder="e.g. 50000"
-                    className={errors.creditLimit ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.creditLimit ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                    }
                   />
                   {errors.creditLimit && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2657,12 +3202,20 @@ export const CustomerView: React.FC = () => {
 
                 <div>
                   <FormLabel>Payment Due Period</FormLabel>
-                  <input
-                    type="text"
+                  <select
                     {...register("paymentTerms")}
-                    placeholder="e.g. Net 30 Days"
-                    className={FORM_INPUT_CLS}
-                  />
+                    className={FORM_SELECT_CLS}
+                  >
+                    <option value="">Select Payment Due Period</option>
+                    <option value="15 Days">15 Days</option>
+                    <option value="30 Days">30 Days</option>
+                    <option value="45 Days">45 Days</option>
+                    <option value="60 Days">60 Days</option>
+                    <option value="75 Days">75 Days</option>
+                    <option value="90 Days">90 Days</option>
+                    <option value="105 Days">105 Days</option>
+                    <option value="120 Days">120 Days</option>
+                  </select>
                 </div>
 
                 <div>
@@ -2683,7 +3236,11 @@ export const CustomerView: React.FC = () => {
                       );
                     }}
                     placeholder="e.g. 0"
-                    className={errors.openingBalance ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    className={
+                      errors.openingBalance
+                        ? FORM_INPUT_ERROR_CLS
+                        : FORM_INPUT_CLS
+                    }
                   />
                   {errors.openingBalance && (
                     <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
@@ -2709,21 +3266,6 @@ export const CustomerView: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <FormLabel>Assigned Sales Rep</FormLabel>
-                  <select
-                    {...register("salesRepresentativeId")}
-                    className={FORM_SELECT_CLS}
-                  >
-                    <option value="">Select Sales Representative</option>
-                    {availableSalesReps.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name} {r.mobile ? `(${r.mobile})` : ""} - {r.status}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 <div className="sm:col-span-2">
                   <FormLabel>Notes / Internal Comments</FormLabel>
                   <input
@@ -2738,10 +3280,10 @@ export const CustomerView: React.FC = () => {
           </div>
 
           {/* Modal Footer */}
-          <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
+          <div className="sticky bottom-0 z-10 bg-white pt-3.5 pb-4 sm:pb-5 -mb-3.5 sm:-mb-6 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-200/80">
             <button
               type="button"
-              onClick={() => setIsFormModalOpen(false)}
+              onClick={handleCloseFormModal}
               className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
             >
               <X className="w-4 h-4 text-slate-500" />
@@ -2808,7 +3350,7 @@ export const CustomerView: React.FC = () => {
                     {dup.name}
                   </p>
                   <p className="text-[11px] text-slate-500 font-mono">
-                    {dup.customerCode} â€¢ {dup.phone} â€¢ {dup.email}
+                    {dup.customerCode} • {dup.phone}{dup.email ? ` • ${dup.email}` : ""}
                   </p>
                   {dup.company && (
                     <p className="text-[11px] text-slate-400">{dup.company}</p>
@@ -2819,6 +3361,7 @@ export const CustomerView: React.FC = () => {
                   onClick={() => {
                     setIsDuplicateModalOpen(false);
                     setIsFormModalOpen(false);
+                    setReopenDetailAfterEdit(false);
                     setSelectedCustomer(dup);
                     setActiveDetailTab("overview");
                     setIsDetailModalOpen(true);
@@ -2897,14 +3440,14 @@ export const CustomerView: React.FC = () => {
           isOpen={isDetailModalOpen}
           onClose={() => setIsDetailModalOpen(false)}
           title={`Customer: ${selectedCustomer.name}`}
-          subtitle={`ID: ${selectedCustomer.customerCode} â€¢ ${selectedCustomer.customerType} Profile â€¢ Credit & Ledger`}
+          subtitle={`ID: ${selectedCustomer.customerCode} • ${selectedCustomer.customerType} Profile • Credit & Ledger`}
           maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
           hideCloseButton={true}
           onBack={() => setIsDetailModalOpen(false)}
         >
-          <div className="space-y-5 p-2 sm:p-4 max-h-[75vh] overflow-y-auto text-xs animate-in fade-in duration-150">
+          <div className="space-y-5 p-1 sm:p-2 text-xs animate-in fade-in duration-150">
             {/* Modal Header Profile Banner */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-700">
               <div className="flex items-center gap-3.5">
@@ -2925,11 +3468,11 @@ export const CustomerView: React.FC = () => {
                     <span>ID: {selectedCustomer.customerCode}</span>
                     {selectedCustomer.company && (
                       <span className="font-sans font-medium text-slate-700 dark:text-slate-300">
-                        â€¢ {selectedCustomer.company}
+                        • {selectedCustomer.company}
                       </span>
                     )}
-                    <span>â€¢ {selectedCustomer.phone}</span>
-                    <span>â€¢ {selectedCustomer.email}</span>
+                    {selectedCustomer.phone && <span>• {selectedCustomer.phone}</span>}
+                    {selectedCustomer.email && <span>• {selectedCustomer.email}</span>}
                     {selectedCustomerCollectionData?.rep && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-900/40 text-[#4309A2] dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
                         <UserCheck className="w-3 h-3 text-[#4309A2]" />
@@ -2945,7 +3488,7 @@ export const CustomerView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    handleOpenEditModal(selectedCustomer);
+                    handleOpenEditModal(selectedCustomer, true);
                   }}
                   className="h-9 px-3 rounded-xl border border-slate-200 hover:border-slate-300 bg-white dark:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
                 >
@@ -3111,7 +3654,7 @@ export const CustomerView: React.FC = () => {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() =>
@@ -3120,7 +3663,11 @@ export const CustomerView: React.FC = () => {
                         className="px-3.5 py-1.5 rounded-xl border border-purple-300 dark:border-purple-700 bg-white dark:bg-purple-950/40 text-[#33077C] dark:text-purple-300 hover:bg-purple-50 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
                       >
                         <UserCheck className="w-3.5 h-3.5" />
-                        <span>Change Sales Rep</span>
+                        <span>
+                          {selectedCustomerCollectionData?.rep
+                            ? "Change Sales Rep"
+                            : "Assign Sales Rep"}
+                        </span>
                       </button>
                       {selectedCustomerCollectionData?.invoicesWithBalance &&
                         selectedCustomerCollectionData.invoicesWithBalance
@@ -3168,7 +3715,7 @@ export const CustomerView: React.FC = () => {
                               ? "Sales Executive"
                               : "Inactive Rep"}
                             {selectedCustomer.salesRepresentativeType
-                              ? ` â€¢ ${selectedCustomer.salesRepresentativeType}`
+                              ? ` • ${selectedCustomer.salesRepresentativeType}`
                               : ""}
                           </p>
                         </div>
@@ -3241,8 +3788,8 @@ export const CustomerView: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-white dark:bg-slate-800">
-                      <table className="w-full text-left border-collapse text-xs">
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto bg-white dark:bg-slate-800">
+                      <table className="w-full min-w-[540px] text-left border-collapse text-xs">
                         <thead>
                           <tr className="bg-slate-50 dark:bg-slate-700/60 border-b border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold uppercase text-[10px] tracking-wider">
                             <th className="py-2.5 px-3">Invoice</th>
@@ -3275,7 +3822,7 @@ export const CustomerView: React.FC = () => {
                                   {inv.invoiceNo}
                                 </td>
                                 <td className="py-2 px-3 text-slate-600 dark:text-slate-300">
-                                  {inv.saleDate}
+                                  {formatDate(inv.saleDate)}
                                 </td>
                                 <td className="py-2 px-3 text-right font-medium text-slate-800 dark:text-slate-200">
                                   ₹
@@ -3524,7 +4071,7 @@ export const CustomerView: React.FC = () => {
 
                 {/* Outstanding Invoices List */}
                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
-                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
                         Receivable Invoices ({selectedCustomerSales.length})
@@ -3553,7 +4100,8 @@ export const CustomerView: React.FC = () => {
                       No invoices found for this customer.
                     </div>
                   ) : (
-                    <table className="w-full text-left text-xs">
+                    <div className="overflow-x-auto">
+                    <table className="w-full min-w-[620px] text-left text-xs">
                       <thead className="bg-[#33077C] text-white font-bold uppercase text-[10px] tracking-wider">
                         <tr>
                           <th className="py-2.5 px-3">Invoice No</th>
@@ -3608,7 +4156,7 @@ export const CustomerView: React.FC = () => {
                                 {s.invoiceNo}
                               </td>
                               <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                                {s.saleDate}
+                                {formatDate(s.saleDate)}
                               </td>
                               <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
                                 {s.dueDate || "N/A"}
@@ -3657,6 +4205,7 @@ export const CustomerView: React.FC = () => {
                         })}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 
@@ -3762,7 +4311,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab: Quotations */}
             {activeDetailTab === "quotations" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerQuotations.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <FileText className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -3802,7 +4351,7 @@ export const CustomerView: React.FC = () => {
                             {q.quotationNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {q.date}
+                            {formatDate(q.date)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
                             {q.validUntil}
@@ -3828,7 +4377,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab: Proformas */}
             {activeDetailTab === "proformas" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerProformas.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <FileSpreadsheet className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -3868,7 +4417,7 @@ export const CustomerView: React.FC = () => {
                             {p.proformaNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {p.date}
+                            {formatDate(p.date)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
                             {p.validUntil}
@@ -3894,7 +4443,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab: Sale Orders */}
             {activeDetailTab === "orders" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerOrders.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <ShoppingBag className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -3937,10 +4486,10 @@ export const CustomerView: React.FC = () => {
                             {o.orderNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {o.orderDate}
+                            {formatDate(o.orderDate)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {o.dueDate}
+                            {formatDate(o.dueDate)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-slate-900">
                             ₹
@@ -3969,7 +4518,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab: Delivery Challans */}
             {activeDetailTab === "challans" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerChallans.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <Truck className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -4009,7 +4558,7 @@ export const CustomerView: React.FC = () => {
                             {c.challanNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {c.invoiceDate}
+                            {formatDate(c.invoiceDate)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
                             {c.vehicleNo || "-"}
@@ -4035,7 +4584,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab 2: Sales Invoices */}
             {activeDetailTab === "sales" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerSales.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <ShoppingCart className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -4089,7 +4638,7 @@ export const CustomerView: React.FC = () => {
                             {sale.invoiceNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {sale.saleDate}
+                            {formatDate(sale.saleDate)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
                             {sale.items.length} items
@@ -4140,7 +4689,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab 3: Payments */}
             {activeDetailTab === "payments" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerSales.filter((s) => (s.paidAmount || 0) > 0)
                   .length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
@@ -4181,7 +4730,7 @@ export const CustomerView: React.FC = () => {
                               {sale.invoiceNo}
                             </td>
                             <td className="py-2.5 px-3 text-slate-600">
-                              {sale.saleDate}
+                              {formatDate(sale.saleDate)}
                             </td>
                             <td className="py-2.5 px-3 font-medium text-slate-700 dark:text-slate-200">
                               {sale.paymentMethod || "Bank Transfer"}
@@ -4213,7 +4762,7 @@ export const CustomerView: React.FC = () => {
 
             {/* Tab 4: Sales Returns */}
             {activeDetailTab === "returns" && (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[60vh] overflow-x-auto overflow-y-auto pr-1">
                 {selectedCustomerReturns.length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
                     <RotateCcw className="w-10 h-10 mx-auto text-slate-300 mb-2" />
@@ -4253,7 +4802,7 @@ export const CustomerView: React.FC = () => {
                             {ret.invoiceNo}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            {ret.returnDate}
+                            {formatDate(ret.returnDate)}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">
                             {ret.items.length} items
@@ -4594,7 +5143,7 @@ export const CustomerView: React.FC = () => {
                   {changeRepTargetCustomer.name}
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium">
-                  Code: {changeRepTargetCustomer.customerCode} â€¢{" "}
+                  Code: {changeRepTargetCustomer.customerCode} •{" "}
                   {changeRepTargetCustomer.company || "Direct"}
                 </span>
               </div>
@@ -4628,7 +5177,7 @@ export const CustomerView: React.FC = () => {
             {/* Assignment Type (Primary / Temporary) */}
             <div>
               <FormLabel required>Assignment Type</FormLabel>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={() => setRepAssignmentType("Primary")}
@@ -4703,6 +5252,431 @@ export const CustomerView: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* ============================================================ */}
+      {/* BULK UPLOAD CUSTOMERS MODAL                                 */}
+      {/* ============================================================ */}
+      <Modal
+        isOpen={isBulkUploadModalOpen}
+        onClose={() => {
+          if (!isProcessingBulkUpload) {
+            setIsBulkUploadModalOpen(false);
+            setBulkFile(null);
+            setBulkParsedCustomers([]);
+            setBulkUploadResult(null);
+          }
+        }}
+        title="Bulk Upload Customers"
+        subtitle="Import multiple customers at once via CSV with automatic organization isolation & duplicate checks"
+        maxWidth="3xl"
+      >
+        <div className="space-y-4 p-1 text-xs">
+          {/* Top Actions: Template Download & Instructions */}
+          <div className="p-4 bg-purple-50/70 dark:bg-purple-950/40 rounded-2xl border border-purple-200/80 dark:border-purple-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h4 className="font-bold text-[#33077C] dark:text-purple-300 text-sm flex items-center gap-1.5">
+                <FileSpreadsheet className="w-4 h-4 text-[#33077C] dark:text-purple-300" />
+                <span>CSV Template & Format Instructions</span>
+              </h4>
+              <p className="text-slate-600 dark:text-slate-300 text-xs mt-1">
+                Expected CSV headers:{" "}
+                <code className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/50 text-[#33077C] dark:text-purple-300 font-mono text-[11px] break-all sm:break-normal">
+                  customer_code, full_name*, mobile_number*, alternate_mobile, email, date_of_birth, gender, occupation, status
+                </code>
+              </p>
+              <p className="text-slate-500 dark:text-slate-400 text-[11px] mt-1">
+                Required fields: <strong className="text-slate-700 dark:text-slate-200">full_name</strong> and <strong className="text-slate-700 dark:text-slate-200">mobile_number</strong>. Max file size: 5 MB.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDownloadSampleCsv}
+              className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-purple-300 dark:border-purple-700 hover:border-[#33077C] text-[#33077C] dark:text-purple-300 font-bold text-xs flex items-center justify-center gap-2 shadow-2xs hover:shadow-xs transition-all shrink-0 cursor-pointer"
+            >
+              <Download className="w-4 h-4 text-[#33077C] dark:text-purple-300" />
+              <span>Download Sample CSV</span>
+            </button>
+          </div>
+
+          {/* Results Summary (When upload finished) */}
+          {bulkUploadResult ? (
+            <div className="space-y-4">
+              <div
+                className={`p-4 rounded-2xl border flex items-start gap-3 ${
+                  bulkUploadResult.failed === 0
+                    ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-100"
+                    : bulkUploadResult.created > 0
+                    ? "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-100"
+                    : "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-100"
+                }`}
+              >
+                {bulkUploadResult.failed === 0 ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <h4 className="font-bold text-sm">
+                    {bulkUploadResult.failed === 0
+                      ? "Bulk Upload Completed Successfully!"
+                      : bulkUploadResult.created > 0
+                      ? "Bulk Upload Completed with Warnings"
+                      : "Bulk Upload Failed"}
+                  </h4>
+                  <p className="text-xs mt-0.5 opacity-90">
+                    {bulkUploadResult.failed === 0
+                      ? `All ${bulkUploadResult.created} customer records were successfully created under your organization.`
+                      : `${bulkUploadResult.created} records created, ${bulkUploadResult.failed} failed. Please review the errors below.`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Stat Counters */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-center">
+                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Total In File
+                  </div>
+                  <div className="text-xl font-black text-slate-800 dark:text-white mt-0.5">
+                    {bulkUploadResult.total}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-center">
+                  <div className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">
+                    Created
+                  </div>
+                  <div className="text-xl font-black text-emerald-600 mt-0.5">
+                    {bulkUploadResult.created}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-center">
+                  <div className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">
+                    Failed
+                  </div>
+                  <div className="text-xl font-black text-rose-600 mt-0.5">
+                    {bulkUploadResult.failed}
+                  </div>
+                </div>
+              </div>
+
+              {/* Errors Breakdown Table if any */}
+              {bulkUploadResult.errors && bulkUploadResult.errors.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Row-Level Errors ({bulkUploadResult.errors.length})</span>
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Fix these rows in your CSV and re-upload
+                    </span>
+                  </div>
+                  <div className="max-h-56 overflow-auto rounded-xl border border-rose-200 dark:border-rose-900/60">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-rose-100/60 dark:bg-rose-950/60 text-rose-800 dark:text-rose-200 sticky top-0 z-10 font-bold uppercase text-[10px]">
+                        <tr>
+                          <th className="py-2 px-3 text-center w-16">CSV Row</th>
+                          <th className="py-2 px-3">Validation Message</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40 bg-white dark:bg-slate-900">
+                        {bulkUploadResult.errors.map((err, i) => (
+                          <tr key={i} className="hover:bg-rose-50/50 dark:hover:bg-rose-950/20">
+                            <td className="py-2 px-3 text-center font-mono font-bold text-rose-600 text-xs">
+                              #{err.row}
+                            </td>
+                            <td className="py-2 px-3 text-rose-700 dark:text-rose-300 font-medium">
+                              {err.message}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons for Results */}
+              <div className="pt-3 flex flex-wrap justify-end items-center gap-2.5 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkUploadResult(null);
+                    setBulkFile(null);
+                    setBulkParsedCustomers([]);
+                  }}
+                  className="h-10 px-4 rounded-xl border border-purple-200 hover:border-purple-300 text-xs font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Upload Another CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBulkUploadModalOpen(false);
+                    setBulkFile(null);
+                    setBulkParsedCustomers([]);
+                    setBulkUploadResult(null);
+                  }}
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4 stroke-[2.5]" />
+                  <span>Done & View Customers</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* File Upload Dropzone */}
+              <div
+                onClick={() => {
+                  if (!isProcessingBulkUpload && bulkFileInputRef.current) {
+                    bulkFileInputRef.current.click();
+                  }
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (isProcessingBulkUpload) return;
+                  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    handleBulkFileSelected(e.dataTransfer.files[0]);
+                  }
+                }}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer ${
+                  bulkFile
+                    ? "border-purple-300 bg-purple-50/30 dark:bg-purple-950/20"
+                    : "border-slate-300 dark:border-slate-700 hover:border-[#33077C] hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                }`}
+              >
+                <input
+                  type="file"
+                  ref={bulkFileInputRef}
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handleBulkFileSelected(e.target.files[0]);
+                    }
+                  }}
+                />
+                <div className="flex flex-col items-center justify-center gap-2">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-100 dark:bg-purple-900/40 text-[#33077C] dark:text-purple-300 flex items-center justify-center">
+                    <FileUp className="w-6 h-6 stroke-[2]" />
+                  </div>
+                  {bulkFile ? (
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-white">
+                        {bulkFile.name}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {(bulkFile.size / 1024).toFixed(1)} KB • Click or drop
+                        another file to replace
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-bold text-slate-800 dark:text-white">
+                        Click to browse or drag & drop CSV file
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Supports .CSV files up to 5 MB with header row
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Parsed Summary Counters */}
+              {bulkParsedCustomers.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-center">
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Total Parsed
+                    </div>
+                    <div className="text-xl font-black text-slate-800 dark:text-white mt-0.5">
+                      {bulkParsedCustomers.length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-center">
+                    <div className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">
+                      Ready to Upload
+                    </div>
+                    <div className="text-xl font-black text-emerald-600 mt-0.5">
+                      {bulkParsedCustomers.filter((c) => c.isValid).length}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-center">
+                    <div className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">
+                      Needs Attention
+                    </div>
+                    <div className="text-xl font-black text-rose-600 mt-0.5">
+                      {bulkParsedCustomers.filter((c) => !c.isValid).length}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Validation & Data Preview Table */}
+              {bulkParsedCustomers.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Data Preview ({bulkParsedCustomers.length} Records)
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Scroll horizontally to inspect all CSV columns
+                    </span>
+                  </div>
+                  <div className="max-h-60 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 sticky top-0 z-10 font-bold uppercase text-[10px]">
+                        <tr>
+                          <th className="py-2 px-2.5 text-center w-10">#</th>
+                          <th className="py-2 px-2.5 text-center w-16">Status</th>
+                          <th className="py-2 px-3">Customer Code</th>
+                          <th className="py-2 px-3">Full Name</th>
+                          <th className="py-2 px-3">Mobile</th>
+                          <th className="py-2 px-3">Alt Mobile</th>
+                          <th className="py-2 px-3">Email</th>
+                          <th className="py-2 px-3">DOB</th>
+                          <th className="py-2 px-3">Gender</th>
+                          <th className="py-2 px-3">Occupation</th>
+                          <th className="py-2 px-3 text-center">Status</th>
+                          <th className="py-2 px-3">Issues / Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                        {bulkParsedCustomers.map((row) => (
+                          <tr
+                            key={row.rowNumber}
+                            className={
+                              row.isValid
+                                ? "hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                                : "bg-rose-50/40 hover:bg-rose-50/70 dark:bg-rose-950/20"
+                            }
+                          >
+                            <td className="py-2 px-2.5 text-center font-mono text-[11px] text-slate-500">
+                              {row.rowNumber}
+                            </td>
+                            <td className="py-2 px-2.5 text-center">
+                              {row.isValid ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Valid
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-200">
+                                  <AlertCircle className="w-3 h-3 text-rose-600" />
+                                  Error
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                              {row.customerCode || <span className="text-slate-400 italic">Auto</span>}
+                            </td>
+                            <td className="py-2 px-3 font-medium text-slate-900 dark:text-white">
+                              {row.fullName || (
+                                <span className="italic text-rose-400">Missing</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                              {row.mobileNumber || (
+                                <span className="italic text-rose-400">Missing</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                              {row.alternateMobile || "-"}
+                            </td>
+                            <td className="py-2 px-3 text-slate-600 dark:text-slate-400">
+                              {row.email || "-"}
+                            </td>
+                            <td className="py-2 px-3 text-slate-600 dark:text-slate-400">
+                              {row.dateOfBirth || "-"}
+                            </td>
+                            <td className="py-2 px-3 text-slate-600 dark:text-slate-400">
+                              {row.gender || "-"}
+                            </td>
+                            <td className="py-2 px-3 text-slate-600 dark:text-slate-400">
+                              {row.occupation || "-"}
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                {row.status}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 text-rose-600 font-medium text-[11px]">
+                              {row.errors.length > 0 ? (
+                                row.errors.join(", ")
+                              ) : (
+                                <span className="text-emerald-600">Ready</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Upload in Progress Banner */}
+              {isProcessingBulkUpload && (
+                <div className="p-4 bg-purple-50 dark:bg-purple-950/40 rounded-xl border border-purple-200 dark:border-purple-800 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-[#33077C] dark:text-purple-300">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-[#33077C] dark:text-purple-300" />
+                      <span>Uploading & Processing CSV via Commerce API...</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-purple-200 dark:bg-purple-900/60 h-2 rounded-full overflow-hidden">
+                    <div className="bg-[#33077C] dark:bg-purple-400 h-full w-2/3 animate-pulse" />
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Validating headers, organization isolation, and phone uniqueness...
+                  </div>
+                </div>
+              )}
+
+              {/* Modal Actions */}
+              <div className="pt-3 flex justify-end items-center gap-2.5 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  disabled={isProcessingBulkUpload}
+                  onClick={() => {
+                    setIsBulkUploadModalOpen(false);
+                    setBulkFile(null);
+                    setBulkParsedCustomers([]);
+                    setBulkUploadResult(null);
+                  }}
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessingBulkUpload || !bulkFile}
+                  onClick={handleExecuteBulkUpload}
+                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isProcessingBulkUpload ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Uploading...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4 stroke-[2.5]" />
+                      <span>
+                        Upload Customers to Commerce API
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

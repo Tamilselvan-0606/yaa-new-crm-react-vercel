@@ -146,7 +146,18 @@ export const mapApiExpenseToUi = (apiExp: ApiExpense): UiExpenseItem => {
     totalAmount: totalAmt,
     paymentMode: normalizePaymentMode(apiExp.paymentMethod),
     referenceNo: apiExp.referenceNo || '',
-    receiptImage: '',
+    receiptImage:
+      apiExp.receiptImage ||
+      (apiExp as any).receiptUrl ||
+      (apiExp as any).attachmentUrl ||
+      (apiExp as any).attachment ||
+      (apiExp as any).billUrl ||
+      (apiExp as any).billImage ||
+      (apiExp as any).fileUrl ||
+      (apiExp as any).documentUrl ||
+      (typeof window !== 'undefined' && apiExp.id ? localStorage.getItem(`crm_exp_receipt_${apiExp.id}`) : '') ||
+      (typeof window !== 'undefined' && apiExp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${apiExp.expenseNo}`) : '') ||
+      '',
     notes: apiExp.notes || '',
     status: 'Paid',
     createdAt: apiExp.createdAt || new Date().toISOString(),
@@ -169,6 +180,7 @@ export const mapUiToCreateExpensePayload = (formData: {
   paymentMethod?: string;
   referenceNo?: string;
   notes?: string;
+  receiptImage?: string | null;
 }): CreateExpensePayload => {
   const payload: CreateExpensePayload = {
     categoryId: formData.categoryId,
@@ -197,6 +209,10 @@ export const mapUiToCreateExpensePayload = (formData: {
     payload.notes = notes;
   }
 
+  if (formData.receiptImage) {
+    payload.receiptImage = formData.receiptImage;
+  }
+
   return payload;
 };
 
@@ -215,6 +231,7 @@ export const mapUiToUpdateExpensePayload = (formData: {
   paymentMethod?: string;
   referenceNo?: string;
   notes?: string;
+  receiptImage?: string | null;
 }): UpdateExpensePayload => {
   const payload: UpdateExpensePayload = {};
 
@@ -270,6 +287,10 @@ export const mapUiToUpdateExpensePayload = (formData: {
     if (notes) {
       payload.notes = notes;
     }
+  }
+
+  if (formData.receiptImage !== undefined) {
+    payload.receiptImage = formData.receiptImage || null;
   }
 
   return payload;
@@ -744,6 +765,9 @@ export const workExpenseApi = {
     if (payload.notes && payload.notes.trim()) {
       cleanPayload.notes = payload.notes.trim();
     }
+    if (payload.receiptImage !== undefined && payload.receiptImage !== null && payload.receiptImage !== '') {
+      cleanPayload.receiptImage = payload.receiptImage;
+    }
 
     const response = await baseClient.post<ExpenseSingleResponse>(
       '/work/expenses',
@@ -788,6 +812,9 @@ export const workExpenseApi = {
       if (payload.notes.trim()) {
         cleanPayload.notes = payload.notes.trim();
       }
+    }
+    if (payload.receiptImage !== undefined) {
+      cleanPayload.receiptImage = payload.receiptImage || null;
     }
 
     const response = await baseClient.put<ExpenseSingleResponse>(

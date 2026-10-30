@@ -42,6 +42,7 @@ import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
+import { useScopeLock } from '../../hooks/useScopeLock';
 
 export const ProductsView: React.FC = () => {
   const { showToast, currentUser } = useAuth();
@@ -55,6 +56,7 @@ export const ProductsView: React.FC = () => {
       'Yaa Creations'
     );
   });
+  const { lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId } = useScopeLock();
   const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
   const [loadingSubOrgs, setLoadingSubOrgs] = useState<boolean>(false);
   const [branches, setBranches] = useState<BranchApiItem[]>([]);
@@ -238,30 +240,7 @@ export const ProductsView: React.FC = () => {
         subMap.set(key, s);
       });
 
-      // Only fallback to localStorage if API returned nothing
-      if (apiSubs.length === 0) {
-        const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
-        if (savedOrgs) {
-          try {
-            const parsed = JSON.parse(savedOrgs);
-            if (Array.isArray(parsed)) {
-              parsed.forEach((so: any) => {
-                const key = (so.id || so.code || so.name || '').trim().toLowerCase();
-                if (key && !subMap.has(key)) {
-                  subMap.set(key, {
-                    id: so.id || `sub_${Date.now()}`,
-                    organizationId: activeOrgId || 'org_main',
-                    name: so.name,
-                    code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
-                    status: so.status || 'Active',
-                    createdAt: so.createdAt || new Date().toISOString(),
-                  });
-                }
-              });
-            }
-          } catch {}
-        }
-      }
+      // Only use API sub-organizations
 
       setSubOrganizations(Array.from(subMap.values()));
     } catch (e) {
@@ -413,8 +392,8 @@ export const ProductsView: React.FC = () => {
     setApiModalError(null);
     setFormData({
       organizationId: currentUser?.organizationId || getStoredOrganizationId() || '',
-      subOrganizationId: '',
-      branchId: '',
+      subOrganizationId: lockedSubOrgId,
+      branchId: lockedBranchId,
       name: '',
       code: '',
       contactPerson: '',
@@ -445,8 +424,8 @@ export const ProductsView: React.FC = () => {
     const resolvedBranchId = prod.branchId || (prod as any).branch_id || '';
     setFormData({
       organizationId: prod.organizationId || currentUser?.organizationId || getStoredOrganizationId() || '',
-      subOrganizationId: resolvedSubOrgId,
-      branchId: resolvedBranchId,
+      subOrganizationId: lockedSubOrgId || resolvedSubOrgId,
+      branchId: lockedBranchId || resolvedBranchId,
       name: prod.name || '',
       code: prod.code || '',
       contactPerson: prod.contactPerson || '',
@@ -608,15 +587,10 @@ export const ProductsView: React.FC = () => {
       {/* 1. Top Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              <Boxes className="w-4.5 h-4.5" />
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Products List
-            </h1>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+            Products List
+          </h1>
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             Manage organization products, active offering suites, and configuration details.
           </p>
         </div>
@@ -1101,6 +1075,19 @@ export const ProductsView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Select Sub-Organization {subOrganizations.length > 0 && <span className="text-rose-500 font-bold">*</span>}
               </label>
+              {lockSubOrg || editingProduct ? (
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={
+                    subOrganizations.find((s) => s.id === formData.subOrganizationId)?.name ||
+                    (loadingSubOrgs ? 'Loading...' : '')
+                  }
+                  title="Sub-organization cannot be modified"
+                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                />
+              ) : (
               <CustomSelect
                 value={formData.subOrganizationId}
                 onChange={(val) => {
@@ -1118,6 +1105,7 @@ export const ProductsView: React.FC = () => {
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
               />
+              )}
               {formErrors.subOrganizationId && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subOrganizationId}</p>
               )}
@@ -1127,6 +1115,19 @@ export const ProductsView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Select Branch {branches.length > 0 && <span className="text-rose-500 font-bold">*</span>}
               </label>
+              {lockBranch ? (
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={
+                    branches.find((b) => b.id === lockedBranchId)?.name ||
+                    (loadingBranches ? 'Loading...' : '')
+                  }
+                  title="Branch cannot be modified"
+                  className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
+                />
+              ) : (
               <CustomSelect
                 value={formData.branchId}
                 onChange={(val) => {
@@ -1155,6 +1156,7 @@ export const ProductsView: React.FC = () => {
                 placeholder="Select Branch"
                 error={!!formErrors.branchId}
               />
+              )}
               {formErrors.branchId && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branchId}</p>
               )}

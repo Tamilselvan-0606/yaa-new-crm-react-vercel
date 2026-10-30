@@ -98,6 +98,11 @@ export interface PlatformClientListParams {
   sortBy?: 'name' | 'code' | 'createdAt' | 'updatedAt' | string;
   sortOrder?: 'asc' | 'desc';
   organization_id?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  sub_organization_id?: string;
+  branchId?: string;
+  branch_id?: string;
 }
 
 export interface PlatformClientPagination {
@@ -156,6 +161,8 @@ export interface CreatePlatformClientRequest {
   subOrganizationId?: string;
   branchId?: string;
   productId?: string;
+  /** Lead the client is created from; the lead is marked converted. */
+  leadId?: string;
 }
 
 export interface UpdatePlatformClientRequest {

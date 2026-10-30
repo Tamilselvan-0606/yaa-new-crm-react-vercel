@@ -44,6 +44,7 @@ export interface DeliveryChallanRecord {
   invoiceDate: string;
   dueDate: string;
   customerId: string;
+  customerCode?: string;
   partyName: string;
   customerPhone?: string;
   customerEmail?: string;
@@ -67,6 +68,7 @@ export interface DeliveryChallanRecord {
   convertedToInvoiceNo?: string;
   convertedToType?: 'Invoice' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
   notes?: string;
   terms?: string;
   attachedImageName?: string;
@@ -157,6 +159,7 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
     invoiceDate: dateStr,
     dueDate: dueDateStr,
     customerId: apiC.customerId || apiC.customer?.id || '',
+    customerCode: apiC.customer?.customerCode || (apiC as any).customerCode || '',
     partyName: apiC.partyName || apiC.customer?.name || 'Unnamed Party',
     customerPhone: apiC.customerPhone || apiC.customer?.phone || undefined,
     customerEmail: apiC.customerEmail || apiC.customer?.email || undefined,
@@ -180,6 +183,7 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
     convertedToInvoiceNo: apiC.convertedToInvoiceNo || undefined,
     convertedToType: apiC.convertedToType || undefined,
     convertedToId: apiC.convertedToId || undefined,
+    convertedAt: (apiC as any).convertedAt || undefined,
     notes: apiC.notes || undefined,
     terms: apiC.terms || undefined,
     attachedImageName: apiC.attachedImageName || undefined,
@@ -205,32 +209,34 @@ export const mapDeliveryChallanRecordToPayload = (
 ): CreateDeliveryChallanPayload => {
   const payload: CreateDeliveryChallanPayload = {
     partyName: challan.partyName.trim(),
-    items: (challan.items || []).map((it: any) => {
-      const itemPayload: any = {
-        productId: it.productId || '',
-        quantity: Math.max(1, Number(it.quantity) || 1),
-        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
-      };
-      if (it.productName && it.productName.trim()) {
-        itemPayload.productName = it.productName.trim();
-      }
-      if (it.sku && String(it.sku).trim()) {
-        itemPayload.sku = String(it.sku).trim();
-      } else if (it.itemCode && String(it.itemCode).trim()) {
-        itemPayload.sku = String(it.itemCode).trim();
-      }
-      if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
-        itemPayload.discountPercent = it.discountPercent;
-      }
-      if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
-        itemPayload.taxPercent = it.taxPercent;
-      }
-      if (it.batch && String(it.batch).trim()) {
-        itemPayload.batch = String(it.batch).trim();
-        itemPayload.batchNo = String(it.batch).trim();
-      }
-      return itemPayload;
-    }),
+    items: (challan.items || [])
+      .filter((it: any) => it && (it.productId || String(it.productName || '').trim() || Number(it.unitPrice) > 0))
+      .map((it: any) => {
+        const itemPayload: any = {
+          productId: it.productId || '',
+          quantity: Math.max(1, Number(it.quantity) || 1),
+          unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+        };
+        if (it.productName && it.productName.trim()) {
+          itemPayload.productName = it.productName.trim();
+        }
+        if (it.sku && String(it.sku).trim()) {
+          itemPayload.sku = String(it.sku).trim();
+        } else if (it.itemCode && String(it.itemCode).trim()) {
+          itemPayload.sku = String(it.itemCode).trim();
+        }
+        if (typeof it.discountPercent === 'number' && !isNaN(it.discountPercent) && it.discountPercent > 0) {
+          itemPayload.discountPercent = it.discountPercent;
+        }
+        if (typeof it.taxPercent === 'number' && !isNaN(it.taxPercent) && it.taxPercent > 0) {
+          itemPayload.taxPercent = it.taxPercent;
+        }
+        if (it.batch && String(it.batch).trim()) {
+          itemPayload.batch = String(it.batch).trim();
+          itemPayload.batchNo = String(it.batch).trim();
+        }
+        return itemPayload;
+      }),
   };
 
   // On creation, omit temporary client-generated challanNo so backend sequence assigns official number
@@ -246,8 +252,8 @@ export const mapDeliveryChallanRecordToPayload = (
   if (challan.dueDate) {
     payload.dueDate = challan.dueDate.includes('T') ? challan.dueDate.split('T')[0] : challan.dueDate;
   }
-  if (challan.customerId && UUID_REGEX.test(challan.customerId)) {
-    payload.customerId = challan.customerId;
+  if (challan.customerId && challan.customerId.trim()) {
+    payload.customerId = challan.customerId.trim();
   }
   if (challan.customerCompany && challan.customerCompany.trim()) {
     payload.customerCompany = challan.customerCompany.trim();

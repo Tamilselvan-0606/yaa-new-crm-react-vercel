@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
@@ -26,10 +28,6 @@ import {
   X,
   Printer,
 } from "lucide-react";
-import {
-  UniversalShareDropdown,
-  formatSalesRepShare,
-} from "../../../utils/shareUtils";
 import { Button } from "../../../components/common/Button";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
@@ -45,7 +43,6 @@ import {
   collectionApi,
   CollectionFollowUpItem,
   CollectionHistoryItem,
-  CustomerAssignmentItem,
 } from "../../../api/commerce/collectionApi";
 import { SalesRepresentativeSchema, SalesRepFormData } from "../../../schemas";
 import { Modal } from "../../../components/common/Modal";
@@ -59,16 +56,14 @@ import {
   SalesCustomer,
   SalesRepresentative,
 } from "../../../store/useSalesManagementStore";
-import {
-  customerApi,
-  mapApiCustomerToSalesCustomer,
-} from "../../../api/commerce/customerApi";
+
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { calculateRepMetrics } from "../../../utils/outstandingBalance";
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, getFormInputCls } from "../utils/formUtils";
 
+import { formatDate } from '../utils/dateUtils';
 // Auto-generate a secure random password (user doesn't need to set this)
 const generatePassword = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$!";
@@ -89,6 +84,7 @@ export const SalesRepresentativeView: React.FC = () => {
   const navigate = useNavigate();
   const {
     saveSalesRepresentative,
+    deleteSalesRepresentative,
     customers,
     sales,
     salesRepresentatives: storedSalesRepresentatives,
@@ -99,8 +95,6 @@ export const SalesRepresentativeView: React.FC = () => {
 
   // ── list state ──────────────────────────────────────────────────────────
   const [reps, setReps] = useState<ApiSalesRepresentative[]>([]);
-  const [apiAssignments, setApiAssignments] = useState<CustomerAssignmentItem[]>([]);
-  const [remoteCustomers, setRemoteCustomers] = useState<SalesCustomer[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [isListLoading, setIsListLoading] = useState(false);
@@ -109,6 +103,16 @@ export const SalesRepresentativeView: React.FC = () => {
   // ── filters / pagination ─────────────────────────────────────────────────
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState<
     "ALL" | "Active" | "Inactive"
   >("ALL");
@@ -116,19 +120,7 @@ export const SalesRepresentativeView: React.FC = () => {
     "ALL" | "Active" | "Inactive"
   >("ALL");
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize] = useState(10);
-
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
+  const [pageSize, setPageSize] = useState(5);
 
   // ── portfolio (detail) state ─────────────────────────────────────────────
   const [selectedRep, setSelectedRep] = useState<ApiSalesRepresentative | null>(
@@ -161,12 +153,6 @@ export const SalesRepresentativeView: React.FC = () => {
     bottom?: number;
     right?: number;
   } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{
-    top?: number;
-    bottom?: number;
-    right?: number;
-  } | null>(null);
 
   // ── delete modal state ───────────────────────────────────────────────────
   const [deleteTargetRep, setDeleteTargetRep] =
@@ -183,6 +169,7 @@ export const SalesRepresentativeView: React.FC = () => {
     watch,
     reset,
     setError,
+    clearErrors,
     formState: { errors },
   } = useForm<SalesRepFormData>({
     resolver: zodResolver(SalesRepresentativeSchema),
@@ -202,65 +189,179 @@ export const SalesRepresentativeView: React.FC = () => {
   const inactiveRepsRef = useRef<Map<string, ApiSalesRepresentative>>(new Map());
   const requestIdRef = useRef(0);
 
-  // ── fetch assignments & customers once on mount ──────────────────────────
+  // ── cache of all known representatives for duplicate validation without hitting API ──
+  const allRepsCacheRef = useRef<ApiSalesRepresentative[]>([]);
+
+  const refreshAllRepsCache = useCallback(async () => {
+    try {
+      const res = await salesRepresentativeApi.getList({ limit: 200 });
+      if (res.success && res.data) {
+        allRepsCacheRef.current = res.data;
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
-    let isMounted = true;
-    Promise.allSettled([
-      collectionApi.getCustomerAssignments({ limit: 200 }),
-      customerApi.getCustomers({ page_size: 200, pagination_required: false }),
-    ]).then(([assignmentsRes, customersRes]) => {
-      if (!isMounted) return;
-      if (assignmentsRes.status === "fulfilled" && assignmentsRes.value?.success) {
-        setApiAssignments(Array.isArray(assignmentsRes.value.data) ? assignmentsRes.value.data : []);
-      }
-      if (customersRes.status === "fulfilled" && customersRes.value?.success && Array.isArray(customersRes.value.data)) {
-        setRemoteCustomers(customersRes.value.data.map(mapApiCustomerToSalesCustomer));
-      }
-    });
-    return () => {
-      isMounted = false;
+    refreshAllRepsCache();
+  }, [refreshAllRepsCache]);
+
+  const findDuplicateRepByMobile = useCallback(
+    (mobileInput: string, excludeRepId?: string) => {
+      const clean = normalizeIndianPhoneTo10Digits(mobileInput);
+      if (!clean || clean.length < 10) return null;
+
+      const fromCache = allRepsCacheRef.current.find(
+        (r) =>
+          r.id !== excludeRepId &&
+          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+      );
+      if (fromCache) return fromCache;
+
+      const fromCurrent = reps.find(
+        (r) =>
+          r.id !== excludeRepId &&
+          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+      );
+      if (fromCurrent) return fromCurrent;
+
+      const fromStore = (storedSalesRepresentatives || []).find(
+        (r) =>
+          r.id !== excludeRepId &&
+          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+      );
+      if (fromStore) return fromStore;
+
+      return null;
+    },
+    [reps, storedSalesRepresentatives],
+  );
+
+  const findDuplicateRepByEmail = useCallback(
+    (emailInput: string, excludeRepId?: string) => {
+      const clean = emailInput.trim().toLowerCase();
+      if (!clean) return null;
+
+      const fromCache = allRepsCacheRef.current.find(
+        (r) => r.id !== excludeRepId && r.email?.trim().toLowerCase() === clean,
+      );
+      if (fromCache) return fromCache;
+
+      const fromCurrent = reps.find(
+        (r) => r.id !== excludeRepId && r.email?.trim().toLowerCase() === clean,
+      );
+      if (fromCurrent) return fromCurrent;
+
+      const fromStore = (storedSalesRepresentatives || []).find(
+        (r) => r.id !== excludeRepId && r.email?.trim().toLowerCase() === clean,
+      );
+      if (fromStore) return fromStore;
+
+      return null;
+    },
+    [reps, storedSalesRepresentatives],
+  );
+
+
+  const normalizeApiRep = useCallback((r: any): ApiSalesRepresentative => {
+    const rawStatus = String(r?.status ?? "").trim().toLowerCase();
+    const normalizedStatus: "Active" | "Inactive" =
+      rawStatus === "inactive" ||
+      r?.active === false ||
+      r?.isActive === false ||
+      r?.user?.active === false
+        ? "Inactive"
+        : "Active";
+
+    return {
+      ...r,
+      status: normalizedStatus,
+      assignedCustomersCount:
+        r.metrics?.assignedCustomersCount ?? r.assignedCustomersCount ?? 0,
+      assignedInvoicesCount:
+        r.metrics?.assignedInvoicesCount ??
+        r.metrics?.invoicesCount ??
+        r.assignedInvoicesCount ??
+        0,
+      totalOutstandingAmount:
+        r.metrics?.totalOutstandingAmount ??
+        r.metrics?.totalOutstanding ??
+        r.totalOutstandingAmount ??
+        0,
+      totalCollectedAmount:
+        r.metrics?.totalCollectedAmount ??
+        r.metrics?.collectedThisMonth ??
+        r.totalCollectedAmount ??
+        0,
+      collectionRatePercent:
+        r.metrics?.collectionRatePercent ??
+        r.metrics?.collectionRate ??
+        r.collectionRatePercent ??
+        0,
     };
   }, []);
 
-  // ── load list (single API call) ──────────────────────────────────────────
+  // ── load list (fetches Active + Inactive when ALL so inactive reps always appear) ──
   const loadReps = useCallback(async () => {
     const currentReqId = ++requestIdRef.current;
     setIsListLoading(true);
     setListError(null);
     try {
-      const res = await salesRepresentativeApi.getList({
-        page: currentPage,
-        limit: pageSize,
-        search: appliedSearch || undefined,
-        status: appliedStatus === "ALL" ? undefined : appliedStatus,
-      });
-
-      if (currentReqId !== requestIdRef.current) return;
-
       let repList: ApiSalesRepresentative[] = [];
-      let totalRecs = 0;
-      let totalPgs = 1;
 
-      if (res.success) {
-        // Flatten nested metrics from response into root entity for consistent rendering
-        repList = (res.data ?? []).map((r: any) => ({
-          ...r,
-          assignedCustomersCount:
-            r.metrics?.assignedCustomersCount ?? r.assignedCustomersCount ?? 0,
-          assignedInvoicesCount:
-            r.metrics?.assignedInvoicesCount ?? r.metrics?.invoicesCount ?? r.assignedInvoicesCount ?? 0,
-          totalOutstandingAmount:
-            r.metrics?.totalOutstandingAmount ?? r.metrics?.totalOutstanding ?? r.totalOutstandingAmount ?? 0,
-          totalCollectedAmount:
-            r.metrics?.totalCollectedAmount ?? r.metrics?.collectedThisMonth ?? r.totalCollectedAmount ?? 0,
-          collectionRatePercent:
-            r.metrics?.collectionRatePercent ?? r.metrics?.collectionRate ?? r.collectionRatePercent ?? 0,
-        }));
-        totalRecs = res.pagination?.totalRecords ?? repList.length;
-        totalPgs = res.pagination?.totalPages ?? 1;
+      if (appliedStatus === "ALL") {
+        const [defaultRes, inactiveRes] = await Promise.allSettled([
+          salesRepresentativeApi.getList({
+            limit: 200,
+            search: appliedSearch || undefined,
+          }),
+          salesRepresentativeApi.getList({
+            limit: 200,
+            search: appliedSearch || undefined,
+            status: "Inactive",
+          }),
+        ]);
 
-        // Populate known inactive reps ref with any inactive reps received from API
-        repList.forEach((r) => {
+        if (currentReqId !== requestIdRef.current) return;
+
+        if (
+          defaultRes.status === "rejected" &&
+          inactiveRes.status === "rejected"
+        ) {
+          throw defaultRes.reason;
+        }
+
+        const repMap = new Map<string, ApiSalesRepresentative>();
+
+        if (
+          defaultRes.status === "fulfilled" &&
+          defaultRes.value?.success &&
+          Array.isArray(defaultRes.value.data)
+        ) {
+          defaultRes.value.data.forEach((raw: any) => {
+            const norm = normalizeApiRep(raw);
+            repMap.set(norm.id, norm);
+          });
+        }
+
+        if (
+          inactiveRes.status === "fulfilled" &&
+          inactiveRes.value?.success &&
+          Array.isArray(inactiveRes.value.data)
+        ) {
+          inactiveRes.value.data.forEach((raw: any) => {
+            const norm = normalizeApiRep(raw);
+            if (norm.status === "Inactive") {
+              repMap.set(norm.id, norm);
+            } else if (!repMap.has(norm.id)) {
+              repMap.set(norm.id, norm);
+            }
+          });
+        }
+
+        // Update session inactive cache from authoritative API results
+        repMap.forEach((r) => {
           if (r.status === "Inactive") {
             inactiveRepsRef.current.set(r.id, r);
           } else {
@@ -268,70 +369,123 @@ export const SalesRepresentativeView: React.FC = () => {
           }
         });
 
-        // When status filter is "ALL", retain any inactive reps known from current session
-        // so they never vanish after being changed to Inactive
-        if (appliedStatus === "ALL") {
-          const repMap = new Map<string, ApiSalesRepresentative>();
-          repList.forEach((r) => repMap.set(r.id, r));
+        // Merge any session / store inactive reps omitted by backend soft-filtering
+        inactiveRepsRef.current.forEach((inactiveRep, id) => {
+          if (!repMap.has(id)) {
+            repMap.set(id, inactiveRep);
+          } else {
+            const current = repMap.get(id)!;
+            repMap.set(id, { ...current, status: "Inactive" });
+          }
+        });
 
-          // Merge locally tracked inactive reps
+        const storedReps = storedSalesRepresentatives || [];
+        storedReps.forEach((sr) => {
+          if (String(sr.status).toLowerCase() === "inactive" && !repMap.has(sr.id)) {
+            repMap.set(sr.id, {
+              id: sr.id,
+              organizationId: "",
+              name: sr.name,
+              email: sr.email || "",
+              mobile: sr.mobile || "",
+              designation: sr.designation,
+              status: "Inactive",
+              assignedCustomersCount: 0,
+              assignedInvoicesCount: 0,
+              totalOutstandingAmount: 0,
+              totalCollectedAmount: 0,
+              collectionRatePercent: 0,
+              createdAt: sr.createdAt,
+              updatedAt: sr.updatedAt,
+            });
+          }
+        });
+
+        repList = Array.from(repMap.values());
+      } else {
+        const res = await salesRepresentativeApi.getList({
+          limit: 200,
+          search: appliedSearch || undefined,
+          status: appliedStatus,
+        });
+
+        if (currentReqId !== requestIdRef.current) return;
+
+        if (res.success && Array.isArray(res.data)) {
+          repList = res.data.map(normalizeApiRep);
+        }
+
+        if (appliedStatus === "Inactive") {
+          const repMap = new Map<string, ApiSalesRepresentative>();
+          repList
+            .filter((r) => r.status === "Inactive")
+            .forEach((r) => {
+              inactiveRepsRef.current.set(r.id, r);
+              repMap.set(r.id, r);
+            });
+
           inactiveRepsRef.current.forEach((inactiveRep, id) => {
             if (!repMap.has(id)) {
-              repMap.set(id, inactiveRep);
-            } else {
-              const current = repMap.get(id)!;
-              repMap.set(id, { ...current, status: "Inactive" });
+              repMap.set(id, { ...inactiveRep, status: "Inactive" });
             }
           });
 
-          // Also merge any inactive reps from store
           const storedReps = storedSalesRepresentatives || [];
           storedReps.forEach((sr) => {
-            if (sr.status === "Inactive") {
-              if (!repMap.has(sr.id)) {
-                repMap.set(sr.id, {
-                  id: sr.id,
-                  organizationId: "",
-                  name: sr.name,
-                  email: sr.email || "",
-                  mobile: sr.mobile || "",
-                  designation: sr.designation,
-                  status: "Inactive",
-                  assignedCustomersCount: 0,
-                  assignedInvoicesCount: 0,
-                  totalOutstandingAmount: 0,
-                  totalCollectedAmount: 0,
-                  collectionRatePercent: 0,
-                  createdAt: sr.createdAt,
-                  updatedAt: sr.updatedAt,
-                });
-              } else {
-                const current = repMap.get(sr.id)!;
-                repMap.set(sr.id, { ...current, status: "Inactive" });
-              }
+            if (String(sr.status).toLowerCase() === "inactive" && !repMap.has(sr.id)) {
+              repMap.set(sr.id, {
+                id: sr.id,
+                organizationId: "",
+                name: sr.name,
+                email: sr.email || "",
+                mobile: sr.mobile || "",
+                designation: sr.designation,
+                status: "Inactive",
+                assignedCustomersCount: 0,
+                assignedInvoicesCount: 0,
+                totalOutstandingAmount: 0,
+                totalCollectedAmount: 0,
+                collectionRatePercent: 0,
+                createdAt: sr.createdAt,
+                updatedAt: sr.updatedAt,
+              });
             }
           });
 
           repList = Array.from(repMap.values());
-          if (appliedSearch) {
-            const q = appliedSearch.toLowerCase().trim();
-            repList = repList.filter(
-              (r) =>
-                r.name.toLowerCase().includes(q) ||
-                r.mobile.includes(q) ||
-                (r.email && r.email.toLowerCase().includes(q)) ||
-                (r.designation && r.designation.toLowerCase().includes(q)),
-            );
-          }
-          totalRecs = repList.length;
-          totalPgs = Math.ceil(totalRecs / pageSize) || 1;
+        } else if (appliedStatus === "Active") {
+          repList = repList.filter(
+            (r) => r.status === "Active" && !inactiveRepsRef.current.has(r.id),
+          );
         }
+      }
 
-        setReps(repList);
-        setTotalRecords(totalRecs);
-        setTotalPages(totalPgs);
+      if (appliedSearch) {
+        const q = appliedSearch.toLowerCase().trim();
+        repList = repList.filter(
+          (r) =>
+            r.name.toLowerCase().includes(q) ||
+            (r.mobile && r.mobile.includes(q)) ||
+            (r.email && r.email.toLowerCase().includes(q)) ||
+            (r.designation && r.designation.toLowerCase().includes(q)),
+        );
+      }
 
-        // Sync into store without creating an infinite dependency loop
+      repList.sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", undefined, {
+          sensitivity: "base",
+        }),
+      );
+
+      const totalRecs = repList.length;
+      const totalPgs = Math.ceil(totalRecs / pageSize) || 1;
+
+      setReps(repList);
+      setTotalRecords(totalRecs);
+      setTotalPages(totalPgs);
+
+      if (appliedStatus === "ALL" && !appliedSearch) {
+        allRepsCacheRef.current = repList;
         const currentStored = storedSalesRepresentatives || [];
         const mappedReps: SalesRepresentative[] = repList.map((r) => ({
           id: r.id,
@@ -346,7 +500,11 @@ export const SalesRepresentativeView: React.FC = () => {
 
         const isDifferent =
           currentStored.length !== mappedReps.length ||
-          mappedReps.some((r, i) => r.id !== currentStored[i]?.id || r.status !== currentStored[i]?.status);
+          mappedReps.some(
+            (r, i) =>
+              r.id !== currentStored[i]?.id ||
+              r.status !== currentStored[i]?.status,
+          );
 
         if (isDifferent) {
           setSalesRepresentativesList(mappedReps);
@@ -362,7 +520,7 @@ export const SalesRepresentativeView: React.FC = () => {
         setIsListLoading(false);
       }
     }
-  }, [currentPage, pageSize, appliedSearch, appliedStatus]);
+  }, [appliedSearch, appliedStatus, normalizeApiRep]);
 
   useEffect(() => {
     loadReps();
@@ -449,8 +607,31 @@ export const SalesRepresentativeView: React.FC = () => {
   };
 
   const onSubmit = async (data: SalesRepFormData) => {
-    setIsSubmitting(true);
     const cleanMobile = normalizeIndianPhoneTo10Digits(data.mobile) || data.mobile.trim();
+
+    // Client-side mobile duplicate check: prevents hitting API if already registered
+    const duplicateMobile = findDuplicateRepByMobile(cleanMobile, editingRep?.id);
+    if (duplicateMobile) {
+      setError("mobile", {
+        type: "manual",
+        message: `Phone number is already used by ${duplicateMobile.name || "another sales representative"}. Each representative must have a unique mobile number.`,
+      });
+      return;
+    }
+
+    // Client-side email duplicate check
+    if (data.email) {
+      const duplicateEmail = findDuplicateRepByEmail(data.email, editingRep?.id);
+      if (duplicateEmail) {
+        setError("email", {
+          type: "manual",
+          message: `This email is already registered to ${duplicateEmail.name || "another representative"}. Please use a different email.`,
+        });
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
     try {
       if (editingRep) {
         const newDesignation = data.designation?.trim() || "";
@@ -549,10 +730,28 @@ export const SalesRepresentativeView: React.FC = () => {
       }
     } catch (err: any) {
       const code = err?.response?.data?.error?.code;
-      const msg = err?.response?.data?.error?.message;
-      if (code === "DUPLICATE_EMAIL") {
+      const msg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        "";
+      const lowerMsg = String(msg).toLowerCase();
+
+      if (code === "DUPLICATE_EMAIL" || lowerMsg.includes("email")) {
         setError("email", {
           message: "This email is already registered. Use a different email.",
+        });
+      } else if (
+        code === "DUPLICATE_PHONE" ||
+        code === "DUPLICATE_MOBILE" ||
+        lowerMsg.includes("phone number is already used") ||
+        lowerMsg.includes("already used by another login account") ||
+        lowerMsg.includes("phone") ||
+        lowerMsg.includes("mobile")
+      ) {
+        setError("mobile", {
+          message:
+            "Phone number is already used by another login account. Each representative must have a unique mobile number.",
         });
       } else {
         toast.error(msg || "Failed to save representative. Please try again.");
@@ -576,13 +775,11 @@ export const SalesRepresentativeView: React.FC = () => {
         !target.closest(".share-popover-container") &&
         !target.closest(".share-popover-menu")
       ) {
-        setActiveShareId(null);
       }
     };
 
     const handleScroll = () => {
       setActiveDropdownId(null);
-      setActiveShareId(null);
     };
 
     document.addEventListener("click", handleGlobalClick);
@@ -598,23 +795,47 @@ export const SalesRepresentativeView: React.FC = () => {
     newStatus: "Active" | "Inactive",
   ) => {
     try {
-      const res = await salesRepresentativeApi.update(rep.id, {
+      const cleanMobile =
+        normalizeIndianPhoneTo10Digits(rep.mobile) || rep.mobile?.trim() || "";
+      const updatePayload: UpdateSalesRepPayload = {
+        name: rep.name.trim(),
+        email: rep.email?.trim() || "",
+        mobile: cleanMobile,
+        designation: rep.designation?.trim() || "",
         status: newStatus,
-        active: newStatus === "Active",
-        isActive: newStatus === "Active",
-      });
+      };
+      const res = await salesRepresentativeApi.update(
+        rep.id,
+        updatePayload,
+        rep.organizationId || undefined,
+      );
       if (res.success || (res as any).statusCode === 200 || res.data) {
         toast.success(`"${rep.name}" set as ${newStatus}`);
+        const updatedRep: ApiSalesRepresentative = {
+          ...rep,
+          ...(res.data || {}),
+          status: newStatus,
+        };
         setReps((prev) =>
-          prev.map((r) => (r.id === rep.id ? { ...r, status: newStatus } : r)),
+          prev.map((r) => (r.id === rep.id ? updatedRep : r)),
         );
         if (selectedRep?.id === rep.id) {
           setSelectedRep((prev) =>
             prev ? { ...prev, status: newStatus } : null,
           );
         }
+        saveSalesRepresentative({
+          id: rep.id,
+          name: rep.name.trim(),
+          mobile: cleanMobile,
+          email: rep.email?.trim() || "",
+          designation: rep.designation?.trim() || "",
+          status: newStatus,
+          createdAt: rep.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
         if (newStatus === "Inactive") {
-          inactiveRepsRef.current.set(rep.id, { ...rep, status: "Inactive" });
+          inactiveRepsRef.current.set(rep.id, updatedRep);
         } else {
           inactiveRepsRef.current.delete(rep.id);
         }
@@ -629,7 +850,9 @@ export const SalesRepresentativeView: React.FC = () => {
       }
     } catch (err: any) {
       toast.error(
-        err?.response?.data?.error?.message || "Failed to update status",
+        err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          "Failed to update status",
       );
     }
   };
@@ -642,6 +865,7 @@ export const SalesRepresentativeView: React.FC = () => {
       await salesRepresentativeApi.remove(deleteTargetRep.id);
       toast.success(`"${deleteTargetRep.name}" deleted.`);
       inactiveRepsRef.current.delete(deleteTargetRep.id);
+      deleteSalesRepresentative(deleteTargetRep.id);
       if (selectedRep?.id === deleteTargetRep.id) {
         setIsDetailModalOpen(false);
         setSelectedRep(null);
@@ -684,15 +908,7 @@ export const SalesRepresentativeView: React.FC = () => {
       }
     >();
 
-    // Merge remote customers with local store customers so customer updates & reassignments
-    // take effect immediately
-    const customerMapById = new Map<string, SalesCustomer>();
-    (remoteCustomers || []).forEach((c) => customerMapById.set(c.id, c));
-    (customers || []).forEach((c) => {
-      const existing = customerMapById.get(c.id);
-      customerMapById.set(c.id, { ...(existing || {}), ...c });
-    });
-    const allKnownCustomers = Array.from(customerMapById.values());
+    const allKnownCustomers = customers || [];
 
     reps.forEach((rep) => {
       const computed = calculateRepMetrics(
@@ -700,15 +916,46 @@ export const SalesRepresentativeView: React.FC = () => {
         allKnownCustomers,
         (sales || []) as any,
         (salesReturns || []) as any,
-        (paymentIns || []) as any,
-        undefined,
-        apiAssignments
+        (paymentIns || []) as any
       );
-      map.set(rep.id, computed);
+
+      // Prioritize client calculated metrics if store has data, otherwise preserve server-calculated metrics
+      const customersCount = computed.customersCount > 0 
+        ? computed.customersCount 
+        : Number(rep.assignedCustomersCount || 0);
+      const invoicesCount = computed.invoicesCount > 0 
+        ? computed.invoicesCount 
+        : Number(rep.assignedInvoicesCount || 0);
+      const totalOutstanding = computed.totalOutstanding > 0 
+        ? computed.totalOutstanding 
+        : Number(rep.totalOutstandingAmount || 0);
+      const totalCollected = computed.totalCollected > 0 
+        ? computed.totalCollected 
+        : Number(rep.totalCollectedAmount || 0);
+      const collectionRatePercent = computed.collectionRatePercent > 0 
+        ? computed.collectionRatePercent 
+        : Number(rep.collectionRatePercent || 0);
+
+      map.set(rep.id, {
+        ...computed,
+        customersCount,
+        invoicesCount,
+        totalOutstanding,
+        totalCollected,
+        collectionRatePercent,
+      });
     });
 
     return map;
-  }, [reps, apiAssignments, customers, remoteCustomers, sales, salesReturns, paymentIns]);
+  }, [reps, customers, sales, salesReturns, paymentIns]);
+
+  const pagedReps = useMemo(() => {
+    if (reps.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return reps.slice(start, start + pageSize);
+    }
+    return reps;
+  }, [reps, currentPage, pageSize]);
 
   // ── derived portfolio values ──────────────────────────────────────────────
   const selectedRepMetrics = selectedRep ? repMetricsMap.get(selectedRep.id) : null;
@@ -895,8 +1142,8 @@ export const SalesRepresentativeView: React.FC = () => {
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* ── 1. Top Header Card ── */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <UserCheck className="w-4.5 h-4.5" />
@@ -916,12 +1163,12 @@ export const SalesRepresentativeView: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-2.5 w-full sm:w-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
             onClick={handleExportExcel}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
@@ -931,7 +1178,7 @@ export const SalesRepresentativeView: React.FC = () => {
             variant="secondary"
             size="md"
             onClick={handlePrintTableReport}
-            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            className="flex-1 sm:flex-initial justify-center hover:border-purple-300"
             icon={<Printer className="w-4 h-4 text-slate-600" />}
           >
             Print Report
@@ -941,7 +1188,7 @@ export const SalesRepresentativeView: React.FC = () => {
             variant="primary"
             size="md"
             onClick={openCreateModal}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<Plus className="w-4 h-4 text-white stroke-[2.5]" />}
           >
             Add Sales Representative
@@ -1036,22 +1283,43 @@ export const SalesRepresentativeView: React.FC = () => {
         onChange={setPendingSearch}
         placeholder="Search by name, mobile, email, designation..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch.trim());
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedStatus === pendingStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedStatus(pendingStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            loadReps();
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === "" &&
+            pendingSearch === "" &&
+            appliedStatus === "ALL" &&
+            pendingStatus === "ALL" &&
+            currentPage === 1;
+
           setPendingSearch("");
           setAppliedSearch("");
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setCurrentPage(1);
+
+          if (isSame) {
+            loadReps();
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Status : All"
-              value={appliedStatus}
+              value={pendingStatus}
               options={[
                 { label: "Status : All", value: "ALL" },
                 { label: "Active", value: "Active", dotColor: "#10b981" },
@@ -1059,8 +1327,6 @@ export const SalesRepresentativeView: React.FC = () => {
               ]}
               onChange={(val) => {
                 setPendingStatus(val as any);
-                setAppliedStatus(val as any);
-                setCurrentPage(1);
               }}
             />
           </div>
@@ -1081,24 +1347,18 @@ export const SalesRepresentativeView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="overflow-x-auto min-h-[360px]">
           <table className="w-full text-left border-collapse text-sm">
-            <thead className="bg-[#33077C] text-white font-bold text-xs uppercase tracking-wider select-none">
-              <tr>
-                <th className="py-3.5 px-4 text-white min-w-[200px]">Representative</th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[100px]">
-                  Customers
-                </th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[100px]">Invoices</th>
-                <th className="py-3.5 px-4 text-right text-white min-w-[120px]">
-                  Outstanding
-                </th>
-                <th className="py-3.5 px-4 text-right text-white min-w-[120px]">Collected</th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[120px]">
-                  Collection Rate
-                </th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[110px]">Status</th>
-                <th className="py-3.5 px-4 text-center text-white min-w-[120px]">Action</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "REPRESENTATIVE", align: "left", minWidth: "200px" },
+                { label: "CUSTOMERS", align: "center", minWidth: "100px" },
+                { label: "INVOICES", align: "center", minWidth: "100px" },
+                { label: "OUTSTANDING", align: "right", minWidth: "120px" },
+                { label: "COLLECTED", align: "right", minWidth: "120px" },
+                { label: "COLLECTION RATE", align: "center", minWidth: "120px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTION", align: "center", minWidth: "120px" },
+              ]}
+            />
             <tbody className="divide-y divide-slate-100 font-sans">
               {isListLoading ? (
                 <tr>
@@ -1139,7 +1399,7 @@ export const SalesRepresentativeView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                reps.map((rep) => {
+                pagedReps.map((rep) => {
                   const metrics = repMetricsMap.get(rep.id);
                   const custCount = metrics ? metrics.customersCount : (rep.assignedCustomersCount ?? 0);
                   const invCount = metrics ? metrics.invoicesCount : (rep.assignedInvoicesCount ?? 0);
@@ -1237,17 +1497,7 @@ export const SalesRepresentativeView: React.FC = () => {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="inline-flex items-center justify-center gap-1">
-                        {/* Share Representative Profile */}
-                        <UniversalShareDropdown
-                          id={rep.id}
-                          activeShareId={activeShareId}
-                          setActiveShareId={setActiveShareId}
-                          sharePos={sharePos}
-                          setSharePos={setSharePos}
-                          getShareData={() => formatSalesRepShare(rep)}
-                          buttonClassName="w-7 h-7 rounded-lg text-slate-500 hover:text-[#33077C] hover:bg-purple-50 flex items-center justify-center transition-colors cursor-pointer"
-                          title="Share Representative"
-                        />
+                        
 
                         {/* 3-Dots Floating Menu Button */}
                         <SaleActionDropdown
@@ -1288,19 +1538,22 @@ export const SalesRepresentativeView: React.FC = () => {
           </table>
         </div>
 
-        {/* Pagination */}
-        {!isListLoading && reps.length > 0 && (
-          <div className="p-3 border-t border-slate-100 bg-white">
-            <Pagination
-              totalItems={totalRecords}
-              currentPage={currentPage}
-              pageSize={pageSize}
-              onPageChange={setCurrentPage}
-              onPageSizeChange={() => {}}
-            />
-          </div>
-        )}
       </div>
+
+      {/* Pagination */}
+      {!isListLoading && reps.length > 0 && (
+        <Pagination
+          totalItems={totalRecords}
+          currentPage={currentPage}
+          pageSize={pageSize}
+          pageSizeOptions={[5, 10, 20, 50]}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setCurrentPage(1);
+          }}
+        />
+      )}
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmationModal
@@ -1380,6 +1633,19 @@ export const SalesRepresentativeView: React.FC = () => {
                 onChange={(e) => {
                   const clean = e.target.value.replace(/\D/g, "").slice(0, 10);
                   setValue("mobile", clean, { shouldValidate: true });
+                  if (clean.length === 10) {
+                    const duplicate = findDuplicateRepByMobile(clean, editingRep?.id);
+                    if (duplicate) {
+                      setError("mobile", {
+                        type: "manual",
+                        message: `Phone number is already used by ${duplicate.name || "another sales representative"}. Each representative must have a unique mobile number.`,
+                      });
+                    } else {
+                      clearErrors("mobile");
+                    }
+                  } else {
+                    clearErrors("mobile");
+                  }
                 }}
                 className={getFormInputCls(Boolean(errors.mobile))}
               />
@@ -1480,7 +1746,7 @@ export const SalesRepresentativeView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsDetailModalOpen(false)}
         >
-          <div className="space-y-6 p-2 sm:p-4 text-xs">
+          <div className="space-y-6 p-0.5 sm:p-2 text-xs">
             {/* Top Bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
               <div className="flex items-center gap-3">
@@ -1541,7 +1807,7 @@ export const SalesRepresentativeView: React.FC = () => {
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2.5">
                     Collection Performance Summary
                   </h4>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="p-3.5 rounded-xl bg-purple-50/60 border border-purple-200/80">
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
@@ -1690,8 +1956,8 @@ export const SalesRepresentativeView: React.FC = () => {
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="rounded-xl border border-slate-200 overflow-hidden">
-                        <table className="w-full text-left border-collapse text-xs">
+                      <div className="rounded-xl border border-slate-200 overflow-x-auto">
+                        <table className="w-full min-w-[520px] text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">
                               <th className="py-2.5 px-3">Customer</th>
@@ -1792,8 +2058,8 @@ export const SalesRepresentativeView: React.FC = () => {
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="rounded-xl border border-slate-200 overflow-hidden">
-                        <table className="w-full text-left border-collapse text-xs">
+                      <div className="rounded-xl border border-slate-200 overflow-x-auto">
+                        <table className="w-full min-w-[520px] text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">
                               <th className="py-2.5 px-3">Invoice</th>
@@ -1835,7 +2101,7 @@ export const SalesRepresentativeView: React.FC = () => {
                                     {inv.customerName}
                                   </td>
                                   <td className="py-2.5 px-3 text-slate-600">
-                                    {inv.invoiceDate}
+                                    {formatDate(inv.invoiceDate)}
                                   </td>
                                   <td className="py-2.5 px-3 text-slate-600">
                                     {inv.dueDate || "—"}
@@ -1889,8 +2155,8 @@ export const SalesRepresentativeView: React.FC = () => {
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="rounded-xl border border-slate-200 overflow-hidden">
-                        <table className="w-full text-left border-collapse text-xs">
+                      <div className="rounded-xl border border-slate-200 overflow-x-auto">
+                        <table className="w-full min-w-[520px] text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">
                               <th className="py-2.5 px-3">Date</th>
@@ -1988,8 +2254,8 @@ export const SalesRepresentativeView: React.FC = () => {
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="rounded-xl border border-slate-200 overflow-hidden">
-                        <table className="w-full text-left border-collapse text-xs">
+                      <div className="rounded-xl border border-slate-200 overflow-x-auto">
+                        <table className="w-full min-w-[520px] text-left border-collapse text-xs">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">
                               <th className="py-2.5 px-3">Receipt ID</th>
@@ -2026,7 +2292,7 @@ export const SalesRepresentativeView: React.FC = () => {
                                     {p.receiptNo || p.id}
                                   </td>
                                   <td className="py-2.5 px-3 text-slate-600">
-                                    {p.paymentDate}
+                                    {formatDate(p.paymentDate)}
                                   </td>
                                   <td className="py-2.5 px-3 font-medium text-slate-900">
                                     {p.customerName}

@@ -109,6 +109,9 @@ export const organizationApi = {
   },
 
   getOrganizationById: async (id: string): Promise<OrganizationSingleResponse> => {
+    if (!id || id === '11111111-1111-4111-8111-111111111111') {
+      return { success: false, statusCode: 400, message: 'Invalid organization ID', data: null as any, meta: {} as any };
+    }
     const res = await baseClient.get<OrganizationSingleResponse>(`/platform/organizations/${id}`);
     return res.data;
   },

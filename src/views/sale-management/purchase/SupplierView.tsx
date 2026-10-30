@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
   useMemo,
@@ -64,10 +66,6 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import {
-  UniversalShareDropdown,
-  formatSupplierShare,
-} from "../../../utils/shareUtils";
 import { printBusinessDocument, printTableReport } from "../../../utils/printUtils";
 import {
   FormLabel,
@@ -75,10 +73,12 @@ import {
   FORM_INPUT_DISABLED_CLS,
   FORM_SELECT_CLS,
   getFormInputCls,
+  handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "sonner";
 
+import { formatDate } from '../utils/dateUtils';
 export const SupplierView: React.FC = () => {
   const {
     suppliers: storeSuppliers,
@@ -102,10 +102,20 @@ export const SupplierView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState("All");
   const [appliedStatus, setAppliedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // Fetch tracking refs to prevent duplicate concurrent calls
   const lastFetchKeyRef = useRef<string>("");
@@ -117,14 +127,6 @@ export const SupplierView: React.FC = () => {
     top?: number;
     bottom?: number;
     right: number;
-  } | null>(null);
-
-  // Share Popover State
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{
-    top?: number;
-    bottom?: number;
-    right?: number;
   } | null>(null);
 
   // Close action dropdown & share popover on click outside or scroll
@@ -142,18 +144,12 @@ export const SupplierView: React.FC = () => {
         !target.closest(".share-popover-container") &&
         !target.closest(".share-popover-menu")
       ) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     window.addEventListener("click", handleOutside);
@@ -162,7 +158,7 @@ export const SupplierView: React.FC = () => {
       window.removeEventListener("click", handleOutside);
       window.removeEventListener("scroll", handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
   // Modals
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
@@ -214,6 +210,7 @@ export const SupplierView: React.FC = () => {
     formState: { errors },
   } = useForm<SupplierFormData>({
     resolver: zodResolver(SupplierSchema),
+    mode: "onChange",
     defaultValues: {
       supplierCode: "",
       name: "",
@@ -227,7 +224,7 @@ export const SupplierView: React.FC = () => {
       pincode: "",
       gstNumber: "",
       panNumber: "",
-      paymentTerms: "Net 30 Days",
+      paymentTerms: "30 Days",
       creditLimit: 500000,
       bankName: "",
       accountNumber: "",
@@ -328,6 +325,14 @@ export const SupplierView: React.FC = () => {
 
   // Active display list
   const displaySuppliers = apiSuppliers;
+
+  const pagedSuppliers = useMemo(() => {
+    if (displaySuppliers.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return displaySuppliers.slice(start, start + pageSize);
+    }
+    return displaySuppliers;
+  }, [displaySuppliers, currentPage, pageSize]);
 
   // Summary Metrics
   const summary = useMemo(() => {
@@ -469,6 +474,12 @@ export const SupplierView: React.FC = () => {
 
   // Save / Update Supplier
   const onSaveSupplier = async (data: SupplierFormData) => {
+    const creditLimitNum = Number(data.creditLimit || 0);
+    if (isNaN(creditLimitNum) || creditLimitNum < 0) {
+      toast.error("Credit Limit cannot be negative.");
+      return;
+    }
+
     try {
       setIsSubmittingForm(true);
 
@@ -801,8 +812,8 @@ export const SupplierView: React.FC = () => {
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <UsersRound className="w-4.5 h-4.5" />
@@ -817,11 +828,11 @@ export const SupplierView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -831,7 +842,7 @@ export const SupplierView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -841,7 +852,7 @@ export const SupplierView: React.FC = () => {
           <Button
             variant="primary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleOpenCreateModal}
             icon={<Plus className="w-4 h-4 text-white" />}
           >
@@ -1028,34 +1039,18 @@ export const SupplierView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  SUPPLIER & CODE
-                </th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  CONTACT PERSON
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                  CONTACT INFO
-                </th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  LOCATION
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                  TOTAL PURCHASE
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                  PAID / PAYABLE
-                </th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                  STATUS
-                </th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
+            <CommonTableHead
+                columns={[
+                  { label: "SUPPLIER & CODE", align: "left", minWidth: "180px" },
+                  { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
+                  { label: "CONTACT INFO", align: "center", minWidth: "140px" },
+                  { label: "LOCATION", align: "left", minWidth: "150px" },
+                  { label: "TOTAL PURCHASE", align: "right", minWidth: "130px" },
+                  { label: "PAID / PAYABLE", align: "right", minWidth: "140px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTIONS", align: "center", minWidth: "120px" },
+                ]}
+              />
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
@@ -1088,7 +1083,7 @@ export const SupplierView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                displaySuppliers.map((sup) => {
+                pagedSuppliers.map((sup) => {
                   const initials = getSupplierInitials(sup.name);
 
                   return (
@@ -1221,16 +1216,7 @@ export const SupplierView: React.FC = () => {
                       {/* 8. Actions */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Share / Forward Button with Popover */}
-                          <UniversalShareDropdown
-                            id={sup.id}
-                            activeShareId={activeShareId}
-                            setActiveShareId={setActiveShareId}
-                            sharePos={sharePos}
-                            setSharePos={setSharePos}
-                            getShareData={() => formatSupplierShare(sup)}
-                            title="Share Supplier Details"
-                          />
+                          
 
                           {/* 3-dots Actions Dropdown */}
                           <SaleActionDropdown
@@ -1366,7 +1352,7 @@ export const SupplierView: React.FC = () => {
               <FormError message={errors.phone?.message} />
             </div>
             <div>
-              <FormLabel>Email Address</FormLabel>
+              <FormLabel required>Email Address</FormLabel>
               <input
                 type="email"
                 {...register("email")}
@@ -1413,6 +1399,7 @@ export const SupplierView: React.FC = () => {
               <FormLabel required>Pincode</FormLabel>
               <input
                 type="text"
+                maxLength={6}
                 {...register("pincode")}
                 placeholder="e.g. 110041"
                 className={getFormInputCls(!!errors.pincode)}
@@ -1458,12 +1445,17 @@ export const SupplierView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
               <FormLabel>Payment Terms</FormLabel>
-              <input
-                type="text"
+              <select
                 {...register("paymentTerms")}
-                placeholder="e.g. Net 30"
-                className={getFormInputCls(!!errors.paymentTerms)}
-              />
+                className={FORM_SELECT_CLS}
+              >
+                <option value="Immediate">Immediate / Advance</option>
+                <option value="15 Days">15 Days</option>
+                <option value="30 Days">30 Days</option>
+                <option value="45 Days">45 Days</option>
+                <option value="60 Days">60 Days</option>
+                <option value="90 Days">90 Days</option>
+              </select>
               <FormError message={errors.paymentTerms?.message} />
             </div>
             <div>
@@ -1472,6 +1464,7 @@ export const SupplierView: React.FC = () => {
                 type="number"
                 min="0"
                 {...register("creditLimit", { valueAsNumber: true })}
+                onKeyDown={handleNonNegativeKeyDown}
                 className={getFormInputCls(!!errors.creditLimit)}
               />
               <FormError message={errors.creditLimit?.message} />
@@ -1956,7 +1949,7 @@ export const SupplierView: React.FC = () => {
                               {r.purchaseNo}
                             </td>
                             <td className="py-3.5 px-4 text-slate-600 font-medium border border-slate-200 whitespace-nowrap">
-                              {r.returnDate}
+                              {formatDate(r.returnDate)}
                             </td>
                             <td className="py-3.5 px-4 text-right font-bold text-slate-900 border border-slate-200 whitespace-nowrap">
                               ₹{r.returnAmount.toLocaleString("en-IN")}

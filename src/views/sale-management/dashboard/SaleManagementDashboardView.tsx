@@ -46,6 +46,7 @@ import {
   getStoredOrganizationId,
 } from '../../../api';
 
+import { formatDate as sharedFormatDate } from '../utils/dateUtils';
 type TimeRange = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'all';
 type ModuleTab = 'all' | 'inventory' | 'sales_hub' | 'purchase' | 'reports';
 
@@ -332,7 +333,7 @@ export const SaleManagementDashboardView: React.FC = () => {
     try {
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return dateStr;
-      return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      return sharedFormatDate(d);
     } catch {
       return dateStr;
     }

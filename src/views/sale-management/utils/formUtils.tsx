@@ -127,3 +127,19 @@ export {
   useAutoCapitalizeFirstLetter,
   SaleManagementAutoCapitalize,
 } from './textUtils';
+
+// Re-export centralized numeric validation architecture
+export {
+  parseNumericValue,
+  requiredPositiveNumber,
+  nonNegativeNumber,
+  optionalNonNegativeNumber,
+  validPercentage,
+  validCurrencyAmount,
+  validQuantity,
+  validRange,
+  validSignedAdjustment,
+  handleNonNegativeKeyDown,
+  sanitizeNonNegativeInput,
+} from '../../../utils/validation';
+

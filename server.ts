@@ -308,95 +308,6 @@ export function createApiApp() {
   });
 
   // ==========================================
-  // DASHBOARD & OVERVIEW
-  // ==========================================
-  app.get('/api/dashboard/stats', (req: Request, res: Response) => {
-    const user: User = (req as any).user;
-    const today = new Date().toISOString().split('T')[0];
-
-    if (user.role === 'ADMIN') {
-      const totalLeads = db.leads.length;
-      const totalCustomers = db.customers.length;
-      const digitalMarketingClients = db.customers.filter((c) => c.usesDigitalMarketing).length;
-      const pendingPaymentsCount = db.payments.filter((p) => p.status === 'Pending' || p.status === 'Overdue').length;
-      const pendingPaymentsAmount = db.payments
-        .filter((p) => p.status === 'Pending' || p.status === 'Overdue')
-        .reduce((sum, p) => sum + p.amount, 0);
-      const activeSubscriptions = db.subscriptions.filter((s) => s.status === 'Active').length;
-      const expiringSubscriptions = db.subscriptions.filter((s) => s.status === 'Expiring Soon').length;
-      const todayFollowUps = db.leads.filter((l) => l.nextFollowUpDate && l.nextFollowUpDate.startsWith(today)).length;
-      const todayTasks = db.tasks.filter((t) => t.dueDate === today && t.status !== 'Completed').length;
-      const contentPending = db.content.filter((c) => c.status !== 'Published').length;
-
-      // Product-wise customer breakdown
-      const productBreakdown = db.products.map((prod) => {
-        const count = db.customers.filter((c) => c.linkedProducts.some((lp) => lp.productId === prod.id)).length;
-        const leadsCount = db.leads.filter((l) => l.interestedProductOrService === prod.name).length;
-        const revenue = db.subscriptions
-          .filter((s) => s.productOrService === prod.name && s.status === 'Active')
-          .reduce((sum, s) => sum + s.amount, 0);
-        return {
-          productId: prod.id,
-          productName: prod.name,
-          color: prod.color,
-          customerCount: count,
-          leadsCount,
-          monthlyRevenue: revenue,
-        };
-      });
-
-      // Digital Marketing Revenue
-      const marketingRevenue = db.subscriptions
-        .filter((s) => s.productOrService === 'Digital Marketing' && s.status === 'Active')
-        .reduce((sum, s) => sum + s.amount, 0);
-
-      res.json({
-        role: 'ADMIN',
-        totalLeads,
-        totalCustomers,
-        digitalMarketingClients,
-        pendingPaymentsCount,
-        pendingPaymentsAmount,
-        activeSubscriptions,
-        expiringSubscriptions,
-        todayFollowUps,
-        todayTasks,
-        contentPending,
-        productBreakdown,
-        marketingRevenue,
-        recentActivities: db.activities.slice(0, 10),
-      });
-    } else {
-      // Staff Dashboard
-      const myLeads = db.leads.filter((l) => l.assignedStaffId === user.id);
-      const myFollowUps = myLeads.filter((l) => l.nextFollowUpDate && l.nextFollowUpDate.startsWith(today));
-      const myClients = db.customers.filter((c) =>
-        db.leads.some((l) => l.assignedStaffId === user.id && l.name === c.name) ||
-        db.tasks.some((t) => t.assignedStaffId === user.id && t.clientId === c.id) ||
-        db.content.some((ct) => ct.assignedStaffId === user.id && ct.clientId === c.id)
-      );
-      const myTasks = db.tasks.filter((t) => t.assignedStaffId === user.id && t.status !== 'Completed');
-      const myTodayTasks = myTasks.filter((t) => t.dueDate === today);
-      const myPendingContent = db.content.filter((c) => c.assignedStaffId === user.id && c.status !== 'Published');
-      const myReminders = db.reminders.filter((r) => (!r.assignedStaffId || r.assignedStaffId === user.id) && !r.isCompleted);
-
-      res.json({
-        role: 'STAFF',
-        myLeadsCount: myLeads.length,
-        myFollowUpsCount: myFollowUps.length,
-        myFollowUps,
-        myClientsCount: myClients.length,
-        myTasksCount: myTasks.length,
-        myTodayTasks,
-        myPendingContentCount: myPendingContent.length,
-        myRemindersCount: myReminders.length,
-        myReminders: myReminders.slice(0, 6),
-        myRecentActivities: db.activities.filter((a) => a.userId === user.id).slice(0, 8),
-      });
-    }
-  });
-
-  // ==========================================
   // PRODUCTS (4 Products Management)
   // ==========================================
   app.get('/api/products', (req: Request, res: Response) => {
@@ -1058,8 +969,8 @@ export function createApiApp() {
       title: req.body.title,
       description: req.body.description || '',
       targetType: req.body.targetType || 'Product',
-      targetId: req.body.targetId || 'prod_1',
-      targetName: req.body.targetName || 'OmniFlow ERP',
+      targetId: req.body.targetId || '',
+      targetName: req.body.targetName || '',
       clientId: req.body.clientId,
       clientName: req.body.clientName,
       assignedStaffId: assignedStaff.id,
@@ -1139,8 +1050,8 @@ export function createApiApp() {
       invoiceNumber: req.body.invoiceNumber || `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
       customerId: req.body.customerId,
       customerName: req.body.customerName || 'Direct Client',
-      productOrService: req.body.productOrService || 'OmniFlow ERP',
-      plan: req.body.plan || 'Growth Tier',
+      productOrService: req.body.productOrService || '',
+      plan: req.body.plan || 'Standard Tier',
       amount: parseFloat(req.body.amount) || 0,
       dueDate: req.body.dueDate || new Date().toISOString().split('T')[0],
       paymentDate: req.body.paymentDate,
@@ -1190,7 +1101,7 @@ export function createApiApp() {
       id: `sub_${Date.now()}`,
       customerId: req.body.customerId,
       customerName: req.body.customerName || 'Client Subscription',
-      productOrService: req.body.productOrService || 'OmniFlow ERP',
+      productOrService: req.body.productOrService || '',
       plan: req.body.plan || 'Standard Tier',
       startDate: req.body.startDate || new Date().toISOString().split('T')[0],
       endDate: req.body.endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -1226,56 +1137,6 @@ export function createApiApp() {
     res.json({ success: true, deleted });
   });
 
-  // ==========================================
-  // REMINDERS & NOTIFICATIONS
-  // ==========================================
-  app.get('/api/reminders', (req: Request, res: Response) => {
-    const user: User = (req as any).user;
-    runAutoReminders();
-    if (user.role === 'ADMIN') {
-      res.json(db.reminders);
-    } else {
-      res.json(db.reminders.filter((r) => !r.assignedStaffId || r.assignedStaffId === user.id));
-    }
-  });
-
-  app.post('/api/reminders', (req: Request, res: Response) => {
-    const user: User = (req as any).user;
-    const newRem: ReminderItem = {
-      id: `rem_${Date.now()}`,
-      type: req.body.type || 'Task Deadline',
-      title: req.body.title,
-      description: req.body.description || '',
-      relatedId: req.body.relatedId,
-      relatedType: req.body.relatedType,
-      dueDate: req.body.dueDate || new Date().toISOString(),
-      isRead: false,
-      isCompleted: false,
-      priority: req.body.priority || 'Medium',
-      assignedStaffId: req.body.assignedStaffId || user.id,
-      createdAt: new Date().toISOString(),
-    };
-    db.reminders.unshift(newRem);
-    res.json(newRem);
-  });
-
-  app.put('/api/reminders/:id', (req: Request, res: Response) => {
-    const index = db.reminders.findIndex((r) => r.id === req.params.id);
-    if (index === -1) return res.status(404).json({ error: 'Reminder not found' });
-
-    db.reminders[index] = { ...db.reminders[index], ...req.body };
-    res.json(db.reminders[index]);
-  });
-
-  app.post('/api/reminders/mark-all-read', (req: Request, res: Response) => {
-    const user: User = (req as any).user;
-    db.reminders.forEach((r) => {
-      if (user.role === 'ADMIN' || !r.assignedStaffId || r.assignedStaffId === user.id) {
-        r.isRead = true;
-      }
-    });
-    res.json({ success: true });
-  });
 
   // ==========================================
   // EMPLOYEES (Admin Only)

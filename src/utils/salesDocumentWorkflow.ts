@@ -29,6 +29,7 @@ export interface SalesDocumentLineage {
   invoiceId?: string;
   invoiceNo?: string;
   customerId?: string;
+  customerCode?: string;
   partyName?: string;
   grandTotal?: number;
   createdAt: string;
@@ -51,7 +52,17 @@ export const STORAGE_KEYS = {
 export const getStoredLineages = (): SalesDocumentLineage[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DOCUMENT_LINEAGE);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed: SalesDocumentLineage[] = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Sanitize: clean up invalid entries where estimateNo was set to single digit IDs
+    return parsed.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      if (item.estimateNo && /^[0-9]$/.test(item.estimateNo.trim())) {
+        item.estimateNo = undefined;
+      }
+      return true;
+    });
   } catch (err) {
     console.warn('Failed to parse sales document lineage from storage:', err);
     return [];
@@ -68,13 +79,73 @@ export const persistLineages = (lineages: SalesDocumentLineage[]): void => {
 };
 
 /**
+ * Infers Sales Document Type from document reference number prefix
+ */
+export const inferDocType = (docRef?: string | null): SalesDocType | undefined => {
+  if (!docRef || !docRef.trim()) return undefined;
+  const clean = docRef.trim().toUpperCase();
+  if (clean.startsWith('EST-') || clean.startsWith('QT-') || clean.startsWith('EST') || clean.startsWith('QUOT')) return 'Estimate';
+  if (clean.startsWith('PRO-') || clean.startsWith('PI-') || clean.startsWith('PRO')) return 'Proforma';
+  if (clean.startsWith('SO-') || clean.startsWith('ORD-') || clean.startsWith('SO')) return 'Order';
+  if (clean.startsWith('DC-') || clean.startsWith('CHAL-') || clean.startsWith('DC')) return 'Challan';
+  if (clean.startsWith('INV-') || clean.startsWith('INV')) return 'Invoice';
+  return undefined;
+};
+
+/**
  * Finds the lineage record containing any matching document number or ID
  */
-export const findDocumentLineage = (docRef?: string | null): SalesDocumentLineage | undefined => {
+export const findDocumentLineage = (
+  docRef?: string | null,
+  docType?: SalesDocType
+): SalesDocumentLineage | undefined => {
   if (!docRef || !docRef.trim()) return undefined;
   const clean = docRef.trim().toLowerCase();
   const all = getStoredLineages();
 
+  const effectiveType = docType || inferDocType(docRef);
+
+  if (effectiveType === 'Estimate') {
+    return all.find(
+      (item) =>
+        (item.estimateNo && item.estimateNo.toLowerCase() === clean) ||
+        (item.estimateId && item.estimateId.toLowerCase() === clean)
+    );
+  }
+
+  if (effectiveType === 'Proforma') {
+    return all.find(
+      (item) =>
+        (item.proformaNo && item.proformaNo.toLowerCase() === clean) ||
+        (item.proformaId && item.proformaId.toLowerCase() === clean)
+    );
+  }
+
+  if (effectiveType === 'Order') {
+    return all.find(
+      (item) =>
+        (item.orderNo && item.orderNo.toLowerCase() === clean) ||
+        (item.orderId && item.orderId.toLowerCase() === clean)
+    );
+  }
+
+  if (effectiveType === 'Challan') {
+    return all.find(
+      (item) =>
+        (item.challanNo && item.challanNo.toLowerCase() === clean) ||
+        (item.challanId && item.challanId.toLowerCase() === clean)
+    );
+  }
+
+  if (effectiveType === 'Invoice') {
+    return all.find(
+      (item) =>
+        (item.invoiceNo && item.invoiceNo.toLowerCase() === clean) ||
+        (item.invoiceId && item.invoiceId.toLowerCase() === clean)
+    );
+  }
+
+  // Fallback for untyped references (matches either document number or document ID)
   return all.find((item) => {
     return (
       (item.estimateNo && item.estimateNo.toLowerCase() === clean) ||
@@ -103,23 +174,62 @@ export const recordDocumentConversion = (params: {
   toNo?: string;
   partyName?: string;
   customerId?: string;
+  customerCode?: string;
   grandTotal?: number;
 }): SalesDocumentLineage => {
   const current = getStoredLineages();
   const now = new Date().toISOString();
 
-  // Find existing lineage matching either source or target
-  let existingIndex = current.findIndex(
-    (item) =>
-      (params.fromNo && (item.estimateNo === params.fromNo || item.proformaNo === params.fromNo || item.orderNo === params.fromNo || item.challanNo === params.fromNo || item.invoiceNo === params.fromNo)) ||
-      (params.fromId && (item.estimateId === params.fromId || item.proformaId === params.fromId || item.orderId === params.fromId || item.challanId === params.fromId || item.invoiceId === params.fromId)) ||
-      (params.toNo && (item.estimateNo === params.toNo || item.proformaNo === params.toNo || item.orderNo === params.toNo || item.challanNo === params.toNo || item.invoiceNo === params.toNo))
-  );
+  const cleanFromNo = params.fromNo?.trim().toLowerCase();
+  const cleanFromId = params.fromId?.trim().toLowerCase();
+  const cleanToNo = params.toNo?.trim().toLowerCase();
+  const cleanToId = params.toId?.trim().toLowerCase();
+
+  const isTypeMatch = (
+    item: SalesDocumentLineage,
+    type: SalesDocType,
+    no?: string,
+    id?: string
+  ) => {
+    if (type === 'Estimate') {
+      return Boolean((no && item.estimateNo?.toLowerCase() === no) || (id && item.estimateId?.toLowerCase() === id));
+    }
+    if (type === 'Proforma') {
+      return Boolean((no && item.proformaNo?.toLowerCase() === no) || (id && item.proformaId?.toLowerCase() === id));
+    }
+    if (type === 'Order') {
+      return Boolean((no && item.orderNo?.toLowerCase() === no) || (id && item.orderId?.toLowerCase() === id));
+    }
+    if (type === 'Challan') {
+      return Boolean((no && item.challanNo?.toLowerCase() === no) || (id && item.challanId?.toLowerCase() === id));
+    }
+    if (type === 'Invoice') {
+      return Boolean((no && item.invoiceNo?.toLowerCase() === no) || (id && item.invoiceId?.toLowerCase() === id));
+    }
+    return false;
+  };
+
+  const isMatch = (item: SalesDocumentLineage) => {
+    return (
+      isTypeMatch(item, params.fromType, cleanFromNo, cleanFromId) ||
+      isTypeMatch(item, params.toType, cleanToNo, cleanToId)
+    );
+  };
+
+  // Find all lineages that match either source or target to stitch disjoint segments
+  const matchingIndices: number[] = [];
+  current.forEach((item, idx) => {
+    if (isMatch(item)) matchingIndices.push(idx);
+  });
 
   let lineage: SalesDocumentLineage;
 
-  if (existingIndex >= 0) {
-    lineage = { ...current[existingIndex] };
+  if (matchingIndices.length > 0) {
+    // Merge all matching records into one unified lineage
+    lineage = matchingIndices.reduce<SalesDocumentLineage>(
+      (acc, idx) => ({ ...acc, ...current[idx] }),
+      { ...current[matchingIndices[0]] }
+    );
   } else {
     lineage = {
       id: `lin_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -166,353 +276,268 @@ export const recordDocumentConversion = (params: {
 
   if (params.partyName) lineage.partyName = params.partyName;
   if (params.customerId) lineage.customerId = params.customerId;
+  if (params.customerCode) lineage.customerCode = params.customerCode;
   if (params.grandTotal !== undefined) lineage.grandTotal = params.grandTotal;
   lineage.updatedAt = now;
 
-  let updatedList: SalesDocumentLineage[];
-  if (existingIndex >= 0) {
-    updatedList = [...current];
-    updatedList[existingIndex] = lineage;
-  } else {
-    updatedList = [lineage, ...current];
-  }
+  // Filter out all previous matching instances and insert the unified lineage
+  const updatedList = current.filter((_, idx) => !matchingIndices.includes(idx));
+  updatedList.unshift(lineage);
 
   persistLineages(updatedList);
   return lineage;
 };
 
+/**
+ * Resolves the conversion timestamp for any sales document across all workflows.
+ * Guarantees converted time is reflected whether stored in backend API, local record,
+ * document lineage, or updated audit status.
+ */
+export const resolveDocumentConvertedAt = (
+  docType: SalesDocType,
+  item?: {
+    id?: string;
+    status?: string;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    convertedAt?: string | null;
+    convertedDate?: string | null;
+    converted_at?: string | null;
+    convertedToInvoiceNo?: string | null;
+    convertedToId?: string | null;
+    convertedToType?: string | null;
+    referenceNo?: string | null;
+    invoiceNo?: string | null;
+    orderNo?: string | null;
+    challanNo?: string | null;
+    proformaNo?: string | null;
+    quotationNo?: string | null;
+    [key: string]: any;
+  } | null
+): string | null => {
+  if (!item) return null;
+
+  // 1. Direct explicit convertedAt property on the item
+  const direct = item.convertedAt || item.convertedDate || item.converted_at;
+  if (direct && typeof direct === 'string' && direct.trim() && !isNaN(new Date(direct).getTime())) {
+    return direct;
+  }
+
+  // 2. Resolve document reference for cross-module lineage lookup
+  const docRef =
+    (docType === 'Estimate' ? item.quotationNo :
+     docType === 'Proforma' ? item.proformaNo :
+     docType === 'Order' ? item.orderNo :
+     docType === 'Challan' ? item.challanNo :
+     item.invoiceNo) ||
+    item.referenceNo ||
+    item.id;
+
+  const lineage = findDocumentLineage(docRef, docType);
+
+  // 3. Inspect lineage conversion status per document type
+  if (lineage) {
+    if (docType === 'Estimate') {
+      const hasDownstream = Boolean(
+        lineage.proformaNo || lineage.orderNo || lineage.challanNo || lineage.invoiceNo
+      );
+      if (hasDownstream) {
+        return lineage.updatedAt || lineage.createdAt || item.updatedAt || null;
+      }
+    } else if (docType === 'Proforma') {
+      const hasDownstream = Boolean(
+        lineage.orderNo || lineage.challanNo || lineage.invoiceNo
+      );
+      if (hasDownstream) {
+        return lineage.updatedAt || lineage.createdAt || item.updatedAt || null;
+      }
+    } else if (docType === 'Order') {
+      const hasDownstream = Boolean(
+        lineage.challanNo || lineage.invoiceNo
+      );
+      if (hasDownstream) {
+        return lineage.updatedAt || lineage.createdAt || item.updatedAt || null;
+      }
+    } else if (docType === 'Challan') {
+      const hasDownstream = Boolean(lineage.invoiceNo);
+      if (hasDownstream) {
+        return lineage.updatedAt || lineage.createdAt || item.updatedAt || null;
+      }
+    } else if (docType === 'Invoice') {
+      const hasUpstream = Boolean(
+        lineage.estimateNo || lineage.proformaNo || lineage.orderNo || lineage.challanNo
+      );
+      if (hasUpstream) {
+        return lineage.updatedAt || item.createdAt || lineage.createdAt || null;
+      }
+    }
+  }
+
+  // 4. Check status & converted document indicators on item itself
+  const isMarkedConverted =
+    item.status === 'Converted' ||
+    Boolean(item.convertedToInvoiceNo) ||
+    Boolean(item.convertedToId) ||
+    (docType === 'Challan' && item.status === 'Delivered' && Boolean(item.convertedToInvoiceNo));
+
+  if (isMarkedConverted) {
+    if (item.updatedAt && !isNaN(new Date(item.updatedAt).getTime())) {
+      return item.updatedAt;
+    }
+    if (item.createdAt && !isNaN(new Date(item.createdAt).getTime())) {
+      return item.createdAt;
+    }
+  }
+
+  // 5. For Invoices, check if referenceNo indicates an upstream document
+  if (docType === 'Invoice' && item.referenceNo) {
+    const ref = item.referenceNo.trim().toUpperCase();
+    if (
+      ref.startsWith('EST-') ||
+      ref.startsWith('QT-') ||
+      ref.startsWith('PRO-') ||
+      ref.startsWith('PI-') ||
+      ref.startsWith('SO-') ||
+      ref.startsWith('ORD-') ||
+      ref.startsWith('DC-') ||
+      ref.startsWith('CHAL-')
+    ) {
+      return item.createdAt || item.updatedAt || null;
+    }
+  }
+
+  return null;
+};
+
 // =========================================================================
-// 2. Module Local Caches Synchronizers
+// 2. Module In-Memory Event Dispatchers (API is Single Source of Truth)
 // =========================================================================
 
 /**
- * Saves/updates a converted Proforma Invoice in local cache
+ * Dispatches event for converted Proforma Invoice without localStorage persistence
  */
 export const syncConvertedProformaToStorage = (proforma: any): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PROFORMAS);
-    const list: any[] = raw ? JSON.parse(raw) : [];
-    const idx = list.findIndex((p) => p.id === proforma.id || (p.proformaNo && p.proformaNo === proforma.proformaNo));
-    let updated: any[];
-    if (idx >= 0) {
-      updated = [...list];
-      updated[idx] = { ...list[idx], ...proforma };
-    } else {
-      updated = [proforma, ...list];
-    }
-    localStorage.setItem(STORAGE_KEYS.PROFORMAS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_proformas_updated', { detail: updated }));
+    window.dispatchEvent(new CustomEvent('yaa_crm_proformas_updated', { detail: [proforma] }));
   } catch (err) {
-    console.error('Failed to sync proforma to storage:', err);
+    console.error('Failed to dispatch proforma update:', err);
   }
 };
 
 /**
- * Saves/updates a converted Sale Order in local cache
+ * Dispatches event for converted Sale Order without localStorage persistence
  */
 export const syncConvertedOrderToStorage = (order: any): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
-    const list: any[] = raw ? JSON.parse(raw) : [];
-    const idx = list.findIndex((o) => o.id === order.id || (o.orderNo && o.orderNo === order.orderNo));
-    let updated: any[];
-    if (idx >= 0) {
-      updated = [...list];
-      updated[idx] = { ...list[idx], ...order };
-    } else {
-      updated = [order, ...list];
-    }
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_orders_updated', { detail: updated }));
+    window.dispatchEvent(new CustomEvent('yaa_crm_orders_updated', { detail: [order] }));
   } catch (err) {
-    console.error('Failed to sync order to storage:', err);
+    console.error('Failed to dispatch order update:', err);
   }
 };
 
 /**
- * Saves/updates a converted Delivery Challan in local cache
+ * Dispatches event for converted Delivery Challan without localStorage persistence
  */
 export const syncConvertedChallanToStorage = (challan: any): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CHALLANS);
-    const list: any[] = raw ? JSON.parse(raw) : [];
-    const idx = list.findIndex((c) => c.id === challan.id || (c.challanNo && c.challanNo === challan.challanNo));
-    let updated: any[];
-    if (idx >= 0) {
-      updated = [...list];
-      updated[idx] = { ...list[idx], ...challan };
-    } else {
-      updated = [challan, ...list];
-    }
-    localStorage.setItem(STORAGE_KEYS.CHALLANS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_challans_updated', { detail: updated }));
+    window.dispatchEvent(new CustomEvent('yaa_crm_challans_updated', { detail: [challan] }));
   } catch (err) {
-    console.error('Failed to sync challan to storage:', err);
+    console.error('Failed to dispatch challan update:', err);
   }
 };
 
 /**
- * Saves/updates a converted Sales Invoice in local cache
+ * Dispatches event for converted Sales Invoice without localStorage persistence
  */
 export const syncConvertedInvoiceToStorage = (invoice: any): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SALES);
-    const list: any[] = raw ? JSON.parse(raw) : [];
-    const idx = list.findIndex((s) => s.id === invoice.id || (s.invoiceNo && s.invoiceNo === invoice.invoiceNo));
-    let updated: any[];
-    if (idx >= 0) {
-      updated = [...list];
-      updated[idx] = { ...list[idx], ...invoice };
-    } else {
-      updated = [invoice, ...list];
-    }
-    localStorage.setItem(STORAGE_KEYS.SALES, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_sales_updated', { detail: updated }));
+    window.dispatchEvent(new CustomEvent('yaa_crm_sales_updated', { detail: [invoice] }));
   } catch (err) {
-    console.error('Failed to sync invoice to storage:', err);
+    console.error('Failed to dispatch invoice update:', err);
   }
 };
 
 /**
- * Updates quotation status in local cache
+ * Updates quotation status (in-memory notification only)
  */
 export const syncQuotationStatusInStorage = (
   quotationIdOrNo: string,
   newStatus: 'Converted' | 'Open' | 'Cancelled',
-  convertedTo?: { type?: string; documentNo?: string; id?: string } | string
+  convertedTo?: { type?: string; documentNo?: string; id?: string; convertedAt?: string } | string
 ): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.QUOTATIONS);
-    if (!raw) return;
-    const docNo = typeof convertedTo === 'string' ? convertedTo : convertedTo?.documentNo;
-    const docType = typeof convertedTo === 'string' ? undefined : convertedTo?.type;
-    const docId = typeof convertedTo === 'string' ? undefined : convertedTo?.id;
-
-    const list: any[] = JSON.parse(raw);
-    const updated = list.map((q) => {
-      if (q.id === quotationIdOrNo || q.quotationNo === quotationIdOrNo) {
-        return {
-          ...q,
-          status: newStatus,
-          convertedToType: docType || q.convertedToType,
-          convertedToInvoiceNo: docNo || q.convertedToInvoiceNo,
-          convertedToId: docId || q.convertedToId,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return q;
-    });
-    localStorage.setItem(STORAGE_KEYS.QUOTATIONS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_quotations_updated', { detail: updated }));
+    const convertedAt = new Date().toISOString();
+    window.dispatchEvent(new CustomEvent('yaa_crm_quotations_updated', {
+      detail: { idOrNo: quotationIdOrNo, status: newStatus, convertedTo, convertedAt }
+    }));
   } catch (err) {
-    console.error('Failed to sync quotation status:', err);
+    console.error('Failed to dispatch quotation status update:', err);
   }
 };
 
 /**
- * Updates proforma status in local cache
+ * Updates proforma status (in-memory notification only)
  */
 export const syncProformaStatusInStorage = (
   proformaIdOrNo: string,
   newStatus: 'Converted' | 'Open' | 'Cancelled',
-  convertedTo?: { type?: string; documentNo?: string; id?: string } | string
+  convertedTo?: { type?: string; documentNo?: string; id?: string; convertedAt?: string } | string
 ): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PROFORMAS);
-    if (!raw) return;
-    const docNo = typeof convertedTo === 'string' ? convertedTo : convertedTo?.documentNo;
-    const docType = typeof convertedTo === 'string' ? undefined : convertedTo?.type;
-    const docId = typeof convertedTo === 'string' ? undefined : convertedTo?.id;
-
-    const list: any[] = JSON.parse(raw);
-    const updated = list.map((p) => {
-      if (p.id === proformaIdOrNo || p.proformaNo === proformaIdOrNo) {
-        return {
-          ...p,
-          status: newStatus,
-          convertedToType: docType || p.convertedToType,
-          convertedToInvoiceNo: docNo || p.convertedToInvoiceNo,
-          convertedToId: docId || p.convertedToId,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return p;
-    });
-    localStorage.setItem(STORAGE_KEYS.PROFORMAS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_proformas_updated', { detail: updated }));
+    const convertedAt = new Date().toISOString();
+    window.dispatchEvent(new CustomEvent('yaa_crm_proformas_updated', {
+      detail: { idOrNo: proformaIdOrNo, status: newStatus, convertedTo, convertedAt }
+    }));
   } catch (err) {
-    console.error('Failed to sync proforma status:', err);
+    console.error('Failed to dispatch proforma status update:', err);
   }
 };
 
 /**
- * Updates order status in local cache
+ * Updates order status (in-memory notification only)
  */
 export const syncOrderStatusInStorage = (
   orderIdOrNo: string,
   newStatus: 'Converted' | 'Confirmed' | 'Cancelled',
-  convertedTo?: { type?: string; documentNo?: string; id?: string } | string
+  convertedTo?: { type?: string; documentNo?: string; id?: string; convertedAt?: string } | string
 ): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
-    if (!raw) return;
-    const docNo = typeof convertedTo === 'string' ? convertedTo : convertedTo?.documentNo;
-    const docType = typeof convertedTo === 'string' ? undefined : convertedTo?.type;
-    const docId = typeof convertedTo === 'string' ? undefined : convertedTo?.id;
-
-    const list: any[] = JSON.parse(raw);
-    const updated = list.map((o) => {
-      if (o.id === orderIdOrNo || o.orderNo === orderIdOrNo) {
-        return {
-          ...o,
-          status: newStatus,
-          convertedToType: docType || o.convertedToType,
-          convertedToInvoiceNo: docNo || o.convertedToInvoiceNo,
-          convertedToId: docId || o.convertedToId,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return o;
-    });
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(updated));
-    window.dispatchEvent(new CustomEvent('yaa_crm_orders_updated', { detail: updated }));
+    const convertedAt = new Date().toISOString();
+    window.dispatchEvent(new CustomEvent('yaa_crm_orders_updated', {
+      detail: { idOrNo: orderIdOrNo, status: newStatus, convertedTo, convertedAt }
+    }));
   } catch (err) {
-    console.error('Failed to sync order status:', err);
+    console.error('Failed to dispatch order status update:', err);
   }
 };
 
 /**
- * Self-healing bootstrap: if EST-2026-0007 was previously converted, guarantee
- * its proforma and sale order linkages exist so the user sees immediate resolution.
+ * Checks if a Delivery Challan record is legacy mock data
+ */
+export const isMockChallan = (c: any): boolean => {
+  if (!c) return false;
+  const isMockId = c.id === 'dc_1' || c.id === 'dc_2' || c.id === 'challan_1';
+  const isMockPhone = c.customerPhone === '7839396753';
+  const isMockCompany = c.customerCompany === 'Keerthi Retailers';
+  const isMockVehicle = c.vehicleNo === 'TN-30-AZ-1122';
+  const hasMockItem =
+    Array.isArray(c.items) &&
+    c.items.some(
+      (it: any) =>
+        it.productId === 'PROD_1001' ||
+        (String(it.productName || '').includes('India Gate Super Basmati Rice') &&
+          (it.total === 29925 || it.unitPrice === 2850))
+    );
+  return isMockId || isMockPhone || isMockCompany || isMockVehicle || hasMockItem;
+};
+
+/**
+ * Legacy workflow bootstrap placeholder.
+ * Retained as a safe no-op so callers do not break.
+ * All authoritative data now comes strictly from the backend database/API.
  */
 export const initializeWorkflowIntegrity = (): void => {
-  try {
-    const lineages = getStoredLineages();
-    const est0007 = lineages.find((l) => l.estimateNo === 'EST-2026-0007');
-
-    const proformasRaw = localStorage.getItem(STORAGE_KEYS.PROFORMAS);
-    const proformas: any[] = proformasRaw ? JSON.parse(proformasRaw) : [];
-
-    const ordersRaw = localStorage.getItem(STORAGE_KEYS.ORDERS);
-    const orders: any[] = ordersRaw ? JSON.parse(ordersRaw) : [];
-
-    // Check if EST-2026-0007 needs linking or creation
-    let targetProforma = proformas.find(
-      (p) =>
-        p.proformaNo === 'PRO-2026-0007' ||
-        p.proformaNo === 'PI-2026-0004' ||
-        (p.notes && p.notes.includes('EST-2026-0007')) ||
-        (est0007 && p.proformaNo === est0007.proformaNo)
-    );
-
-    let targetOrder = orders.find(
-      (o) =>
-        o.orderNo === 'SO-2026-0007' ||
-        o.orderNo === 'SO-2026-0003' ||
-        (o.notes && (o.notes.includes('EST-2026-0007') || o.notes.includes('PRO-2026-0007'))) ||
-        (est0007 && o.orderNo === est0007.orderNo)
-    );
-
-    const year = new Date().getFullYear();
-    const pNo = targetProforma?.proformaNo || `PRO-${year}-0007`;
-    const oNo = targetOrder?.orderNo || `SO-${year}-0007`;
-
-    // Ensure proforma exists in storage
-    if (!targetProforma) {
-      targetProforma = {
-        id: `pro_conv_${Date.now()}`,
-        proformaNo: pNo,
-        referenceNo: 'EST-2026-0007',
-        date: new Date().toISOString().split('T')[0],
-        validUntil: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-        customerId: 'cust_anand_supermarket',
-        partyName: 'Anand Supermarket',
-        customerPhone: '98400 55667',
-        billingAddress: '123 Market St, Chennai, Tamil Nadu',
-        stateOfSupply: '33-Tamil Nadu',
-        items: [
-          {
-            id: 'row_1',
-            productId: 'PRD-001',
-            productName: 'Organic Brown Rice 5kg',
-            quantity: 10,
-            unitPrice: 450,
-            unit: 'BAG',
-            taxPercent: 5,
-            discountPercent: 0,
-            total: 4725,
-          },
-        ],
-        subtotal: 4500,
-        taxAmount: 225,
-        discount: 0,
-        amount: 4725,
-        balance: 4725,
-        status: 'Converted',
-        convertedToType: 'Order',
-        convertedToInvoiceNo: oNo,
-        notes: 'Converted from Estimate EST-2026-0007',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      syncConvertedProformaToStorage(targetProforma);
-    } else if (targetProforma.status !== 'Converted') {
-      targetProforma.status = 'Converted';
-      targetProforma.convertedToType = 'Order';
-      targetProforma.convertedToInvoiceNo = oNo;
-      syncConvertedProformaToStorage(targetProforma);
-    }
-
-    // Ensure order exists in storage
-    if (!targetOrder) {
-      targetOrder = {
-        id: `order_conv_${Date.now()}`,
-        orderNo: oNo,
-        referenceNo: pNo,
-        orderDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-        customerId: targetProforma.customerId || 'cust_anand_supermarket',
-        partyName: targetProforma.partyName || 'Anand Supermarket',
-        customerPhone: targetProforma.customerPhone || '98400 55667',
-        billingAddress: targetProforma.billingAddress || '123 Market St, Chennai, Tamil Nadu',
-        stateOfSupply: targetProforma.stateOfSupply || '33-Tamil Nadu',
-        paymentType: 'Credit',
-        items: targetProforma.items || [],
-        subtotal: targetProforma.subtotal || 4500,
-        taxAmount: targetProforma.taxAmount || 225,
-        discount: targetProforma.discount || 0,
-        amount: targetProforma.amount || 4725,
-        balance: targetProforma.balance || 4725,
-        advanceAmount: 0,
-        status: 'Open',
-        sourceProformaNo: pNo,
-        sourceQuotationNo: 'EST-2026-0007',
-        notes: `Converted from Proforma ${pNo} (Source Estimate EST-2026-0007)`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      syncConvertedOrderToStorage(targetOrder);
-    }
-
-    // Record complete linkage
-    recordDocumentConversion({
-      fromType: 'Estimate',
-      fromNo: 'EST-2026-0007',
-      toType: 'Proforma',
-      toNo: pNo,
-      partyName: targetProforma.partyName,
-      grandTotal: targetProforma.amount,
-    });
-
-    recordDocumentConversion({
-      fromType: 'Proforma',
-      fromNo: pNo,
-      toType: 'Order',
-      toNo: oNo,
-      partyName: targetOrder.partyName,
-      grandTotal: targetOrder.amount,
-    });
-  } catch (err) {
-    console.warn('Workflow integrity check notice:', err);
-  }
+  // Safe no-op: Backend API is the sole source of truth.
 };
+
+

@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Layers,
@@ -77,18 +79,28 @@ export const SubcategoryView: React.FC = () => {
   const [categoryOptions, setCategoryOptions] = useState<{ label: string; value: string }[]>(DEFAULT_CATEGORY_OPTIONS);
 
   // Request Deduplication Refs
-  const isFetchingRef = useRef(false);
+  const requestSeqRef = useRef(0); // latest request wins; a superseded response is ignored
   const lastFetchKeyRef = useRef<string | null>(null);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [pendingCategory, setPendingCategory] = useState('ALL');
   const [appliedCategory, setAppliedCategory] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -157,37 +169,31 @@ export const SubcategoryView: React.FC = () => {
     };
   }, [activeDropdownId]);
 
-  /**
-   * Fetch live categories to populate dropdowns in Add/Edit modal and filter
-   */
-  useEffect(() => {
-    let isMounted = true;
-    const fetchCategories = async () => {
-      try {
-        const res = await categoryApi.getCategories({
-          pagination_required: false,
-          sortOrder: 'asc',
-        });
-        if (isMounted && res && res.success && Array.isArray(res.data) && res.data.length > 0) {
-          const opts = res.data
-            .map((c) => ({
-              label: c.categoryName || c.name || '',
-              value: c.categoryName || c.name || '',
-            }))
-            .filter((o) => o.label.trim() !== '');
+  // Lazy fetch categories only when Add/Edit modal is opened
+  const categoriesFetchedRef = useRef(false);
+  const fetchCategoriesLazy = useCallback(async () => {
+    if (categoriesFetchedRef.current) return;
+    try {
+      const res = await categoryApi.getCategories({
+        pagination_required: false,
+        sortOrder: 'asc',
+      });
+      if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const opts = res.data
+          .map((c) => ({
+            label: c.categoryName || c.name || '',
+            value: c.categoryName || c.name || '',
+          }))
+          .filter((o) => o.label.trim() !== '');
 
-          if (opts.length > 0) {
-            setCategoryOptions(opts);
-          }
+        if (opts.length > 0) {
+          categoriesFetchedRef.current = true;
+          setCategoryOptions(opts);
         }
-      } catch (err) {
-        // Fallback to defaults already set
       }
-    };
-    fetchCategories();
-    return () => {
-      isMounted = false;
-    };
+    } catch (err) {
+      // Fallback to defaults already set
+    }
   }, []);
 
   /**
@@ -198,11 +204,10 @@ export const SubcategoryView: React.FC = () => {
     async (forceRefresh = false) => {
       const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedCategory}`;
 
-      // Prevent concurrent calls or redundant re-fetching of identical parameters
-      if (isFetchingRef.current) return;
+      // Skip redundant re-fetching of identical parameters
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
-      isFetchingRef.current = true;
+      const seq = ++requestSeqRef.current;
       lastFetchKeyRef.current = fetchKey;
       setIsLoading(true);
 
@@ -216,6 +221,7 @@ export const SubcategoryView: React.FC = () => {
           status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
           category: appliedCategory !== 'ALL' ? appliedCategory : undefined,
         });
+        if (seq !== requestSeqRef.current) return;
 
         if (res && res.success && Array.isArray(res.data)) {
           const mapped = res.data.map((item, idx) =>
@@ -232,10 +238,12 @@ export const SubcategoryView: React.FC = () => {
         }
       } catch (err: any) {
         console.warn('Commerce Subcategory API call failed, falling back to local state:', err?.message || err);
-        setIsApiConnected(false);
+        if (seq === requestSeqRef.current) {
+          setIsApiConnected(false);
+          lastFetchKeyRef.current = null; // allow a retry of the same parameters
+        }
       } finally {
-        setIsLoading(false);
-        isFetchingRef.current = false;
+        if (seq === requestSeqRef.current) setIsLoading(false);
       }
     },
     [page, pageSize, appliedSearch, appliedStatus, appliedCategory]
@@ -244,18 +252,6 @@ export const SubcategoryView: React.FC = () => {
   useEffect(() => {
     loadSubcategories();
   }, [loadSubcategories]);
-
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // Filter subcategories in local fallback mode
   const filteredSubcategories = useMemo(() => {
@@ -297,19 +293,27 @@ export const SubcategoryView: React.FC = () => {
     return filteredSubcategories.slice((safePage - 1) * pageSize, safePage * pageSize);
   }, [isApiConnected, subcategories, filteredSubcategories, safePage, pageSize]);
 
-  // Category filter options for SearchBar dropdown
+  // Category filter options for SearchBar dropdown (derived from categories & loaded subcategories)
   const categoryFilterOptions = useMemo(() => {
+    const existingCats: string[] = Array.from(new Set(subcategories.map((it) => it.category).filter(Boolean)));
+    const mergedMap = new Map<string, string>();
+    categoryOptions.forEach((o) => mergedMap.set(o.value, o.label));
+    existingCats.forEach((c) => {
+      if (!mergedMap.has(c)) mergedMap.set(c, c);
+    });
+
     return [
       { label: 'Category : All', value: 'ALL' },
-      ...categoryOptions.map((opt) => ({
-        label: opt.label,
-        value: opt.value,
+      ...Array.from(mergedMap.entries()).map(([val, lbl]) => ({
+        label: lbl,
+        value: val,
       })),
     ];
-  }, [categoryOptions]);
+  }, [categoryOptions, subcategories]);
 
   // Open Create Modal
   const handleOpenAddModal = () => {
+    fetchCategoriesLazy();
     setEditingSubcategory(null);
     reset({
       category: categoryOptions[0]?.value || '',
@@ -321,6 +325,7 @@ export const SubcategoryView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (subcat: SubcategoryItem) => {
+    fetchCategoriesLazy();
     setEditingSubcategory(subcat);
     reset({
       category: subcat.category,
@@ -389,12 +394,10 @@ export const SubcategoryView: React.FC = () => {
           });
 
           if (res?.success && res.data) {
-            const updated = mapApiSubcategoryToSubcategoryItem(res.data);
-            setSubcategories((prev) =>
-              prev.map((s) => (s.id === editingSubcategory.id ? { ...s, ...updated } : s))
-            );
-            toast.success(`Subcategory "${updated.subcategory}" updated successfully.`);
+            toast.success(`Subcategory "${res.data.subcategory || res.data.name || data.subcategory}" updated successfully.`);
             setIsModalOpen(false);
+            lastFetchKeyRef.current = '';
+            await loadSubcategories(true);
             return;
           }
         } catch (apiErr: any) {
@@ -413,11 +416,11 @@ export const SubcategoryView: React.FC = () => {
           });
 
           if (res?.success && res.data) {
-            const created = mapApiSubcategoryToSubcategoryItem(res.data);
-            setSubcategories((prev) => [created, ...prev]);
-            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
-            toast.success(`Subcategory "${created.subcategory}" created successfully.`);
+            toast.success(`Subcategory "${res.data.subcategory || res.data.name || data.subcategory}" created successfully.`);
             setIsModalOpen(false);
+            setPage(1);
+            lastFetchKeyRef.current = '';
+            await loadSubcategories(true);
             return;
           }
         } catch (apiErr: any) {
@@ -441,20 +444,17 @@ export const SubcategoryView: React.FC = () => {
     try {
       const res = await subcategoryApi.patchSubcategory(item.id, { status: nextStatus });
       if (res?.success) {
-        setSubcategories((prev) =>
-          prev.map((s) => (s.id === item.id ? { ...s, status: nextStatus } : s))
-        );
         toast.success(`Subcategory "${item.subcategory}" set to ${nextStatus}.`);
+        lastFetchKeyRef.current = '';
+        await loadSubcategories(true);
         return;
       }
     } catch (apiErr: any) {
-      console.warn('Remote subcategory status patch failed, updating locally:', apiErr);
+      console.warn('Remote subcategory status patch failed:', apiErr);
+      const errMsg = apiErr?.response?.data?.error?.message || apiErr?.message || 'Failed to update subcategory status.';
+      toast.error(errMsg);
+      return;
     }
-
-    setSubcategories((prev) =>
-      prev.map((s) => (s.id === item.id ? { ...s, status: nextStatus } : s))
-    );
-    toast.success(`Subcategory "${item.subcategory}" set to ${nextStatus}.`);
   };
 
   // Confirm and Execute Delete (DELETE /commerce/subcategories/:id)
@@ -527,8 +527,8 @@ export const SubcategoryView: React.FC = () => {
   return (
     <div className="space-y-5">
       {/* 1. Top Header Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Layers className="w-4.5 h-4.5" />
@@ -548,12 +548,12 @@ export const SubcategoryView: React.FC = () => {
         </div>
 
         {/* Top Right Action Buttons: Excel Report & Add Subcategory */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 w-full sm:w-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
             onClick={handleExport}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
@@ -562,7 +562,7 @@ export const SubcategoryView: React.FC = () => {
             variant="primary"
             size="md"
             onClick={handleOpenAddModal}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<Plus className="w-4 h-4 text-white" />}
           >
             Add Subcategory
@@ -576,12 +576,32 @@ export const SubcategoryView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by subcategory, category..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedStatus === pendingStatus &&
+            appliedCategory === pendingCategory &&
+            page === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedStatus(pendingStatus);
           setAppliedCategory(pendingCategory);
           setPage(1);
+
+          if (isSame) {
+            loadSubcategories(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedStatus === 'ALL' &&
+            pendingStatus === 'ALL' &&
+            appliedCategory === 'ALL' &&
+            pendingCategory === 'ALL' &&
+            page === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingStatus('ALL');
@@ -589,6 +609,10 @@ export const SubcategoryView: React.FC = () => {
           setPendingCategory('ALL');
           setAppliedCategory('ALL');
           setPage(1);
+
+          if (isSame) {
+            loadSubcategories(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -625,25 +649,15 @@ export const SubcategoryView: React.FC = () => {
         {/* Desktop & Tablet Table (sm: and above) */}
         <div className="hidden sm:block overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white w-12 sm:w-16 text-center">
-                  S.NO
-                </th>
-                <th className="py-3.5 px-3 sm:px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  CATEGORY
-                </th>
-                <th className="py-3.5 px-3 sm:px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  SUBCATEGORY
-                </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24 sm:w-32">
-                  STATUS
-                </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-16 sm:w-20">
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "S.NO", align: "center", width: "60px" },
+                { label: "CATEGORY", align: "left", minWidth: "160px" },
+                { label: "SUBCATEGORY", align: "left", minWidth: "180px" },
+                { label: "STATUS", align: "center", width: "120px" },
+                { label: "ACTIONS", align: "center", width: "90px" },
+              ]}
+            />
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
               {isLoading ? (
                 <tr>

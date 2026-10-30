@@ -1,3 +1,4 @@
+import { CommonTableHead } from '../../components/common/CommonTableHead';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -209,34 +210,7 @@ export const BranchesView: React.FC = () => {
         subMap.set(s.name.toLowerCase(), s);
       });
 
-      // Only fallback to locally created sub-orgs if API returned nothing
-      if (loadedSubsFromApi.length === 0) {
-        const savedOrgs = localStorage.getItem('organizations_catalog_orgsuperadmin');
-        if (savedOrgs) {
-          try {
-            const parsed = JSON.parse(savedOrgs);
-            if (Array.isArray(parsed)) {
-              const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
-              const filtered = parsed.filter((so: any) => !mockNames.includes((so.name || '').toLowerCase()));
-              if (filtered.length !== parsed.length) {
-                localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filtered));
-              }
-              filtered.forEach((so: any) => {
-                if (isSubForSuite(so.name || '', so.organizationType)) {
-                  subMap.set((so.name || '').toLowerCase(), {
-                    id: so.id || `sub_${Date.now()}`,
-                    organizationId: activeOrgId || 'org_main',
-                    name: so.name,
-                    code: so.code || `SUB-${so.name.slice(0, 3).toUpperCase()}`,
-                    status: so.status || 'Active',
-                    createdAt: so.createdAt || new Date().toISOString(),
-                  });
-                }
-              });
-            }
-          } catch {}
-        }
-      }
+      // Only use API sub-organizations
 
       const loadedSubs = Array.from(subMap.values());
       setSubOrganizations(loadedSubs);
@@ -792,15 +766,10 @@ export const BranchesView: React.FC = () => {
       {/* 1. Top Action Header */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              <GitBranch className="w-4.5 h-4.5" />
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Branches
-            </h1>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+            Branches
+          </h1>
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             List and manage regional branches and office locations
           </p>
         </div>
@@ -866,18 +835,18 @@ export const BranchesView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BRANCH & CODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION & TYPE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "BRANCH & CODE", align: "left", minWidth: "160px" },
+                { label: "SUB-ORGANIZATION & TYPE", align: "left", minWidth: "180px" },
+                { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
+                { label: "CONTACT INFO", align: "center", minWidth: "140px" },
+                { label: "LOCATION", align: "left", minWidth: "140px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "CREATED DATE", align: "left", minWidth: "130px" },
+                { label: "ACTIONS", align: "center", minWidth: "120px" },
+              ]}
+            />
             <tbody className="text-sm">
               {loading ? (
                 <tr>

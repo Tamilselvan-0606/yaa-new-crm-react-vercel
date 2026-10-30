@@ -3,7 +3,8 @@ export type QuoteStatus = 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED'
 export interface QuoteItem {
   id: string;
   quoteId?: string;
-  description: string;
+  title?: string;
+  description?: string;
   quantity: number;
   unitPrice: number;
   taxRate?: number;
@@ -126,7 +127,8 @@ export interface QuoteListParams {
 }
 
 export interface CreateQuoteItemPayload {
-  description: string;
+  title: string;
+  description?: string;
   quantity: number;
   unitPrice: number;
   taxRate?: number;
@@ -137,6 +139,8 @@ export interface CreateQuoteRequest {
   date: string; // YYYY-MM-DD
   expiryDate: string; // YYYY-MM-DD
   organizationId?: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
   customerId: string; // UUID
   productName: string;
   discountAmount?: number;
@@ -147,6 +151,8 @@ export interface CreateQuoteRequest {
 
 export interface UpdateQuoteRequest {
   status?: QuoteStatus;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
   discountAmount?: number;
   notes?: string;
   termsAndConditions?: string;
@@ -161,3 +167,4 @@ export interface ConvertQuoteRequest {
   target: 'INVOICE' | 'PROFORMA';
   dueDate?: string; // YYYY-MM-DD
 }
+

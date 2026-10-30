@@ -27,27 +27,27 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
   return (
     <div
       id="media-viewer-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/80 backdrop-blur-sm"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
         id="media-viewer-container"
-        className="relative w-full max-w-4xl bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 flex flex-col max-h-[92vh]"
+        className="relative w-full max-w-4xl bg-slate-900 rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl border border-slate-800 flex flex-col max-h-[93dvh]"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60 text-white">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-[#4309A2]/20 text-[#4309A2]">
+        <div className="flex items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-800 bg-slate-950/60 text-white shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div className="p-2 rounded-lg bg-[#4309A2]/20 text-[#4309A2] shrink-0">
               {mediaType === 'video' ? <Play className="w-5 h-5" /> : <ImageIcon className="w-5 h-5" />}
             </div>
-            <div>
-              <h4 className="text-base font-semibold text-white">{title}</h4>
-              {clientName && <p className="text-xs text-slate-400">Client: {clientName}</p>}
+            <div className="min-w-0 flex-1">
+              <h4 className="text-sm sm:text-base font-semibold text-white truncate">{title}</h4>
+              {clientName && <p className="text-xs text-slate-400 truncate">Client: {clientName}</p>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <a
               href={mediaUrl}
               target="_blank"
@@ -67,7 +67,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
         </div>
 
         {/* Media Frame */}
-        <div className="bg-black/90 flex items-center justify-center min-h-[360px] max-h-[560px] overflow-hidden p-2">
+        <div className="bg-black/90 flex items-center justify-center min-h-[200px] sm:min-h-[340px] max-h-[60dvh] sm:max-h-[560px] overflow-hidden p-2 flex-1">
           {mediaType === 'video' ? (
             <video
               id="inline-media-player"
@@ -75,7 +75,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
               controls
               autoPlay
               playsInline
-              className="max-h-[520px] max-w-full rounded-lg object-contain shadow-lg"
+              className="max-h-[56dvh] sm:max-h-[520px] max-w-full rounded-lg object-contain shadow-lg"
             >
               Your browser does not support HTML5 video.
             </video>
@@ -83,7 +83,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
             <img
               src={mediaUrl}
               alt={title}
-              className="max-h-[520px] max-w-full rounded-lg object-contain"
+              className="max-h-[56dvh] sm:max-h-[520px] max-w-full rounded-lg object-contain"
               referrerPolicy="no-referrer"
             />
           )}
@@ -91,7 +91,7 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({
 
         {/* Caption & Metadata Footer */}
         {(caption || tags.length > 0) && (
-          <div className="px-6 py-4 bg-slate-950/80 border-t border-slate-800 text-slate-300 text-sm">
+          <div className="px-4 sm:px-6 py-3 sm:py-4 bg-slate-950/80 border-t border-slate-800 text-slate-300 text-sm overflow-y-auto max-h-36 sm:max-h-44 shrink-0">
             {caption && <p className="whitespace-pre-line leading-relaxed text-xs sm:text-sm text-slate-200">{caption}</p>}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-2.5">

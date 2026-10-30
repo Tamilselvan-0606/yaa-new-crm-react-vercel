@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
   useMemo,
@@ -35,9 +37,9 @@ import {
   Layers3,
   FileSpreadsheet,
   Loader2,
-  Database,
   AlertCircle,
   Printer,
+  Download,
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import {
@@ -49,9 +51,10 @@ import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
+import { ProductSearchableSelect, BatchSearchableSelect } from "../../../components/common/paginated-select";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { printBusinessDocument, printTableReport } from "../../../utils/printUtils";
+import { printBusinessDocument, printTableReport, downloadBusinessDocument, downloadTableReport, DocumentPrintOptions } from "../../../utils/printUtils";
 import { toast } from "sonner";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
@@ -67,6 +70,7 @@ import {
 } from "../../../api";
 import { getProductImageFromCache } from "./InventoryProductsView";
 
+import { formatDate } from '../utils/dateUtils';
 export interface EditStockFormValues {
   productName: string;
   sku: string;
@@ -118,13 +122,19 @@ const StockProductThumbnail: React.FC<StockProductThumbnailProps> = ({
 
   useEffect(() => {
     const cached = getProductImageFromCache(productId, sku, src);
-    if (cached && src && !src.startsWith("data:")) {
+    if (cached) {
       setCurrentSrc(cached);
       setTriedFallback(true);
       setHasError(false);
       return;
     }
-    setCurrentSrc(src || null);
+    if (src) {
+      setCurrentSrc(src);
+      setTriedFallback(false);
+      setHasError(false);
+      return;
+    }
+    setCurrentSrc(null);
     setTriedFallback(false);
     setHasError(false);
   }, [src, productId, sku]);
@@ -198,13 +208,17 @@ export const StocksView: React.FC = () => {
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
 
   // Request deduplication & Batch cache
-  const isFetchingRef = useRef(false);
+  const requestSeqRef = useRef(0); // latest request wins; a superseded response is ignored
   const lastFetchKeyRef = useRef<string | null>(null);
   const cachedBatchesRef = useRef<Map<string, StockBatch[]> | null>(null);
   const storeStocksRef = useRef(storeStocks);
   useEffect(() => {
     storeStocksRef.current = storeStocks;
   }, [storeStocks]);
+  const purchaseReturnsRef = useRef(purchaseReturns);
+  useEffect(() => {
+    purchaseReturnsRef.current = purchaseReturns;
+  }, [purchaseReturns]);
 
   // Catalog products & categories from API for modal dropdowns and filters
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductItem[]>([]);
@@ -220,12 +234,22 @@ export const StocksView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingCategory, setPendingCategory] = useState("All");
   const [appliedCategory, setAppliedCategory] = useState("All");
   const [pendingStatus, setPendingStatus] = useState("All");
   const [appliedStatus, setAppliedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -272,6 +296,8 @@ export const StocksView: React.FC = () => {
   const [detailTab, setDetailTab] = useState<
     "overview" | "batches" | "movements"
   >("overview");
+  const [isDownloadingStockSlip, setIsDownloadingStockSlip] = useState(false);
+  const [isDownloadingStocksReport, setIsDownloadingStocksReport] = useState(false);
 
   // Adjust Form State with Batch
   const [adjustType, setAdjustType] = useState<"add" | "deduct">("add");
@@ -345,71 +371,38 @@ export const StocksView: React.FC = () => {
   const loadStocks = useCallback(
     async (forceRefresh = false) => {
       const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedStatus}`;
-      if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
-      isFetchingRef.current = true;
+      const seq = ++requestSeqRef.current;
       lastFetchKeyRef.current = fetchKey;
       setIsLoading(true);
 
       try {
         const isLowStock = appliedStatus === "Low Stock";
-        const shouldFetchBatches = forceRefresh || !cachedBatchesRef.current;
-        const [res, batchRes] = await Promise.allSettled([
-          stockApi.getStocks({
-            page_no: currentPage,
-            page_size: pageSize,
-            pagination_required: true,
-            search: appliedSearch.trim() || undefined,
-            sortOrder: "desc",
-            category: appliedCategory !== "All" && appliedCategory !== "ALL" ? appliedCategory : undefined,
-            lowStock: isLowStock ? true : undefined,
-          }),
-          shouldFetchBatches
-            ? stockApi.getStockBatches({
-                pagination_required: false,
-                sortOrder: "desc",
-              })
-            : Promise.resolve(null),
-        ]);
+        const res = await stockApi.getStocks({
+          page_no: currentPage,
+          page_size: pageSize,
+          pagination_required: true,
+          search: appliedSearch.trim() || undefined,
+          sortOrder: "desc",
+          category: appliedCategory !== "All" && appliedCategory !== "ALL" ? appliedCategory : undefined,
+          lowStock: isLowStock ? true : undefined,
+        });
+        if (seq !== requestSeqRef.current) return;
 
-        let batchesByProductId = cachedBatchesRef.current || new Map<string, StockBatch[]>();
-        if (
-          batchRes.status === "fulfilled" &&
-          batchRes.value &&
-          (batchRes.value as any)?.success &&
-          Array.isArray((batchRes.value as any).data)
-        ) {
-          const freshMap = new Map<string, StockBatch[]>();
-          (batchRes.value as any).data.forEach((b: any) => {
-            const mappedBatch = mapApiStockBatchToStockBatch(b);
-            if (b.productId) {
-              const list = freshMap.get(b.productId) || [];
-              list.push(mappedBatch);
-              freshMap.set(b.productId, list);
-            }
-            if (b.sku) {
-              const list = freshMap.get(b.sku) || [];
-              list.push(mappedBatch);
-              freshMap.set(b.sku, list);
-            }
-          });
-          cachedBatchesRef.current = freshMap;
-          batchesByProductId = freshMap;
-        }
+        const batchesByProductId = cachedBatchesRef.current || new Map<string, StockBatch[]>();
 
         if (
-          res.status === "fulfilled" &&
-          res.value &&
-          res.value.success &&
-          Array.isArray(res.value.data)
+          res &&
+          res.success &&
+          Array.isArray(res.data)
         ) {
           const currentCatalog = catalogProductsRef.current;
-          const mapped = res.value.data.map((item) => {
+          const mapped = res.data.map((item) => {
             const stk = mapApiStockToInventoryStockItem(item);
             const itemBatches: StockBatch[] = [...(stk.batches || [])];
 
-            // 1. Merge batches from /commerce/stocks/batches
+            // 1. Merge batches from /commerce/stocks/batches if cached
             const apiBatches = [
               ...(batchesByProductId.get(stk.productId) || []),
               ...(batchesByProductId.get(stk.id) || []),
@@ -426,78 +419,101 @@ export const StocksView: React.FC = () => {
               }
             });
 
-            // 2. Merge batches from catalog products (e.g. BAT-2026-Oct on Cargo pant or Lays)
             const cat = currentCatalog.find(
               (p) => p.id === stk.productId || p.id === stk.id || p.sku === stk.sku,
             );
-            if (cat) {
-              if (cat.stockBatches && cat.stockBatches.length > 0) {
-                cat.stockBatches.forEach((cb) => {
-                  if (
-                    !itemBatches.some(
-                      (eb) => eb.batchNo.toLowerCase() === cb.batchNo.toLowerCase(),
-                    )
-                  ) {
-                    itemBatches.push(mapApiStockBatchToStockBatch(cb));
-                  }
-                });
-              }
-              const catBatchNo = (cat.batchNo || cat.initialBatchNo || "").trim();
-              if (
-                catBatchNo &&
-                !itemBatches.some(
-                  (eb) => eb.batchNo.toLowerCase() === catBatchNo.toLowerCase(),
-                )
-              ) {
-                const bQty = stk.inStock > 0 ? stk.inStock : (cat.openingStock || 0);
-                itemBatches.push({
-                  id: `bat_${stk.productId}_${catBatchNo}`,
-                  batchNo: catBatchNo,
-                  productId: stk.productId,
-                  quantity: bQty,
-                  costPrice: stk.unitCost || cat.unitCost,
-                  sellingPrice: stk.unitPrice || cat.unitPrice,
-                  mfgDate: cat.mfgDate,
-                  expDate: cat.expDate,
-                  status: bQty > 0 ? "Active" : "Depleted",
-                  receivedDate: new Date().toISOString().split("T")[0],
-                });
-              }
-            }
-
-            // 3. Merge batches from local store
             const storeItem = storeStocksRef.current.find(
               (s) => s.productId === stk.productId || s.sku === stk.sku,
             );
-            if (storeItem?.batches && storeItem.batches.length > 0) {
-              storeItem.batches.forEach((sb) => {
-                const exIdx = itemBatches.findIndex(
-                  (eb) => eb.batchNo.toLowerCase() === sb.batchNo.toLowerCase(),
-                );
-                if (exIdx === -1) {
-                  itemBatches.push(sb);
-                } else if (itemBatches[exIdx].quantity === 0 && sb.quantity > 0) {
-                  itemBatches[exIdx] = sb;
-                }
-              });
+
+            // Determine authoritative stock from API response
+            let effectiveInStock =
+              typeof stk.inStock === 'number' && !isNaN(stk.inStock)
+                ? stk.inStock
+                : (storeItem?.inStock ?? 0);
+
+            // If local store has enacted deductions (e.g. from local sale / return before backend sync), respect the deduction
+            if (
+              storeItem &&
+              typeof storeItem.inStock === 'number' &&
+              storeItem.inStock >= 0 &&
+              storeItem.inStock < effectiveInStock
+            ) {
+              effectiveInStock = storeItem.inStock;
             }
 
-            const batchTotal = itemBatches.reduce((acc, b) => acc + (b.quantity || 0), 0);
-            const effectiveInStock = Math.max(stk.inStock, batchTotal, storeItem?.inStock || 0);
+            // If no batches exist for this item, create at most one single fallback batch representing the available stock
+            if (itemBatches.length === 0) {
+              const fallbackBatchNo = (
+                cat?.batchNo ||
+                cat?.initialBatchNo ||
+                storeItem?.batches?.[0]?.batchNo ||
+                (stk as any).batchNo ||
+                ''
+              ).trim();
+              if (fallbackBatchNo) {
+                itemBatches.push({
+                  id: `bat_${stk.productId}_${fallbackBatchNo}`,
+                  batchNo: fallbackBatchNo,
+                  productId: stk.productId,
+                  quantity: effectiveInStock,
+                  costPrice: stk.unitCost || cat?.unitCost || 0,
+                  sellingPrice: stk.unitPrice || cat?.unitPrice || 0,
+                  mfgDate: cat?.mfgDate || storeItem?.batches?.[0]?.mfgDate,
+                  expDate: cat?.expDate || storeItem?.batches?.[0]?.expDate,
+                  status: effectiveInStock > 0 ? 'Active' : 'Depleted',
+                  receivedDate: new Date().toISOString().split('T')[0],
+                });
+              }
+            } else if (itemBatches.length === 1) {
+              // Ensure single batch quantity strictly mirrors available in-stock count
+              itemBatches[0] = {
+                ...itemBatches[0],
+                quantity: effectiveInStock,
+                status: effectiveInStock > 0 ? 'Active' : 'Depleted',
+              };
+            } else {
+              // Multiple batches from API: ensure their sum doesn't exceed effectiveInStock
+              const batchTotal = itemBatches.reduce((acc, b) => acc + (b.quantity || 0), 0);
+              if (batchTotal > effectiveInStock && effectiveInStock >= 0) {
+                let remaining = effectiveInStock;
+                itemBatches.forEach((b, idx) => {
+                  if (idx === itemBatches.length - 1) {
+                    b.quantity = Math.max(0, remaining);
+                  } else {
+                    b.quantity = Math.min(b.quantity, Math.max(0, remaining));
+                    remaining -= b.quantity;
+                  }
+                  b.status = b.quantity > 0 ? 'Active' : 'Depleted';
+                });
+              }
+            }
+
+            const effImage =
+              stk.itemImage ||
+              getProductImageFromCache(stk.productId, stk.id, stk.sku, (stk as any).productCode) ||
+              cat?.itemImage;
 
             return {
               ...stk,
               inStock: effectiveInStock,
-              itemImage: stk.itemImage || cat?.itemImage,
+              itemImage: effImage,
               batches: itemBatches,
             };
           });
 
+          mapped.sort((a, b) => {
+            const timeA = new Date(a.createdAt || a.lastUpdated || 0).getTime();
+            const timeB = new Date(b.createdAt || b.lastUpdated || 0).getTime();
+            if (timeB !== timeA) return timeB - timeA;
+            return String(b.id || "").localeCompare(String(a.id || ""));
+          });
+
           setStocks(mapped);
           setIsApiConnected(true);
-          if (res.value.pagination) {
-            setTotalApiRecords(res.value.pagination.totalRecords);
-            setTotalApiPages(res.value.pagination.totalPages);
+          if (res.pagination) {
+            setTotalApiRecords(res.pagination.totalRecords);
+            setTotalApiPages(res.pagination.totalPages);
           }
         } else {
           setIsApiConnected(false);
@@ -507,10 +523,12 @@ export const StocksView: React.FC = () => {
           "Commerce Stock API call failed, falling back to local state:",
           err?.message || err,
         );
-        setIsApiConnected(false);
+        if (seq === requestSeqRef.current) {
+          setIsApiConnected(false);
+          lastFetchKeyRef.current = null; // allow a retry of the same parameters
+        }
       } finally {
-        setIsLoading(false);
-        isFetchingRef.current = false;
+        if (seq === requestSeqRef.current) setIsLoading(false);
       }
     },
     [currentPage, pageSize, appliedSearch, appliedCategory, appliedStatus],
@@ -520,59 +538,13 @@ export const StocksView: React.FC = () => {
     loadStocks();
   }, [loadStocks]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
-
-  // Fetch Categories for Modal & Filter (catalog products fetched on demand)
-  useEffect(() => {
-    let isMounted = true;
-    const fetchCatalogAndCategories = async () => {
-      try {
-        const catRes = await categoryApi.getCategories({
-          pagination_required: false,
-          sortOrder: "asc",
-        });
-
-        if (
-          isMounted &&
-          catRes &&
-          catRes.success &&
-          Array.isArray(catRes.data)
-        ) {
-          const names = catRes.data
-            .map((c) => c.categoryName || c.name || "")
-            .filter((n) => n.trim() !== "");
-          if (names.length > 0) {
-            setApiCategories(Array.from(new Set(names)));
-          }
-        }
-      } catch (e) {
-        // Silently fallback
-      }
-    };
-
-    fetchCatalogAndCategories();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Extract unique categories (combines API categories and stock categories)
+  // Extract unique categories directly from loaded stocks (no redundant category API call on mount)
   const categories = useMemo(() => {
     const cats = Array.from(
       new Set([
         ...apiCategories,
         ...stocks.map((s) => s.category).filter(Boolean),
-      ]),
+      ])
     );
     return cats;
   }, [stocks, apiCategories]);
@@ -756,6 +728,23 @@ export const StocksView: React.FC = () => {
       toast.error("Product Name and SKU are required.");
       return;
     }
+    const reorderLevelNum = Number(data.reorderLevel);
+    const unitCostNum = Number(data.unitCost);
+    const unitPriceNum = Number(data.unitPrice);
+
+    if (isNaN(reorderLevelNum) || reorderLevelNum < 0) {
+      toast.error("Reorder Level cannot be negative.");
+      return;
+    }
+    if (isNaN(unitCostNum) || unitCostNum < 0) {
+      toast.error("Unit Cost Price cannot be negative.");
+      return;
+    }
+    if (isNaN(unitPriceNum) || unitPriceNum < 0) {
+      toast.error("Unit Selling Price cannot be negative.");
+      return;
+    }
+
     const updated: InventoryStockItem = {
       ...selectedStock,
       productName: data.productName.trim(),
@@ -763,9 +752,9 @@ export const StocksView: React.FC = () => {
       category: data.category.trim() || "General",
       subcategory: data.subcategory.trim() || "General",
       unit: data.unit.trim() || "Units",
-      reorderLevel: Math.max(0, Number(data.reorderLevel) || 0),
-      unitCost: Math.max(0, Number(data.unitCost) || 0),
-      unitPrice: Math.max(0, Number(data.unitPrice) || 0),
+      reorderLevel: reorderLevelNum,
+      unitCost: unitCostNum,
+      unitPrice: unitPriceNum,
     };
 
     try {
@@ -780,11 +769,13 @@ export const StocksView: React.FC = () => {
       });
       toast.success(`Updated stock details for "${updated.productName}".`);
       setIsEditModalOpen(false);
+      setCurrentPage(1);
       loadStocks(true);
     } catch (err: any) {
       updateStockItemInStore(updated);
       toast.success(`Updated stock details for "${updated.productName}".`);
       setIsEditModalOpen(false);
+      setCurrentPage(1);
       loadStocks(true);
     }
   };
@@ -855,6 +846,7 @@ export const StocksView: React.FC = () => {
           `Stock for "${selectedStock.productName}" adjusted successfully (${delta > 0 ? `+${delta}` : delta} ${selectedStock.unit})${effectiveBatchNo ? ` [Batch: ${effectiveBatchNo}]` : ""}`,
         );
         setIsAdjustModalOpen(false);
+        setCurrentPage(1);
         loadStocks(true);
         return;
       }
@@ -873,6 +865,7 @@ export const StocksView: React.FC = () => {
         `Stock for "${selectedStock.productName}" updated locally (${delta > 0 ? `+${delta}` : delta} ${selectedStock.unit}).`,
       );
       setIsAdjustModalOpen(false);
+      setCurrentPage(1);
       loadStocks(true);
     } finally {
       setIsAdjusting(false);
@@ -908,34 +901,49 @@ export const StocksView: React.FC = () => {
 
   // Filtered & Displayed Stocks
   const displayedStocks = useMemo(() => {
+    let list: InventoryStockItem[] = [];
     if (isApiConnected) {
-      return stocks;
+      list = stocks;
+    } else {
+      list = stocks.filter((s) => {
+        const q = appliedSearch.toLowerCase().trim();
+        const matchesSearch =
+          !q ||
+          s.productName.toLowerCase().includes(q) ||
+          s.sku.toLowerCase().includes(q) ||
+          s.category.toLowerCase().includes(q) ||
+          (s.subcategory && s.subcategory.toLowerCase().includes(q)) ||
+          s.batches?.some((b) => b.batchNo.toLowerCase().includes(q));
+
+        const matchesCat =
+          appliedCategory === "All" || s.category === appliedCategory;
+
+        let matchesStatus = true;
+        if (appliedStatus === "Healthy" || appliedStatus === "In Stock") {
+          matchesStatus = s.inStock > s.reorderLevel;
+        } else if (appliedStatus === "Low Stock") {
+          matchesStatus = s.inStock > 0 && s.inStock <= s.reorderLevel;
+        } else if (appliedStatus === "Out of Stock") {
+          matchesStatus = s.inStock === 0;
+        }
+
+        return matchesSearch && matchesCat && matchesStatus;
+      });
     }
-    return stocks.filter((s) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        s.productName.toLowerCase().includes(q) ||
-        s.sku.toLowerCase().includes(q) ||
-        s.category.toLowerCase().includes(q) ||
-        (s.subcategory && s.subcategory.toLowerCase().includes(q)) ||
-        s.batches?.some((b) => b.batchNo.toLowerCase().includes(q));
 
-      const matchesCat =
-        appliedCategory === "All" || s.category === appliedCategory;
-
-      let matchesStatus = true;
-      if (appliedStatus === "Healthy" || appliedStatus === "In Stock") {
-        matchesStatus = s.inStock > s.reorderLevel;
-      } else if (appliedStatus === "Low Stock") {
-        matchesStatus = s.inStock > 0 && s.inStock <= s.reorderLevel;
-      } else if (appliedStatus === "Out of Stock") {
-        matchesStatus = s.inStock === 0;
-      }
-
-      return matchesSearch && matchesCat && matchesStatus;
+    return [...list].sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.lastUpdated || 0).getTime();
+      const timeB = new Date(b.createdAt || b.lastUpdated || 0).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      return String(b.id || "").localeCompare(String(a.id || ""));
     });
   }, [stocks, isApiConnected, appliedSearch, appliedCategory, appliedStatus]);
+
+  const pagedStocks = useMemo(() => {
+    if (displayedStocks.length <= pageSize) return displayedStocks;
+    const start = (currentPage - 1) * pageSize;
+    return displayedStocks.slice(start, start + pageSize);
+  }, [displayedStocks, currentPage, pageSize]);
 
   const totalRecords =
     totalApiRecords !== null ? totalApiRecords : displayedStocks.length;
@@ -1040,8 +1048,8 @@ export const StocksView: React.FC = () => {
     );
   };
 
-  // Print Individual Stock Item Slip via universal printUtils
-  const handlePrintStockSlip = (stk: InventoryStockItem) => {
+  // Print & Download Individual Stock Item Slip via universal printUtils
+  const buildStockSlipPrintOptions = (stk: InventoryStockItem): DocumentPrintOptions => {
     const computedStatus =
       (stk as any).status ||
       (stk.inStock <= 0
@@ -1049,7 +1057,7 @@ export const StocksView: React.FC = () => {
         : stk.inStock <= stk.reorderLevel
         ? 'Low Stock'
         : 'In Stock');
-    printBusinessDocument({
+    return {
       docTypeTitle: 'STOCK ITEM INVENTORY SLIP',
       docNo: stk.sku || stk.id.slice(0, 8).toUpperCase(),
       docDate: new Date().toISOString().split('T')[0],
@@ -1095,16 +1103,30 @@ export const StocksView: React.FC = () => {
       paidAmountLabel: 'Retail Potential (Selling)',
       paidAmount: (stk.inStock || 0) * (stk.unitPrice || (stk as any).sellingPrice || 0),
       notes: `Product SKU: ${stk.sku || 'N/A'}. Tracked in warehouse inventory catalog.`,
-    });
+    };
   };
 
-  // Print Table Report for Stocks
-  const handlePrintStocksReport = () => {
-    if (displayedStocks.length === 0) {
-      toast.info('No inventory stock records available to print.');
-      return;
-    }
+  const handlePrintStockSlip = (stk: InventoryStockItem) => {
+    printBusinessDocument(buildStockSlipPrintOptions(stk));
+  };
 
+  const handleDownloadStockSlip = async (stk: InventoryStockItem) => {
+    if (isDownloadingStockSlip) return;
+    setIsDownloadingStockSlip(true);
+    const filename = `StockSlip_${(stk.sku || stk.productName || 'slip').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildStockSlipPrintOptions(stk), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download stock slip PDF:', err);
+      toast.error('Failed to download stock slip PDF. Please try again.');
+    } finally {
+      setIsDownloadingStockSlip(false);
+    }
+  };
+
+  // Table Report for Stocks
+  const getStocksReportTableOptions = () => {
     const printRows = displayedStocks.map((s) => ({
       productName: s.productName,
       category: s.category,
@@ -1117,18 +1139,18 @@ export const StocksView: React.FC = () => {
       status: s.inStock === 0 ? 'Out of Stock' : s.inStock <= s.reorderLevel ? 'Low Stock' : 'In Stock',
     }));
 
-    printTableReport({
+    return {
       title: 'Inventory & Warehouse Stock Valuation Report',
       subtitle: `Total SKUs: ${displayedStocks.length} | Category: ${appliedCategory} | Status: ${appliedStatus}`,
       columns: [
         { header: 'Product Name', key: 'productName', width: '22%' },
         { header: 'Category', key: 'category', width: '13%' },
         { header: 'Subcategory', key: 'subcategory', width: '12%' },
-        { header: 'Available Qty', key: 'inStock', align: 'center', width: '11%' },
-        { header: 'Cost / Unit (₹)', key: 'costPrice', align: 'right', type: 'currency', width: '12%' },
-        { header: 'Selling Price (₹)', key: 'sellingPrice', align: 'right', type: 'currency', width: '12%' },
-        { header: 'Stock Value (₹)', key: 'stockValue', align: 'right', type: 'currency', width: '13%' },
-        { header: 'Status', key: 'status', align: 'center', width: '7%' },
+        { header: 'Available Qty', key: 'inStock', align: 'center' as const, width: '11%' },
+        { header: 'Cost / Unit (₹)', key: 'costPrice', align: 'right' as const, type: 'currency' as const, width: '12%' },
+        { header: 'Selling Price (₹)', key: 'sellingPrice', align: 'right' as const, type: 'currency' as const, width: '12%' },
+        { header: 'Stock Value (₹)', key: 'stockValue', align: 'right' as const, type: 'currency' as const, width: '13%' },
+        { header: 'Status', key: 'status', align: 'center' as const, width: '7%' },
       ],
       data: printRows,
       metrics: [
@@ -1141,7 +1163,34 @@ export const StocksView: React.FC = () => {
         productName: 'Total',
         stockValue: displayedStocks.reduce((acc, s) => acc + (s.inStock || 0) * (s.unitCost || (s as any).costPrice || 0), 0),
       },
-    });
+    };
+  };
+
+  const handlePrintStocksReport = () => {
+    if (displayedStocks.length === 0) {
+      toast.info('No inventory stock records available to print.');
+      return;
+    }
+    printTableReport(getStocksReportTableOptions());
+  };
+
+  const handleDownloadStocksReport = async () => {
+    if (displayedStocks.length === 0) {
+      toast.info('No inventory stock records available to download.');
+      return;
+    }
+    if (isDownloadingStocksReport) return;
+    setIsDownloadingStocksReport(true);
+    const filename = `Stock_Valuation_Report_${new Date().toISOString().split('T')[0]}.pdf`;
+    try {
+      await downloadTableReport(getStocksReportTableOptions(), filename);
+      toast.success('Stock valuation report PDF downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to download stock report PDF:', err);
+      toast.error('Failed to download stock report PDF. Please try again.');
+    } finally {
+      setIsDownloadingStocksReport(false);
+    }
   };
 
   // Stock Movements for selected product
@@ -1242,8 +1291,8 @@ export const StocksView: React.FC = () => {
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Layers className="w-4.5 h-4.5" />
@@ -1258,11 +1307,11 @@ export const StocksView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintStocksReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -1272,7 +1321,7 @@ export const StocksView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -1280,9 +1329,20 @@ export const StocksView: React.FC = () => {
           </Button>
 
           <Button
+            variant="secondary"
+            size="md"
+            disabled={isDownloadingStocksReport}
+            className="flex-1 sm:flex-initial justify-center"
+            onClick={handleDownloadStocksReport}
+            icon={isDownloadingStocksReport ? <Loader2 className="w-4 h-4 animate-spin text-orange-600" /> : <Download className="w-4 h-4 text-orange-600" />}
+          >
+            {isDownloadingStocksReport ? 'Generating...' : 'Download Report'}
+          </Button>
+
+          <Button
             variant="primary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={() => handleOpenAdjustModal()}
             icon={<Plus className="w-4 h-4 text-white" />}
           >
@@ -1398,12 +1458,32 @@ export const StocksView: React.FC = () => {
         onChange={(val) => setPendingSearch(val)}
         placeholder="Search by product, SKU, category, subcategory, batch..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedCategory === pendingCategory &&
+            appliedStatus === pendingStatus &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
           setAppliedCategory(pendingCategory);
           setAppliedStatus(pendingStatus);
           setCurrentPage(1);
+
+          if (isSame) {
+            loadStocks(true);
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === "" &&
+            pendingSearch === "" &&
+            appliedCategory === "All" &&
+            pendingCategory === "All" &&
+            appliedStatus === "All" &&
+            pendingStatus === "All" &&
+            currentPage === 1;
+
           setPendingSearch("");
           setAppliedSearch("");
           setPendingCategory("All");
@@ -1411,6 +1491,10 @@ export const StocksView: React.FC = () => {
           setPendingStatus("All");
           setAppliedStatus("All");
           setCurrentPage(1);
+
+          if (isSame) {
+            loadStocks(true);
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1455,43 +1539,21 @@ export const StocksView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[1320px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  PRODUCT &amp; SKU
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  CATEGORY
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  SUBCATEGORY
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  BATCH / LOT
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  AVAILABLE QTY
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  REORDER LEVEL
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                  COST / UNIT
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                  SELLING PRICE
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                  STOCK VALUE
-                </th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                  STATUS
-                </th>
-                <th className="py-4 px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-20 whitespace-nowrap">
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "PRODUCT & SKU", align: "left", minWidth: "200px" },
+                { label: "CATEGORY", align: "left", minWidth: "140px" },
+                { label: "SUBCATEGORY", align: "left", minWidth: "140px" },
+                { label: "BATCH / LOT", align: "left", minWidth: "130px" },
+                { label: "AVAILABLE QTY", align: "center", minWidth: "130px" },
+                { label: "REORDER LEVEL", align: "center", minWidth: "130px" },
+                { label: "COST / UNIT", align: "right", minWidth: "120px" },
+                { label: "SELLING PRICE", align: "right", minWidth: "120px" },
+                { label: "TOTAL VALUE", align: "right", minWidth: "130px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTIONS", align: "center", minWidth: "130px" },
+              ]}
+            />
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
@@ -1537,7 +1599,7 @@ export const StocksView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                displayedStocks.map((stk) => {
+                pagedStocks.map((stk) => {
                   const isLow =
                     stk.inStock > 0 && stk.inStock <= stk.reorderLevel;
                   const isOut = stk.inStock === 0;
@@ -1750,6 +1812,11 @@ export const StocksView: React.FC = () => {
                               onClick: () => handlePrintStockSlip(stk),
                             },
                             {
+                              label: 'Download Stock Slip',
+                              variant: 'download',
+                              onClick: () => handleDownloadStockSlip(stk),
+                            },
+                            {
                               label: 'Edit',
                               variant: 'edit',
                               onClick: () => handleOpenEditModal(stk),
@@ -1850,10 +1917,15 @@ export const StocksView: React.FC = () => {
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Select Product <span className="text-slate-500">*</span>
               </label>
-              <select
+              <ProductSearchableSelect
                 value={selectedStock?.productId || ""}
-                onChange={(e) => {
-                  const targetProdId = e.target.value;
+                onChange={(val, prod) => {
+                  const targetProdId = val;
+                  if (!targetProdId) {
+                    setSelectedStock(null);
+                    setSelectedBatchNo("");
+                    return;
+                  }
                   const existing = stocks.find(
                     (s) => s.productId === targetProdId,
                   );
@@ -1894,63 +1966,64 @@ export const StocksView: React.FC = () => {
                     const firstBatch = effExisting.batches?.[0]?.batchNo || "";
                     setSelectedBatchNo(firstBatch);
                     setBatchMode(firstBatch ? "existing" : "new");
-                  } else {
-                    const catItem = catalogProducts.find(
-                      (p) => p.id === targetProdId,
-                    );
-                    if (catItem) {
-                      const catBatches: StockBatch[] = [];
-                      if (catItem.stockBatches && catItem.stockBatches.length > 0) {
-                        catBatches.push(
-                          ...catItem.stockBatches.map(mapApiStockBatchToStockBatch),
-                        );
-                      } else if (catItem.batchNo || catItem.initialBatchNo) {
-                        const bCode = (catItem.batchNo || catItem.initialBatchNo || "").trim();
-                        catBatches.push({
-                          id: `bat_${catItem.id}_${bCode}`,
-                          batchNo: bCode,
-                          productId: catItem.id,
-                          quantity: catItem.openingStock || 0,
-                          costPrice: catItem.unitCost,
-                          sellingPrice: catItem.unitPrice,
-                          mfgDate: catItem.mfgDate,
-                          expDate: catItem.expDate,
-                          status:
-                            (catItem.openingStock || 0) > 0 ? "Active" : "Depleted",
-                          receivedDate: new Date().toISOString().split("T")[0],
-                        });
-                      }
-                      setSelectedStock({
-                        id: catItem.id,
+                  } else if (prod) {
+                    const catItem = prod;
+                    const catBatches: StockBatch[] = [];
+                    if ((catItem as any).stockBatches && (catItem as any).stockBatches.length > 0) {
+                      catBatches.push(
+                        ...(catItem as any).stockBatches.map(mapApiStockBatchToStockBatch),
+                      );
+                    } else if ((catItem as any).batchNo || (catItem as any).initialBatchNo) {
+                      const bCode = ((catItem as any).batchNo || (catItem as any).initialBatchNo || "").trim();
+                      catBatches.push({
+                        id: `bat_${catItem.id}_${bCode}`,
+                        batchNo: bCode,
                         productId: catItem.id,
-                        productName: catItem.name,
-                        sku: catItem.sku,
-                        category: catItem.category,
-                        subcategory: catItem.subcategory,
-                        unit: catItem.unit,
-                        inStock: catItem.openingStock || 0,
-                        reorderLevel: 10,
-                        unitCost: catItem.unitCost,
-                        unitPrice: catItem.unitPrice,
-                        lastUpdated: new Date().toISOString(),
-                        batches: catBatches,
+                        quantity: (catItem as any).openingStock || 0,
+                        costPrice: (catItem as any).purchasePrice || 0,
+                        sellingPrice: (catItem as any).salePrice || 0,
+                        mfgDate: (catItem as any).mfgDate,
+                        expDate: (catItem as any).expDate,
+                        status:
+                          ((catItem as any).openingStock || 0) > 0 ? "Active" : "Depleted",
+                        receivedDate: new Date().toISOString().split("T")[0],
                       });
-                      const firstBatch = catBatches[0]?.batchNo || "";
-                      setSelectedBatchNo(firstBatch);
-                      setBatchMode(firstBatch ? "existing" : "new");
                     }
+                    setSelectedStock({
+                      id: catItem.id,
+                      productId: catItem.id,
+                      productName: catItem.productName,
+                      sku: (catItem as any).sku || catItem.productCode || "",
+                      category: (catItem as any).category || "",
+                      subcategory: (catItem as any).subcategory,
+                      unit: (catItem as any).unit || "PCS",
+                      inStock: (catItem as any).openingStock || 0,
+                      reorderLevel: 10,
+                      unitCost: (catItem as any).purchasePrice || 0,
+                      unitPrice: (catItem as any).salePrice || 0,
+                      lastUpdated: new Date().toISOString(),
+                      batches: catBatches,
+                    });
+                    const firstBatch = catBatches[0]?.batchNo || "";
+                    setSelectedBatchNo(firstBatch);
+                    setBatchMode(firstBatch ? "existing" : "new");
+                  } else {
+                    setSelectedStock(null);
+                    setSelectedBatchNo("");
                   }
                 }}
-                required
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-              >
-                <option value="">-- Select Product --</option>
-                {allSelectableProducts.map((s) => (
-                  <option key={s.productId} value={s.productId}>
-                    {s.productName} ({s.sku})
-                  </option>
-                ))}
-              </select>
+                selectedProduct={
+                  selectedStock
+                    ? {
+                        id: selectedStock.productId,
+                        productName: selectedStock.productName,
+                        productCode: selectedStock.sku,
+                      }
+                    : null
+                }
+                size="md"
+                placeholder="-- Select Product --"
+              />
             </div>
 
             <div>
@@ -2056,19 +2129,13 @@ export const StocksView: React.FC = () => {
                   Select Batch / Lot{" "}
                   {adjustType === "deduct" ? "(Deduct From)" : "(Add To)"}
                 </label>
-                <select
+                <BatchSearchableSelect
+                  productId={selectedStock?.productId || ""}
                   value={selectedBatchNo}
-                  onChange={(e) => setSelectedBatchNo(e.target.value)}
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all cursor-pointer"
-                >
-                  <option value="">-- Auto FIFO / General Lot --</option>
-                  {selectedStock?.batches?.map((b) => (
-                    <option key={b.id || b.batchNo} value={b.batchNo}>
-                      {b.batchNo} (Available: {b.quantity} {selectedStock.unit}
-                      {b.expDate ? ` | Exp: ${b.expDate}` : ""})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedBatchNo(val)}
+                  allowCustomBatch={false}
+                  placeholder="-- Auto FIFO / General Lot --"
+                />
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2357,8 +2424,8 @@ export const StocksView: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                  <table className="w-full text-left border-collapse">
+                <div className="border border-slate-200 rounded-xl overflow-x-auto shadow-2xs">
+                  <table className="w-full min-w-[580px] text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-100 text-[11px] font-bold text-slate-700 uppercase tracking-wider border-b border-slate-200">
                         <th className="py-2.5 px-3">Batch Number</th>
@@ -2397,10 +2464,10 @@ export const StocksView: React.FC = () => {
                               {batch.quantity} {selectedStock.unit}
                             </td>
                             <td className="py-2.5 px-3 text-slate-600">
-                              {batch.mfgDate || "N/A"}
+                              {formatDate(batch.mfgDate, "N/A")}
                             </td>
                             <td className="py-2.5 px-3 text-slate-600">
-                              {batch.expDate || "N/A"}
+                              {formatDate(batch.expDate, "N/A")}
                             </td>
                             <td className="py-2.5 px-3 text-right font-semibold text-slate-700 font-mono">
                               ₹
@@ -2439,7 +2506,7 @@ export const StocksView: React.FC = () => {
             )}
 
             {/* Modal Actions */}
-            <div className="flex items-center justify-between gap-2.5 pt-3 border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => {
@@ -2451,7 +2518,7 @@ export const StocksView: React.FC = () => {
                 <Edit3 className="w-3.5 h-3.5 text-slate-600" />
                 <span>Edit Product Info</span>
               </button>
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="secondary"
                   size="md"
@@ -2459,6 +2526,15 @@ export const StocksView: React.FC = () => {
                   icon={<Printer className="w-3.5 h-3.5 text-[#33077C]" />}
                 >
                   Print Stock Slip
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
+                  disabled={isDownloadingStockSlip}
+                  onClick={() => handleDownloadStockSlip(selectedStock)}
+                  icon={isDownloadingStockSlip ? <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" /> : <Download className="w-3.5 h-3.5 text-orange-600" />}
+                >
+                  {isDownloadingStockSlip ? 'Generating...' : 'Download Stock Slip'}
                 </Button>
                 <Button
                   variant="secondary"
@@ -2498,7 +2574,7 @@ export const StocksView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsMovementModalOpen(false)}
         >
-          <div className="space-y-4 text-xs font-sans max-h-[75vh] overflow-y-auto p-2">
+          <div className="space-y-4 text-xs font-sans p-0.5 sm:p-1">
             {/* Header info */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
               <div>
@@ -2531,8 +2607,8 @@ export const StocksView: React.FC = () => {
             </div>
 
             {/* Movement table */}
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-              <table className="w-full text-left border-collapse">
+            <div className="border border-slate-200 rounded-xl overflow-x-auto shadow-2xs">
+              <table className="w-full min-w-[640px] text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-100 text-[11px] font-bold text-slate-700 uppercase tracking-wider border-b border-slate-200">
                     <th className="py-3 px-3.5">Date &amp; Time</th>
@@ -2636,11 +2712,7 @@ export const StocksView: React.FC = () => {
                         className="hover:bg-slate-50 transition-colors"
                       >
                         <td className="py-3 px-3.5 text-slate-600 font-medium whitespace-nowrap">
-                          {new Date(mv.date).toLocaleDateString("en-GB", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })}
+                          {formatDate(mv.date)}
                         </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           <span
@@ -2771,13 +2843,12 @@ export const StocksView: React.FC = () => {
                       message: "Must be at least 2 characters",
                     },
                     validate: (val) =>
-                      /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "Only text characters (letters and spaces) are allowed",
+                      /^[A-Za-z0-9\s&'().\-\[\]{}/,+%#:*_"]+$/.test(String(val).trim()) ||
+                      "Product name can contain letters, numbers, spaces, brackets, and common symbols",
                   })}
-                  onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
-                      /[^A-Za-z\s&'.-]/g,
+                      /[^A-Za-z0-9\s&'().\-\[\]{}/,+%#:*_"]/g,
                       "",
                     );
                   }}

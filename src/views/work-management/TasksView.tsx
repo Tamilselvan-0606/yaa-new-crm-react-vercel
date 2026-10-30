@@ -316,7 +316,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
             setEditingTask(null);
             setIsCreateModalOpen(true);
           }}
-          className="h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+          className="h-10 sm:h-11 px-5 sm:px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span>Create Task</span>
@@ -629,7 +629,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-200/60">
-                        <span>Offering: <strong>{lead.interestedProductOrService || 'OmniFlow ERP'}</strong></span>
+                        <span>Offering: <strong>{lead.interestedProductOrService || '—'}</strong></span>
                         <span>Source: <strong>{lead.leadSource || 'Direct'}</strong></span>
                       </div>
                     </div>

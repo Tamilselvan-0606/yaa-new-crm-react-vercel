@@ -131,15 +131,10 @@ export const RemindersView: React.FC = () => {
       {/* 1. Top Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              <Bell className="w-4.5 h-4.5" />
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Reminders & Automated Alerts Engine
-            </h1>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+            Reminders & Automated Alerts Engine
+          </h1>
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             {isAdmin
               ? 'Company-wide operational notifications, scheduled tasks, and critical action items.'
               : 'Your personal action items and scheduled reminders.'}

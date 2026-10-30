@@ -1,3 +1,4 @@
+import { CommonTableHead } from '../../components/common/CommonTableHead';
 import React, { useState, useMemo } from 'react';
 import {
   Clock,
@@ -360,8 +361,8 @@ export const PendingDuesView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Top Header Row with Title on Left and Action Buttons on Right */}
-      <div className="bg-white/90 backdrop-blur-md rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white/90 backdrop-blur-md rounded-2xl border border-slate-200/90 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             Pending Dues
           </h1>
@@ -371,11 +372,11 @@ export const PendingDuesView: React.FC = () => {
         </div>
 
         {/* Top Right Action Button */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -385,7 +386,7 @@ export const PendingDuesView: React.FC = () => {
           <Button
             variant="primary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleOpenAddModal}
             icon={<Plus className="w-4 h-4 text-white" />}
           >
@@ -492,37 +493,19 @@ export const PendingDuesView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-[#33077C] text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center w-16">
-                  S.NO
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                  INVOICE &amp; CUSTOMER
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                  PRODUCT
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                  DUE DATE
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-right">
-                  TOTAL AMOUNT
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-right">
-                  PAID AMOUNT
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-right">
-                  DUE AMOUNT
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center">
-                  STATUS
-                </th>
-                <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center">
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "S.NO", align: "center", width: "60px" },
+                { label: "INVOICE & CUSTOMER", align: "left", minWidth: "180px" },
+                { label: "PRODUCT", align: "left", minWidth: "150px" },
+                { label: "DUE DATE", align: "left", minWidth: "130px" },
+                { label: "TOTAL AMOUNT", align: "right", minWidth: "130px" },
+                { label: "PAID AMOUNT", align: "right", minWidth: "130px" },
+                { label: "DUE AMOUNT", align: "right", minWidth: "130px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTION", align: "center", minWidth: "120px" },
+              ]}
+            />
             <tbody className="text-sm">
               {paginatedDues.length === 0 ? (
                 <tr>
@@ -653,11 +636,11 @@ export const PendingDuesView: React.FC = () => {
 
                             {activeShareId === item.id && sharePos && (
                               <div
-                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px]"
+                                className="share-popover-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[190px] max-w-[calc(100vw-1rem)]"
                                 style={{
                                   top: sharePos.top !== undefined ? `${sharePos.top}px` : 'auto',
                                   bottom: sharePos.bottom !== undefined ? `${sharePos.bottom}px` : 'auto',
-                                  right: `${Math.max(12, sharePos.right)}px`,
+                                  right: `${Math.min(Math.max(8, sharePos.right), Math.max(8, window.innerWidth - 206))}px`,
                                 }}
                               >
                                 <div className="text-xs font-bold text-slate-800 mb-3 px-0.5">
@@ -820,9 +803,9 @@ export const PendingDuesView: React.FC = () => {
                   ...(dropdownPos.bottom !== undefined
                     ? { bottom: `${dropdownPos.bottom}px` }
                     : { top: `${dropdownPos.top}px` }),
-                  right: `${dropdownPos.right}px`,
+                  right: `${Math.min(Math.max(8, dropdownPos.right), Math.max(8, window.innerWidth - 204))}px`,
                 }}
-                className="due-action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
+                className="due-action-dropdown-menu fixed z-[9999] w-48 max-w-[calc(100vw-1rem)] bg-white rounded-xl shadow-xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
               >
                 {/* 1. Edit Due */}
                 <button
@@ -1089,7 +1072,7 @@ export const PendingDuesView: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 p-4 bg-purple-50/50 rounded-2xl border border-purple-100 text-center">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-purple-50/50 rounded-2xl border border-purple-100 text-center">
               <div>
                 <p className="text-[11px] font-bold text-slate-500 uppercase">Total</p>
                 <p className="text-base font-extrabold text-slate-800 mt-0.5">₹{selectedDue.totalAmount.toLocaleString()}</p>
@@ -1265,8 +1248,8 @@ export const PendingDuesView: React.FC = () => {
               </div>
             </div>
 
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-left text-xs">
+            <div className="border border-slate-200 rounded-xl overflow-x-auto">
+              <table className="w-full min-w-[360px] text-left text-xs">
                 <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[10px]">
                   <tr>
                     <th className="py-2.5 px-3">Date</th>

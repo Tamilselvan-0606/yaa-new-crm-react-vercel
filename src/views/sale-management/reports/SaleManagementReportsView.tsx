@@ -32,6 +32,7 @@ import {
   Mail,
   X,
   Check,
+  Loader2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -51,6 +52,7 @@ import {
 import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
 import { Modal } from '../../../components/common/Modal';
 import { toast } from 'sonner';
+import { downloadTableReport } from '../../../utils/printUtils';
 
 type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'expense' | 'tax';
 
@@ -211,6 +213,7 @@ export const SaleManagementReportsView: React.FC = () => {
 
   // Preview Modal State
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // Helper date filter
   const isWithinDateRange = (dateStr?: string) => {
@@ -232,7 +235,9 @@ export const SaleManagementReportsView: React.FC = () => {
       return new Date(dateStr) >= yearStart;
     }
     if (timeRange === 'custom') {
-      return dateStr >= customStartDate && dateStr <= customEndDate;
+      const start = customStartDate <= customEndDate ? customStartDate : customEndDate;
+      const end = customStartDate <= customEndDate ? customEndDate : customStartDate;
+      return dateStr >= start && dateStr <= end;
     }
     return true;
   };
@@ -446,8 +451,10 @@ export const SaleManagementReportsView: React.FC = () => {
     rows: Array<{ id: string; cells: string[] }>;
     summary: Array<{ label: string; value: string }>;
   }>(() => {
-    const formatCurrency = (val: number) =>
-      `₹ ${val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formatCurrency = (val: number) => {
+      const sign = val < 0 ? '-' : '';
+      return `${sign}₹ ${Math.abs(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
 
     switch (activeReport) {
       // 1. BILL-WISE PROFIT
@@ -1995,6 +2002,49 @@ export const SaleManagementReportsView: React.FC = () => {
     toast.success('Report exported to CSV successfully!');
   };
 
+  const handleDownloadPDF = async () => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const filename = `${activeReport}_${new Date().toISOString().split('T')[0]}.pdf`;
+    try {
+      const columns = currentReportData.columns.map((col, idx) => ({
+        header: col.label,
+        key: `col_${idx}`,
+        align: (col.align as any) || 'left',
+      }));
+
+      const data = currentReportData.rows.map((row) => {
+        const rowObj: Record<string, any> = {};
+        row.cells.forEach((cell, idx) => {
+          rowObj[`col_${idx}`] = cell;
+        });
+        return rowObj;
+      });
+
+      const metrics = (currentReportData.summary || []).map((s) => ({
+        label: s.label,
+        value: s.value,
+      }));
+
+      await downloadTableReport(
+        {
+          title: currentReportData.title || currentReportMeta.label,
+          subtitle: `Date Range: ${formattedDateRange} | Generated on ${new Date().toLocaleDateString('en-IN')}`,
+          columns,
+          data,
+          metrics,
+        },
+        filename
+      );
+      toast.success('Report PDF downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to download report PDF:', err);
+      toast.error('Failed to download report PDF. Please try again.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200 font-sans pb-12">
       {/* 1. Header & Controls */}
@@ -2015,7 +2065,7 @@ export const SaleManagementReportsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Global Actions: Preview & Print, Export CSV */}
+        {/* Global Actions: Preview & Print, Export CSV, Download PDF */}
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
             type="button"
@@ -2024,6 +2074,19 @@ export const SaleManagementReportsView: React.FC = () => {
           >
             <Download className="w-4 h-4 text-[#33077C]" />
             <span>Export CSV</span>
+          </button>
+          <button
+            type="button"
+            disabled={isDownloadingPdf}
+            onClick={handleDownloadPDF}
+            className="h-10 px-4 rounded-xl border border-orange-200 hover:border-orange-300 bg-orange-50/60 hover:bg-orange-100/60 text-orange-700 text-xs sm:text-[13px] font-bold shadow-2xs transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+          >
+            {isDownloadingPdf ? (
+              <Loader2 className="w-4 h-4 animate-spin text-orange-600" />
+            ) : (
+              <Download className="w-4 h-4 text-orange-600" />
+            )}
+            <span>{isDownloadingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
           </button>
           <button
             type="button"
@@ -2554,10 +2617,16 @@ export const SaleManagementReportsView: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={handleExportCSV}
-              className="h-9 px-4.5 rounded-full border border-purple-200 hover:border-purple-400 bg-white hover:bg-purple-50/60 text-[#33077C] text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+              disabled={isDownloadingPdf}
+              onClick={handleDownloadPDF}
+              className="h-9 px-4.5 rounded-full border border-orange-200 hover:border-orange-400 bg-orange-50 hover:bg-orange-100/70 text-orange-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 disabled:opacity-50"
             >
-              Save PDF
+              {isDownloadingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{isDownloadingPdf ? 'Generating...' : 'Download PDF'}</span>
             </button>
             <button
               type="button"

@@ -407,32 +407,32 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Name</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.name}</Text>
+              <Text style={styles.billingValue}>{company.name || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>GSTIN / Tax ID</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.taxId}</Text>
+              <Text style={styles.billingValue}>{company.taxId || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>PAN Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.pan}</Text>
+              <Text style={styles.billingValue}>{company.pan || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.phone}</Text>
+              <Text style={styles.billingValue}>{company.phone || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.email}</Text>
+              <Text style={styles.billingValue}>{company.email || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Address</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{company.address}</Text>
+              <Text style={styles.billingValue}>{company.address || '-'}</Text>
             </View>
           </View>
 
@@ -442,32 +442,32 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Name</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{quotation.customerCompany || quotation.customerName}</Text>
+              <Text style={styles.billingValue}>{quotation.customerCompany || quotation.customerName || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>GSTIN / Tax ID</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>27AABCT8892K1Z5</Text>
+              <Text style={styles.billingValue}>{quotation.customerGstin || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>PAN Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>ABCDE9876G</Text>
+              <Text style={styles.billingValue}>{quotation.customerPan || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{quotation.customerPhone || 'N/A'}</Text>
+              <Text style={styles.billingValue}>{quotation.customerPhone || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{quotation.customerEmail || 'N/A'}</Text>
+              <Text style={styles.billingValue}>{quotation.customerEmail || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Address</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{quotation.customerLocation || 'Suite 750, Innovation Park, Dallas, TX 75201'}</Text>
+              <Text style={styles.billingValue}>{quotation.customerLocation || '-'}</Text>
             </View>
           </View>
         </View>

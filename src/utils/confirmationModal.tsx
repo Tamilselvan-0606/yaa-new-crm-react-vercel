@@ -86,14 +86,14 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
+      className="fixed inset-0 z-[10000] flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
       onClick={() => {
         if (!isLoading) onClose();
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden transform scale-100 p-6 text-center animate-in zoom-in-95 duration-150"
+        className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-y-auto max-h-[92dvh] transform scale-100 p-4 sm:p-6 text-center animate-in zoom-in-95 duration-150 my-auto"
       >
         {/* Action Icon */}
         <div className="mx-auto mb-4 w-14 h-14 rounded-full flex items-center justify-center shadow-inner">
@@ -115,18 +115,18 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
         </div>
 
         {/* Title */}
-        <h3 className="text-lg font-bold text-slate-800">{computedTitle}</h3>
+        <h3 className="text-base sm:text-lg font-bold text-slate-800 break-words">{computedTitle}</h3>
 
         {/* Description */}
-        <p className="mt-2 text-sm text-slate-500 leading-relaxed">{computedDescription}</p>
+        <p className="mt-2 text-xs sm:text-sm text-slate-500 leading-relaxed break-words">{computedDescription}</p>
 
         {/* Action Buttons */}
-        <div className="mt-6 flex items-center justify-center gap-3">
+        <div className="mt-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-center gap-2.5 sm:gap-3">
           <button
             type="button"
             disabled={isLoading}
             onClick={onClose}
-            className="flex-1 h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+            className="w-full sm:flex-1 h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
           >
             {cancelButtonText}
           </button>
@@ -134,7 +134,7 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
             type="button"
             disabled={isLoading}
             onClick={onConfirm}
-            className={`flex-1 h-10 px-4 rounded-xl text-white text-xs sm:text-[13px] font-bold shadow-sm hover:shadow transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 ${buttonColorClass}`}
+            className={`w-full sm:flex-1 h-10 px-4 rounded-xl text-white text-xs sm:text-[13px] font-bold shadow-sm hover:shadow transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2 ${buttonColorClass}`}
           >
             {isLoading ? (
               <>

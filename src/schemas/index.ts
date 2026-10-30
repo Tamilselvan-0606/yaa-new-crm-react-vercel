@@ -47,7 +47,7 @@ export const LeadSchema = z.object({
   interestedProducts: z.array(z.string()).optional(),
   interestedProductOrService: z.string().trim().min(1, 'Product Interest is required'),
   assignedStaffId: z.string().optional(),
-  status: z.enum(['New', 'Contacted', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost', 'Follow-up', 'Interested', 'Onboarding', 'Converted', 'Not Interested', 'All']).optional(),
+  status: z.enum(['Open', 'Contacted', 'Qualified', 'Converted to Client', 'Inactive', 'Lost', 'New', 'Proposal', 'Negotiation', 'Won', 'Follow-up', 'Interested', 'Onboarding', 'Converted', 'Not Interested', 'All']).optional(),
   priority: z.enum(['High', 'Medium', 'Low']).optional(),
   interest: z.enum(['High', 'Medium', 'Low']),
   tags: z.string().optional(),

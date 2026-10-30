@@ -1,3 +1,6 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -21,6 +24,7 @@ import {
   Building2,
   History,
   Trash2,
+  Download,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -37,7 +41,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPurchaseReturnShare } from '../../../utils/shareUtils';
-import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
+import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from 'sonner';
 import { useDispatch } from 'react-redux';
 import {
@@ -51,9 +55,10 @@ import {
 import { workPurchaseOrderApi, stockApi, baseApi } from '../../../api';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
-import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 
+import { formatDate } from '../utils/dateUtils';
 export const PurchaseReturnView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -93,12 +98,22 @@ export const PurchaseReturnView: React.FC = () => {
   // Filter & Pagination State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('All');
   const [appliedStatus, setAppliedStatus] = useState('All');
   const [pendingRefundStatus, setPendingRefundStatus] = useState('All');
   const [appliedRefundStatus, setAppliedRefundStatus] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action dropdown & Share Popover State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -119,6 +134,7 @@ export const PurchaseReturnView: React.FC = () => {
   const [deleteTargetReturn, setDeleteTargetReturn] = useState<PurchaseReturn | null>(null);
   const [isDeletingReturn, setIsDeletingReturn] = useState(false);
   const [deleteReturnError, setDeleteReturnError] = useState<string | null>(null);
+  const [isDownloadingReturn, setIsDownloadingReturn] = useState(false);
 
   const handleOpenHistory = async (pret: PurchaseReturn) => {
     setActiveDropdownId(null);
@@ -455,7 +471,7 @@ export const PurchaseReturnView: React.FC = () => {
       : Math.ceil(effectiveReturns.length / pageSize) || 1;
 
   const paginatedReturns = useMemo(() => {
-    if (isApiConnected && totalApiRecords !== null) {
+    if (isApiConnected && totalApiRecords !== null && effectiveReturns.length <= pageSize) {
       return effectiveReturns;
     }
     const start = (currentPage - 1) * pageSize;
@@ -493,7 +509,7 @@ export const PurchaseReturnView: React.FC = () => {
         id: `pr_ret_it_${Date.now()}_${idx}`,
         productId: ensureValidUuid(it.productId),
         productName: it.productName,
-        batch: it.batch,
+        batch: (it.batch && it.batch !== 'SELECT BATCH' ? it.batch : (it as any).batchNo || '').trim(),
         purchasedQuantity: Number(it.quantity) || 1,
         returnQuantity: 0,
         unitPrice: Number(it.purchasePrice) || 0,
@@ -508,10 +524,17 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   const handleReturnQtyChange = (index: number, qty: number) => {
+    if (isNaN(qty) || qty < 0) {
+      toast.error('Return quantity cannot be negative.');
+      return;
+    }
     setReturnItems((prev) => {
       const copy = [...prev];
       const it = { ...copy[index] };
       const maxAllowed = it.purchasedQuantity > 0 ? it.purchasedQuantity : 999999;
+      if (it.purchasedQuantity > 0 && qty > it.purchasedQuantity) {
+        toast.warning(`Return quantity cannot exceed purchased quantity (${it.purchasedQuantity}).`);
+      }
       const cleanQty = Math.max(0, Math.min(maxAllowed, qty));
       it.returnQuantity = cleanQty;
       it.returnAmount = Math.round(cleanQty * it.unitPrice * 100) / 100;
@@ -521,6 +544,10 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   const handleUnitPriceChange = (index: number, price: number) => {
+    if (isNaN(price) || price < 0) {
+      toast.error('Unit price cannot be negative.');
+      return;
+    }
     setReturnItems((prev) => {
       const copy = [...prev];
       const it = { ...copy[index] };
@@ -654,6 +681,17 @@ export const PurchaseReturnView: React.FC = () => {
       return;
     }
 
+    const hasNegativeQty = returnItems.some((it) => it.productName.trim() && Number(it.returnQuantity) < 0);
+    if (hasNegativeQty) {
+      toast.error('Return quantity cannot be negative.');
+      return;
+    }
+    const hasNegativePrice = returnItems.some((it) => it.productName.trim() && Number(it.unitPrice) < 0);
+    if (hasNegativePrice) {
+      toast.error('Unit price cannot be negative.');
+      return;
+    }
+
     const validItems = returnItems.filter(
       (it) => it.productName.trim() && Number(it.returnQuantity) > 0
     );
@@ -718,6 +756,49 @@ export const PurchaseReturnView: React.FC = () => {
             notes: notes,
             updatedAt: new Date().toISOString(),
           };
+        }
+
+        const isEnactedStatus =
+          updatedReturn.returnStatus === 'Completed' ||
+          updatedReturn.returnStatus === 'Returned' ||
+          updatedReturn.returnStatus === 'Dispatched';
+
+        if (isEnactedStatus && !editingReturn.stockDeducted) {
+          let outwardCount = 0;
+          for (const item of updatedReturn.items) {
+            if (!item.productId || !item.returnQuantity) continue;
+            try {
+              const cleanBatch =
+                (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+                  ? item.batch.trim()
+                  : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
+                      ? (item as any).batchNo.trim()
+                      : `BAT-${updatedReturn.purchaseNo || 'RET'}`);
+              await stockApi.adjustStock({
+                productId: item.productId,
+                quantity: -Math.abs(item.returnQuantity),
+                batchNo: cleanBatch,
+                adjustmentType: 'OUTWARD',
+                reason: `Purchase Return ${updatedReturn.returnNo} (${updatedReturn.returnStatus})`,
+                costPrice: item.unitPrice,
+                supplierName: updatedReturn.supplierName,
+              });
+              outwardCount++;
+            } catch (stkErr) {
+              console.warn('API Stock outward return warning on edit:', stkErr);
+            }
+          }
+          if (outwardCount > 0) {
+            updatedReturn.stockDeducted = true;
+            dispatch(
+              baseApi.util.invalidateTags([
+                { type: 'Stock', id: 'LIST' },
+                { type: 'Stock', id: 'BATCHES' },
+                { type: 'Stock', id: 'LEDGER' },
+                { type: 'Product', id: 'LIST' },
+              ])
+            );
+          }
         }
 
         savePurchaseReturn(updatedReturn);
@@ -786,10 +867,16 @@ export const PurchaseReturnView: React.FC = () => {
           for (const item of newReturn.items) {
             if (!item.productId || !item.returnQuantity) continue;
             try {
+              const cleanBatch =
+                (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+                  ? item.batch.trim()
+                  : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
+                      ? (item as any).batchNo.trim()
+                      : `BAT-${newReturn.purchaseNo || 'RET'}`);
               await stockApi.adjustStock({
                 productId: item.productId,
-                quantity: item.returnQuantity,
-                batchNo: (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH') ? item.batch.trim() : `BAT-${newReturn.purchaseNo || 'RET'}`,
+                quantity: -Math.abs(item.returnQuantity),
+                batchNo: cleanBatch,
                 adjustmentType: 'OUTWARD',
                 reason: `Purchase Return ${newReturn.returnNo} (${newReturn.returnStatus})`,
                 costPrice: item.unitPrice,
@@ -858,10 +945,16 @@ export const PurchaseReturnView: React.FC = () => {
         for (const item of pret.items) {
           if (!item.productId || !item.returnQuantity) continue;
           try {
+            const cleanBatch =
+              (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH')
+                ? item.batch.trim()
+                : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
+                    ? (item as any).batchNo.trim()
+                    : `BAT-${pret.purchaseNo || 'RET'}`);
             await stockApi.adjustStock({
               productId: item.productId,
-              quantity: item.returnQuantity,
-              batchNo: (item.batch && item.batch.trim() && item.batch !== 'SELECT BATCH') ? item.batch.trim() : `BAT-${pret.purchaseNo || 'RET'}`,
+              quantity: -Math.abs(item.returnQuantity),
+              batchNo: cleanBatch,
               adjustmentType: 'OUTWARD',
               reason: `Purchase Return ${pret.returnNo} (${nextStatus})`,
               costPrice: item.unitPrice,
@@ -1020,11 +1113,11 @@ export const PurchaseReturnView: React.FC = () => {
     toast.success(`Purchase Returns Excel report downloaded (${listToExport.length} records)!`);
   };
 
-  // Print Debit Note via universal printUtils
-  const handlePrintDebitNote = (pret: PurchaseReturn) => {
+  // Print & Download Debit Note via universal printUtils
+  const buildDebitNotePrintOptions = (pret: PurchaseReturn): DocumentPrintOptions => {
     const matchedSup = suppliers.find((s) => s.id === pret.supplierId || s.name === pret.supplierName);
 
-    printBusinessDocument({
+    return {
       docTypeTitle: 'DEBIT NOTE / PURCHASE RETURN',
       docNo: pret.returnNo,
       docDate: pret.returnDate,
@@ -1059,7 +1152,26 @@ export const PurchaseReturnView: React.FC = () => {
       subtotal: Number(pret.returnAmount || 0),
       grandTotal: Number(pret.returnAmount || 0),
       notes: pret.notes,
-    });
+    };
+  };
+
+  const handlePrintDebitNote = (pret: PurchaseReturn) => {
+    printBusinessDocument(buildDebitNotePrintOptions(pret));
+  };
+
+  const handleDownloadPurchaseReturn = async (pret: PurchaseReturn) => {
+    if (isDownloadingReturn) return;
+    setIsDownloadingReturn(true);
+    const filename = `DebitNote_${(pret.returnNo || 'return').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildDebitNotePrintOptions(pret), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download debit note PDF:', err);
+      toast.error('Failed to download debit note PDF. Please try again.');
+    } finally {
+      setIsDownloadingReturn(false);
+    }
   };
 
   // Print Table Report for Purchase Returns
@@ -1110,8 +1222,8 @@ export const PurchaseReturnView: React.FC = () => {
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <ArrowDownLeft className="w-4.5 h-4.5" />
@@ -1125,11 +1237,11 @@ export const PurchaseReturnView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -1139,7 +1251,7 @@ export const PurchaseReturnView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -1151,7 +1263,7 @@ export const PurchaseReturnView: React.FC = () => {
             size="md"
             onClick={handleOpenCreateModal}
             icon={<Plus className="w-4 h-4 text-white" />}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
           >
             Create Purchase Return
           </Button>
@@ -1329,17 +1441,17 @@ export const PurchaseReturnView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">RETURN NO & DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ORIGINAL PURCHASE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUPPLIER</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ITEMS RETURNED</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">RETURN AMOUNT</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+                columns={[
+                  { label: "RETURN NO & DATE", align: "left", minWidth: "160px" },
+                  { label: "ORIGINAL PURCHASE", align: "left", minWidth: "150px" },
+                  { label: "SUPPLIER", align: "left", minWidth: "180px" },
+                  { label: "ITEMS RETURNED", align: "left", minWidth: "150px" },
+                  { label: "RETURN AMOUNT", align: "right", minWidth: "130px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTIONS", align: "center", minWidth: "130px" },
+                ]}
+              />
             <tbody className="text-sm">
               {isApiLoading && paginatedReturns.length === 0 ? (
                 <tr>
@@ -1377,7 +1489,7 @@ export const PurchaseReturnView: React.FC = () => {
                           >
                             {pret.returnNo}
                           </span>
-                          <span className="text-xs text-slate-400 font-medium mt-0.5 block">{pret.returnDate}</span>
+                          <span className="text-xs text-slate-400 font-medium mt-0.5 block">{formatDate(pret.returnDate)}</span>
                         </div>
                       </div>
                     </td>
@@ -1421,7 +1533,7 @@ export const PurchaseReturnView: React.FC = () => {
                     </td>
 
                     {/* 6. Status */}
-                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap min-w-[130px] w-36 align-middle">
                       <span
                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
                           pret.returnStatus === 'Completed'
@@ -1449,7 +1561,7 @@ export const PurchaseReturnView: React.FC = () => {
                     </td>
 
                     {/* 7. Actions */}
-                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                    <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap min-w-[130px] w-36 align-middle">
                       <div className="flex items-center justify-center gap-1.5">
 
                         {/* Share / Forward Popover */}
@@ -1475,6 +1587,11 @@ export const PurchaseReturnView: React.FC = () => {
                               label: 'Print Debit Note',
                               variant: 'print',
                               onClick: () => handlePrintDebitNote(pret),
+                            },
+                            {
+                              label: 'Download Debit Note',
+                              variant: 'download',
+                              onClick: () => handleDownloadPurchaseReturn(pret),
                             },
                             {
                               label: 'Duplicate',
@@ -1606,18 +1723,12 @@ export const PurchaseReturnView: React.FC = () => {
                   className={FORM_INPUT_DISABLED_CLS}
                 />
               ) : (
-                <select
+                <SupplierSearchableSelect
                   value={selectedSupplierId}
-                  onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  className={FORM_SELECT_CLS}
-                >
-                  <option value="">-- Select Supplier --</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.contactPerson ? `(${s.contactPerson})` : ''}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedSupplierId(val)}
+                  allowNone
+                  placeholder="Select or search supplier..."
+                />
               )}
             </div>
 
@@ -1702,21 +1813,22 @@ export const PurchaseReturnView: React.FC = () => {
                     <tr key={it.id || idx} className="hover:bg-slate-50/60">
                       {/* Product Name (Searchable Product Selection) */}
                       <td className="py-2 px-3 min-w-[200px]">
-                        <SearchableSelect
+                        <ProductSearchableSelect
                           value={it.productId || ''}
-                          onChange={(val) => handleProductSelect(idx, val)}
-                          onOpen={() => {
-                            if (availableProducts.length === 0) {
-                              handleProductSearch('');
-                            }
+                          onChange={(val) => {
+                            handleProductSelect(idx, val);
                           }}
-                          onSearch={handleProductSearch}
-                          isLoading={isSearchingProducts}
-                          options={productOptions}
+                          selectedProduct={
+                            it.productId
+                              ? {
+                                  id: it.productId,
+                                  productName: it.productName,
+                                  purchasePrice: it.unitPrice,
+                                }
+                              : null
+                          }
+                          priceType="purchase"
                           placeholder="Select Product..."
-                          searchPlaceholder="Search product..."
-                          emptyText={isSearchingProducts ? "Searching products..." : "No products found"}
-                          allowClear
                           size="sm"
                         />
                       </td>
@@ -1763,6 +1875,7 @@ export const PurchaseReturnView: React.FC = () => {
                           type="number"
                           min="1"
                           value={it.returnQuantity}
+                          onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleReturnQtyChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-center bg-white border border-purple-300 rounded-lg text-xs font-bold text-[#33077C] outline-none focus:ring-2 focus:ring-purple-200"
                         />
@@ -1775,6 +1888,7 @@ export const PurchaseReturnView: React.FC = () => {
                           min="0"
                           step="0.01"
                           value={it.unitPrice}
+                          onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleUnitPriceChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-right bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
                         />
@@ -1927,7 +2041,7 @@ export const PurchaseReturnView: React.FC = () => {
                   <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
                   <span>{selectedReturn.returnStatus}</span>
                 </span>
-                <div className="text-slate-500 mt-1 font-medium">Return Date: {selectedReturn.returnDate}</div>
+                <div className="text-slate-500 mt-1 font-medium">Return Date: {formatDate(selectedReturn.returnDate)}</div>
                 <div className="text-purple-900 font-bold text-xs mt-0.5">
                   Refund: {selectedReturn.refundStatus}
                 </div>
@@ -2007,6 +2121,15 @@ export const PurchaseReturnView: React.FC = () => {
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Debit Note</span>
+              </button>
+              <button
+                type="button"
+                disabled={isDownloadingReturn}
+                onClick={() => handleDownloadPurchaseReturn(selectedReturn)}
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDownloadingReturn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>{isDownloadingReturn ? 'Generating...' : 'Download Debit Note'}</span>
               </button>
             </div>
           </div>
@@ -2089,7 +2212,7 @@ export const PurchaseReturnView: React.FC = () => {
                       Debit Note Issued
                     </div>
                     <div className="text-slate-500 text-[11px] mt-0.5">
-                      Return Date: <span className="font-medium text-slate-700">{historyReturn.returnDate}</span>
+                      Return Date: <span className="font-medium text-slate-700">{formatDate(historyReturn.returnDate)}</span>
                     </div>
                     <div className="text-slate-400 text-[10px] mt-0.5">
                       Items Returned: {historyReturn.items.length} product item(s)

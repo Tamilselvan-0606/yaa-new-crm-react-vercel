@@ -18,6 +18,8 @@ export interface User {
   email: string;
   role: Role;
   organizationId?: string;
+  subOrganizationId?: string;
+  accessibleBranchIds?: string[];
   department?: string;
   avatar: string;
   phone?: string;
@@ -145,6 +147,9 @@ export interface DigitalMarketingPlan {
 }
 
 export type LeadStatus =
+  | 'Open'
+  | 'Converted to Client'
+  | 'Inactive'
   | 'New'
   | 'Contacted'
   | 'Qualified'
@@ -224,6 +229,11 @@ export interface Lead {
   nextAction?: string;
   nextFollowUpDate?: string;
   notes?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  subOrganizationName?: string;
+  branchId?: string;
+  branchName?: string;
   createdAt?: string;
   followUps?: LeadFollowUp[];
   followUpHistory?: LeadFollowUp[];
@@ -284,6 +294,11 @@ export interface Customer {
   gstin?: string;
   taxId?: string;
   pan?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  subOrganizationName?: string;
+  branchId?: string;
+  branchName?: string;
   status: 'Active' | 'Inactive' | 'Onboarding' | string;
   linkedProducts: ClientProductLink[];
   usesDigitalMarketing?: boolean;
@@ -387,6 +402,9 @@ export interface PaymentItem {
   productName?: string;
   plan?: string;
   amount: number;
+  totalAmount?: number;
+  paidAmount?: number;
+  outstandingAmount?: number;
   dueDate: string;
   paymentDate?: string;
   paymentMethod?: PaymentMethod;

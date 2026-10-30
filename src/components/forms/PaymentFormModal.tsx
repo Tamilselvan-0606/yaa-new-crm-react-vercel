@@ -1,57 +1,105 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { PaymentSchema, PaymentFormData } from '../../schemas';
 import { PaymentItem } from '../../types';
 import { Modal } from '../common/Modal';
 import { useAuth } from '../../context/AuthContext';
-import { useCreatePayment } from '../../hooks/useQueries';
+import { useCreatePlatformPaymentMutation, clientProductApi } from '../../api';
 
 interface PaymentFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialPayment?: PaymentItem | null;
+  onSuccess?: () => void;
 }
 
 export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
   isOpen,
   onClose,
   initialPayment,
+  onSuccess,
 }) => {
-  const { isAdmin } = useAuth();
-  const createPaymentMutation = useCreatePayment();
+  const { showToast } = useAuth();
+  const [createPayment, { isLoading: isSubmittingPayment }] = useCreatePlatformPaymentMutation();
+  const [products, setProducts] = useState<Array<{ id: string; name: string }>>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchProducts = async () => {
+      try {
+        const res = await clientProductApi.getProducts({ limit: 100 });
+        if (res?.success && Array.isArray(res.data)) {
+          setProducts(res.data);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch products for payment form:', err);
+      }
+    };
+    fetchProducts();
+  }, [isOpen]);
 
   const {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<PaymentFormData>({
     resolver: zodResolver(PaymentSchema),
     defaultValues: {
       customerId: 'cust_direct_entry',
       customerName: '',
-      productOrService: 'OmniFlow ERP',
-      plan: 'Enterprise Tier',
-      amount: 1499,
+      productOrService: '',
+      plan: 'Standard Tier',
+      amount: 0,
       dueDate: new Date().toISOString().split('T')[0],
       paymentDate: new Date().toISOString().split('T')[0],
-      paymentMethod: 'Stripe',
+      paymentMethod: 'Bank Transfer',
       status: 'Paid',
       notes: '',
     },
   });
 
+  // When products are fetched and no product is selected yet, default to first real product
+  useEffect(() => {
+    if (products.length > 0 && !watch('productOrService')) {
+      reset((prev) => ({
+        ...prev,
+        productOrService: products[0].name,
+      }));
+    }
+  }, [products, reset, watch]);
+
   const onSubmit = async (data: PaymentFormData) => {
     try {
-      await createPaymentMutation.mutateAsync({
-        ...data,
+      const selectedProd = products.find(
+        (p) => p.name === data.productOrService || p.id === data.productOrService
+      );
+
+      await createPayment({
+        customerName: data.customerName,
+        customerId: data.customerId,
+        amount: Number(data.amount) || 0,
+        productOrService: data.productOrService,
         productName: data.productOrService,
-      } as any);
+        productId: selectedProd?.id,
+        plan: data.plan,
+        paymentMethod: data.paymentMethod,
+        status: data.status,
+        dueDate: data.dueDate,
+        paymentDate: data.status === 'Paid' ? (data.paymentDate || new Date().toISOString().split('T')[0]) : undefined,
+        referenceNumber: (data as any).transactionId || undefined,
+        notes: data.notes,
+      }).unwrap();
+
+      showToast('success', 'Payment Recorded', `Payment recorded successfully for ${data.customerName}.`);
       reset();
+      if (onSuccess) onSuccess();
       onClose();
-    } catch (e) {
-      // Handled in mutation hook
+    } catch (e: any) {
+      const msg = e?.data?.message || e?.message || 'Failed to record payment.';
+      showToast('error', 'Error', msg);
     }
   };
 
@@ -81,7 +129,7 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Amount ($ USD) <span className="text-red-500">*</span>
+              Amount (₹) <span className="text-red-500">*</span>
             </label>
             <input
               {...register('amount', { valueAsNumber: true })}
@@ -103,12 +151,15 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
               {...register('productOrService')}
               className="w-full px-3 py-2 text-xs border border-[#E2E8F0] rounded-md outline-none focus:border-[#33077C] bg-white"
             >
-              <option value="OmniFlow ERP">OmniFlow ERP</option>
-              <option value="NexusCRM Pro">NexusCRM Pro</option>
-              <option value="PulseAnalytics">PulseAnalytics</option>
-              <option value="ChatSphere AI">ChatSphere AI</option>
-              <option value="Digital Marketing - Scale">Digital Marketing - Scale Plan</option>
-              <option value="Digital Marketing - Enterprise">Digital Marketing - Enterprise</option>
+              {products.length > 0 ? (
+                products.map((prod) => (
+                  <option key={prod.id} value={prod.name}>
+                    {prod.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">No products available</option>
+              )}
             </select>
           </div>
 
@@ -171,20 +222,20 @@ export const PaymentFormModal: React.FC<PaymentFormModalProps> = ({
           />
         </div>
 
-        <div className="pt-4 border-t border-[#E2E8F0] flex items-center justify-end gap-3">
+        <div className="pt-4 border-t border-[#E2E8F0] flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
           <button
             type="button"
             onClick={onClose}
-            className="h-11 px-5 border border-[#E2E8F0] text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center"
+            className="w-full sm:w-auto h-11 px-5 border border-[#E2E8F0] text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center"
           >
             Cancel
           </button>
           <button
             type="submit"
-            disabled={isSubmitting || createPaymentMutation.isPending}
-            className="h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-orange-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+            disabled={isSubmitting || isSubmittingPayment}
+            className="w-full sm:w-auto h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-orange-500/20 hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            <span>Record Payment</span>
+            <span>{isSubmitting || isSubmittingPayment ? 'Recording...' : 'Record Payment'}</span>
           </button>
         </div>
       </form>

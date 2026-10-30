@@ -83,6 +83,8 @@ export interface ApiQuotation {
   convertedToType?: 'Invoice' | 'Order' | 'Proforma' | string | null;
   convertedToId?: string | null;
   convertedToInvoiceNo?: string | null;
+  convertedAt?: string | null;
+  customerCode?: string;
   attachedImageName?: string | null;
   attachedDocName?: string | null;
 }
@@ -123,7 +125,7 @@ export interface QuotationFilterParams {
  * Strictly adheres to backend schema: NO 'unit' or unrecognized keys
  */
 export interface CreateQuotationItemPayload {
-  productId: string;
+  productId?: string;
   productName: string;
   sku?: string;
   batch?: string;
@@ -177,7 +179,7 @@ export interface QuotationStatusUpdatePayload {
  * Payload for POST /commerce/quotations/{id}/convert
  */
 export interface ConvertQuotationPayload {
-  targetType: 'Invoice' | 'Order' | 'Proforma';
+  targetType: 'Invoice' | 'Order' | 'Proforma' | 'Challan' | 'DeliveryChallan';
   dueDate?: string;
 }
 
@@ -234,7 +236,7 @@ export interface ConvertQuotationResponse {
   data: {
     source: ApiQuotation;
     convertedTo: {
-      type: 'Invoice' | 'Order' | 'Proforma';
+      type: 'Invoice' | 'Order' | 'Proforma' | 'Challan' | 'DeliveryChallan' | string;
       id: string;
       documentNo: string;
     };

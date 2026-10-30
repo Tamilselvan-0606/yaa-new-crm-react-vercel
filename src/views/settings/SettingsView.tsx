@@ -688,12 +688,12 @@ export const SettingsView: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             {superAdminTab === 'theme' && (
               <button
                 type="button"
                 onClick={resetTheme}
-                className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs sm:text-[13px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-2xs"
+                className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs sm:text-[13px] font-bold rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
                 title="Reset theme and colors to default"
               >
                 <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
@@ -704,7 +704,7 @@ export const SettingsView: React.FC = () => {
             <button
               type="button"
               onClick={handleSaveSettings}
-              className="h-10 px-5 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs sm:text-[13px] font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] flex items-center gap-2 cursor-pointer"
+              className="h-10 px-5 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs sm:text-[13px] font-bold rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
             >
               <Save className="w-4 h-4" />
               <span>Save Changes</span>
@@ -1477,9 +1477,9 @@ export const SettingsView: React.FC = () => {
                           ...(roleDropdownPos.bottom !== undefined
                             ? { bottom: `${roleDropdownPos.bottom}px` }
                             : { top: `${roleDropdownPos.top}px` }),
-                          right: `${roleDropdownPos.right}px`,
+                          right: `${Math.min(Math.max(8, roleDropdownPos.right), Math.max(8, window.innerWidth - 204))}px`,
                         }}
-                        className="w-48 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
+                        className="w-48 max-w-[calc(100vw-1rem)] bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
                       >
                         {/* 1. View */}
                         <button
@@ -1535,14 +1535,14 @@ export const SettingsView: React.FC = () => {
 
                 {/* MODAL: VIEW / EDIT / ADD ROLE WITH MODULE ON/OFF BUTTONS */}
                 {isRoleModalOpen && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto">
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-6xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in duration-200">
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-2.5 sm:p-6 overflow-y-auto">
+                    <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xl max-w-6xl w-full max-h-[93dvh] flex flex-col overflow-hidden animate-in fade-in duration-200">
                       {/* Modal Header exactly matching Add Organization */}
                       <div
-                        className="flex items-center justify-between px-6 py-4.5 text-white shrink-0"
+                        className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4.5 text-white shrink-0"
                         style={{ background: '#33077C' }}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
                           <button
                             type="button"
                             onClick={() => setIsRoleModalOpen(false)}
@@ -1776,7 +1776,7 @@ export const SettingsView: React.FC = () => {
                       </div>
 
                       {/* Modal Footer Actions matching 2nd Reference Image */}
-                      <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0 bg-white">
+                      <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-t border-slate-100 flex items-center justify-end gap-2.5 sm:gap-3 shrink-0 bg-white">
                         <button
                           type="button"
                           onClick={() => setIsRoleModalOpen(false)}
@@ -1884,8 +1884,8 @@ export const SettingsView: React.FC = () => {
 
         {/* Add Staff Modal */}
         {isStaffModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150 overflow-y-auto">
+            <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 space-y-4 my-auto">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <h3 className="text-base font-bold text-slate-900">Add Platform Staff</h3>
                 <button
@@ -1922,7 +1922,7 @@ export const SettingsView: React.FC = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Role Title</label>
                     <input

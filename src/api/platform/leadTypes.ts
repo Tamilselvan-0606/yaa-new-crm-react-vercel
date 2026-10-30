@@ -4,12 +4,11 @@
  */
 
 export type PlatformLeadStatus =
-  | 'New'
+  | 'Open'
   | 'Contacted'
   | 'Qualified'
-  | 'Proposal'
-  | 'Negotiation'
-  | 'Won'
+  | 'Converted to Client'
+  | 'Inactive'
   | 'Lost'
   | 'All';
 
@@ -39,9 +38,13 @@ export interface PlatformLeadItem {
   planInterest?: string | null;
   industry?: string | null;
   location?: string | null;
+  designation?: string | null;
   assignedTo?: string | null;
   followUpDate?: string | null;
   notes?: string | null;
+  organizationId?: string | null;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
   convertedOrganizationId?: string | null;
   convertedAt?: string | null;
   convertedOrganization?: {
@@ -69,6 +72,12 @@ export interface PlatformLeadListParams {
   converted?: 'true' | 'false' | boolean;
   sortBy?: 'createdAt' | 'followUpDate' | 'value' | 'name';
   sortOrder?: 'asc' | 'desc';
+  organizationId?: string;
+  organization_id?: string;
+  subOrganizationId?: string;
+  sub_organization_id?: string;
+  branchId?: string;
+  branch_id?: string;
 }
 
 export interface PlatformLeadSummary {
@@ -132,6 +141,10 @@ export interface CreatePlatformLeadRequest {
   assignedTo?: string;
   followUpDate?: string;
   notes?: string;
+  designation?: string;
+  organizationId?: string;
+  subOrganizationId?: string;
+  branchId?: string;
 }
 
 export type UpdatePlatformLeadRequest = Partial<CreatePlatformLeadRequest>;

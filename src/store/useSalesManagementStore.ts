@@ -21,6 +21,8 @@ export interface SaleProductItem {
   unitPrice: number;
   rate?: number;
   discountPercent?: number;
+  discountAmount?: number;
+  discountType?: 'percent' | 'amount';
   taxPercent: number;
   total: number;
 }
@@ -54,6 +56,7 @@ export interface SaleTransaction {
   saleDate: string;
   dueDate: string;
   customerId: string;
+  customerCode?: string;
   customerName: string;
   customerCompany?: string;
   customerPhone?: string;
@@ -89,6 +92,7 @@ export interface SaleTransaction {
   collectionStatus?: 'Pending Follow-up' | 'Contacted' | 'Promise to Pay' | 'Overdue' | 'Due Today' | 'Settled' | string;
   nextFollowUpDate?: string;
   notes?: string;
+  convertedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -105,6 +109,7 @@ export interface SaleQuotation {
   date: string; // ISO format e.g. "2026-10-01"
   validUntil: string;
   customerId: string;
+  customerCode?: string;
   partyName: string;
   customerCompany?: string;
   customerPhone?: string;
@@ -126,6 +131,7 @@ export interface SaleQuotation {
   convertedToInvoiceNo?: string;
   convertedToType?: 'Invoice' | 'Order' | 'Proforma' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
   stateOfSupply?: string;
   roundOff?: number;
   attachedImageName?: string | null;
@@ -263,6 +269,9 @@ export interface SalesCustomer {
   status: CustomerStatus;
   totalSales?: number;
   paidAmount?: number;
+  paidAmountDate?: string | null;
+  paymentDuePeriod?: string | null;
+  lastPaymentDate?: string | null;
   outstandingAmount?: number;
   salesRepresentativeId?: string;
   salesRepresentativeName?: string;
@@ -590,6 +599,7 @@ export interface InventoryStockItem {
   unitCost: number;
   unitPrice: number;
   lastUpdated: string;
+  createdAt?: string;
   batches?: StockBatch[];
   itemImage?: string;
 }
@@ -646,13 +656,13 @@ const KEYS = {
   PROMISES_TO_PAY: 'yaa_crm_promises_to_pay',
 };
 
-const SEED_VERSION_KEY = 'yaa_crm_grocery_mock_v7';
+const SEED_VERSION_KEY = 'yaa_crm_pure_db_v1';
 const INITIAL_PAYMENT_INS: SalePaymentIn[] = [];
 
 function getStorage<T>(key: string, initial: T): T {
   try {
-    const isGrocerySeeded = localStorage.getItem(SEED_VERSION_KEY);
-    if (!isGrocerySeeded) {
+    const isCleanSeeded = localStorage.getItem(SEED_VERSION_KEY);
+    if (!isCleanSeeded) {
       localStorage.setItem(KEYS.SALES, JSON.stringify(INITIAL_SALES));
       localStorage.setItem(KEYS.SALES_RETURNS, JSON.stringify(INITIAL_SALES_RETURNS));
       localStorage.setItem(KEYS.CUSTOMERS, JSON.stringify(INITIAL_CUSTOMERS));
@@ -667,6 +677,8 @@ function getStorage<T>(key: string, initial: T): T {
       localStorage.setItem(KEYS.SALES_REPRESENTATIVES, JSON.stringify(INITIAL_SALES_REPRESENTATIVES));
       localStorage.setItem(KEYS.COLLECTION_FOLLOW_UPS, JSON.stringify(INITIAL_COLLECTION_FOLLOW_UPS));
       localStorage.setItem(KEYS.PROMISES_TO_PAY, JSON.stringify(INITIAL_PROMISES_TO_PAY));
+      localStorage.setItem('yaa_crm_proforma_invoices', JSON.stringify([]));
+      localStorage.setItem('yaa_crm_sale_orders', JSON.stringify([]));
       localStorage.setItem(SEED_VERSION_KEY, 'true');
       return initial;
     }
@@ -1104,6 +1116,20 @@ export const useSalesManagementStore = () => {
               expDate: batchMeta?.expDate ?? batches[bIdx].expDate,
               mfgDate: batchMeta?.mfgDate ?? batches[bIdx].mfgDate,
             };
+          } else if (quantityDelta < 0 && batches.length > 0) {
+            // Target batch not found, fallback to FIFO deduction across available batches
+            let rem = Math.abs(quantityDelta);
+            batches = batches.map((b) => {
+              if (rem <= 0 || b.quantity <= 0) return b;
+              const deduct = Math.min(b.quantity, rem);
+              rem -= deduct;
+              const newQty = b.quantity - deduct;
+              return {
+                ...b,
+                quantity: newQty,
+                status: newQty === 0 ? 'Depleted' : b.status,
+              };
+            });
           } else if (quantityDelta > 0) {
             batches.push({
               id: `bat_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -1142,8 +1168,8 @@ export const useSalesManagementStore = () => {
           }
         }
 
-        const totalBatchQty = batches.reduce((sum, b) => sum + b.quantity, 0);
-        const newInStock = batches.length > 0 ? Math.max(totalBatchQty, item.inStock + quantityDelta) : Math.max(0, item.inStock + quantityDelta);
+        const totalBatchQty = batches.reduce((sum, b) => sum + (b.quantity || 0), 0);
+        const newInStock = batches.length > 0 ? totalBatchQty : Math.max(0, item.inStock + quantityDelta);
 
         return {
           ...item,
@@ -1184,6 +1210,7 @@ export const useSalesManagementStore = () => {
         unitCost: batchMeta?.costPrice ?? 0,
         unitPrice: batchMeta?.sellingPrice ?? 0,
         lastUpdated: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         batches: [fallbackBatch],
       };
       updated = [newItem, ...updated];
@@ -1665,14 +1692,21 @@ export const useSalesManagementStore = () => {
     const current = getStorage<PurchaseReturn[]>(KEYS.PURCHASE_RETURNS, INITIAL_PURCHASE_RETURNS);
     const exists = current.find((r) => r.id === pret.id);
     let updated: PurchaseReturn[];
+    const isEnacted = (status?: string) =>
+      status === 'Completed' || status === 'Returned' || status === 'Dispatched';
+
     if (exists) {
-      if (exists.returnStatus !== 'Completed' && pret.returnStatus === 'Completed') {
-        pret.items.forEach((item) => adjustStock(item.productId, -item.returnQuantity, item.batch));
+      if (!isEnacted(exists.returnStatus) && isEnacted(pret.returnStatus)) {
+        pret.items.forEach((item) =>
+          adjustStock(item.productId, -Math.abs(item.returnQuantity), item.batch || (item as any).batchNo)
+        );
       }
       updated = current.map((r) => (r.id === pret.id ? pret : r));
     } else {
-      if (pret.returnStatus === 'Completed' || pret.returnStatus === 'Returned') {
-        pret.items.forEach((item) => adjustStock(item.productId, -item.returnQuantity, item.batch));
+      if (isEnacted(pret.returnStatus)) {
+        pret.items.forEach((item) =>
+          adjustStock(item.productId, -Math.abs(item.returnQuantity), item.batch || (item as any).batchNo)
+        );
       }
       updated = [pret, ...current];
     }

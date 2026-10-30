@@ -475,32 +475,32 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Name</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.name}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.name || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>GSTIN / Tax ID</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.taxId || '27AABCA1234F1Z8'}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.taxId || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>PAN Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.pan || 'ABCDE1234F'}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.pan || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.phone}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.phone || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.email}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.email || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Address</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.company.address}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.company.address || '-'}</Text>
             </View>
           </View>
 
@@ -510,44 +510,32 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Name</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.client.company}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.company || activeInvoice.client.name || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>GSTIN / Tax ID</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>
-                {activeInvoice.client.gstin || activeInvoice.client.taxId || '27AABCT8892K1Z5'}
-              </Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.gstin || activeInvoice.client.taxId || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>PAN Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.client.pan || 'ABCDE9876G'}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.pan || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Phone Number</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.client.phone || 'N/A'}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.phone || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Email</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.client.email}</Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.email || '-'}</Text>
             </View>
             <View style={styles.billingRow}>
               <Text style={styles.billingLabel}>Company Address</Text>
               <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>
-                {activeInvoice.client.location &&
-                (activeInvoice.client.location.includes('Suite') ||
-                  activeInvoice.client.location.includes('Hub') ||
-                  activeInvoice.client.location.includes('Building') ||
-                  activeInvoice.client.location.includes('Floor'))
-                  ? activeInvoice.client.location
-                  : activeInvoice.client.location
-                  ? `Suite 750, Innovation Park, ${activeInvoice.client.location} 75201`
-                  : 'Suite 750, Innovation Park, Dallas, TX 75201'}
-              </Text>
+              <Text style={styles.billingValue}>{activeInvoice.client.location || '-'}</Text>
             </View>
           </View>
         </View>
@@ -666,33 +654,41 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
         {/* 7. Bottom Settlement / Bank Information & Signature */}
         <View style={styles.bottomGrid}>
           {/* Bank Info */}
-          <View style={styles.bankCol}>
-            <Text style={styles.sectionTitle}>Billing Information:</Text>
-            <View style={styles.billingRow}>
-              <Text style={styles.billingLabel}>Account Name</Text>
-              <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.bank?.accountName || activeInvoice.company.name}</Text>
-            </View>
-            <View style={styles.billingRow}>
-              <Text style={styles.billingLabel}>Bank Account</Text>
-              <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>
-                {activeInvoice.bank?.accountNumber || '50200012345678'} ({activeInvoice.bank?.bankName || 'HDFC Bank'})
-              </Text>
-            </View>
-            <View style={styles.billingRow}>
-              <Text style={styles.billingLabel}>IFSC Code</Text>
-              <Text style={styles.billingColon}>:</Text>
-              <Text style={styles.billingValue}>{activeInvoice.bank?.ifscCode || 'HDFC0001234'}</Text>
-            </View>
-            {activeInvoice.bank?.upiId ? (
+          {activeInvoice.bank?.accountNumber || activeInvoice.bank?.bankName ? (
+            <View style={styles.bankCol}>
+              <Text style={styles.sectionTitle}>Billing Information:</Text>
+              {activeInvoice.bank.accountName ? (
+                <View style={styles.billingRow}>
+                  <Text style={styles.billingLabel}>Account Name</Text>
+                  <Text style={styles.billingColon}>:</Text>
+                  <Text style={styles.billingValue}>{activeInvoice.bank.accountName}</Text>
+                </View>
+              ) : null}
               <View style={styles.billingRow}>
-                <Text style={styles.billingLabel}>Instant UPI VPA</Text>
+                <Text style={styles.billingLabel}>Bank Account</Text>
                 <Text style={styles.billingColon}>:</Text>
-                <Text style={styles.billingValue}>{activeInvoice.bank.upiId}</Text>
+                <Text style={styles.billingValue}>
+                  {activeInvoice.bank.accountNumber || '-'} {activeInvoice.bank.bankName ? `(${activeInvoice.bank.bankName})` : ''}
+                </Text>
               </View>
-            ) : null}
-          </View>
+              {activeInvoice.bank.ifscCode ? (
+                <View style={styles.billingRow}>
+                  <Text style={styles.billingLabel}>IFSC Code</Text>
+                  <Text style={styles.billingColon}>:</Text>
+                  <Text style={styles.billingValue}>{activeInvoice.bank.ifscCode}</Text>
+                </View>
+              ) : null}
+              {activeInvoice.bank.upiId ? (
+                <View style={styles.billingRow}>
+                  <Text style={styles.billingLabel}>Instant UPI VPA</Text>
+                  <Text style={styles.billingColon}>:</Text>
+                  <Text style={styles.billingValue}>{activeInvoice.bank.upiId}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <View style={styles.bankCol} />
+          )}
 
           {/* Signature Block */}
           <View style={styles.signCol}>

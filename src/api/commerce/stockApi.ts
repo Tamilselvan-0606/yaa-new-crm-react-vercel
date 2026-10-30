@@ -98,6 +98,22 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
     : undefined;
   const finalStock = Number(rawStock !== null && rawStock !== undefined ? rawStock : (batchSum ?? 0));
 
+  const rawCreatedAt =
+    anyItem.createdAt ||
+    anyItem.created_at ||
+    item.createdAt ||
+    anyItem.product?.createdAt ||
+    anyItem.product?.created_at ||
+    undefined;
+  const rawUpdatedAt =
+    item.lastUpdated ||
+    anyItem.updatedAt ||
+    anyItem.updated_at ||
+    anyItem.product?.updatedAt ||
+    anyItem.product?.updated_at ||
+    rawCreatedAt ||
+    new Date().toISOString();
+
   return {
     id: item.id || item.productId,
     productId: item.productId || item.id,
@@ -110,7 +126,8 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
     reorderLevel: Number(item.reorderLevel ?? anyItem.minStockAlert ?? anyItem.product?.minStockAlert ?? 0),
     unitCost: Number(item.unitCost ?? anyItem.purchasePrice ?? anyItem.costPrice ?? anyItem.product?.purchasePrice ?? anyItem.product?.costPrice ?? 0),
     unitPrice: Number(item.unitPrice ?? anyItem.salePrice ?? anyItem.sellingPrice ?? anyItem.product?.salePrice ?? anyItem.product?.sellingPrice ?? 0),
-    lastUpdated: item.lastUpdated || anyItem.updatedAt || new Date().toISOString(),
+    lastUpdated: rawUpdatedAt,
+    createdAt: rawCreatedAt || rawUpdatedAt,
     batches: mappedBatches,
     itemImage: anyItem.itemImage || anyItem.image || anyItem.item_image || anyItem.product?.itemImage || anyItem.product?.image || anyItem.product?.item_image || undefined,
   };
@@ -156,11 +173,21 @@ export const stockEndpoints = baseApi.injectEndpoints({
     }),
 
     adjustCommerceStock: builder.mutation<AdjustStockResponse, AdjustStockPayload>({
-      query: (payload) => ({
-        url: '/commerce/stocks/adjust',
-        method: 'POST',
-        body: payload,
-      }),
+      query: (payload) => {
+        const isOutward =
+          payload.adjustmentType === 'OUTWARD' ||
+          payload.adjustmentType === 'DAMAGED' ||
+          payload.adjustmentType === 'RETURN';
+        const signedQty = isOutward ? -Math.abs(payload.quantity) : Math.abs(payload.quantity);
+        return {
+          url: '/commerce/stocks/adjust',
+          method: 'POST',
+          body: {
+            ...payload,
+            quantity: signedQty,
+          },
+        };
+      },
       invalidatesTags: [
         { type: 'Stock', id: 'LIST' },
         { type: 'Stock', id: 'LEDGER' },
@@ -311,7 +338,16 @@ export const stockApi = {
    * POST /commerce/stocks/adjust
    */
   adjustStock: async (payload: AdjustStockPayload): Promise<AdjustStockResponse> => {
-    const response = await baseClient.post<AdjustStockResponse>('/commerce/stocks/adjust', payload);
+    const isOutward =
+      payload.adjustmentType === 'OUTWARD' ||
+      payload.adjustmentType === 'DAMAGED' ||
+      payload.adjustmentType === 'RETURN';
+    const signedQty = isOutward ? -Math.abs(payload.quantity) : Math.abs(payload.quantity);
+    const normalizedPayload = {
+      ...payload,
+      quantity: signedQty,
+    };
+    const response = await baseClient.post<AdjustStockResponse>('/commerce/stocks/adjust', normalizedPayload);
     return response.data;
   },
 

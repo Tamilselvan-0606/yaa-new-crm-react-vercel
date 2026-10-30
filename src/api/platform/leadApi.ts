@@ -31,6 +31,19 @@ export const leadEndpoints = baseApi.injectEndpoints({
           if (params.converted !== undefined && params.converted !== null) queryParams.converted = String(params.converted);
           if (params.sortBy) queryParams.sortBy = params.sortBy;
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
+          if (params.organization_id || params.organizationId) {
+            queryParams.organization_id = params.organization_id || params.organizationId;
+          }
+          const subId = params.sub_organization_id || params.subOrganizationId;
+          if (subId) {
+            queryParams.sub_organization_id = subId;
+            queryParams.subOrganizationId = subId;
+          }
+          const branchId = params.branch_id || params.branchId;
+          if (branchId) {
+            queryParams.branch_id = branchId;
+            queryParams.branchId = branchId;
+          }
         }
         return {
           url: '/platform/leads',

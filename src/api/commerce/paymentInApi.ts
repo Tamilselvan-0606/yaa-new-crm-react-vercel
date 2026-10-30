@@ -9,6 +9,8 @@ import {
   CreatePaymentInPayload,
   UpdatePaymentInPayload,
   PatchPaymentInPayload,
+  CommercePaymentType,
+  normalizeCommercePaymentType,
 } from './paymentInTypes';
 
 export * from './paymentInTypes';
@@ -58,17 +60,20 @@ export const mapApiPaymentInToSalePaymentIn = (apiPay: ApiPaymentIn): SalePaymen
 export const mapSalePaymentInToApiPayload = (
   pay: Partial<SalePaymentIn> & {
     partyName: string;
-    paymentType: string;
+    paymentType?: string;
     receivedAmount: number;
   }
 ): CreatePaymentInPayload => {
   const dateVal = pay.date || pay.paymentDate || new Date().toISOString().split('T')[0];
   const dateStr = dateVal.includes('T') ? dateVal.split('T')[0] : dateVal;
 
+  const rawPaymentType = pay.paymentType || pay.paymentMethod || 'Cash';
+  const normalizedPaymentType = normalizeCommercePaymentType(rawPaymentType);
+
   const payload: CreatePaymentInPayload = {
     date: dateStr,
     partyName: pay.partyName.trim(),
-    paymentType: pay.paymentType || pay.paymentMethod || 'Cash',
+    paymentType: normalizedPaymentType,
     receivedAmount: Math.max(0, Number(pay.receivedAmount ?? pay.amount ?? 0)),
   };
 
@@ -92,6 +97,16 @@ export const mapSalePaymentInToApiPayload = (
   }
   if (pay.notes && pay.notes.trim()) {
     payload.notes = pay.notes.trim();
+  }
+  if (
+    rawPaymentType &&
+    rawPaymentType !== normalizedPaymentType &&
+    !payload.description?.toLowerCase().includes(rawPaymentType.toLowerCase()) &&
+    !payload.notes?.toLowerCase().includes(rawPaymentType.toLowerCase())
+  ) {
+    const extra = `Payment Mode: ${rawPaymentType}`;
+    payload.notes = payload.notes ? `${payload.notes} (${extra})` : extra;
+    payload.description = payload.description ? `${payload.description} (${extra})` : extra;
   }
   if (pay.imageAttachment && pay.imageAttachment.trim()) {
     payload.imageAttachment = pay.imageAttachment.trim();
@@ -149,7 +164,7 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
             queryParams.invoiceId = params.invoiceId;
           }
           if (params.paymentType && params.paymentType !== 'ALL' && params.paymentType !== 'All') {
-            queryParams.paymentType = params.paymentType;
+            queryParams.paymentType = normalizeCommercePaymentType(params.paymentType);
           }
         }
         return {
@@ -175,7 +190,10 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
       query: (payload) => ({
         url: '/commerce/payments-in',
         method: 'POST',
-        body: payload,
+        body: {
+          ...payload,
+          paymentType: normalizeCommercePaymentType(payload.paymentType),
+        },
       }),
       invalidatesTags: [
         { type: 'PaymentIn', id: 'LIST' },
@@ -193,7 +211,10 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/payments-in/${id}`,
         method: 'PUT',
-        body: payload,
+        body: {
+          ...payload,
+          ...(payload.paymentType ? { paymentType: normalizeCommercePaymentType(payload.paymentType) } : {}),
+        },
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentIn', id },
@@ -212,7 +233,10 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/payments-in/${id}`,
         method: 'PATCH',
-        body: payload,
+        body: {
+          ...payload,
+          ...(payload.paymentType ? { paymentType: normalizeCommercePaymentType(payload.paymentType) } : {}),
+        },
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentIn', id },
@@ -291,7 +315,7 @@ export const commercePaymentInApi = {
         queryParams.invoiceId = params.invoiceId;
       }
       if (params.paymentType && params.paymentType !== 'ALL' && params.paymentType !== 'All') {
-        queryParams.paymentType = params.paymentType;
+        queryParams.paymentType = normalizeCommercePaymentType(params.paymentType);
       }
     }
 
@@ -315,7 +339,11 @@ export const commercePaymentInApi = {
    * POST /commerce/payments-in
    */
   createPaymentIn: async (payload: CreatePaymentInPayload): Promise<CommercePaymentInSingleResponse> => {
-    const response = await baseClient.post<CommercePaymentInSingleResponse>('/commerce/payments-in', payload);
+    const cleanPayload: CreatePaymentInPayload = {
+      ...payload,
+      paymentType: normalizeCommercePaymentType(payload.paymentType),
+    };
+    const response = await baseClient.post<CommercePaymentInSingleResponse>('/commerce/payments-in', cleanPayload);
     return response.data;
   },
 
@@ -327,7 +355,11 @@ export const commercePaymentInApi = {
     id: string,
     payload: UpdatePaymentInPayload
   ): Promise<CommercePaymentInSingleResponse> => {
-    const response = await baseClient.put<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`, payload);
+    const cleanPayload: UpdatePaymentInPayload = {
+      ...payload,
+      ...(payload.paymentType ? { paymentType: normalizeCommercePaymentType(payload.paymentType) } : {}),
+    };
+    const response = await baseClient.put<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`, cleanPayload);
     return response.data;
   },
 
@@ -339,7 +371,11 @@ export const commercePaymentInApi = {
     id: string,
     payload: PatchPaymentInPayload
   ): Promise<CommercePaymentInSingleResponse> => {
-    const response = await baseClient.patch<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`, payload);
+    const cleanPayload: PatchPaymentInPayload = {
+      ...payload,
+      ...(payload.paymentType ? { paymentType: normalizeCommercePaymentType(payload.paymentType) } : {}),
+    };
+    const response = await baseClient.patch<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`, cleanPayload);
     return response.data;
   },
 

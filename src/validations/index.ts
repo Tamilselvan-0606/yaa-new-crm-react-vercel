@@ -179,6 +179,10 @@ export const LeadSchema = z.object({
   interestedProductOrService: z.string().trim().optional(),
   assignedStaffId: z.string().optional(),
   status: z.enum([
+    "Open",
+    "Qualified",
+    "Inactive",
+    "Converted to Client",
     "New",
     "Contacted",
     "Follow-up",
@@ -313,8 +317,8 @@ export const CustomerSchema = z.object({
   customerType: z
     .enum(["Retail", "Wholesale", "Corporate", "Business", "Individual"])
     .optional(),
-  creditLimit: z.number().nonnegative().optional(),
-  openingBalance: z.number().optional(),
+  creditLimit: z.number().nonnegative("Credit limit cannot be negative").optional(),
+  openingBalance: z.number().nonnegative("Opening balance cannot be negative").optional(),
   paymentTerms: z.string().optional(),
   gstin: z.string().trim().optional(),
   salesRepresentativeId: z.string().optional(),
@@ -365,13 +369,13 @@ export const ProductSchema = z.object({
   category: z.string().trim().min(1, "Category is required"),
   subcategory: z.string().trim().optional(),
   unit: z.string().trim().optional(),
-  purchasePrice: z.number().nonnegative("Purchase price must be positive"),
-  salesPrice: z.number().nonnegative("Sales price must be positive"),
-  mrp: z.number().nonnegative().optional(),
-  taxPercent: z.number().min(0).max(100).optional(),
+  purchasePrice: z.number().nonnegative("Purchase price cannot be negative"),
+  salesPrice: z.number().nonnegative("Sales price cannot be negative"),
+  mrp: z.number().nonnegative("MRP cannot be negative").optional(),
+  taxPercent: z.number().min(0, "Tax cannot be negative").max(100, "Tax cannot exceed 100%").optional(),
   hsnCode: z.string().trim().optional(),
-  minStockLevel: z.number().nonnegative().optional(),
-  openingStock: z.number().nonnegative().optional(),
+  minStockLevel: z.number().nonnegative("Minimum stock level cannot be negative").optional(),
+  openingStock: z.number().nonnegative("Opening stock cannot be negative").optional(),
   description: z.string().trim().optional(),
 });
 export type ProductFormData = z.infer<typeof ProductSchema>;
@@ -427,18 +431,26 @@ export const SupplierSchema = z.object({
   email: z
     .string()
     .trim()
-    .email("Invalid email address")
-    .or(z.literal(""))
-    .optional(),
+    .min(1, "Email is required")
+    .email("Invalid email address"),
   address: z.string().trim().min(1, "Address is required"),
   city: z.string().trim().min(1, "City is required"),
   state: z.string().trim().min(1, "State is required"),
   country: z.string().trim().optional(),
-  pincode: z.string().trim().min(1, "Pincode is required"),
+  pincode: z
+    .string()
+    .trim()
+    .min(1, "Pincode is required")
+    .regex(/^\d{6}$/, "Pincode must be exactly 6 digits"),
   gstNumber: z.string().trim().optional(),
   panNumber: z.string().trim().optional(),
   paymentTerms: z.string().trim().optional(),
-  creditLimit: z.union([z.number(), z.string()]).optional(),
+  creditLimit: z
+    .union([
+      z.number().nonnegative("Credit limit cannot be negative"),
+      z.string().refine((v) => !v || (!isNaN(Number(v)) && Number(v) >= 0), "Credit limit cannot be negative"),
+    ])
+    .optional(),
   bankName: z.string().trim().optional(),
   accountNumber: z.string().trim().optional(),
   ifscCode: z.string().trim().optional(),
@@ -459,9 +471,23 @@ export const ExpenseSchema = z.object({
   payee: z.string().trim().optional(),
   amount: z.union([
     z.number().positive("Amount must be greater than 0"),
-    z.string().min(1, "Amount is required"),
+    z
+      .string()
+      .trim()
+      .min(1, "Amount is required")
+      .refine((v) => !isNaN(Number(v)) && Number(v) > 0, "Amount must be greater than 0"),
   ]),
-  taxPercent: z.union([z.number(), z.string()]).optional(),
+  taxPercent: z
+    .union([
+      z.number().min(0, "Tax cannot be negative").max(100, "Tax cannot exceed 100%"),
+      z
+        .string()
+        .refine(
+          (v) => !v || (!isNaN(Number(v)) && Number(v) >= 0 && Number(v) <= 100),
+          "Tax percentage must be between 0 and 100"
+        ),
+    ])
+    .optional(),
   paymentMode: z.string().min(1, "Payment mode is required"),
   referenceNo: z.string().trim().optional(),
   receiptImage: z.string().optional(),
@@ -477,8 +503,9 @@ export const PaymentOutSchema = z.object({
     z.number().positive("Payment amount must be greater than 0"),
     z
       .string()
+      .trim()
       .min(1, "Payment amount is required")
-      .refine((v) => Number(v) > 0, "Payment amount must be greater than 0"),
+      .refine((v) => !isNaN(Number(v)) && Number(v) > 0, "Payment amount must be greater than 0"),
   ]),
   paymentDate: z.string().min(1, "Payment date is required"),
   paymentMode: z.string().min(1, "Payment mode is required"),
@@ -555,7 +582,7 @@ export const RecordPaymentSchema = z.object({
   taxDeductedType: z.enum(["none", "gst", "income_tax", "both"]).optional(),
   gstTdsPercentage: z.union([z.number(), z.string()]).optional(),
   incomeTaxTdsPercentage: z.union([z.number(), z.string()]).optional(),
-  bankDeductions: z.number().min(0).optional(),
+  bankDeductions: z.number().min(0, "Bank deductions cannot be negative").optional(),
   referenceId: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
@@ -590,7 +617,7 @@ export const CollectionFollowUpSchema = z.object({
   followUpDate: z.string().min(1, "Follow-up date is required"),
   outcome: z.string().min(1, "Outcome is required"),
   notes: z.string().trim().optional(),
-  promisedAmount: z.number().nonnegative().optional(),
+  promisedAmount: z.number().nonnegative("Promised amount cannot be negative").optional(),
   promiseDate: z.string().optional(),
   nextFollowUpDate: z.string().optional(),
 });

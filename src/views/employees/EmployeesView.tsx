@@ -268,7 +268,7 @@ export const EmployeesView: React.FC = () => {
         title={editingEmployee ? `Edit ${editingEmployee.name}` : 'Add Staff Member'}
       >
         <form noValidate onSubmit={handleSubmit(onSubmitEmployee)} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Full Name *</label>
               <input
@@ -293,7 +293,7 @@ export const EmployeesView: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Position / Job Title</label>
               <input

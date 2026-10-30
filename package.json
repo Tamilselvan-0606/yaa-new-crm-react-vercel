@@ -17,6 +17,7 @@
     "@emotion/styled": "^11.14.1",
     "@google/genai": "^2.4.0",
     "@hookform/resolvers": "^5.9.1",
+    "@mui/icons-material": "^7.3.11",
     "@mui/material": "^9.4.0",
     "@react-pdf/renderer": "^4.9.0",
     "@reduxjs/toolkit": "^2.13.0",
@@ -39,6 +40,7 @@
     "react-router-dom": "^7.18.3",
     "recharts": "^3.10.1",
     "sonner": "^2.0.8",
+    "use-debounce": "^10.1.1",
     "vite": "^6.2.3",
     "zod": "^4.5.4",
     "zustand": "^5.0.15"

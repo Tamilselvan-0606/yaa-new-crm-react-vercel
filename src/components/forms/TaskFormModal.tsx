@@ -48,11 +48,11 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
           title: '',
           description: '',
           targetType: 'Product',
-          targetId: 'prod_1',
-          targetName: 'OmniFlow ERP',
+          targetId: '',
+          targetName: '',
           clientId: '',
           clientName: '',
-          assignedStaffId: currentUser?.id || 'usr_staff_sales',
+          assignedStaffId: currentUser?.id || '',
           dueDate: new Date().toISOString().split('T')[0],
           priority: 'Medium',
           status: 'Pending',
@@ -70,7 +70,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
         targetName: initialTask.targetName,
         clientId: initialTask.clientId || '',
         clientName: initialTask.clientName || '',
-        assignedStaffId: initialTask.assignedStaffId || currentUser?.id || 'usr_staff_sales',
+        assignedStaffId: initialTask.assignedStaffId || currentUser?.id || '',
         dueDate: initialTask.dueDate || new Date().toISOString().split('T')[0],
         priority: initialTask.priority as any,
         status: initialTask.status as any,
@@ -81,11 +81,11 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
         title: '',
         description: '',
         targetType: 'Product',
-        targetId: 'prod_1',
-        targetName: 'OmniFlow ERP',
+        targetId: '',
+        targetName: '',
         clientId: '',
         clientName: '',
-        assignedStaffId: currentUser?.id || 'usr_staff_sales',
+        assignedStaffId: currentUser?.id || '',
         dueDate: new Date().toISOString().split('T')[0],
         priority: 'Medium',
         status: 'Pending',
@@ -153,7 +153,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             <input
               {...register('targetName')}
               type="text"
-              placeholder="e.g. OmniFlow ERP or Brand Campaign"
+              placeholder="e.g. Product Demo or Brand Campaign"
               className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
             />
           </div>
@@ -209,18 +209,18 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
         </div>
 
         {/* Bottom Actions Bar */}
-        <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+        <div className="pt-4 border-t border-slate-100 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
           <button
             type="button"
             onClick={onClose}
-            className="h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-all cursor-pointer flex items-center justify-center"
+            className="w-full sm:w-auto h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-all cursor-pointer flex items-center justify-center"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting || createTaskMutation.isPending || updateTaskMutation.isPending}
-            className="h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white rounded-xl text-sm font-bold shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+            className="w-full sm:w-auto h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white rounded-xl text-sm font-bold shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {initialTask ? 'Update Task' : 'Create Task'}
           </button>

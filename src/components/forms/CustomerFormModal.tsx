@@ -7,6 +7,7 @@ import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { CustomSelect } from '../common/CustomSelect';
 import { useAuth } from '../../context/AuthContext';
+import { useScopeLock } from '../../hooks/useScopeLock';
 import { api } from '../../services/api';
 import { customerApi } from '../../api/commerce/customerApi';
 import {
@@ -53,6 +54,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   initialCustomer,
 }) => {
   const dispatch = useAppDispatch();
+  // Prefilled records (e.g. converting a lead) have no id yet and must be created, not updated.
+  const isEditing = Boolean(initialCustomer?.id);
   const { currentUser } = useAuth();
 
   // Role determination
@@ -64,6 +67,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     currentUser?.email?.toLowerCase() === 'suborgadmin@gmail.com' ||
     currentUser?.email?.toLowerCase() === 'yaaadmin@gmail.com';
   const isOrgAdmin = !isSuperAdmin && !isSubOrgAdmin;
+  const { lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId } = useScopeLock();
 
   // Organization, SubOrg, Branch State
   const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
@@ -158,8 +162,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   }, [isOpen, selectedOrgId, activeOrgId, isSuperAdmin, isSubOrgAdmin]);
 
   // Fetch Branches
+  const branchesKey = `${(isSuperAdmin ? selectedOrgId : activeOrgId) || ''}|${selectedSubOrgId}`;
+  const [branchesLoadedFor, setBranchesLoadedFor] = useState('');
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setBranchesLoadedFor('');
+      return;
+    }
+    let cancelled = false;
     const fetchBranches = async () => {
       try {
         setLoadingBranches(true);
@@ -174,19 +184,25 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           },
           orgToQuery || undefined
         );
-        if (res && Array.isArray(res.data)) {
-          setBranches(res.data);
-        } else {
-          setBranches([]);
-        }
+        if (cancelled) return;
+        const list = res && Array.isArray(res.data) ? res.data : [];
+        setBranches(list);
+        // Drop a branch that belongs to a previously selected sub-organization
+        if (!initialCustomer) setSelectedBranchId((cur) => (cur && !list.some((b) => b.id === cur) ? '' : cur));
       } catch (err) {
         console.warn('Failed to load branches:', err);
-        setBranches([]);
+        if (!cancelled) setBranches([]);
       } finally {
-        setLoadingBranches(false);
+        if (!cancelled) {
+          setBranchesLoadedFor(branchesKey);
+          setLoadingBranches(false);
+        }
       }
     };
     fetchBranches();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, selectedOrgId, selectedSubOrgId, activeOrgId, isSuperAdmin]);
 
   // Products from API
@@ -224,34 +240,65 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     },
   });
 
-  // Load real products from API
+  // Load real products, requested with the selected branch once the branches for the current org/sub-org are
+  // loaded (so a stale branch id is never sent). If the server rejects the branch, the org/sub-org products
+  // are loaded and filtered by the branch here instead.
   useEffect(() => {
-    if (!isOpen) return;
-    const loadProducts = async () => {
-      try {
-        setLoadingProducts(true);
-        const res = await clientProductApi.getProducts({ page: 1, limit: 100 });
-        if (res && res.success && Array.isArray(res.data)) {
-          setProducts(res.data);
-        } else {
-          setProducts([]);
+    if (!isOpen || branchesLoadedFor !== branchesKey) return;
+    let cancelled = false;
+    const orgToQuery = (isSuperAdmin ? selectedOrgId : activeOrgId) || undefined;
+    const branchId = branches.some((b) => b.id === selectedBranchId) ? selectedBranchId : undefined;
+    const load = (withBranch: boolean) =>
+      clientProductApi.getProducts(
+        {
+          page: 1,
+          limit: 100,
+          organizationId: orgToQuery,
+          subOrganizationId: selectedSubOrgId || undefined,
+          branchId: withBranch ? branchId : undefined,
+        },
+        orgToQuery
+      );
+
+    setLoadingProducts(true);
+    load(true)
+      .then((res) => ({ res, filterByBranch: false }))
+      .catch((e) =>
+        branchId && /branch/i.test(e?.message || '')
+          ? load(false).then((res) => ({ res, filterByBranch: true }))
+          : Promise.reject(e)
+      )
+      .then(({ res, filterByBranch }) => {
+        if (cancelled) return;
+        let list = res && res.success && Array.isArray(res.data) ? res.data : [];
+        if (filterByBranch) {
+          const linkedProductId = branches.find((b) => b.id === branchId)?.productId;
+          list = list.filter((p) => p.branchId === branchId || p.id === linkedProductId);
         }
-      } catch (err) {
+        setProducts(list);
+        // A product chosen for another branch no longer applies (existing clients keep their linked product).
+        if (branchId && !initialCustomer) {
+          setSelectedProductId((prev) => (prev && !list.some((p) => p.name === prev) ? '' : prev));
+        }
+      })
+      .catch((err) => {
         console.warn('Failed to load products in customer form:', err);
-        setProducts([]);
-      } finally {
-        setLoadingProducts(false);
-      }
+        if (!cancelled) setProducts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingProducts(false);
+      });
+    return () => {
+      cancelled = true;
     };
-    loadProducts();
-  }, [isOpen]);
+  }, [isOpen, branchesLoadedFor, branchesKey, branches, selectedBranchId, selectedSubOrgId, selectedOrgId, activeOrgId, isSuperAdmin]);
 
   // Reset or pre-fill form
   useEffect(() => {
     if (isOpen) {
       if (initialCustomer) {
         reset({
-          clientId: initialCustomer.clientId || `CLI-${initialCustomer.id}`,
+          clientId: (initialCustomer as any).code || initialCustomer.clientId || `CLI-${initialCustomer.id}`,
           clientName: initialCustomer.clientName || initialCustomer.name || '',
           businessName: initialCustomer.businessName || initialCustomer.company || '',
           contactPerson: initialCustomer.contactPerson || initialCustomer.name || '',
@@ -263,36 +310,19 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           address: initialCustomer.address || initialCustomer.location || '',
         });
 
+        const existingSubOrgId =
+          (initialCustomer as any).subOrganizationId || (initialCustomer as any).sub_organization_id || '';
+        const existingBranchId = (initialCustomer as any).branchId || (initialCustomer as any).branch_id || '';
+        if (existingSubOrgId) setSelectedSubOrgId(existingSubOrgId);
+        if (existingBranchId) setSelectedBranchId(existingBranchId);
+
         const firstLinkedProd = initialCustomer.linkedProducts?.[0]?.productName || initialCustomer.linkedProducts?.[0]?.productId || '';
         setSelectedProductId(firstLinkedProd);
 
         setDocuments(
           initialCustomer.documents && initialCustomer.documents.length > 0
             ? initialCustomer.documents
-            : [
-                {
-                  id: 'doc_init_1',
-                  title: 'Master Service Agreement (MSA)',
-                  category: 'Agreement',
-                  fileType: 'PDF',
-                  fileSize: '2.4 MB',
-                  url: '#',
-                  uploadedBy: 'Company Staff',
-                  uploadedAt: new Date().toISOString().split('T')[0],
-                  type: 'shared_by_company',
-                },
-                {
-                  id: 'doc_init_2',
-                  title: 'Corporate GST Certificate',
-                  category: 'Tax/GST',
-                  fileType: 'PDF',
-                  fileSize: '850 KB',
-                  url: '#',
-                  uploadedBy: 'Client',
-                  uploadedAt: new Date().toISOString().split('T')[0],
-                  type: 'shared_by_client',
-                },
-              ]
+            : []
         );
       } else {
         reset({
@@ -308,35 +338,23 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           address: '',
         });
         setSelectedProductId('');
-        setDocuments([
-          {
-            id: 'doc_init_1',
-            title: 'Master Service Agreement (MSA)',
-            category: 'Agreement',
-            fileType: 'PDF',
-            fileSize: '2.4 MB',
-            url: '#',
-            uploadedBy: 'Company Staff',
-            uploadedAt: new Date().toISOString().split('T')[0],
-            type: 'shared_by_company',
-          },
-          {
-            id: 'doc_init_2',
-            title: 'Corporate GST Certificate',
-            category: 'Tax/GST',
-            fileType: 'PDF',
-            fileSize: '850 KB',
-            url: '#',
-            uploadedBy: 'Client',
-            uploadedAt: new Date().toISOString().split('T')[0],
-            type: 'shared_by_client',
-          },
-        ]);
+        setDocuments([]);
+        if (!isSubOrgAdmin) {
+          setSelectedSubOrgId('');
+          setSelectedBranchId('');
+        }
       }
       setFormErrors({});
       setApiModalError(null);
     }
   }, [isOpen, initialCustomer, reset]);
+
+  // Sub-org / branch admins are pinned to the scope from their login
+  useEffect(() => {
+    if (!isOpen) return;
+    if (lockSubOrg) setSelectedSubOrgId(lockedSubOrgId);
+    if (lockBranch) setSelectedBranchId(lockedBranchId);
+  }, [isOpen, lockSubOrg, lockBranch, lockedSubOrgId, lockedBranchId, initialCustomer, subOrganizations]);
 
   const handleFileUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -344,7 +362,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   ) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    Array.from(files).forEach((file) => {
+    Array.from(files).forEach((file: any) => {
       const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
       const sizeStr = Number(sizeMB) < 1 ? `${Math.round(file.size / 1024)} KB` : `${sizeMB} MB`;
@@ -436,8 +454,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         selectedProductId ||
         undefined;
 
-      if (initialCustomer) {
+      if (isEditing) {
         await platformClientApi.updateClient(initialCustomer.id, {
+          code: data.clientId,
           name: data.businessName || data.clientName,
           legalName: data.businessName || data.clientName,
           contactPerson: data.contactPerson || data.clientName,
@@ -478,6 +497,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           organizationType: 1,
           status: 'Active',
           subOrganizationSupport: true,
+          leadId: (initialCustomer as any)?.sourceLeadId || undefined,
         });
         toast.success('Client profile created successfully');
       }
@@ -486,6 +506,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         baseApi.util.invalidateTags([
           { type: 'Customer', id: 'LIST' },
           { type: 'PlatformClient', id: 'LIST' },
+          { type: 'Lead', id: 'LIST' },
           'Dashboard',
         ])
       );
@@ -513,10 +534,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={initialCustomer ? 'Edit Client Profile' : 'Create Client Profile'}
+      title={isEditing ? 'Edit Client Profile' : 'Create Client Profile'}
       subtitle={
         <span className="text-white/80 text-xs font-normal">
-          {initialCustomer
+          {isEditing
             ? 'Update client details, tax numbers, product and attached documents'
             : 'Register a new client profile with contact info, tax registration, product and documents'}
         </span>
@@ -527,7 +548,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       hideCloseButton={true}
       onBack={onClose}
     >
-      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+      <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4 p-0.5 sm:p-2 animate-in fade-in duration-150">
         {apiModalError && (
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
             <span>{apiModalError}</span>
@@ -591,7 +612,20 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             <label className={labelClass}>
               Sub-Organization <span className="text-rose-500 font-bold">*</span>
             </label>
-            {isSubOrgAdmin ? (
+            {lockSubOrg || initialCustomer ? (
+              <input
+                type="text"
+                readOnly
+                disabled
+                value={
+                  subOrganizations.find((s) => s.id === selectedSubOrgId)?.name ||
+                  initialCustomer?.subOrganizationName ||
+                  (loadingSubOrgs ? 'Loading...' : '')
+                }
+                title="Sub-organization cannot be modified"
+                className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+              />
+            ) : isSubOrgAdmin ? (
               <div>
                 <input
                   type="text"
@@ -634,6 +668,16 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             <label className={labelClass}>
               Branch <span className="text-rose-500 font-bold">*</span>
             </label>
+            {lockBranch ? (
+              <input
+                type="text"
+                readOnly
+                disabled
+                value={branches.find((b) => b.id === lockedBranchId)?.name || (loadingBranches ? 'Loading...' : '')}
+                title="Branch cannot be modified"
+                className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
+              />
+            ) : (
             <CustomSelect
               value={selectedBranchId}
               error={!!formErrors.branch}
@@ -642,8 +686,13 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                 if (formErrors.branch) setFormErrors((prev) => ({ ...prev, branch: '' }));
               }}
               options={
-                branches.length > 0
-                  ? branches.map((b) => ({
+                branches.length > 0 || (selectedBranchId && initialCustomer?.branchName)
+                  ? [
+                      ...branches,
+                      ...(selectedBranchId && initialCustomer?.branchName && !branches.some((x) => x.id === selectedBranchId)
+                        ? [{ id: selectedBranchId, name: initialCustomer.branchName, location: '' } as any]
+                        : []),
+                    ].map((b) => ({
                       value: b.id,
                       label: `${b.name}${b.location ? ` - ${b.location}` : ''}`,
                     }))
@@ -651,6 +700,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
               }
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
             />
+            )}
             {formErrors.branch && (
               <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.branch}</p>
             )}
@@ -1161,7 +1211,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             icon={<Check className="w-4 h-4 stroke-[2.5]" />}
             className="w-full sm:w-auto justify-center"
           >
-            {isSubmitting ? 'Saving...' : initialCustomer ? 'Save Changes' : 'Save'}
+            {isSubmitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Save'}
           </Button>
         </div>
       </form>

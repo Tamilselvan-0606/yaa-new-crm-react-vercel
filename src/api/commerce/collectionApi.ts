@@ -50,7 +50,7 @@ export const collectionEndpoints = baseApi.injectEndpoints({
       query: (params) => {
         const queryParams: Record<string, any> = {};
         if (params) {
-          if (params.tab && params.tab !== 'all') queryParams.tab = params.tab;
+          if (params.tab && params.tab !== 'all' && params.tab !== 'ALL') queryParams.tab = params.tab;
           if (params.search && params.search.trim()) queryParams.search = params.search.trim();
           if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
             queryParams.salesRepresentativeId = params.salesRepresentativeId;
@@ -61,14 +61,25 @@ export const collectionEndpoints = baseApi.injectEndpoints({
           if (params.dueDateFilter && params.dueDateFilter !== 'ALL') {
             queryParams.dueDateFilter = params.dueDateFilter;
           }
-          if (params.status && params.status !== 'ALL') queryParams.status = params.status;
-          if (params.paymentStatus && params.paymentStatus !== 'ALL') {
+          if (params.status && params.status !== 'ALL' && params.status !== 'All') queryParams.status = params.status;
+          if (params.paymentStatus && params.paymentStatus !== 'ALL' && params.paymentStatus !== 'All') {
             queryParams.paymentStatus = params.paymentStatus;
           }
-          if (typeof params.page === 'number') queryParams.page = params.page;
-          if (typeof params.limit === 'number') queryParams.limit = params.limit;
-          else if (typeof params.pageSize === 'number') queryParams.limit = params.pageSize;
+          if (typeof params.page === 'number') {
+            queryParams.page = params.page;
+            queryParams.page_no = params.page;
+          }
+          if (typeof params.limit === 'number') {
+            queryParams.limit = params.limit;
+            queryParams.page_size = params.limit;
+          } else if (typeof params.pageSize === 'number') {
+            queryParams.limit = params.pageSize;
+            queryParams.pageSize = params.pageSize;
+            queryParams.page_size = params.pageSize;
+          }
           if (params.sub_organization_id) queryParams.sub_organization_id = params.sub_organization_id;
+          if (params.branch_id) queryParams.branch_id = params.branch_id;
+          if (params.product_id) queryParams.product_id = params.product_id;
         }
         return {
           url: '/commerce/collections/invoices',
@@ -288,37 +299,38 @@ export const collectionApi = {
   ): Promise<CommerceCollectionInvoicesResponse> => {
     const queryParams: Record<string, any> = {};
     if (params) {
-      if (params.tab && params.tab !== 'all') {
+      if (params.tab && params.tab !== 'all' && params.tab !== 'ALL') {
         queryParams.tab = params.tab;
-      } else {
-        queryParams.tab = 'all';
       }
       if (params.search && params.search.trim()) {
         queryParams.search = params.search.trim();
       }
-      if (params.salesRepresentativeId) {
+      if (params.salesRepresentativeId && params.salesRepresentativeId !== 'ALL') {
         queryParams.salesRepresentativeId = params.salesRepresentativeId;
       }
-      if (params.customerId) {
+      if (params.customerId && params.customerId !== 'ALL') {
         queryParams.customerId = params.customerId;
       }
       if (params.dueDateFilter && params.dueDateFilter !== 'ALL') {
         queryParams.dueDateFilter = params.dueDateFilter;
       }
-      if (params.status && params.status !== 'ALL') {
+      if (params.status && params.status !== 'ALL' && params.status !== 'All') {
         queryParams.status = params.status;
       }
-      if (params.paymentStatus && params.paymentStatus !== 'ALL') {
+      if (params.paymentStatus && params.paymentStatus !== 'ALL' && params.paymentStatus !== 'All') {
         queryParams.paymentStatus = params.paymentStatus;
       }
       if (typeof params.page === 'number') {
         queryParams.page = params.page;
+        queryParams.page_no = params.page;
       }
       if (typeof params.limit === 'number') {
         queryParams.limit = params.limit;
+        queryParams.page_size = params.limit;
       } else if (typeof params.pageSize === 'number') {
         queryParams.limit = params.pageSize;
         queryParams.pageSize = params.pageSize;
+        queryParams.page_size = params.pageSize;
       }
       if (params.sub_organization_id) {
         queryParams.sub_organization_id = params.sub_organization_id;

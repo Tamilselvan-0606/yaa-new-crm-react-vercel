@@ -25,8 +25,8 @@ const variantClasses: Record<ButtonVariant, string> = {
 
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-8 px-3 text-xs gap-1.5',
-  md: 'h-11 px-5 text-sm gap-2',
-  lg: 'h-12 px-6 text-base gap-2.5',
+  md: 'h-10 sm:h-11 px-4 sm:px-5 text-xs sm:text-sm gap-2',
+  lg: 'h-11 sm:h-12 px-5 sm:px-6 text-sm sm:text-base gap-2.5',
 };
 
 export const Button: React.FC<ButtonProps> = ({
@@ -47,7 +47,7 @@ export const Button: React.FC<ButtonProps> = ({
       {...props}
       disabled={isDisabled}
       className={[
-        'inline-flex items-center justify-center font-bold rounded-xl transition-all duration-200 cursor-pointer select-none',
+        'inline-flex items-center justify-center font-bold rounded-xl transition-all duration-200 cursor-pointer select-none whitespace-nowrap shrink-0',
         variantClasses[variant],
         sizeClasses[size],
         isDisabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : '',
@@ -80,7 +80,7 @@ export const Button: React.FC<ButtonProps> = ({
       ) : (
         <>
           {icon && iconPosition === 'left' && <span className="shrink-0">{icon}</span>}
-          {children && <span>{children}</span>}
+          {children && <span className="whitespace-nowrap">{children}</span>}
           {icon && iconPosition === 'right' && <span className="shrink-0">{icon}</span>}
         </>
       )}

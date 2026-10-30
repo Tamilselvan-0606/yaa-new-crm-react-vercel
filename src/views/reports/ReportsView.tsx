@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { api } from '../../services/api';
 import {
   BarChart3,
   TrendingUp,
@@ -33,25 +32,7 @@ import {
 
 export const ReportsView: React.FC = () => {
   const { isAdmin, showToast } = useAuth();
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'30d' | '90d' | '1y'>('30d');
-
-  useEffect(() => {
-    loadStats();
-  }, []);
-
-  const loadStats = async () => {
-    setLoading(true);
-    try {
-      const data = await api.getDashboardStats();
-      setStats(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleExportCSV = () => {
     showToast('info', 'Report Generated', 'Executive summary CSV exported.');
@@ -68,20 +49,20 @@ export const ReportsView: React.FC = () => {
 
   // Monthly Revenue Trend Data
   const revenueTrendData = [
-    { month: 'Mar', OmniFlow: 24500, NexusCRM: 18200, Pulse: 11500, ChatSphere: 9800, Marketing: 14200 },
-    { month: 'Apr', OmniFlow: 26800, NexusCRM: 19400, Pulse: 12800, ChatSphere: 11200, Marketing: 15800 },
-    { month: 'May', OmniFlow: 29200, NexusCRM: 21500, Pulse: 13900, ChatSphere: 12900, Marketing: 16900 },
-    { month: 'Jun', OmniFlow: 31000, NexusCRM: 22800, Pulse: 15400, ChatSphere: 14100, Marketing: 18400 },
-    { month: 'Jul', OmniFlow: 33400, NexusCRM: 24600, Pulse: 16800, ChatSphere: 15600, Marketing: 19800 },
-    { month: 'Aug', OmniFlow: 36200, NexusCRM: 26400, Pulse: 18200, ChatSphere: 17300, Marketing: 21500 },
+    { month: 'Mar', YaaConnect: 24500, DocMotez: 18200, DocDentQ: 11500, AarudamAI: 9800, Marketing: 14200 },
+    { month: 'Apr', YaaConnect: 26800, DocMotez: 19400, DocDentQ: 12800, AarudamAI: 11200, Marketing: 15800 },
+    { month: 'May', YaaConnect: 29200, DocMotez: 21500, DocDentQ: 13900, AarudamAI: 12900, Marketing: 16900 },
+    { month: 'Jun', YaaConnect: 31000, DocMotez: 22800, DocDentQ: 15400, AarudamAI: 14100, Marketing: 18400 },
+    { month: 'Jul', YaaConnect: 33400, DocMotez: 24600, DocDentQ: 16800, AarudamAI: 15600, Marketing: 19800 },
+    { month: 'Aug', YaaConnect: 36200, DocMotez: 26400, DocDentQ: 18200, AarudamAI: 17300, Marketing: 21500 },
   ];
 
   // Revenue by Product Pie Data
   const productDistribution = [
-    { name: 'OmniFlow ERP', value: 36200, color: '#33077C' },
-    { name: 'NexusCRM Pro', value: 26400, color: '#6b21a8' },
-    { name: 'PulseAnalytics', value: 18200, color: '#9333ea' },
-    { name: 'ChatSphere AI', value: 17300, color: '#c084fc' },
+    { name: 'Yaa Connect', value: 36200, color: '#33077C' },
+    { name: 'Doc Motez', value: 26400, color: '#6b21a8' },
+    { name: 'Doc DentQ', value: 18200, color: '#9333ea' },
+    { name: 'Aarudam AI', value: 17300, color: '#c084fc' },
     { name: 'Digital Marketing', value: 21500, color: '#4309A2' },
   ];
 
@@ -99,10 +80,10 @@ export const ReportsView: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-bold text-[#33077C]">
+          <h2 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             Executive Business Analytics & Performance Reports
           </h2>
-          <p className="text-xs text-slate-500">
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             Multi-product revenue aggregation, marketing retainer returns, and CRM pipeline conversion metrics.
           </p>
         </div>
@@ -132,7 +113,7 @@ export const ReportsView: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-xs">
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Group Revenue</span>
-          <p className="text-2xl font-black text-slate-900 mt-1">₹{stats?.financials?.totalRevenue?.toLocaleString() || '119,600'}</p>
+          <p className="text-2xl font-black text-slate-900 mt-1">₹119,600</p>
           <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-1">
             <TrendingUp className="w-3 h-3" /> +14.2% from prior period
           </span>
@@ -177,10 +158,10 @@ export const ReportsView: React.FC = () => {
                   contentStyle={{ borderRadius: '12px', fontSize: '11px', border: '1px solid #e2e8f0' }}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
-                <Line type="monotone" dataKey="OmniFlow" stroke="#33077C" strokeWidth={2.5} />
-                <Line type="monotone" dataKey="NexusCRM" stroke="#6b21a8" strokeWidth={2} />
-                <Line type="monotone" dataKey="Pulse" stroke="#9333ea" strokeWidth={2} />
-                <Line type="monotone" dataKey="ChatSphere" stroke="#c084fc" strokeWidth={2} />
+                <Line type="monotone" dataKey="YaaConnect" stroke="#33077C" strokeWidth={2.5} />
+                <Line type="monotone" dataKey="DocMotez" stroke="#6b21a8" strokeWidth={2} />
+                <Line type="monotone" dataKey="DocDentQ" stroke="#9333ea" strokeWidth={2} />
+                <Line type="monotone" dataKey="AarudamAI" stroke="#c084fc" strokeWidth={2} />
                 <Line type="monotone" dataKey="Marketing" stroke="#4309A2" strokeWidth={3} />
               </LineChart>
             </ResponsiveContainer>

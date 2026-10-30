@@ -1,6 +1,7 @@
+import { useDebounce } from 'use-debounce';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check, X, Loader2 } from 'lucide-react';
+import { ChevronDown, Check, X, Loader2, Plus } from 'lucide-react';
 
 export interface SearchableOption {
   value: string;
@@ -8,11 +9,12 @@ export interface SearchableOption {
   subLabel?: string;
   badge?: string;
   disabled?: boolean;
+  data?: any;
 }
 
-interface SearchableSelectProps {
+export interface SearchableSelectProps {
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, option?: SearchableOption) => void;
   options: (string | SearchableOption)[];
   placeholder?: string;
   searchPlaceholder?: string;
@@ -27,6 +29,14 @@ interface SearchableSelectProps {
   onSearch?: (query: string) => void;
   onOpen?: () => void;
   isLoading?: boolean;
+  // Server-side pagination & infinite scroll props
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  selectedItem?: SearchableOption;
+  staticOptions?: SearchableOption[];
+  onAddNew?: () => void;
+  addNewText?: string;
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -45,6 +55,13 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   onSearch,
   onOpen,
   isLoading = false,
+  onLoadMore,
+  hasMore = false,
+  isLoadingMore = false,
+  selectedItem,
+  staticOptions = [],
+  onAddNew,
+  addNewText = 'Add New',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -67,42 +84,54 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     );
   }, [options]);
 
+  // Selected Option: checks explicitly passed selectedItem first (preserves value across pages)
   const selectedOption = useMemo(() => {
-    return normalizedOptions.find((opt) => opt.value === value);
-  }, [normalizedOptions, value]);
+    if (selectedItem && String(selectedItem.value) === String(value)) {
+      return selectedItem;
+    }
+    const inStatic = staticOptions.find((opt) => String(opt.value) === String(value));
+    if (inStatic) return inStatic;
+    return normalizedOptions.find((opt) => String(opt.value) === String(value));
+  }, [normalizedOptions, value, selectedItem, staticOptions]);
 
-  // Debounce API search callback when typing
+  // Debounced search term via use-debounce
+  const [debouncedSearchTerm] = useDebounce(searchTerm, 400);
+
+  // Debounced API search callback when typing
   useEffect(() => {
     if (!onSearch || !isTyping) return;
-    const timer = setTimeout(() => {
-      onSearch(searchTerm.trim());
-    }, 500);
+    const trimmed = debouncedSearchTerm.trim();
+    onSearch(trimmed);
+  }, [debouncedSearchTerm, isTyping, onSearch]);
 
-    return () => clearTimeout(timer);
-  }, [searchTerm, isTyping, onSearch]);
-
-  // Filtered options based on search query typed directly into the box
+  // Filtered options based on search query
   const filteredOptions = useMemo(() => {
     if (!isTyping || !searchTerm.trim()) {
       return normalizedOptions;
     }
+    // If external onSearch is provided, the backend supplies already-filtered items
+    if (onSearch) {
+      return normalizedOptions;
+    }
     const query = searchTerm.toLowerCase().trim();
-    const localMatches = normalizedOptions.filter((opt) => {
+    return normalizedOptions.filter((opt) => {
       const matchLabel = opt.label.toLowerCase().includes(query);
       const matchSub = opt.subLabel?.toLowerCase().includes(query);
       const matchBadge = opt.badge?.toLowerCase().includes(query);
       const matchVal = opt.value.toLowerCase().includes(query);
       return matchLabel || matchSub || matchBadge || matchVal;
     });
-
-    // If onSearch is provided, and local matching found items, show them.
-    // If backend already filtered for this query but fields didn't match the strict check, display normalizedOptions
-    if (onSearch && localMatches.length === 0 && normalizedOptions.length > 0) {
-      return normalizedOptions;
-    }
-
-    return localMatches;
   }, [normalizedOptions, isTyping, searchTerm, onSearch]);
+
+  // Filter static options (e.g. None / Unassigned)
+  const filteredStaticOptions = useMemo(() => {
+    if (!staticOptions || staticOptions.length === 0) return [];
+    if (!isTyping || !searchTerm.trim()) return staticOptions;
+    const query = searchTerm.toLowerCase().trim();
+    return staticOptions.filter((opt) =>
+      opt.label.toLowerCase().includes(query) || opt.value.toLowerCase().includes(query)
+    );
+  }, [staticOptions, isTyping, searchTerm]);
 
   // Calculate dropdown portal position
   const updatePosition = () => {
@@ -110,12 +139,15 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     const rect = containerRef.current.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
-    const openUpward = spaceBelow < 240 && spaceAbove > spaceBelow;
+    const openUpward = spaceBelow < 250 && spaceAbove > spaceBelow;
+    const viewportWidth = window.innerWidth;
+    const menuWidth = Math.min(Math.max(rect.width, 240), Math.max(160, viewportWidth - 16));
+    const clampedLeft = Math.max(8, Math.min(rect.left, viewportWidth - menuWidth - 8));
 
     setDropdownPos({
       top: openUpward ? rect.top - 6 : rect.bottom + 6,
-      left: rect.left,
-      width: Math.max(rect.width, 240),
+      left: clampedLeft,
+      width: menuWidth,
       openUpward,
     });
   };
@@ -175,8 +207,17 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     };
   }, [isOpen]);
 
-  const handleSelect = (val: string) => {
-    onChange(val);
+  // Infinite scroll trigger
+  const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!hasMore || isLoading || isLoadingMore || !onLoadMore) return;
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 30) {
+      onLoadMore();
+    }
+  };
+
+  const handleSelect = (opt: SearchableOption) => {
+    onChange(opt.value, opt);
     handleClose();
   };
 
@@ -202,7 +243,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
 
   return (
     <div ref={containerRef} className={`relative select-none w-full ${className}`}>
-      {/* Searchable Input Trigger (Type directly to filter) */}
+      {/* Searchable Input Trigger */}
       <div
         onClick={() => {
           if (!disabled) {
@@ -236,10 +277,11 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              if (isOpen && filteredOptions.length > 0) {
+              if (isOpen && (filteredStaticOptions.length > 0 || filteredOptions.length > 0)) {
                 e.preventDefault();
                 e.stopPropagation();
-                handleSelect(filteredOptions[0].value);
+                const firstOpt = filteredStaticOptions[0] || filteredOptions[0];
+                if (firstOpt) handleSelect(firstOpt);
               } else if (isOpen) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -251,7 +293,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
               handleClose();
             }
           }}
-          className={`w-full bg-transparent border-none outline-none truncate placeholder-slate-400 ${
+          className={`w-full min-w-0 bg-transparent border-none outline-none truncate placeholder-slate-400 ${
             selectedOption && !isTyping ? 'font-bold text-slate-900' : 'font-medium text-slate-800'
           } ${disabled ? 'cursor-not-allowed text-slate-400' : 'cursor-text'}`}
         />
@@ -291,7 +333,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
         </div>
       </div>
 
-      {/* Floating Dropdown List (Direct options list without extra search bar) */}
+      {/* Floating Dropdown List */}
       {isOpen &&
         dropdownPos &&
         createPortal(
@@ -307,39 +349,66 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
               width: dropdownPos.width,
               zIndex: 999999,
             }}
-            className={`bg-white rounded-xl border border-slate-200/90 shadow-2xl shadow-slate-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs ${menuClassName}`}
+            className={`bg-white rounded-xl border border-slate-200/90 shadow-2xl shadow-slate-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs flex flex-col ${menuClassName}`}
           >
-            {/* Options List */}
-            <div className="max-h-60 overflow-y-auto p-1.5 space-y-0.5 custom-scrollbar">
+            {/* Options List Container */}
+            <div
+              onScroll={handleListScroll}
+              className="max-h-60 overflow-y-auto p-1.5 space-y-0.5 custom-scrollbar flex-1"
+            >
               {isLoading && (
-                <div className="px-3 py-1.5 mb-1 rounded-lg flex items-center gap-2 bg-[#33077C]/5 text-[11px] text-[#33077C] font-semibold border border-[#33077C]/15">
+                <div className="px-3 py-2 mb-1 rounded-lg flex items-center gap-2 bg-[#33077C]/5 text-[11px] text-[#33077C] font-semibold border border-[#33077C]/15">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />
-                  <span>Searching products...</span>
+                  <span>Searching records...</span>
                 </div>
               )}
 
-              {filteredOptions.length === 0 ? (
+              {/* Static Options (e.g. None / Unassigned) */}
+              {filteredStaticOptions.length > 0 && (
+                <div className="pb-1 mb-1 border-b border-slate-100 space-y-0.5">
+                  {filteredStaticOptions.map((opt) => {
+                    const isSelected = String(opt.value) === String(value);
+                    return (
+                      <button
+                        key={`static_${opt.value}`}
+                        type="button"
+                        onClick={() => handleSelect(opt)}
+                        className={`w-full text-left px-3 py-1.5 rounded-lg flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
+                            : 'text-slate-500 hover:bg-slate-50 font-medium italic'
+                        }`}
+                      >
+                        <span className="truncate">{opt.label}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-[#33077C]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {filteredOptions.length === 0 && filteredStaticOptions.length === 0 ? (
                 <div className="py-6 px-3 text-center text-slate-400 font-medium text-xs">
                   {isLoading ? (
                     <div className="flex items-center justify-center gap-2 text-[#33077C]">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Loading products...</span>
+                      <span>Loading records...</span>
                     </div>
                   ) : isTyping && searchTerm.trim() ? (
-                    `No matching options for "${searchTerm}"`
+                    `No matching records for "${searchTerm}"`
                   ) : (
-                    emptyText || 'Type to search products...'
+                    emptyText || 'Type to search records...'
                   )}
                 </div>
               ) : (
                 filteredOptions.map((opt) => {
-                  const isSelected = opt.value === value;
+                  const isSelected = String(opt.value) === String(value);
                   return (
                     <button
                       key={opt.value}
                       type="button"
                       disabled={opt.disabled}
-                      onClick={() => !opt.disabled && handleSelect(opt.value)}
+                      onClick={() => !opt.disabled && handleSelect(opt)}
                       className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between gap-2 transition-colors cursor-pointer ${
                         opt.disabled
                           ? 'opacity-40 cursor-not-allowed bg-slate-50 text-slate-400'
@@ -377,7 +446,32 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                   );
                 })
               )}
+
+              {/* Loading More Indicator for Infinite Scrolling */}
+              {isLoadingMore && (
+                <div className="py-2 px-3 text-center flex items-center justify-center gap-2 text-slate-500 font-semibold text-[11px] bg-slate-50/70 rounded-lg">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#33077C]" />
+                  <span>Loading more...</span>
+                </div>
+              )}
             </div>
+
+            {/* Quick Add New Footer Action Button */}
+            {onAddNew && (
+              <div className="p-1.5 border-t border-slate-100 bg-slate-50/80 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleClose();
+                    onAddNew();
+                  }}
+                  className="w-full py-2 px-3 rounded-lg text-xs font-bold text-[#33077C] hover:bg-[#33077C]/10 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{addNewText}</span>
+                </button>
+              </div>
+            )}
           </div>,
           document.body
         )}

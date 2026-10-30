@@ -158,7 +158,7 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     name: sub.name || 'Unnamed Sub-Organization',
     code: sub.code || 'SUB-01',
     legalName: sub.legalName || sub.name || '',
-    organizationType: sub.organizationType || '',
+    organizationType: formatOrganizationTypeName(sub.organizationType),
     industry: sub.industry || '',
     location: sub.location || sub.address || '',
     subscriptionPlan: sub.subscriptionPlan || '',
@@ -294,73 +294,9 @@ export const OrganizationView: React.FC = () => {
           console.warn('Backend sub-organization listing notice:', apiErr);
         }
 
-        // Matching logic: separate Client Management vs Sales Management
-        const isItemForSuite = (item: OrganizationItem) => {
-          const typeStr = (item.organizationType || '').toLowerCase();
-          if (isSaleManagement) {
-            return typeStr.includes('sale');
-          } else {
-            return typeStr.includes('client') || !typeStr.includes('sale');
-          }
-        };
-
-        const orgsMap = new Map<string, OrganizationItem>();
-
-        // 1. Add API items strictly matching this suite
-        apiItems.filter(isItemForSuite).forEach((org) => {
-          orgsMap.set(org.name.toLowerCase(), {
-            ...org,
-            organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
-          });
-        });
-
-        // 2. Add locally created items strictly matching this suite
-        const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
-        if (savedCatalog) {
-          try {
-            const parsed = JSON.parse(savedCatalog);
-            if (Array.isArray(parsed)) {
-              // Sanitize legacy mock names from catalog
-              const mockNames = ['yaa academy', 'next gen academy', 'yaa care', 'yaa tech solutions', 'fts academy', 'fyndus academy', 'polihills', 'apex mart & retail', 'apex mart'];
-              const filteredCatalog = parsed.filter((savedOrg: any) => !mockNames.includes((savedOrg.name || '').toLowerCase()));
-              if (filteredCatalog.length !== parsed.length) {
-                localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(filteredCatalog));
-              }
-
-              filteredCatalog.forEach((savedOrg: any) => {
-                const sType = (savedOrg.organizationType || '').toLowerCase();
-                const sName = (savedOrg.name || '').toLowerCase();
-                const matches = isSaleManagement
-                  ? sType.includes('sale')
-                  : sType.includes('client') || !sType.includes('sale');
-
-                if (matches && !orgsMap.has(sName)) {
-                  orgsMap.set(sName, {
-                    id: savedOrg.id || `sub_${Date.now()}`,
-                    name: savedOrg.name,
-                    code: savedOrg.code || `SUB-${savedOrg.name.slice(0, 3).toUpperCase()}`,
-                    legalName: savedOrg.legalName || savedOrg.name,
-                    organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
-                    industry: savedOrg.industry || (isSaleManagement ? 'Retail & Distribution' : 'Business & Services'),
-                    location: savedOrg.location || 'Chennai',
-                    subscriptionPlan: savedOrg.subscriptionPlan || (isSaleManagement ? 'ERP Standard' : 'Yaa Growth'),
-                    branchesCount: savedOrg.branchesCount ?? 0,
-                    membersCount: savedOrg.membersCount ?? 0,
-                    status: savedOrg.status || 'Active',
-                    createdAt: savedOrg.createdAt || new Date().toISOString().split('T')[0],
-                    contactPerson: savedOrg.contactPerson || 'Operations Lead',
-                  });
-                }
-              });
-            }
-          } catch (e) {
-            console.error(e);
-          }
-        }
-
-        const suiteSubOrgs = Array.from(orgsMap.values());
-        setOrganizations(suiteSubOrgs);
-        setTotalRecords(suiteSubOrgs.length);
+        // Use API items directly
+        setOrganizations(apiItems);
+        setTotalRecords(apiItems.length);
       } else {
         const res = await organizationApi.getOrganizations(page, limit);
         if (res && res.success && Array.isArray(res.data)) {
@@ -570,7 +506,7 @@ export const OrganizationView: React.FC = () => {
     setName('');
     setCode('');
     setLegalName('');
-    setOrganizationType('');
+    setOrganizationType(isOrgSuperAdmin ? (isSaleManagement ? 'Sales Management' : 'Client Management') : '');
     setIndustry('');
     setLocation('');
     setSubscriptionPlan('');
@@ -597,7 +533,8 @@ export const OrganizationView: React.FC = () => {
     setName(org.name);
     setCode(org.code);
     setLegalName(org.legalName);
-    setOrganizationType(org.organizationType || 'All');
+    const resolvedType = formatOrganizationTypeName(org.organizationType);
+    setOrganizationType(resolvedType !== 'All' ? resolvedType : (isSaleManagement ? 'Sales Management' : 'Client Management'));
     setIndustry(org.industry);
     setLocation(org.location);
     setSubscriptionPlan(org.subscriptionPlan || '');
@@ -634,7 +571,7 @@ export const OrganizationView: React.FC = () => {
       if (!code.trim()) {
         errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
       }
-      if (!organizationType || (isOrgSuperAdmin && organizationType === 'All')) {
+      if (!organizationType) {
         errors.organizationType = isOrgSuperAdmin
           ? 'Sub Organization Suite is required'
           : 'Organization Type is required';
@@ -748,9 +685,7 @@ export const OrganizationView: React.FC = () => {
       } else {
         if (isSubOrgMode) {
           const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-          const targetSuiteType = organizationType && organizationType !== 'All'
-            ? organizationType
-            : (isSaleManagement ? 'Sales Management' : 'Client Management');
+          const targetSuiteType = organizationType || 'All';
 
           await subOrganizationApi.createSubOrganization(
             {
@@ -777,21 +712,7 @@ export const OrganizationView: React.FC = () => {
             targetParentId || undefined
           );
 
-          // Persist to localStorage catalog so header dropdown immediately syncs
-          const savedCatalog = localStorage.getItem('organizations_catalog_orgsuperadmin');
-          let catalog: any[] = [];
-          if (savedCatalog) {
-            try {
-              const parsed = JSON.parse(savedCatalog);
-              if (Array.isArray(parsed)) catalog = parsed;
-            } catch (e) { }
-          }
-          catalog.push({
-            id: `sub_${Date.now()}`,
-            name: name.trim(),
-            organizationType: targetSuiteType,
-          });
-          localStorage.setItem('organizations_catalog_orgsuperadmin', JSON.stringify(catalog));
+          localStorage.removeItem('organizations_catalog_orgsuperadmin');
           window.dispatchEvent(new CustomEvent('orgChanged', { detail: { organizationType: targetSuiteType } }));
           window.dispatchEvent(new CustomEvent('subOrgChanged', { detail: { name: name.trim(), organizationType: targetSuiteType } }));
           window.dispatchEvent(new CustomEvent('subOrganizationsChanged'));
@@ -883,15 +804,10 @@ export const OrganizationView: React.FC = () => {
       {/* Top Action Header */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              {isSubOrgMode ? <Network className="w-4.5 h-4.5" /> : <Building2 className="w-4.5 h-4.5" />}
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
-              <span>{isOrgSuperAdmin || isSubOrgMode ? 'Sub Organization' : 'Organizations'}</span>
-            </h1>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
+            <span>{isOrgSuperAdmin || isSubOrgMode ? 'Sub Organization' : 'Organizations'}</span>
+          </h1>
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             {isOrgSuperAdmin
               ? 'Manage sub organizations, operational units, and corporate profiles'
               : 'Manage enterprise organizations, multi-tenant units, and corporate profiles'}
@@ -1462,7 +1378,7 @@ export const OrganizationView: React.FC = () => {
               {/* Field 4: Organization Type / Suite */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isOrgSuperAdmin ? 'Sub Organization Suite' : 'Organization Type'} <span className="text-rose-500 font-bold">*</span>
+                  {isSubOrgMode ? 'Sub Organization Type' : 'Organization Type'} <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
                   value={organizationType}
@@ -1470,7 +1386,7 @@ export const OrganizationView: React.FC = () => {
                     setOrganizationType(val);
                     if (formErrors.organizationType) setFormErrors((prev) => ({ ...prev, organizationType: '' }));
                   }}
-                  options={isOrgSuperAdmin ? ['Client Management', 'Sales Management'] : ORGANIZATION_TYPE_OPTIONS}
+                  options={ORGANIZATION_TYPE_OPTIONS}
                   placeholder="Select company type"
                   activeColor="brand"
                   error={!!formErrors.organizationType}

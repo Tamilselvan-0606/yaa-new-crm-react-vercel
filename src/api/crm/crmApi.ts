@@ -13,12 +13,6 @@ import {
 
 export const crmApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    getDashboardStats: builder.query<any, void>({
-      query: () => '/api/dashboard/stats',
-      providesTags: ['Dashboard'],
-      keepUnusedDataFor: 30,
-    }),
-
     getLeads: builder.query<Lead[], void>({
       query: () => ({
         url: '/platform/leads',
@@ -156,7 +150,15 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getTasks: builder.query<TaskItem[], void>({
-      query: () => '/api/tasks',
+      queryFn: () => {
+        try {
+          const raw = localStorage.getItem('crm_platform_tasks');
+          const data: TaskItem[] = raw ? JSON.parse(raw) : [];
+          return { data };
+        } catch {
+          return { data: [] };
+        }
+      },
       providesTags: (result) =>
         result
           ? [
@@ -167,25 +169,67 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getTodayWork: builder.query<any, void>({
-      query: () => '/api/work/today',
+      queryFn: () => {
+        const today = new Date().toISOString().split('T')[0];
+        try {
+          const raw = localStorage.getItem('crm_platform_tasks');
+          const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+          const todayTasks = tasks.filter((t) => t.dueDate === today);
+          return { data: { today, tasks: todayTasks, followUps: [] } };
+        } catch {
+          return { data: { today, tasks: [], followUps: [] } };
+        }
+      },
       providesTags: ['Task'],
     }),
 
     createTask: builder.mutation<TaskItem, Partial<TaskItem>>({
-      query: (data) => ({
-        url: '/api/tasks',
-        method: 'POST',
-        body: data,
-      }),
+      queryFn: (data) => {
+        try {
+          const raw = localStorage.getItem('crm_platform_tasks');
+          const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+          const newTask: TaskItem = {
+            id: `task_${Date.now()}`,
+            title: data.title || '',
+            description: data.description || '',
+            targetType: data.targetType || 'Product',
+            targetId: data.targetId || '',
+            targetName: data.targetName || '',
+            clientId: data.clientId || '',
+            clientName: data.clientName || '',
+            assignedStaffId: data.assignedStaffId || '',
+            dueDate: data.dueDate || new Date().toISOString().split('T')[0],
+            priority: data.priority || 'Medium',
+            status: data.status || 'Pending',
+            notes: data.notes || '',
+            createdAt: new Date().toISOString(),
+          } as TaskItem;
+          tasks.unshift(newTask);
+          localStorage.setItem('crm_platform_tasks', JSON.stringify(tasks));
+          return { data: newTask };
+        } catch (e: any) {
+          return { error: { status: 'CUSTOM_ERROR', error: e.message } };
+        }
+      },
       invalidatesTags: [{ type: 'Task', id: 'LIST' }, 'Task', 'Dashboard'],
     }),
 
     updateTask: builder.mutation<TaskItem, { id: string; data: Partial<TaskItem> }>({
-      query: ({ id, data }) => ({
-        url: `/api/tasks/${id}`,
-        method: 'PUT',
-        body: data,
-      }),
+      queryFn: ({ id, data }) => {
+        try {
+          const raw = localStorage.getItem('crm_platform_tasks');
+          const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+          const idx = tasks.findIndex((t) => t.id === id);
+          if (idx !== -1) {
+            tasks[idx] = { ...tasks[idx], ...data };
+            localStorage.setItem('crm_platform_tasks', JSON.stringify(tasks));
+            return { data: tasks[idx] };
+          }
+          return { data: { id, ...data } as TaskItem };
+        } catch (e: any) {
+          return { error: { status: 'CUSTOM_ERROR', error: e.message } };
+        }
+      },
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Task', id },
         { type: 'Task', id: 'LIST' },
@@ -195,7 +239,15 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getContent: builder.query<ContentItem[], void>({
-      query: () => '/api/content',
+      queryFn: () => {
+        try {
+          const raw = localStorage.getItem('crm_platform_content');
+          const data: ContentItem[] = raw ? JSON.parse(raw) : [];
+          return { data };
+        } catch {
+          return { data: [] };
+        }
+      },
       providesTags: (result) =>
         result
           ? [
@@ -206,16 +258,34 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     createContent: builder.mutation<ContentItem, Partial<ContentItem>>({
-      query: (data) => ({
-        url: '/api/content',
-        method: 'POST',
-        body: data,
-      }),
+      queryFn: (data) => {
+        try {
+          const raw = localStorage.getItem('crm_platform_content');
+          const items: ContentItem[] = raw ? JSON.parse(raw) : [];
+          const newItem: ContentItem = {
+            id: `cnt_${Date.now()}`,
+            title: data.title || '',
+            clientName: data.clientName || '',
+            contentType: data.contentType || 'Reel',
+            platform: data.platform || 'Instagram',
+            status: data.status || 'Draft',
+            approvalStatus: data.approvalStatus || 'Pending Upload',
+            scheduledDate: data.scheduledDate || new Date().toISOString().split('T')[0],
+            createdAt: new Date().toISOString(),
+            ...data,
+          } as ContentItem;
+          items.unshift(newItem);
+          localStorage.setItem('crm_platform_content', JSON.stringify(items));
+          return { data: newItem };
+        } catch (e: any) {
+          return { error: { status: 'CUSTOM_ERROR', error: e.message } };
+        }
+      },
       invalidatesTags: [{ type: 'Content', id: 'LIST' }, 'Dashboard'],
     }),
 
     getPayments: builder.query<PaymentItem[], void>({
-      query: () => '/api/payments',
+      query: () => '/platform/payments',
       providesTags: (result) =>
         result
           ? [
@@ -227,7 +297,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     createPayment: builder.mutation<PaymentItem, Partial<PaymentItem>>({
       query: (data) => ({
-        url: '/api/payments',
+        url: '/platform/payments',
         method: 'POST',
         body: data,
       }),
@@ -235,42 +305,37 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getSubscriptions: builder.query<SubscriptionItem[], void>({
-      query: () => '/api/subscriptions',
+      query: () => '/subscriptions',
       providesTags: ['Subscription'],
     }),
 
-    getReminders: builder.query<any[], void>({
-      query: () => '/api/reminders',
-      providesTags: ['Reminder'],
-    }),
-
     getEmployees: builder.query<any[], void>({
-      query: () => '/api/employees',
+      query: () => '/auth/users',
       providesTags: ['Employee'],
     }),
 
     getActivities: builder.query<ActivityLog[], void>({
-      query: () => '/api/activities',
+      query: () => '/platform/activities',
       providesTags: ['Activity'],
     }),
 
     getReports: builder.query<any, void>({
-      query: () => '/api/reports',
+      query: () => '/commerce/sales/dashboard/modules',
       providesTags: ['Report'],
     }),
 
     getSettings: builder.query<CompanySettings, void>({
-      query: () => '/api/settings',
+      query: () => '/settings',
       providesTags: ['Setting'],
     }),
 
     getMarketingOverview: builder.query<any, void>({
-      query: () => '/api/marketing/overview',
+      query: () => '/marketing/overview',
       providesTags: ['Content', 'Dashboard'],
     }),
 
     getCrmProducts: builder.query<Product[], void>({
-      query: () => '/api/products',
+      query: () => '/products',
       providesTags: (result) =>
         result
           ? [
@@ -281,12 +346,12 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getCrmProductById: builder.query<any, string>({
-      query: (id) => `/api/products/${id}`,
+      query: (id) => `/products/${id}`,
       providesTags: (_result, _error, id) => [{ type: 'Product', id }],
     }),
 
     getCrmCustomers: builder.query<Customer[], void>({
-      query: () => '/api/customers',
+      query: () => '/platform/clients',
       providesTags: (result) =>
         result
           ? [
@@ -297,13 +362,13 @@ export const crmApi = baseApi.injectEndpoints({
     }),
 
     getCrmCustomerById: builder.query<Customer, string>({
-      query: (id) => `/api/customers/${id}`,
+      query: (id) => `/platform/clients/${id}`,
       providesTags: (_result, _error, id) => [{ type: 'Customer', id }],
     }),
 
     updateCrmCustomer: builder.mutation<Customer, { id: string; data: Partial<Customer> }>({
       query: ({ id, data }) => ({
-        url: `/api/customers/${id}`,
+        url: `/platform/clients/${id}`,
         method: 'PUT',
         body: data,
       }),
@@ -316,7 +381,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     deleteCrmCustomer: builder.mutation<any, string>({
       query: (id) => ({
-        url: `/api/customers/${id}`,
+        url: `/platform/clients/${id}`,
         method: 'DELETE',
       }),
       invalidatesTags: [{ type: 'Customer', id: 'LIST' }, 'Dashboard'],
@@ -326,7 +391,6 @@ export const crmApi = baseApi.injectEndpoints({
 });
 
 export const {
-  useGetDashboardStatsQuery,
   useGetLeadsQuery,
   useGetLeadByIdQuery,
   useCreateLeadMutation,
@@ -342,7 +406,6 @@ export const {
   useGetPaymentsQuery,
   useCreatePaymentMutation,
   useGetSubscriptionsQuery,
-  useGetRemindersQuery,
   useGetEmployeesQuery,
   useGetActivitiesQuery,
   useGetReportsQuery,

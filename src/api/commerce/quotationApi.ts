@@ -87,14 +87,15 @@ export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotatio
 
   return {
     id: apiQ.id,
-    quotationNo: apiQ.quotationNo || 'EST-0001',
+    quotationNo: apiQ.quotationNo || '',
     referenceNo: apiQ.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,
     customerId: apiQ.customerId || apiQ.customer?.id || '',
-    partyName: apiQ.partyName || apiQ.customer?.name || 'Unnamed Customer',
+    customerCode: apiQ.customer?.customerCode || (apiQ as any).customerCode || '',
+    partyName: apiQ.partyName || apiQ.customer?.name || '',
     customerCompany: apiQ.customerCompany || apiQ.customer?.company || undefined,
-    customerPhone: apiQ.customerPhone || apiQ.customer?.phone || undefined,
+    customerPhone: apiQ.customerPhone || apiQ.customer?.phone || (apiQ.customer as any)?.customerPhone || undefined,
     customerEmail: apiQ.customerEmail || apiQ.customer?.email || undefined,
     billingAddress: apiQ.billingAddress || '',
     shippingAddress: apiQ.shippingAddress || apiQ.billingAddress || '',
@@ -114,7 +115,10 @@ export const mapApiQuotationToSaleQuotation = (apiQ: ApiQuotation): SaleQuotatio
     convertedToType: (apiQ.convertedToType as any) || null,
     convertedToId: apiQ.convertedToId || null,
     convertedToInvoiceNo: apiQ.convertedToInvoiceNo || null,
-    stateOfSupply: apiQ.stateOfSupply || '33-Tamil Nadu',
+    convertedAt:
+      (apiQ as any).convertedAt ||
+      (apiQ.convertedToInvoiceNo || apiQ.convertedToId ? apiQ.updatedAt : null),
+    stateOfSupply: apiQ.stateOfSupply || '',
     notes: apiQ.notes || '',
     terms: apiQ.terms || '',
     createdAt: apiQ.createdAt || new Date().toISOString(),
@@ -137,11 +141,14 @@ export const mapSaleQuotationToPayload = (
     partyName: quotation.partyName.trim(),
     items: (quotation.items || []).map((it: any) => {
       const item: CreateQuotationItemPayload = {
-        productId: it.productId || '',
-        productName: it.productName || 'Item',
+        productId: it.productId && UUID_REGEX.test(it.productId) ? it.productId : (it.productId || ''),
+        productName: it.productName?.trim() || 'Item',
         quantity: Math.max(1, Number(it.quantity) || 1),
         unitPrice: Math.max(0, Number(it.unitPrice) || 0),
       };
+      if (it.productId && String(it.productId).trim()) {
+        item.productId = it.productId;
+      }
       if (it.sku && String(it.sku).trim()) {
         item.sku = String(it.sku).trim();
       } else if (it.itemCode && String(it.itemCode).trim()) {
@@ -165,48 +172,49 @@ export const mapSaleQuotationToPayload = (
   if (!isCreate && quotation.quotationNo && quotation.quotationNo.trim()) {
     payload.quotationNo = quotation.quotationNo.trim();
   }
-  if (quotation.referenceNo && quotation.referenceNo.trim()) {
-    payload.referenceNo = quotation.referenceNo.trim();
+  // Only pass referenceNo if explicitly provided and not empty
+  if (quotation.referenceNo && String(quotation.referenceNo).trim()) {
+    payload.referenceNo = String(quotation.referenceNo).trim();
   }
-  if (quotation.date) {
-    payload.date = quotation.date;
+  if (quotation.date && quotation.date.trim()) {
+    payload.date = quotation.date.trim();
   }
-  if (quotation.validUntil) {
-    payload.validUntil = quotation.validUntil;
+  if (quotation.validUntil && quotation.validUntil.trim()) {
+    payload.validUntil = quotation.validUntil.trim();
   }
   // Only include customerId if it is a valid UUID
   if (quotation.customerId && UUID_REGEX.test(quotation.customerId)) {
     payload.customerId = quotation.customerId;
   }
-  if (quotation.customerCompany) {
+  if (quotation.customerCompany && quotation.customerCompany.trim()) {
     payload.customerCompany = quotation.customerCompany.trim();
   }
-  if (quotation.customerPhone) {
+  if (quotation.customerPhone && quotation.customerPhone.trim()) {
     payload.customerPhone = quotation.customerPhone.trim();
   }
-  if (quotation.customerEmail) {
+  if (quotation.customerEmail && quotation.customerEmail.trim()) {
     payload.customerEmail = quotation.customerEmail.trim();
   }
-  if (quotation.billingAddress) {
+  if (quotation.billingAddress && quotation.billingAddress.trim()) {
     payload.billingAddress = quotation.billingAddress.trim();
   }
-  if (quotation.shippingAddress) {
+  if (quotation.shippingAddress && quotation.shippingAddress.trim()) {
     payload.shippingAddress = quotation.shippingAddress.trim();
   }
   if (typeof quotation.withGst === 'boolean') {
     payload.withGst = quotation.withGst;
   }
-  if (quotation.gstType) {
-    payload.gstType = quotation.gstType;
+  if (quotation.gstType && quotation.gstType.trim()) {
+    payload.gstType = quotation.gstType.trim();
   }
-  if (quotation.notes) {
-    payload.notes = quotation.notes;
+  if (quotation.notes && quotation.notes.trim()) {
+    payload.notes = quotation.notes.trim();
   }
-  if (quotation.terms) {
-    payload.terms = quotation.terms;
+  if (quotation.terms && quotation.terms.trim()) {
+    payload.terms = quotation.terms.trim();
   }
-  if (quotation.stateOfSupply) {
-    payload.stateOfSupply = quotation.stateOfSupply;
+  if (quotation.stateOfSupply && quotation.stateOfSupply.trim()) {
+    payload.stateOfSupply = quotation.stateOfSupply.trim();
   }
 
   return payload;

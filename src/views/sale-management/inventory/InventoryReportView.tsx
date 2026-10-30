@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { printTableReport } from '../../../utils/printUtils';
+import { printTableReport, downloadTableReport } from '../../../utils/printUtils';
 import {
   FileSpreadsheet,
   Download,
@@ -15,9 +15,11 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
+import { toast } from 'sonner';
 import {
   ResponsiveContainer,
   BarChart,
@@ -90,6 +92,7 @@ const REVENUE_ANALYTICS_DATA = [
 export const InventoryReportView: React.FC = () => {
   const [timeRange, setTimeRange] = useState('6M');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   const handleExport = () => {
     const csvRows = [
@@ -111,7 +114,7 @@ export const InventoryReportView: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  const handlePrint = () => {
+  const getInventoryReportTableOptions = () => {
     const tableData = STOCK_MOVEMENT_DATA.map((d) => {
       const catShare = CATEGORY_SHARE_DATA.find((c) => c.name.toLowerCase().includes(d.category.toLowerCase()));
       return {
@@ -128,7 +131,7 @@ export const InventoryReportView: React.FC = () => {
     const totalOut = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockOut, 0);
     const totalAvail = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.available, 0);
 
-    printTableReport({
+    return {
       title: 'Inventory & Stock Analytics Report',
       subtitle: `Time Range: ${timeRange} | Category Filter: ${selectedCategory}`,
       metrics: [
@@ -138,12 +141,12 @@ export const InventoryReportView: React.FC = () => {
         { label: 'Latest Stock Valuation', value: '₹31,50,000' },
       ],
       columns: [
-        { header: 'Category', key: 'category', align: 'left' },
-        { header: 'Stock In Units', key: 'stockIn', align: 'right' },
-        { header: 'Stock Out Units', key: 'stockOut', align: 'right' },
-        { header: 'Current Available', key: 'available', align: 'right' },
-        { header: 'Movement Ratio', key: 'turnoverRatio', align: 'right' },
-        { header: 'Category Share', key: 'share', align: 'right' },
+        { header: 'Category', key: 'category', align: 'left' as const },
+        { header: 'Stock In Units', key: 'stockIn', align: 'right' as const },
+        { header: 'Stock Out Units', key: 'stockOut', align: 'right' as const },
+        { header: 'Current Available', key: 'available', align: 'right' as const },
+        { header: 'Movement Ratio', key: 'turnoverRatio', align: 'right' as const },
+        { header: 'Category Share', key: 'share', align: 'right' as const },
       ],
       data: tableData,
       summaryRow: {
@@ -154,9 +157,28 @@ export const InventoryReportView: React.FC = () => {
         turnoverRatio: ((totalOut / (totalIn || 1)) * 100).toFixed(1) + '%',
         share: '100%',
       },
-      orientation: 'landscape',
+      orientation: 'landscape' as const,
       footerNote: 'Generated from YAA CRM Inventory Management System • Read-only Analytics Report',
-    });
+    };
+  };
+
+  const handlePrint = () => {
+    printTableReport(getInventoryReportTableOptions());
+  };
+
+  const handleDownloadPdf = async () => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const filename = `Inventory_Stock_Analytics_${new Date().toISOString().split('T')[0]}.pdf`;
+    try {
+      await downloadTableReport(getInventoryReportTableOptions(), filename);
+      toast.success('Inventory analytics PDF report downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to download inventory analytics PDF:', err);
+      toast.error('Failed to download PDF report. Please try again.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   return (
@@ -169,7 +191,7 @@ export const InventoryReportView: React.FC = () => {
               <FileSpreadsheet className="w-4.5 h-4.5" />
             </div>
             <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              Inventory & Stock Analytics
+              Inventory &amp; Stock Analytics
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
@@ -200,12 +222,21 @@ export const InventoryReportView: React.FC = () => {
             Print
           </Button>
           <Button
+            variant="secondary"
+            size="md"
+            disabled={isDownloadingPdf}
+            onClick={handleDownloadPdf}
+            icon={isDownloadingPdf ? <Loader2 className="w-4 h-4 animate-spin text-orange-600" /> : <Download className="w-4 h-4 text-orange-600" />}
+          >
+            {isDownloadingPdf ? 'Generating...' : 'Download PDF'}
+          </Button>
+          <Button
             variant="primary"
             size="md"
             onClick={handleExport}
-            icon={<Download className="w-4 h-4 text-white" />}
+            icon={<FileSpreadsheet className="w-4 h-4 text-white" />}
           >
-            Export Report
+            Export CSV
           </Button>
         </div>
       </div>

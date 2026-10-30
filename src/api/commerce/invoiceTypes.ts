@@ -135,6 +135,7 @@ export interface ApiSalesInvoice {
   stockDeducted?: boolean;
   sourceType?: string | null;
   sourceId?: string | null;
+  convertedAt?: string | null;
   payments?: ApiInvoicePaymentItem[];
 }
 

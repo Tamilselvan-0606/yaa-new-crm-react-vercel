@@ -92,6 +92,7 @@ export interface ApiDeliveryChallan {
   convertedToInvoiceNo?: string | null;
   convertedToType?: 'Invoice' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
 }
 
 /**

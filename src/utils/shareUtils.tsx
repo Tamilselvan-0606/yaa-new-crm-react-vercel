@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Forward, Share2 } from 'lucide-react';
+import SendIcon from '@mui/icons-material/Send';
+import Popover from '@mui/material/Popover';
 import { toast } from 'sonner';
 
 /**
@@ -72,7 +73,13 @@ export const shareOnGmail = ({
   to?: string;
   title?: string;
 }): void => {
-  const encTo = encodeURIComponent(to.trim());
+  const cleanTo = (to || '').trim();
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanTo);
+  if (!cleanTo || !isValidEmail) {
+    toast.error(`Recipient email is missing or invalid for ${title}.`);
+    return;
+  }
+  const encTo = encodeURIComponent(cleanTo);
   const encSubject = encodeURIComponent(subject.trim());
   const encBody = encodeURIComponent(body.trim());
 
@@ -101,7 +108,11 @@ export const shareOnWhatsApp = ({
   title?: string;
 }): void => {
   const encText = encodeURIComponent(text.trim());
-  const cleanPhone = phone.replace(/[^0-9]/g, '');
+  const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
+  if (!cleanPhone || cleanPhone.length < 10) {
+    toast.error(`Recipient phone number is missing or invalid for ${title}.`);
+    return;
+  }
 
   let waUrl = `https://api.whatsapp.com/send?text=${encText}`;
   if (cleanPhone) {
@@ -908,59 +919,41 @@ export interface ShareDropdownProps {
   title?: string;
 }
 
-export const UniversalShareDropdown: React.FC<ShareDropdownProps> = ({
+export const DocumentSharePopover: React.FC<ShareDropdownProps> = ({
   id,
   activeShareId,
   setActiveShareId,
-  sharePos,
-  setSharePos,
   getShareData,
-  buttonClassName = 'w-8 h-8 rounded-lg bg-transparent hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all hover:scale-105 active:scale-95 cursor-pointer',
-  icon = <Forward className="w-4 h-4 text-[#2563EB]" />,
+  buttonClassName = 'w-8 h-8 shrink-0 rounded-lg border border-purple-200/90 bg-purple-50/70 hover:bg-purple-100 text-[#33077C] hover:text-[#4309A2] flex items-center justify-center shadow-2xs transition-all hover:scale-105 active:scale-95 cursor-pointer',
+  icon,
   title = 'Share',
 }) => {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [internalPos, setInternalPos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
-  const isOpen = activeShareId === id;
+  const isOpen =
+    activeShareId !== undefined && activeShareId !== null
+      ? activeShareId === id
+      : Boolean(anchorEl);
 
-  const handleToggle = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     if (isOpen) {
-      setActiveShareId(null);
-      if (setSharePos) setSharePos(null);
-      setInternalPos(null);
+      setAnchorEl(null);
+      setActiveShareId?.(null);
     } else {
-      const btnRect = e.currentTarget.getBoundingClientRect();
-      const spaceBelow = window.innerHeight - btnRect.bottom;
-      const popoverHeight = 150;
-      const rightPos = Math.max(12, window.innerWidth - btnRect.right - 20);
-
-      const computedPos = spaceBelow < popoverHeight
-        ? {
-            bottom: window.innerHeight - btnRect.top + 6,
-            right: rightPos,
-          }
-        : {
-            top: btnRect.bottom + 6,
-            right: rightPos,
-          };
-
-      if (setSharePos) {
-        setSharePos(computedPos);
-      }
-      setInternalPos(computedPos);
-      setActiveShareId(id);
+      setAnchorEl(e.currentTarget);
+      setActiveShareId?.(id);
     }
   };
 
-  const posToUse = sharePos || internalPos;
+  const handleClose = () => {
+    setAnchorEl(null);
+    setActiveShareId?.(null);
+  };
 
-  // Handle Gmail click
   const handleGmail = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setActiveShareId(null);
-    if (setSharePos) setSharePos(null);
+    handleClose();
     const data = getShareData();
     shareOnGmail({
       subject: data.subject,
@@ -970,11 +963,9 @@ export const UniversalShareDropdown: React.FC<ShareDropdownProps> = ({
     });
   };
 
-  // Handle WhatsApp click
   const handleWhatsApp = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setActiveShareId(null);
-    if (setSharePos) setSharePos(null);
+    handleClose();
     const data = getShareData();
     shareOnWhatsApp({
       text: data.whatsAppText || data.body,
@@ -984,63 +975,80 @@ export const UniversalShareDropdown: React.FC<ShareDropdownProps> = ({
   };
 
   return (
-    <div className="relative inline-block text-left share-popover-container">
+    <>
       <button
-        ref={buttonRef}
         type="button"
         title={title}
-        onClick={handleToggle}
+        aria-label={title}
+        onClick={handleClick}
         className={buttonClassName}
       >
-        {icon}
+        {icon || <SendIcon sx={{ fontSize: 18 }} className="text-[#33077C] group-hover:text-[#4309A2]" />}
       </button>
 
-      {isOpen && posToUse && (
-        <div
-          className="share-popover-menu share-dropdown-menu fixed z-[9999] bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left min-w-[200px]"
-          style={{
-            top: posToUse.top !== undefined ? `${posToUse.top}px` : 'auto',
-            bottom: posToUse.bottom !== undefined ? `${posToUse.bottom}px` : 'auto',
-            right: `${posToUse.right}px`,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="text-xs font-bold text-slate-800 mb-3 px-1 tracking-tight">
-            Share
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            {/* Gmail Option */}
-            <button
-              type="button"
-              onClick={handleGmail}
-              className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1 focus:outline-none"
-              title="Share on Gmail"
-            >
-              <div className="w-11 h-11 rounded-full bg-white border border-slate-200/80 shadow-xs flex items-center justify-center group-hover:scale-110 group-hover:border-red-300 transition-all">
-                <GmailIcon className="w-6 h-6" />
-              </div>
-              <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900 transition-colors">
-                Gmail
-              </span>
-            </button>
-
-            {/* WhatsApp Option */}
-            <button
-              type="button"
-              onClick={handleWhatsApp}
-              className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1 focus:outline-none"
-              title="Share on WhatsApp"
-            >
-              <div className="w-11 h-11 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 group-hover:shadow-md transition-all">
-                <WhatsAppIcon className="w-5.5 h-5.5 text-white fill-white" />
-              </div>
-              <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900 transition-colors">
-                WhatsApp
-              </span>
-            </button>
-          </div>
+      <Popover
+        open={isOpen && Boolean(anchorEl)}
+        anchorEl={anchorEl}
+        onClose={handleClose}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'right',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'right',
+        }}
+        slotProps={{
+          paper: {
+            sx: {
+              borderRadius: '16px',
+              padding: '14px',
+              minWidth: '200px',
+              border: '1px solid rgba(226, 232, 240, 0.9)',
+              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+            },
+          },
+        }}
+      >
+        <div className="text-xs font-bold text-slate-800 mb-3 px-1 tracking-tight">
+          Share
         </div>
-      )}
-    </div>
+        <div className="flex items-center justify-between gap-3">
+          {/* Gmail Option */}
+          <button
+            type="button"
+            onClick={handleGmail}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1 focus:outline-none"
+            title="Share via Gmail"
+            aria-label="Share via Gmail"
+          >
+            <div className="w-11 h-11 rounded-full bg-white border border-slate-200/80 shadow-xs flex items-center justify-center group-hover:scale-110 group-hover:border-red-300 transition-all">
+              <GmailIcon className="w-6 h-6" />
+            </div>
+            <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900 transition-colors">
+              Gmail
+            </span>
+          </button>
+
+          {/* WhatsApp Option */}
+          <button
+            type="button"
+            onClick={handleWhatsApp}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-all cursor-pointer group flex-1 focus:outline-none"
+            title="Share via WhatsApp"
+            aria-label="Share via WhatsApp"
+          >
+            <div className="w-11 h-11 rounded-full bg-[#25D366] shadow-xs flex items-center justify-center group-hover:scale-110 group-hover:shadow-md transition-all">
+              <WhatsAppIcon className="w-5.5 h-5.5 text-white fill-white" />
+            </div>
+            <span className="text-[11px] font-semibold text-slate-600 group-hover:text-slate-900 transition-colors">
+              WhatsApp
+            </span>
+          </button>
+        </div>
+      </Popover>
+    </>
   );
 };
+
+export const UniversalShareDropdown = DocumentSharePopover;

@@ -309,7 +309,8 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
     const rect = buttonRef.current.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const estimatedHeight = Math.min(validItems.length * 44 + 24, 380);
-    const rightPos = Math.max(8, window.innerWidth - rect.right);
+    const maxRight = Math.max(8, window.innerWidth - 224);
+    const rightPos = Math.min(Math.max(8, window.innerWidth - rect.right), maxRight);
 
     if (spaceBelow < estimatedHeight && rect.top > estimatedHeight) {
       setDropdownPos({
@@ -375,7 +376,7 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
         type="button"
         title={title}
         onClick={handleToggle}
-        className={`w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer focus:outline-hidden ${className}`}
+        className={`w-8 h-8 shrink-0 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer focus:outline-hidden ${className}`}
       >
         <MoreVertical className="w-4 h-4 fill-white text-white" />
       </button>
@@ -386,7 +387,7 @@ export const SaleActionDropdown: React.FC<SaleActionDropdownProps> = ({
         ReactDOM.createPortal(
           <div
             ref={menuRef}
-            className={`sale-action-dropdown-menu fixed z-[9999] ${dropdownWidth} bg-white rounded-2xl shadow-2xl border border-slate-100 py-2 px-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left`}
+            className={`sale-action-dropdown-menu fixed z-[9999] ${dropdownWidth} max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 py-2 px-1.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left`}
             style={{
               top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : undefined,
               bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : undefined,

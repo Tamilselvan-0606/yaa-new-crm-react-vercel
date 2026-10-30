@@ -28,6 +28,7 @@ export interface ExtendedProformaItem extends SaleProductItem {
   itemCode?: string;
   hsnCode?: string;
   description?: string;
+  isCustomBatch?: boolean;
 }
 
 /**
@@ -40,6 +41,7 @@ export interface SaleProformaInvoice {
   date: string;
   validUntil: string;
   customerId: string;
+  customerCode?: string;
   partyName: string;
   customerCompany?: string;
   customerPhone?: string;
@@ -63,6 +65,7 @@ export interface SaleProformaInvoice {
   convertedToInvoiceNo?: string;
   convertedToType?: 'Invoice' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
   notes?: string;
   terms?: string;
   attachedImageName?: string;
@@ -148,6 +151,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     date: dateFormatted,
     validUntil: validUntilFormatted,
     customerId: apiP.customerId || apiP.customer?.id || '',
+    customerCode: apiP.customer?.customerCode || (apiP as any).customerCode || '',
     partyName: apiP.partyName || apiP.customer?.name || 'Unnamed Customer',
     customerCompany: apiP.customerCompany || apiP.customer?.company || undefined,
     customerPhone: apiP.customerPhone || apiP.customer?.phone || undefined,
@@ -170,6 +174,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
     convertedToInvoiceNo: apiP.convertedToInvoiceNo || undefined,
     convertedToType: apiP.convertedToType || undefined,
     convertedToId: apiP.convertedToId || undefined,
+    convertedAt: (apiP as any).convertedAt || (apiP as any).convertedDate || undefined,
     notes: apiP.notes || undefined,
     terms: apiP.terms || undefined,
     attachedImageName: apiP.attachedImageName || undefined,
@@ -258,20 +263,20 @@ export const mapSaleProformaToPayload = (
   if (typeof proforma.roundOff === 'number') {
     payload.roundOff = proforma.roundOff;
   }
-  if (proforma.notes) {
-    payload.notes = proforma.notes;
+  if (proforma.notes && proforma.notes.trim()) {
+    payload.notes = proforma.notes.trim();
   }
-  if (proforma.terms) {
-    payload.terms = proforma.terms;
+  if (proforma.terms && proforma.terms.trim()) {
+    payload.terms = proforma.terms.trim();
   }
-  if (proforma.stateOfSupply) {
-    payload.stateOfSupply = proforma.stateOfSupply;
+  if (proforma.stateOfSupply && proforma.stateOfSupply.trim()) {
+    payload.stateOfSupply = proforma.stateOfSupply.trim();
   }
-  if (proforma.attachedImageName) {
-    payload.attachedImageName = proforma.attachedImageName;
+  if (proforma.attachedImageName && proforma.attachedImageName.trim()) {
+    payload.attachedImageName = proforma.attachedImageName.trim();
   }
-  if (proforma.attachedDocName) {
-    payload.attachedDocName = proforma.attachedDocName;
+  if (proforma.attachedDocName && proforma.attachedDocName.trim()) {
+    payload.attachedDocName = proforma.attachedDocName.trim();
   }
 
   return payload;

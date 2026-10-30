@@ -1,3 +1,6 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, {
   useState,
   useMemo,
@@ -29,12 +32,20 @@ import {
   ArrowLeft,
   Loader2,
   Ban,
+  Phone,
+  PlusCircle,
+  FileUp,
+  Calendar,
+  Truck,
 } from "lucide-react";
+import { AddCustomerModal } from "./AddCustomerModal";
+import { AddItemModal } from "../inventory/AddItemModal";
 import {
   useSalesManagementStore,
   SaleProductItem,
   SalesCustomer,
   SaleTransaction,
+  InventoryStockItem,
 } from "../../../store/useSalesManagementStore";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -45,10 +56,17 @@ import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { toast } from "sonner";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { printTableReport } from "../../../utils/printUtils";
-import { FileSpreadsheet } from "lucide-react";
+import {
+  printTableReport,
+  downloadBusinessDocument,
+  downloadTableReport,
+  DocumentPrintOptions,
+} from "../../../utils/printUtils";
+import { FileSpreadsheet, Download } from "lucide-react";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import { DocumentSharePopover, formatSaleOrderShare } from "../../../utils/shareUtils";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
 import {
@@ -63,19 +81,46 @@ import { customerApi } from "../../../api/commerce/customerApi";
 import { productApi } from "../../../api/commerce/productApi";
 import { ApiCustomer } from "../../../api/commerce/customerTypes";
 import { ApiProduct } from "../../../api/commerce/productTypes";
-import { DeliveryChallanRecord } from "../../../api/commerce/deliveryChallanApi";
+import {
+  stockApi,
+  mapApiStockToInventoryStockItem,
+  ApiStockBatch,
+  unpackProducts,
+  clientProductApi,
+  mapApiCustomerToSalesCustomer,
+} from "../../../api";
+import {
+  DeliveryChallanRecord,
+  commerceDeliveryChallanApi,
+  mapDeliveryChallanRecordToPayload,
+} from "../../../api/commerce/deliveryChallanApi";
 import {
   syncConvertedInvoiceToStorage,
   syncConvertedChallanToStorage,
   syncOrderStatusInStorage,
   recordDocumentConversion,
   findDocumentLineage,
+  resolveDocumentConvertedAt,
   initializeWorkflowIntegrity,
+  isMockChallan,
 } from "../../../utils/salesDocumentWorkflow";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
-import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown } from "../utils/formUtils";
+import {
+  FormLabel,
+  FORM_INPUT_CLS,
+  getFormInputCls,
+  handleNumberOnlyKeyDown,
+  handleNonNegativeKeyDown,
+} from "../utils/formUtils";
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { FormError } from "../../../components/common/FormError";
+import {
+  calculateLineItem,
+  calculateDocumentTotals,
+  determineGstType,
+  parseTaxRate,
+  round2,
+} from "../../../utils/financialCalculations";
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -94,6 +139,38 @@ const ddmmyyyyToIso = (dmy?: string): string => {
     return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
   }
   return dmy;
+};
+
+const formatDateTime = (
+  dateStr?: string | null,
+): { date: string; time: string; full: string } | null => {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  const hh = String(hours).padStart(2, "0");
+
+  return {
+    date: `${dd}/${mm}/${yyyy}`,
+    time: `${hh}:${minutes} ${ampm}`,
+    full: `${dd}/${mm}/${yyyy} ${hh}:${minutes} ${ampm}`,
+  };
+};
+
+const getInitials = (name?: string, fallback: string = "PR"): string => {
+  if (!name) return fallback;
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return fallback;
 };
 
 const mapPeriodToApiPeriod = (periodLabel: string): string => {
@@ -234,6 +311,7 @@ interface SaleOrderViewProps {
 export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   initialMode = "list",
 }) => {
+  const companyProfile = useCompanyDocumentProfile();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
@@ -242,6 +320,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     stocks: localStocks,
     saveCustomer: saveCustomerLocal,
     saveSale,
+    setCustomersList,
+    setStocksList,
   } = useSalesManagementStore();
 
   useEffect(() => {
@@ -264,8 +344,10 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [totalApiPages, setTotalApiPages] = useState(1);
 
   // Live Masters for Form Selection
-  const [liveCustomers, setLiveCustomers] = useState<ApiCustomer[]>([]);
+  const [liveCustomers, setLiveCustomers] = useState<any[]>([]);
   const [liveProducts, setLiveProducts] = useState<ApiProduct[]>([]);
+  const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
+  const [liveBatches, setLiveBatches] = useState<ApiStockBatch[]>([]);
 
   const persistSaleOrders = (updated: SaleOrderRecord[]) => {
     setSaleOrders(updated);
@@ -286,24 +368,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Search & Filters
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState("This Month");
   const [appliedPeriod, setAppliedPeriod] = useState("This Month");
   const [pendingStatus, setPendingStatus] = useState("ALL");
   const [appliedStatus, setAppliedStatus] = useState("ALL");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
+  const [pageSize, setPageSize] = useState(5);
 
   // Dropdown states & Menu Positioning
   const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
@@ -322,6 +402,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [selectedBulkOrderIds, setSelectedBulkOrderIds] = useState<string[]>(
     [],
   );
+  const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<
+    string | null
+  >(null);
+  const [convertDropdownPos, setConvertDropdownPos] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+  } | null>(null);
 
   // Preview Modal
   const [previewOrder, setPreviewOrder] = useState<SaleOrderRecord | null>(
@@ -330,7 +418,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Delete Modal State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [deleteTargetOrder, setDeleteTargetOrder] = useState<SaleOrderRecord | null>(null);
+  const [deleteTargetOrder, setDeleteTargetOrder] =
+    useState<SaleOrderRecord | null>(null);
   const [isDeletingOrder, setIsDeletingOrder] = useState(false);
   const [deleteOrderError, setDeleteOrderError] = useState<string | null>(null);
 
@@ -340,15 +429,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       const target = e.target as HTMLElement;
       if (
         !target.closest(".sale-order-action-dropdown-container") &&
-        !target.closest(".sale-order-action-dropdown-menu")
+        !target.closest(".sale-order-action-dropdown-menu") &&
+        !target.closest(".order-convert-dropdown-container") &&
+        !target.closest(".order-convert-dropdown-menu") &&
+        !target.closest(".order-convert-btn")
       ) {
         setActiveDropdownId(null);
         setDropdownPos(null);
+        setActiveConvertDropdownId(null);
+        setConvertDropdownPos(null);
       }
     };
     const handleScroll = () => {
       setActiveDropdownId(null);
       setDropdownPos(null);
+      setActiveConvertDropdownId(null);
+      setConvertDropdownPos(null);
     };
     document.addEventListener("mousedown", handleOutsideClick);
     window.addEventListener("scroll", handleScroll, true);
@@ -366,6 +462,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     showDescription: false,
     showDiscount: true,
   });
+  const [showColumnCustomizePopover, setShowColumnCustomizePopover] =
+    useState(false);
+  const [showShareFooterMenu, setShowShareFooterMenu] = useState(false);
 
   // Tax mode
   const [priceTaxMode, setPriceTaxMode] = useState<"Without Tax" | "With Tax">(
@@ -386,68 +485,234 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [enableRoundOff, setEnableRoundOff] = useState(true);
   const [manualRoundOff, setManualRoundOff] = useState<number | null>(null);
 
-  // Quick Customer Creation Modal
-  const [isQuickCustomerModalOpen, setIsQuickCustomerModalOpen] =
-    useState(false);
-  const [quickCustName, setQuickCustName] = useState("");
-  const [quickCustPhone, setQuickCustPhone] = useState("");
-  const [quickCustEmail, setQuickCustEmail] = useState("");
-  const [quickCustCompany, setQuickCustCompany] = useState("");
-  const [quickCustAddress, setQuickCustAddress] = useState("");
-  const [quickCustOpeningBal, setQuickCustOpeningBal] = useState("0");
-  const [quickCustPhoneError, setQuickCustPhoneError] = useState("");
+  // Customer Creation Modal
+  const [isAddCustomerModalOpen, setIsAddCustomerModalOpen] = useState(false);
 
-  // Load Customers and Products masters from Live API ONLY when Form Mode is active
-  const hasLoadedMasterDataRef = useRef(false);
-  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  // Add Item / Product Modal & Searchable Product Dropdown
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(
+    null,
+  );
+  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<
+    number | null
+  >(null);
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const productDropdownRef = useRef<HTMLDivElement>(null);
+  const productSearchTimerRef = useRef<any>(null);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const isFetchingProductsRef = useRef(false);
 
-  // Load Customers Master Data (products are searched on demand)
-  const loadMasterData = useCallback(async () => {
-    if (hasLoadedMasterDataRef.current) return;
-    hasLoadedMasterDataRef.current = true;
+  // Fetch live products with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
+    if (isFetchingProductsRef.current) return;
+    isFetchingProductsRef.current = true;
+    setIsLoadingProducts(true);
     try {
-      const custRes = await customerApi.getCustomers({
-        pagination_required: false,
-      });
-      if (custRes?.data && Array.isArray(custRes.data)) {
-        setLiveCustomers(custRes.data);
+      let prods: any[] = [];
+
+      // 1. First attempt: standard pagination_required: true
+      try {
+        const res = await productApi.getProducts({
+          page_no: 1,
+          page_size: 100,
+          pagination_required: true,
+          search: searchQuery?.trim() || undefined,
+          sortOrder: "desc",
+        });
+        const raw = unpackProducts(res);
+        if (raw.length > 0) prods = raw;
+      } catch (err) {
+        console.warn("Product load pagination_required:true error:", err);
       }
-    } catch (e) {
-      console.warn("Using local fallback for customers master", e);
-    }
-  }, []);
 
-  // On-demand product search: only calls products API when user is actively searching
-  const handleProductSearch = useCallback(async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setIsSearchingProducts(true);
-    try {
-      const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
-        pagination_required: false,
-      });
-      if (res?.data && Array.isArray(res.data)) {
+      // 2. Second attempt: pagination_required: false
+      if (prods.length === 0) {
+        try {
+          const res2 = await productApi.getProducts({
+            search: searchQuery?.trim() || undefined,
+            page_size: 100,
+            pagination_required: false,
+          });
+          const raw2 = unpackProducts(res2);
+          if (raw2.length > 0) prods = raw2;
+        } catch (err2) {
+          console.warn("Product load pagination_required:false error:", err2);
+        }
+      }
+
+      // 3. Third attempt: clientProductApi (platform products)
+      if (prods.length === 0) {
+        try {
+          const cRes = await clientProductApi.getProducts({
+            page: 1,
+            limit: 100,
+            search: searchQuery?.trim() || undefined,
+          });
+          const cItems = unpackProducts(cRes);
+          if (cItems.length > 0) {
+            prods = cItems.map((cp: any) => ({
+              id: cp.id,
+              productId: cp.id,
+              productName: cp.name || cp.productName,
+              productCode: cp.code || cp.sku,
+              salePrice: cp.plans?.[0]?.price || cp.price || 0,
+              unit: "PCS",
+              category: cp.tagline || "General",
+            }));
+          }
+        } catch (cErr) {
+          console.warn("clientProductApi load fallback error:", cErr);
+        }
+      }
+
+      // 4. Fourth attempt: fallback to stockApi
+      if (prods.length === 0) {
+        try {
+          const sRes = await stockApi.getStocks({
+            pagination_required: false,
+            page_size: 100,
+          });
+          const rawStocks = unpackProducts(sRes);
+          if (rawStocks.length > 0) {
+            prods = rawStocks.map((s: any) => ({
+              id: s.productId || s.id,
+              productId: s.productId || s.id,
+              productName: s.productName,
+              productCode: s.sku,
+              salePrice: s.unitPrice || 0,
+              unit: s.unit || "PCS",
+              category: s.category || "",
+            }));
+          }
+        } catch (sErr) {
+          console.warn("stockApi load fallback error:", sErr);
+        }
+      }
+
+      // 5. Fifth attempt: fallback to local storage
+      if (prods.length === 0) {
+        try {
+          const localSaved = localStorage.getItem("yaa_crm_inventory_stocks");
+          if (localSaved) {
+            const parsed = JSON.parse(localSaved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              prods = parsed;
+            }
+          }
+        } catch (locErr) {
+          console.warn("localStorage stock load fallback error:", locErr);
+        }
+      }
+
+      if (prods.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ApiProduct>();
-          prev.forEach((p) => map.set(p.id, p));
-          res.data.forEach((p) => map.set(p.id, p));
+          if (searchQuery?.trim()) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
+          prods.forEach((p) => map.set(p.id, p));
           return Array.from(map.values());
         });
       }
     } catch (err) {
       console.warn("Failed to search products in SaleOrderView:", err);
     } finally {
-      setIsSearchingProducts(false);
+      setIsLoadingProducts(false);
+      isFetchingProductsRef.current = false;
     }
   }, []);
 
+  // Click outside to close product popover
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (
+        !target.closest(".so-product-cell") &&
+        !target.closest(".product-dropdown-popover")
+      ) {
+        setOpenProductDropdownRow(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  // Load Customers, Stocks, and Batches master data on mount so list view and form view both have customer codes and stock items
+  const hasLoadedMasterDataRef = useRef(false);
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+
+  const loadMasterData = useCallback(async () => {
+    fetchLiveProducts();
+
+    try {
+      const custRes = await customerApi.getCustomers({
+        pagination_required: false,
+        page_size: 100,
+      });
+      const rawCust = unpackProducts(custRes);
+      if (rawCust.length > 0) {
+        const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
+        setLiveCustomers(mapped);
+        setCustomersList(mapped);
+      }
+    } catch (e) {
+      console.warn("Customer load error in SaleOrderView:", e);
+    }
+
+    try {
+      const stockRes = await stockApi.getStocks({
+        pagination_required: false,
+        page_size: 100,
+      });
+      const rawStocks = unpackProducts(stockRes);
+      if (rawStocks.length > 0) {
+        const mapped = rawStocks.map(mapApiStockToInventoryStockItem);
+        setLiveStocks(mapped);
+        setStocksList(mapped);
+      }
+    } catch (e) {
+      console.warn("Stock load error in SaleOrderView:", e);
+    }
+
+    try {
+      const batchRes = await stockApi.getStockBatches({
+        pagination_required: false,
+        page_size: 100,
+      });
+      const rawBatches = unpackProducts(batchRes);
+      if (rawBatches.length > 0) {
+        setLiveBatches(rawBatches);
+      }
+    } catch (e) {
+      console.warn("Batch load error in SaleOrderView:", e);
+    }
+  }, [fetchLiveProducts, setCustomersList, setStocksList]);
+
+  useEffect(() => {
+    loadMasterData();
+  }, [loadMasterData]);
+
+  // Load products when entering form mode if not already loaded
   useEffect(() => {
     if (viewMode === "form") {
-      loadMasterData();
+      if (!hasLoadedMasterDataRef.current || liveProducts.length === 0) {
+        hasLoadedMasterDataRef.current = true;
+        fetchLiveProducts();
+      }
     }
-  }, [viewMode, loadMasterData]);
+  }, [viewMode, fetchLiveProducts, liveProducts.length]);
+
+  // On-demand product search: calls products API
+  const handleProductSearch = useCallback(
+    async (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) return;
+      fetchLiveProducts(trimmed);
+    },
+    [fetchLiveProducts],
+  );
 
   // Fetch Sales Orders from Live API merged with local converted orders
   const isFetchingOrdersRef = useRef(false);
@@ -472,16 +737,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         const records = res.data.map((item) =>
           mapApiSaleOrderToSaleOrderRecord(item),
         );
-        const rawLocal = localStorage.getItem("yaa_crm_sale_orders");
-        const localList: SaleOrderRecord[] = rawLocal
-          ? JSON.parse(rawLocal)
-          : [];
-        const apiOrderNos = new Set(records.map((r) => r.orderNo || r.id));
-        const extraLocals = localList.filter(
-          (l) => !apiOrderNos.has(l.orderNo) && !apiOrderNos.has(l.id),
-        );
 
-        const merged = [...extraLocals, ...records].map((ord) => {
+        const merged = records.map((ord) => {
           const lineage = findDocumentLineage(ord.orderNo);
           const isConverted =
             ord.status === "Converted" || Boolean(lineage?.invoiceNo);
@@ -494,12 +751,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         });
 
         persistSaleOrders(merged);
-        setTotalApiRecords(
-          res.pagination?.totalRecords
-            ? res.pagination.totalRecords + extraLocals.length
-            : merged.length,
+        setTotalApiRecords(res.pagination?.totalRecords ?? merged.length);
+        setTotalApiPages(
+          Math.max(
+            1,
+            Math.ceil(
+              (res.pagination?.totalRecords ?? merged.length) / pageSize,
+            ),
+          ),
         );
-        setTotalApiPages(Math.max(1, Math.ceil(merged.length / pageSize)));
         setIsApiConnected(true);
       }
     } catch (err: any) {
@@ -568,11 +828,39 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     return localCustomers;
   }, [liveCustomers, localCustomers]);
 
-  // Combined Products / Stock Items (Live API + Local Store)
+  // Helper to extract batches for a product
+  const getBatchesForProduct = useCallback(
+    (productId: string, sku: string, name: string, explicitBatches?: any[]) => {
+      if (Array.isArray(explicitBatches) && explicitBatches.length > 0) {
+        return explicitBatches;
+      }
+      const matched = liveBatches.filter((b) => {
+        const bPid = String(
+          (b as any).productId || (b as any).product_id || "",
+        );
+        if (productId && bPid && bPid === productId) return true;
+        if (sku && (b as any).sku && (b as any).sku === sku) return true;
+        if (
+          name &&
+          (b as any).productName &&
+          (b as any).productName.toLowerCase() === name.toLowerCase()
+        )
+          return true;
+        return false;
+      });
+      return matched;
+    },
+    [liveBatches],
+  );
+
+  // Combined Products / Stock Items (Live API + Live Stocks + Local Store)
   const allStockItems = useMemo(() => {
     const map = new Map<string, any>();
 
+    // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
+      const pid = String(p.id || "");
+      if (!pid) return;
       let tax = 5;
       if (typeof (p as any).taxPercent === "number") {
         tax = (p as any).taxPercent;
@@ -580,40 +868,121 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ""));
         if (!isNaN(parsed)) tax = parsed;
       }
-      map.set(p.id, {
-        id: p.id,
-        productId: p.id,
-        productName: p.productName || (p as any).name || "Unnamed Product",
-        sku: p.productCode || (p as any).sku || "",
-        unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).price ?? (p as any).unitPrice ?? 0),
+      const sku = p.productCode || (p as any).sku || "";
+      const name = p.productName || (p as any).name || "Unnamed Product";
+      const batches = getBatchesForProduct(
+        pid,
+        sku,
+        name,
+        (p as any).batches || (p as any).stockBatches,
+      );
+      map.set(pid, {
+        id: pid,
+        productId: pid,
+        productName: name,
+        sku: sku,
+        unitPrice: Number(
+          p.salePrice ??
+            (p as any).sellingPrice ??
+            (p as any).price ??
+            (p as any).unitPrice ??
+            0,
+        ),
         unit: p.unit || "PCS",
         taxPercent: tax,
         hsnCode: p.hsnCode || "",
         category: p.category || "",
-        batches: (p as any).batches || (p as any).stockBatches || [],
+        imageUrl:
+          (p as any).images?.[0] ||
+          (p as any).image ||
+          (p as any).imageUrl ||
+          "",
+        batches,
       });
     });
 
-    localStocks.forEach((s) => {
-      const pid = (s as any).productId || s.id;
-      if (!map.has(pid)) {
+    // 2. Live Stocks from /commerce/stocks
+    liveStocks.forEach((s) => {
+      const pid = String(s.productId || s.id || "");
+      if (pid && !map.has(pid)) {
+        const sku = s.sku || (s as any).itemCode || "";
+        const name = s.productName || (s as any).name || "Unnamed Product";
+        const batches = getBatchesForProduct(pid, sku, name, s.batches);
+        let tax = 5;
+        if (typeof (s as any).taxPercent === "number") {
+          tax = (s as any).taxPercent;
+        } else if ((s as any).taxRate) {
+          const parsed = parseFloat(
+            String((s as any).taxRate).replace(/[^0-9.]/g, ""),
+          );
+          if (!isNaN(parsed)) tax = parsed;
+        }
         map.set(pid, {
-          id: s.id,
+          id: pid,
           productId: pid,
-          productName: s.productName || (s as any).name || "Unnamed Product",
-          sku: s.sku || (s as any).itemCode || "",
-          unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
+          productName: name,
+          sku: sku,
+          unitPrice: Number(
+            s.unitPrice ??
+              (s as any).salePrice ??
+              (s as any).sellingPrice ??
+              (s as any).price ??
+              0,
+          ),
           unit: s.unit || "PCS",
-          taxPercent: 5,
+          taxPercent: tax,
           hsnCode: (s as any).hsnCode || "",
           category: s.category || "",
-          batches: s.batches || [],
+          imageUrl:
+            (s as any).images?.[0] ||
+            (s as any).image ||
+            (s as any).imageUrl ||
+            "",
+          batches,
         });
       }
     });
 
-    return Array.from(map.values());
-  }, [liveProducts, localStocks]);
+    // 3. Fallback from local store stocks
+    if (map.size === 0 && Array.isArray(localStocks)) {
+      localStocks.forEach((s) => {
+        const pid = String((s as any).productId || s.id || "");
+        if (pid && !map.has(pid)) {
+          map.set(pid, {
+            id: s.id,
+            productId: pid,
+            productName: s.productName || (s as any).name || "Unnamed Product",
+            sku: s.sku || (s as any).itemCode || "",
+            unitPrice: Number(
+              s.unitPrice ??
+                (s as any).salePrice ??
+                (s as any).sellingPrice ??
+                (s as any).price ??
+                0,
+            ),
+            unit: s.unit || "PCS",
+            taxPercent: 5,
+            hsnCode: (s as any).hsnCode || "",
+            category: s.category || "",
+            imageUrl:
+              (s as any).images?.[0] ||
+              (s as any).image ||
+              (s as any).imageUrl ||
+              "",
+            batches: s.batches || [],
+          });
+        }
+      });
+    }
+
+    return Array.from(map.values()).filter((s: any) => {
+      const pid = String(s.productId || s.id || "").trim();
+      const name = String(s.productName || "").trim();
+      if (!pid && !name) return false;
+      if (pid.startsWith("mock_")) return false;
+      return true;
+    });
+  }, [liveProducts, liveStocks, localStocks, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
     return allStockItems.map((s: any) => ({
@@ -626,6 +995,32 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     }));
   }, [allStockItems]);
 
+  // Filter products for the active row popover
+  const matchingProducts = useMemo(() => {
+    const q = productSearchQuery.toLowerCase().trim();
+    if (!q) return allStockItems;
+    return allStockItems.filter(
+      (p: any) =>
+        (p.productName && p.productName.toLowerCase().includes(q)) ||
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.itemCode && p.itemCode.toLowerCase().includes(q)) ||
+        (p.category && p.category.toLowerCase().includes(q)),
+    );
+  }, [allStockItems, productSearchQuery]);
+
+  // Handle select product from searchable popover
+  const handleSelectProduct = (index: number, product: any) => {
+    handleItemChange(index, "productId", product.productId || product.id);
+    handleItemChange(index, "productName", product.productName);
+    handleItemChange(index, "sku", product.sku || "");
+    handleItemChange(index, "unit", product.unit || "PCS");
+    handleItemChange(index, "category", product.category || "");
+    handleItemChange(index, "hsnCode", product.hsnCode || "");
+    handleItemChange(index, "unitPrice", Number(product.unitPrice || 0));
+    handleItemChange(index, "taxPercent", Number(product.taxPercent || 0));
+    setOpenProductDropdownRow(null);
+  };
+
   // Auto-generate Order Number
   const generateNextOrderNo = () => {
     const year = new Date().getFullYear();
@@ -635,7 +1030,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Initial Form Data State
   const createEmptyFormData = (customNum = 1) => {
-    const firstProduct = allStockItems[0];
     return {
       customerId: "",
       partyName: "",
@@ -652,15 +1046,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       items: [
         {
           id: `so_item_${Date.now()}_1`,
-          productId: firstProduct?.productId || firstProduct?.id || "",
-          productName: firstProduct?.productName || "",
-          sku: firstProduct?.sku || "",
+          productId: "",
+          productName: "",
+          sku: "",
           quantity: 1,
-          unit: firstProduct?.unit || "PCS",
-          unitPrice: firstProduct?.unitPrice || 0,
+          unit: "PCS",
+          unitPrice: 0,
           discountPercent: 0,
-          taxPercent: firstProduct?.taxPercent || 5,
-          total: firstProduct?.unitPrice || 0,
+          taxPercent: 0,
+          total: 0,
         },
       ] as ExtendedSaleOrderItem[],
       notes: "",
@@ -807,90 +1201,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     setIsPartyDropdownOpen(false);
   };
 
-  // Quick Customer Creation
-  const handleSaveQuickCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickCustName.trim()) {
-      toast.error("Please enter customer name");
-      return;
-    }
-    if (quickCustPhone.trim()) {
-      const cleanPhone = normalizeIndianPhoneTo10Digits(quickCustPhone);
-      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
-        toast.error(
-          "Please enter a valid 10-digit Indian phone number (starts with 6, 7, 8, or 9)",
-        );
-        setQuickCustPhoneError("Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)");
-        return;
-      }
-    }
-    setQuickCustPhoneError("");
-
-    try {
-      setIsActionLoading(true);
-      const payload = {
-        name: quickCustName.trim(),
-        phone: quickCustPhone.trim() || "9876543210",
-        email: quickCustEmail.trim() || undefined,
-        company: quickCustCompany.trim() || undefined,
-        customerType: "Business" as const,
-        billingAddress: quickCustAddress.trim() || undefined,
-        shippingAddress: quickCustAddress.trim() || undefined,
-        openingBalance: Number(quickCustOpeningBal) || 0,
-      };
-
-      let createdCustomerId = `cust_${Date.now()}`;
-      try {
-        const apiRes = await customerApi.createCustomer(payload);
-        if (apiRes?.data?.id) {
-          createdCustomerId = apiRes.data.id;
-        }
-      } catch (err) {
-        console.warn("API customer creation fallback to local state");
-      }
-
-      const newCust: SalesCustomer = {
-        id: createdCustomerId,
-        customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
-        name: quickCustName.trim(),
-        phone: quickCustPhone.trim(),
-        email: quickCustEmail.trim(),
-        company: quickCustCompany.trim(),
-        customerType: "Business",
-        address: quickCustAddress.trim(),
-        billingAddress: quickCustAddress.trim(),
-        shippingAddress: quickCustAddress.trim(),
-        sameAsBilling: true,
-        city: "Chennai",
-        state: "Tamil Nadu",
-        country: "India",
-        pincode: "600001",
-        creditLimit: 50000,
-        paymentTerms: "Net 15 Days",
-        openingBalance: Number(quickCustOpeningBal) || 0,
-        preferredPaymentMethod: "Cash",
-        status: "Active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveCustomerLocal(newCust);
-      handleSelectCustomer(newCust);
-      setIsQuickCustomerModalOpen(false);
-      setQuickCustName("");
-      setQuickCustPhone("");
-      setQuickCustEmail("");
-      setQuickCustCompany("");
-      setQuickCustAddress("");
-      setQuickCustOpeningBal("0");
-      toast.success(`Customer "${newCust.name}" registered and selected!`);
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to create customer");
-    } finally {
-      setIsActionLoading(false);
-    }
-  };
-
   // Handle Items Table Changes
   const handleItemChange = (
     index: number,
@@ -920,25 +1230,39 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || "";
           target.taxPercent = (foundStock as any).taxPercent ?? 5;
           if (target.unitPrice === 0) {
-            toast.warning(`Product "${foundStock.productName}" has no default Sale Price configured.`);
+            toast.warning(
+              `Product "${foundStock.productName}" has no default Sale Price configured.`,
+            );
           }
         }
       }
 
-      const qty = Number(target.quantity) || 0;
-      const price = Number(target.unitPrice) || 0;
-      const discPct = Number(target.discountPercent) || 0;
-      const taxPct = Number(target.taxPercent) || 0;
+      const rawDiscPct =
+        field === "discountPercent" ? Number(value) : target.discountPercent;
+      const rawDiscAmt =
+        field === "discountAmount" ? Number(value) : target.discountAmount;
 
-      const gross = qty * price;
-      const discAmt = (gross * discPct) / 100;
-      const taxable = Math.max(0, gross - discAmt);
-      const taxAmt = (taxable * taxPct) / 100;
-      const lineTotal = taxable + taxAmt;
+      const lineRes = calculateLineItem(
+        {
+          quantity: target.quantity,
+          unitPrice: target.unitPrice,
+          discountPercent: rawDiscPct,
+          discountAmount: rawDiscAmt,
+          taxPercent: target.taxPercent,
+        },
+        {
+          withGst: true,
+          gstType: determineGstType(prev.stateOfSupply),
+        },
+      );
 
-      target.discountAmount = discAmt;
-      target.taxAmount = taxAmt;
-      target.total = lineTotal;
+      target.quantity = lineRes.quantity;
+      target.unitPrice = lineRes.unitPrice;
+      target.discountPercent = lineRes.discountPercent;
+      target.discountAmount = lineRes.discountAmount;
+      target.taxPercent = lineRes.taxPercent;
+      target.taxAmount = lineRes.taxAmount;
+      target.total = lineRes.lineTotal;
 
       updatedItems[index] = target;
       return { ...prev, items: updatedItems };
@@ -946,22 +1270,21 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   const handleAddRow = () => {
-    const fallbackProduct = allStockItems[0];
     updateActiveTabFormData((prev) => ({
       ...prev,
       items: [
         ...prev.items,
         {
           id: `so_item_${Date.now()}_${prev.items.length + 1}`,
-          productId: fallbackProduct?.productId || fallbackProduct?.id || "",
-          productName: fallbackProduct?.productName || "",
-          sku: fallbackProduct?.sku || "",
+          productId: "",
+          productName: "",
+          sku: "",
           quantity: 1,
-          unit: fallbackProduct?.unit || "PCS",
-          unitPrice: fallbackProduct?.unitPrice || 0,
+          unit: "PCS",
+          unitPrice: 0,
           discountPercent: 0,
-          taxPercent: fallbackProduct?.taxPercent || 5,
-          total: fallbackProduct?.unitPrice || 0,
+          taxPercent: 0,
+          total: 0,
         },
       ],
     }));
@@ -978,58 +1301,37 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     }));
   };
 
-  // Computed Totals for Current Form
+  // Computed Totals for Current Form using Centralized Financial Engine
   const currentCalculations = useMemo(() => {
-    const items = activeTab.formData.items || [];
-    let totalQty = 0;
-    let subtotalGross = 0;
-    let totalDiscount = 0;
-    let totalTax = 0;
-
-    items.forEach((item) => {
-      const q = Number(item.quantity) || 0;
-      const p = Number(item.unitPrice) || 0;
-      const d = Number(item.discountPercent) || 0;
-      const t = Number(item.taxPercent) || 0;
-
-      const gross = q * p;
-      const disc = (gross * d) / 100;
-      const taxable = gross - disc;
-      const tax = (taxable * t) / 100;
-
-      totalQty += q;
-      subtotalGross += gross;
-      totalDiscount += disc;
-      totalTax += tax;
+    const docTotals = calculateDocumentTotals({
+      items: (activeTab.formData.items || []).map((it) => ({
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
+        discountAmount: it.discountAmount,
+        taxPercent: it.taxPercent,
+      })),
+      withGst: true,
+      stateOfSupply: activeTab.formData.stateOfSupply,
+      roundMode: enableRoundOff ? "auto" : "none",
+      manualRoundOff: manualRoundOff,
     });
 
-    const netTaxable = subtotalGross - totalDiscount;
-    const exactGrandTotal = netTaxable + totalTax;
-
-    let roundOff = 0;
-    let finalAmount = exactGrandTotal;
-
-    if (enableRoundOff) {
-      if (manualRoundOff !== null && !isNaN(manualRoundOff)) {
-        roundOff = manualRoundOff;
-        finalAmount = exactGrandTotal + roundOff;
-      } else {
-        const rounded = Math.round(exactGrandTotal);
-        roundOff = Number((rounded - exactGrandTotal).toFixed(2));
-        finalAmount = rounded;
-      }
-    }
-
     return {
-      totalQty,
-      subtotalGross,
-      totalDiscount,
-      netTaxable,
-      totalTax,
-      roundOff,
-      finalAmount,
+      totalQty: docTotals.totalQty,
+      subtotalGross: docTotals.subtotal,
+      totalDiscount: docTotals.totalDiscount,
+      netTaxable: docTotals.taxableAmount,
+      totalTax: docTotals.totalTax,
+      roundOff: docTotals.roundOff,
+      finalAmount: docTotals.grandTotal,
     };
-  }, [activeTab.formData.items, enableRoundOff, manualRoundOff]);
+  }, [
+    activeTab.formData.items,
+    activeTab.formData.stateOfSupply,
+    enableRoundOff,
+    manualRoundOff,
+  ]);
 
   // Save / Update Sales Order (Live Backend Integration)
   const handleSaveSaleOrder = async (andConvert = false) => {
@@ -1043,6 +1345,32 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     );
     if (validItems.length === 0) {
       toast.error("Please enter at least one item with valid name and rate");
+      return;
+    }
+    const hasInvalidQty = validItems.some(
+      (it) => !it.quantity || it.quantity <= 0,
+    );
+    if (hasInvalidQty) {
+      toast.error("All items must have a quantity greater than zero.");
+      return;
+    }
+    const hasInvalidPrice = validItems.some(
+      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
+    );
+    if (hasInvalidPrice) {
+      toast.error("Item rates cannot be negative.");
+      return;
+    }
+    const hasInvalidDiscount = validItems.some(
+      (it) =>
+        (it.discountPercent !== undefined &&
+          (it.discountPercent < 0 || it.discountPercent > 100)) ||
+        (it.discountAmount !== undefined && it.discountAmount < 0),
+    );
+    if (hasInvalidDiscount) {
+      toast.error(
+        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
+      );
       return;
     }
 
@@ -1182,26 +1510,54 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
 
       // If "Save & Convert to Sale" clicked
-      if (andConvert && savedOrderId && UUID_REGEX.test(savedOrderId)) {
-        try {
-          const convertRes = await commerceSaleOrderApi.convertOrder(
-            savedOrderId,
-            {
-              targetType: "Invoice",
+      if (andConvert) {
+        navigate("/sale-management/sales/sale", {
+          state: {
+            convertFrom: {
+              sourceType: "Order",
+              sourceId: savedOrderId,
+              sourceNo: finalOrderNo,
+              customerId: form.customerId,
+              customerName: form.partyName,
+              customerCompany: form.customerCompany,
+              customerPhone: form.customerPhone,
+              customerEmail: form.customerEmail,
+              billingAddress: form.billingAddress,
+              shippingAddress: form.billingAddress,
+              items: form.items,
+              subtotal: currentCalculations.subtotalGross,
+              withGst: currentCalculations.totalTax > 0,
+              gstType: form.stateOfSupply?.includes("Tamil Nadu")
+                ? ("intra_state" as const)
+                : ("inter_state" as const),
+              cgst:
+                currentCalculations.totalTax > 0 &&
+                form.stateOfSupply?.includes("Tamil Nadu")
+                  ? currentCalculations.totalTax / 2
+                  : 0,
+              sgst:
+                currentCalculations.totalTax > 0 &&
+                form.stateOfSupply?.includes("Tamil Nadu")
+                  ? currentCalculations.totalTax / 2
+                  : 0,
+              igst:
+                currentCalculations.totalTax > 0 &&
+                !form.stateOfSupply?.includes("Tamil Nadu")
+                  ? currentCalculations.totalTax
+                  : 0,
+              discount: currentCalculations.totalDiscount || 0,
+              totalDiscount: currentCalculations.totalDiscount || 0,
+              taxAmount: currentCalculations.totalTax || 0,
+              grandTotal: currentCalculations.finalAmount,
+              paidAmount: 0,
+              paymentMethod: (form.paymentType as any) || "Bank Transfer",
+              paymentTerms: "15 Days",
               dueDate: form.dueDate,
+              notes: `Converted from Sale Order ${finalOrderNo}`,
             },
-          );
-          const convertedDocNo =
-            convertRes?.data?.convertedTo?.documentNo ||
-            convertRes?.data?.document?.invoiceNo ||
-            `INV-${new Date().getFullYear()}-0001`;
-          toast.success(
-            `Sales Order converted to Sales Invoice (${convertedDocNo})!`,
-          );
-        } catch (convErr: any) {
-          console.warn("Convert API response warning:", convErr);
-          toast.info("Sales Order saved. Conversion registered.");
-        }
+          },
+        });
+        return;
       }
 
       // Refresh list from live API
@@ -1224,119 +1580,96 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     }
   };
 
-  // Convert to Sale Invoice from Table (POST /commerce/orders/{id}/convert)
+  // Determine conversion status across all next stages
+  const getOrderStages = (order: SaleOrderRecord) => {
+    const orderNoClean = order.orderNo?.trim();
+    const lineage = orderNoClean
+      ? findDocumentLineage(orderNoClean, "Order")
+      : undefined;
+
+    const isInvoiceConverted = Boolean(
+      lineage?.invoiceNo ||
+      lineage?.invoiceId ||
+      order.status === "Converted" ||
+      (order.convertedToInvoiceNo &&
+        order.convertedToInvoiceNo.startsWith("INV-")),
+    );
+
+    const isChallanConverted = Boolean(
+      lineage?.challanNo ||
+      lineage?.challanId ||
+      (order.convertedToInvoiceNo &&
+        (order.convertedToInvoiceNo.startsWith("DC-") ||
+          order.convertedToInvoiceNo.startsWith("CHAL-"))),
+    );
+
+    const availableStages = [
+      {
+        type: "Challan" as const,
+        label: "Delivery Challan",
+        isConverted: isChallanConverted,
+      },
+      {
+        type: "Invoice" as const,
+        label: "Sale Invoice",
+        isConverted: isInvoiceConverted,
+      },
+    ].filter((s) => !s.isConverted);
+
+    const isFullyConverted = isInvoiceConverted || availableStages.length === 0;
+
+    return {
+      lineage,
+      isInvoiceConverted,
+      isChallanConverted,
+      availableStages,
+      availableCount: availableStages.length,
+      isFullyConverted,
+    };
+  };
+
+  // Convert to Sale Invoice from Table -> Opens New Sale Invoice page with calculations
   const handleConvertExistingToSale = async (order: SaleOrderRecord) => {
-    if (order.status === "Converted") {
+    const stages = getOrderStages(order);
+    if (stages.isFullyConverted || stages.isInvoiceConverted) {
       toast.info(`Sale order ${order.orderNo} is already converted.`);
       return;
     }
+    setActiveConvertDropdownId(null);
+    setConvertDropdownPos(null);
 
-    try {
-      setIsActionLoading(true);
-      const currentLineage = findDocumentLineage(order.orderNo);
-      let invNo =
-        currentLineage?.invoiceNo ||
-        `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1).padStart(4, "0")}`;
-
-      if (UUID_REGEX.test(order.id)) {
-        try {
-          const res = await commerceSaleOrderApi.convertOrder(order.id, {
-            targetType: "Invoice",
-            dueDate: order.dueDate,
-          });
-          const apiInvNo =
-            res?.data?.convertedTo?.documentNo ||
-            res?.data?.document?.invoiceNo;
-          if (apiInvNo) invNo = apiInvNo;
-        } catch (apiErr) {
-          console.warn("API convertOrder notice:", apiErr);
-        }
-      }
-
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}`,
-        invoiceNo: invNo,
-        referenceNo: order.orderNo,
-        saleDate: new Date().toISOString().split("T")[0],
-        dueDate: order.dueDate,
-        customerId: order.customerId,
-        customerName: order.partyName,
-        customerCompany: order.customerCompany,
-        customerPhone: order.customerPhone,
-        customerEmail: order.customerEmail,
-        billingAddress: order.billingAddress,
-        shippingAddress: order.shippingAddress || order.billingAddress,
-        items: order.items,
-        subtotal: order.subtotal,
-        withGst: order.withGst,
-        gstType: order.gstType,
-        cgst: order.cgst,
-        sgst: order.sgst,
-        igst: order.igst,
-        totalDiscount: order.discount || 0,
-        totalTax: order.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: order.amount,
-        paidAmount: order.advanceAmount || 0,
-        balance: order.balance,
-        paymentMethod: (order.paymentType as any) || "Credit",
-        paymentTerms: "15 Days",
-        paymentStatus:
-          order.balance <= 0
-            ? "Paid"
-            : (order.advanceAmount || 0) > 0
-              ? "Partial"
-              : "Unpaid",
-        saleStatus: "Confirmed",
-        createdBy: "Sales Representative",
-        salesperson: "Sales Rep",
-        notes: `Converted from Sale Order ${order.orderNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveSale(newSale);
-      syncConvertedInvoiceToStorage(newSale);
-
-      recordDocumentConversion({
-        fromType: "Order",
-        fromNo: order.orderNo,
-        toType: "Invoice",
-        toNo: invNo,
-      });
-
-      syncOrderStatusInStorage(order.orderNo, "Converted", invNo);
-
-      const updated = saleOrders.map((o) =>
-        o.id === order.id || o.orderNo === order.orderNo
-          ? { ...o, status: "Converted" as const, convertedToInvoiceNo: invNo }
-          : o,
-      );
-      persistSaleOrders(updated);
-
-      dispatch(
-        baseApi.util.invalidateTags([
-          { type: "SalesOrder", id: order.id },
-          { type: "SalesOrder", id: "LIST" },
-          { type: "SalesInvoice", id: "LIST" },
-        ]),
-      );
-
-      toast.success(
-        `Sale Order ${order.orderNo} converted to Invoice ${invNo}!`,
-      );
-      await fetchSaleOrders();
-    } catch (err: any) {
-      console.error("Convert failed:", err);
-      toast.error(
-        err?.response?.data?.error?.message ||
-          err?.message ||
-          "Failed to convert sale order",
-      );
-    } finally {
-      setIsActionLoading(false);
-    }
+    navigate("/sale-management/sales/sale", {
+      state: {
+        convertFrom: {
+          sourceType: "Order",
+          sourceId: order.id,
+          sourceNo: order.orderNo,
+          customerId: order.customerId,
+          customerName: order.partyName,
+          customerCompany: order.customerCompany,
+          customerPhone: order.customerPhone,
+          customerEmail: order.customerEmail,
+          billingAddress: order.billingAddress,
+          shippingAddress: order.shippingAddress || order.billingAddress,
+          items: order.items,
+          subtotal: order.subtotal,
+          withGst: order.withGst,
+          gstType: order.gstType,
+          cgst: order.cgst,
+          sgst: order.sgst,
+          igst: order.igst,
+          discount: order.discount || 0,
+          totalDiscount: order.discount || 0,
+          taxAmount: order.taxAmount || 0,
+          grandTotal: order.amount,
+          paidAmount: order.advanceAmount || 0,
+          paymentMethod: (order.paymentType as any) || "Bank Transfer",
+          paymentTerms: "15 Days",
+          dueDate: order.dueDate,
+          notes: `Converted from Sale Order ${order.orderNo}`,
+        },
+      },
+    });
   };
 
   // Convert to Delivery Challan from Table
@@ -1346,10 +1679,42 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       const currentLineage = findDocumentLineage(order.orderNo);
       const existingChallans: DeliveryChallanRecord[] = JSON.parse(
         localStorage.getItem("yaa_crm_delivery_challans") || "[]",
-      );
-      const challanNo =
+      ).filter((c: any) => !isMockChallan(c));
+      let challanNo =
         currentLineage?.challanNo ||
         `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
+
+      if (UUID_REGEX.test(order.id)) {
+        try {
+          const res = await commerceSaleOrderApi.convertOrder(order.id, {
+            targetType: "DeliveryChallan",
+            dueDate: order.dueDate,
+          });
+          const apiChallanNo =
+            res?.data?.convertedTo?.documentNo ||
+            res?.data?.document?.challanNo;
+          if (apiChallanNo) challanNo = apiChallanNo;
+        } catch (apiErr) {
+          console.warn("API convertOrder to challan notice:", apiErr);
+        }
+      }
+
+      let resolvedCustomerId = order.customerId;
+      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        const found = liveCustomers.find(
+          (c) =>
+            c.id === order.customerId ||
+            c.name.toLowerCase() === order.partyName.trim().toLowerCase(),
+        );
+        if (found && UUID_REGEX.test(found.id)) {
+          resolvedCustomerId = found.id;
+        } else if (
+          liveCustomers.length > 0 &&
+          UUID_REGEX.test(liveCustomers[0].id)
+        ) {
+          resolvedCustomerId = liveCustomers[0].id;
+        }
+      }
 
       const newChallan: DeliveryChallanRecord = {
         id: `dc_${Date.now()}`,
@@ -1357,7 +1722,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         referenceNo: order.orderNo,
         invoiceDate: new Date().toISOString().split("T")[0],
         dueDate: order.dueDate,
-        customerId: order.customerId,
+        customerId: resolvedCustomerId || order.customerId,
         partyName: order.partyName,
         customerPhone: order.customerPhone,
         customerEmail: order.customerEmail,
@@ -1380,6 +1745,29 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+
+      // Attempt persisting to backend Commerce Delivery Challan API
+      if (
+        resolvedCustomerId &&
+        newChallan.items &&
+        newChallan.items.length > 0
+      ) {
+        try {
+          const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
+          payload.customerId = resolvedCustomerId;
+          const createRes =
+            await commerceDeliveryChallanApi.createChallan(payload);
+          if (createRes?.data?.id) {
+            newChallan.id = createRes.data.id;
+          }
+          if (createRes?.data?.challanNo) {
+            newChallan.challanNo = createRes.data.challanNo;
+            challanNo = createRes.data.challanNo;
+          }
+        } catch (createErr) {
+          console.warn("API createChallan notice, saving locally:", createErr);
+        }
+      }
 
       syncConvertedChallanToStorage(newChallan);
 
@@ -1557,6 +1945,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             ...o,
             status: "Converted" as const,
             convertedToInvoiceNo: invNo,
+            convertedAt: new Date().toISOString(),
           };
         }
         return o;
@@ -1582,6 +1971,92 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       );
     } finally {
       setIsActionLoading(false);
+    }
+  };
+
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  const mapSaleOrderToDocumentPrintOptions = (
+    order: SaleOrderRecord,
+  ): DocumentPrintOptions => ({
+    docTypeTitle: "SALE ORDER",
+    docNo: order.orderNo,
+    docDate: isoToDdmmyyyy(order.orderDate),
+    dueDate: order.dueDate ? isoToDdmmyyyy(order.dueDate) : undefined,
+    status: order.status,
+    statusColor:
+      order.status === "Converted" || order.status === "Completed"
+        ? "emerald"
+        : order.status === "Open"
+          ? "amber"
+          : order.status === "Cancelled"
+            ? "rose"
+            : "purple",
+    referenceNo: order.referenceNo,
+    companyName: companyProfile.companyName || "YAA CREATIONS CRM",
+    companySubtitle:
+      companyProfile.companySubtitle || "Commerce & Enterprise Sales Hub",
+    companyAddress:
+      companyProfile.companyAddress ||
+      "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
+    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
+    companyPhone: companyProfile.companyPhone || "+91 98400 12345",
+    companyEmail: companyProfile.companyEmail || "orders@yaacreations.com",
+    partyTitle: "Bill To (Customer Details)",
+    partyName: order.partyName,
+    partyCompany: order.customerCompany,
+    partyPhone: order.customerPhone,
+    partyAddress: order.billingAddress,
+    extraMeta: [
+      { label: "Payment Type", value: order.paymentType || "Credit" },
+      { label: "State of Supply", value: order.stateOfSupply || "Tamil Nadu" },
+      ...(order.convertedToInvoiceNo
+        ? [{ label: "Converted Invoice", value: order.convertedToInvoiceNo }]
+        : []),
+    ],
+    items: (order.items || []).map((it) => ({
+      name: it.productName,
+      sku: it.sku,
+      batch: it.batch,
+      unit: it.unit,
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      taxPercent: it.taxPercent,
+      total: it.total,
+    })),
+    subtotal: order.subtotal,
+    discount: order.discount,
+    tax: {
+      withGst: true,
+      taxAmount: order.taxAmount,
+    },
+    roundOff: order.roundOff,
+    grandTotal: order.amount,
+    terms: order.terms,
+    primarySignatoryLabel: "Authorized Signatory",
+  });
+
+  const handleDownloadSaleOrder = async (order: SaleOrderRecord) => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const toastId = `dl-so-${order.id}`;
+    toast.loading(`Preparing PDF for Sale Order ${order.orderNo}...`, {
+      id: toastId,
+    });
+    try {
+      const options = mapSaleOrderToDocumentPrintOptions(order);
+      await downloadBusinessDocument(
+        options,
+        `SaleOrder_${order.orderNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`,
+      );
+      toast.success(`Sale Order ${order.orderNo} downloaded successfully!`, {
+        id: toastId,
+      });
+    } catch (err: any) {
+      console.error("Sale order download error:", err);
+      toast.error("Failed to download sale order PDF.", { id: toastId });
+    } finally {
+      setIsDownloadingPdf(false);
     }
   };
 
@@ -1630,9 +2105,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         <body>
           <div class="header">
             <div>
-              <div class="brand-name">YAA CREATIONS CRM</div>
-              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">Commerce &amp; Enterprise Sales Hub</div>
-              <div style="color: #475569; font-size: 11px;">GSTIN: 33AAAAA0000A1Z5 • Phone: +91 98400 12345</div>
+              <div class="brand-name">${companyProfile.companyName || "YAA CREATIONS CRM"}</div>
+              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle || "Commerce & Enterprise Sales Hub"}</div>
+              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin || "33AAAAA0000A1Z5"} • Phone: ${companyProfile.companyPhone || "+91 98400 12345"}</div>
             </div>
             <div>
               <div class="doc-title">SALE ORDER</div>
@@ -1770,7 +2245,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
       const updated = saleOrders.filter((o) => o.id !== deleteTargetOrder.id);
       persistSaleOrders(updated);
-      toast.success(`Sale order "${deleteTargetOrder.orderNo}" removed successfully.`);
+      toast.success(
+        `Sale order "${deleteTargetOrder.orderNo}" removed successfully.`,
+      );
       setIsDeleteModalOpen(false);
       setDeleteTargetOrder(null);
       await fetchSaleOrders();
@@ -1897,58 +2374,81 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // =========================================================================
   if (viewMode === "form") {
     return (
-      <div className="min-h-screen bg-slate-100 flex flex-col font-sans -m-4 sm:-m-6 lg:-m-8">
-        {/* 1. Top Tabs Bar */}
-        <div className="bg-slate-200/80 px-4 pt-2.5 pb-0 flex items-center justify-between border-b border-slate-300">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+      <div className="min-h-screen bg-slate-50/70 pb-20 -m-3 sm:-m-6 p-3 sm:p-6 flex flex-col font-sans animate-in fade-in duration-150">
+        {/* 1. TOP TAB BAR */}
+        <div className="flex items-center justify-between border-b border-slate-200/90 pb-2 mb-4">
+          <div className="flex items-center gap-1.5 overflow-x-auto">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <div
                   key={tab.id}
                   onClick={() => setActiveTabId(tab.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-t-xl text-xs sm:text-[13px] font-bold cursor-pointer transition-all border-t border-x ${
+                  className={`group relative flex items-center gap-2.5 px-4 py-2 rounded-t-xl text-xs font-semibold cursor-pointer transition-all border ${
                     isActive
-                      ? "bg-white text-slate-800 border-slate-300 shadow-xs"
-                      : "bg-slate-200 text-slate-600 border-transparent hover:bg-slate-300/70"
+                      ? "bg-white text-[#33077C] border-slate-200 border-b-white shadow-xs font-bold ring-1 ring-[#33077C]/10"
+                      : "bg-slate-100/80 text-slate-600 hover:bg-slate-200/70 border-transparent"
                   }`}
                 >
-                  <FileText className="w-3.5 h-3.5 text-[#33077C]" />
-                  <span>{tab.title}</span>
+                  <span className="truncate max-w-[150px]">{tab.title}</span>
                   <button
                     type="button"
                     onClick={(e) => handleCloseTab(tab.id, e)}
-                    className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
+                    className="text-slate-400 hover:text-rose-600 rounded p-0.5 transition-colors cursor-pointer"
+                    title="Close tab"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               );
             })}
+
+            {/* Plus Tab Button */}
             <button
               type="button"
               onClick={handleAddNewTab}
-              className="p-1.5 rounded-lg bg-white/70 hover:bg-white text-slate-700 transition-colors shadow-2xs cursor-pointer ml-1"
-              title="Add another Sale Order tab"
+              className="w-7 h-7 rounded-full bg-[#33077C] hover:bg-[#4309A2] text-white flex items-center justify-center shadow-xs transition-transform active:scale-95 cursor-pointer ml-1"
+              title="Add New Sale Order Tab"
             >
-              <Plus className="w-4 h-4 text-[#33077C]" />
-            </button>
-          </div>
-
-          {/* Top Right Tool Icons */}
-          <div className="flex items-center gap-2 pb-2">
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-rose-600 transition-colors shadow-2xs cursor-pointer"
-              title="Close and Return to List"
-            >
-              <X className="w-4 h-4" />
+              <Plus className="w-4 h-4 stroke-[3]" />
             </button>
           </div>
         </div>
 
-        {/* 2. Main Form Container */}
+        {/* 2. FORM HEADER / TITLE */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+              <ShoppingCart className="w-5 h-5 stroke-[2.2]" />
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                Sale Order
+              </h1>
+              <p className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap mt-0.5">
+                {activeTab.editingOrder ? (
+                  <>
+                    <span>Edit Sale Order</span>
+                    <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
+                      {activeTab.editingOrder.orderNo}
+                    </span>
+                  </>
+                ) : activeTab.formData.orderNo ? (
+                  <>
+                    <span>New Sale Order</span>
+                    <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
+                      {activeTab.formData.orderNo}
+                    </span>
+                  </>
+                ) : (
+                  "Create advance sale orders and reserve inventory for scheduled fulfillment"
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. MAIN FORM CONTAINER */}
         <form
           id="sale-order-form"
           noValidate
@@ -1956,165 +2456,79 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             e.preventDefault();
             handleSaveSaleOrder(false);
           }}
-          className="flex-1 flex flex-col min-h-0 overflow-hidden"
+          className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6"
         >
-          <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6 max-w-7xl mx-auto">
-              {/* Header Title */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold">
-                    <ShoppingCart className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                      Sale Order
-                    </h1>
-                    <p className="text-xs text-slate-500 font-medium">
-                      Create advance sale orders and reserve inventory for
-                      scheduled fulfillment
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 1: Party Selection + Phone No & Right Side Meta */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                {/* Left Column: Party Picker & Phone No. */}
-                <div className="lg:col-span-6 flex gap-3 items-start">
-                  {/* Party Dropdown with Popup List */}
-                  <div className="flex-1 relative" ref={partyDropdownRef}>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Customer <span className="text-rose-500">*</span>
-                    </label>
-                    <div
-                      onClick={() =>
-                        setIsPartyDropdownOpen(!isPartyDropdownOpen)
-                      }
-                      className="w-full h-11 px-3.5 bg-white border border-blue-500 ring-2 ring-blue-500/15 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 flex items-center justify-between cursor-pointer shadow-2xs"
-                    >
-                      <span
-                        className={
-                          activeTab.formData.partyName
-                            ? "text-slate-900"
-                            : "text-slate-400"
+          <div>
+            {/* Top Meta Details (Party + Ref/Date/State) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
+              {/* Left Column: Customer Selection */}
+              <div
+                className="lg:col-span-6 xl:col-span-5"
+                ref={partyDropdownRef}
+              >
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Customer <span className="text-rose-500">*</span>
+                </label>
+                <CustomerSearchableSelect
+                  value={activeTab.formData.customerId}
+                  allowNone
+                  size="lg"
+                  onChange={(val, cust) => {
+                    updateActiveTabFormData((prev) => ({
+                      ...prev,
+                      customerId: val,
+                      partyName: cust ? cust.name : (val ? prev.partyName : ""),
+                      customerCompany: cust ? (cust.company || "") : (val ? prev.customerCompany : ""),
+                      customerPhone: cust ? (cust.phone || "") : (val ? prev.customerPhone : ""),
+                      customerEmail: cust ? (cust.email || "") : (val ? prev.customerEmail : ""),
+                      billingAddress: cust ? (cust.billingAddress || cust.address || "") : (val ? prev.billingAddress : ""),
+                    }));
+                  }}
+                  selectedCustomer={
+                    activeTab.formData.customerId
+                      ? {
+                          id: activeTab.formData.customerId,
+                          name: activeTab.formData.partyName,
+                          company: activeTab.formData.customerCompany,
+                          phone: activeTab.formData.customerPhone,
                         }
-                      >
-                        {activeTab.formData.partyName || "Select Customer"}
-                      </span>
-                      <ChevronDown className="w-4 h-4 text-slate-400" />
-                    </div>
+                      : null
+                  }
+                  onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
+                  placeholder="Select or search customer..."
+                />
 
-                    {/* Searchable Customer Dropdown Popup */}
-                    {isPartyDropdownOpen && (
-                      <div className="absolute left-0 top-full mt-1.5 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                        <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2 px-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsPartyDropdownOpen(false);
-                              setIsQuickCustomerModalOpen(true);
-                            }}
-                            className="text-xs font-bold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>Add Customer</span>
-                          </button>
-                          <span className="text-[11px] font-bold text-slate-400 uppercase">
-                            Customer Balance
-                          </span>
-                        </div>
+                
 
-                        <div className="relative mb-2">
-                          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                          <input
-                            type="text"
-                            autoFocus
-                            placeholder="Search customer by name or phone..."
-                            value={partySearchQuery}
-                            onChange={(e) =>
-                              setPartySearchQuery(e.target.value)
-                            }
-                            className="w-full h-8 pl-8 pr-2.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#4309A2] focus:bg-white"
-                          />
-                        </div>
-
-                        <div className="max-h-60 overflow-y-auto divide-y divide-slate-50 space-y-1">
-                          {filteredCustomerOptions.map((cust) => (
-                            <div
-                              key={cust.id}
-                              onClick={() => handleSelectCustomer(cust)}
-                              className="p-2 rounded-xl hover:bg-purple-50/60 cursor-pointer flex items-center justify-between transition-colors"
-                            >
-                              <div>
-                                <div className="text-xs font-bold text-slate-800">
-                                  {cust.name}
-                                </div>
-                                <div className="text-[11px] text-slate-400">
-                                  {cust.phone}
-                                </div>
-                              </div>
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 text-xs font-bold border border-teal-200">
-                                ₹
-                                {(cust.openingBalance || 0).toLocaleString(
-                                  "en-IN",
-                                )}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                {/* Party Details Preview Pill */}
+                {activeTab.formData.partyName && (
+                  <div className="mt-2.5 px-3 py-2 bg-purple-50/40 rounded-xl border border-purple-200/60 text-xs text-slate-600 flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {activeTab.formData.customerPhone && (
+                      <div>
+                        <span className="font-bold text-slate-700">Phone:</span>{" "}
+                        {activeTab.formData.customerPhone}
+                      </div>
+                    )}
+                    {activeTab.formData.billingAddress && (
+                      <div>
+                        <span className="font-bold text-slate-700">
+                          Address:
+                        </span>{" "}
+                        {activeTab.formData.billingAddress}
                       </div>
                     )}
                   </div>
+                )}
+              </div>
 
-                  {/* Phone No Input */}
-                  <div className="w-40 sm:w-48">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Phone No.
-                    </label>
-                    <input
-                      type="tel"
-                      placeholder="e.g. 9876543210"
-                      maxLength={10}
-                      value={activeTab.formData.customerPhone}
-                      onKeyDown={handleNumberOnlyKeyDown}
-                      onChange={(e) => {
-                        const clean = normalizeIndianPhoneTo10Digits(e.target.value);
-                        updateActiveTabFormData((prev) => ({
-                          ...prev,
-                          customerPhone: clean,
-                        }));
-                      }}
-                      className="w-full h-11 px-3 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Right Column: Order No, Order Date, Due Date, State of supply */}
-                <div className="lg:col-span-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {/* Order No */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Order No.
-                    </label>
-                    <input
-                      type="text"
-                      value={activeTab.formData.referenceNo}
-                      onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({
-                          ...prev,
-                          referenceNo: e.target.value,
-                        }))
-                      }
-                      className="w-full h-11 px-3 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                    />
-                  </div>
-
-                  {/* Order Date */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Order Date
-                    </label>
+              {/* Right Column: Order Date, State of supply */}
+              <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
+                {/* Order Date */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
+                    Order Date
+                  </span>
+                  <div className="relative w-40 sm:w-48">
                     <input
                       type="date"
                       value={activeTab.formData.orderDate}
@@ -2124,664 +2538,1146 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           orderDate: e.target.value,
                         }))
                       }
-                      className="w-full h-11 px-2.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                      className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                     />
-                  </div>
-
-                  {/* Due Date */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Due Date
-                    </label>
-                    <input
-                      type="date"
-                      value={activeTab.formData.dueDate}
-                      onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({
-                          ...prev,
-                          dueDate: e.target.value,
-                        }))
-                      }
-                      className="w-full h-11 px-2.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                    />
-                  </div>
-
-                  {/* State of supply */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      State of supply
-                    </label>
-                    <select
-                      value={activeTab.formData.stateOfSupply}
-                      onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({
-                          ...prev,
-                          stateOfSupply: e.target.value,
-                        }))
-                      }
-                      className="w-full h-11 px-2 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                    >
-                      {STATE_OPTIONS.map((st) => (
-                        <option key={st} value={st}>
-                          {st}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                 </div>
-              </div>
 
-              {/* 3. Items Table */}
-              <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs sm:text-sm">
-                    <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
-                      <tr>
-                        <th className="py-3 px-3 w-10 text-center text-white/80">
-                          #
-                        </th>
-                        <th className="py-3 px-4 min-w-[200px] text-white">
-                          Item
-                        </th>
-                        <th className="py-3 px-3 min-w-[130px] text-center text-white">
-                          Batch No
-                        </th>
-                        <th className="py-3 px-3 w-20 text-center text-white">
-                          Qty
-                        </th>
-                        <th className="py-3 px-3 w-28 text-white">Unit</th>
-                        <th className="py-3 px-3 min-w-[130px] text-white">
-                          <div className="flex items-center justify-between">
-                            <span>Price/Unit</span>
-                            <span className="text-[10px] text-purple-200 font-medium normal-case">
-                              ({priceTaxMode})
-                            </span>
-                          </div>
-                        </th>
-                        {columnSettings.showDiscount && (
-                          <th className="py-3 px-3 min-w-[130px] text-white">
-                            Discount
-                          </th>
-                        )}
-                        <th className="py-3 px-3 min-w-[130px] text-white">
-                          Tax
-                        </th>
-                        <th className="py-3 px-4 w-32 text-right text-white">
-                          Amount
-                        </th>
-                        <th className="py-3 px-2 w-10 text-center text-white/80">
-                          <Plus className="w-4 h-4 text-white mx-auto" />
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {activeTab.formData.items.map((rowItem, idx) => (
-                        <tr
-                          key={rowItem.id || idx}
-                          className="hover:bg-slate-50/70 transition-colors"
+                {/* State of Supply */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
+                    State of supply
+                  </span>
+                  <select
+                    value={activeTab.formData.stateOfSupply}
+                    onChange={(e) =>
+                      updateActiveTabFormData((prev) => ({
+                        ...prev,
+                        stateOfSupply: e.target.value,
+                      }))
+                    }
+                    className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
+                  >
+                    {STATE_OPTIONS.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
+            <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
+              <table className="w-full text-xs border-collapse">
+                {/* Table Header */}
+                <thead>
+                  <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
+                    <th className="py-2.5 px-2.5 text-center border-r border-[#4309A2]/70 w-10 text-white/80 font-extrabold">
+                      +
+                    </th>
+                    <th className="py-2.5 px-3 text-left border-r border-[#4309A2]/70 min-w-[200px] text-white">
+                      ITEM
+                    </th>
+                    {columnSettings.showItemCategory && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[130px] text-white">
+                        ITEM CATEGORY
+                      </th>
+                    )}
+                    {columnSettings.showItemCode && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
+                        ITEM CODE
+                      </th>
+                    )}
+                    {columnSettings.showHsnSac && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">
+                        HSN/SAC CODE
+                      </th>
+                    )}
+                    {columnSettings.showDescription && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[160px] text-white">
+                        DESCRIPTION
+                      </th>
+                    )}
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">
+                      BATCH NO
+                    </th>
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">
+                      QTY
+                    </th>
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">
+                      UNIT
+                    </th>
+                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
+                      <div>PRICE/UNIT</div>
+                      <div className="text-[9.5px] text-purple-200 font-normal lowercase">
+                        ({priceTaxMode.toLowerCase()})
+                      </div>
+                    </th>
+                    {columnSettings.showDiscount && (
+                      <th
+                        colSpan={2}
+                        className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
+                      >
+                        <div className="text-[10px]">DISCOUNT</div>
+                        <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
+                          <span>%</span>
+                          <span className="text-right pr-1">AMOUNT</span>
+                        </div>
+                      </th>
+                    )}
+                    <th
+                      colSpan={2}
+                      className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white"
+                    >
+                      <div className="text-[10px]">TAX</div>
+                      <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
+                        <span>%</span>
+                        <span className="text-right pr-1">AMOUNT</span>
+                      </div>
+                    </th>
+                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 relative text-white">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <span>AMOUNT</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowColumnCustomizePopover(
+                              !showColumnCustomizePopover,
+                            );
+                          }}
+                          className="table-column-customize-btn inline-flex items-center justify-center w-5 h-5 rounded-full text-white hover:bg-white/20 transition-colors cursor-pointer"
+                          title="Customize table columns"
                         >
-                          <td className="py-3 px-3 text-center text-slate-400 font-semibold">
-                            {idx + 1}
-                          </td>
-                          <td className="py-2.5 px-3 min-w-[200px]">
-                            <SearchableSelect
-                              value={rowItem.productId || ""}
-                              onChange={(val) => {
-                                handleItemChange(idx, "productId", val);
-                              }}
-                              onSearch={handleProductSearch}
-                              isLoading={isSearchingProducts}
-                              options={productOptions}
-                              placeholder="Select Product..."
-                              searchPlaceholder="Search product by name or SKU..."
-                              emptyText="Type to search products..."
-                              allowClear
-                              size="sm"
-                            />
-                          </td>
-                          {/* Batch No */}
-                          <td className="py-2.5 px-2">
-                            {(() => {
-                              const matchedStock = allStockItems.find(
-                                (s: any) =>
-                                  s.productId === rowItem.productId ||
-                                  s.id === rowItem.productId,
-                              );
-                              const batches =
-                                (matchedStock as any)?.batches || [];
-                              if (batches.length > 0) {
-                                return (
-                                  <select
-                                    value={rowItem.batch || ""}
-                                    onChange={(e) =>
-                                      handleItemChange(
-                                        idx,
-                                        "batch",
-                                        e.target.value,
-                                      )
-                                    }
-                                    className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
-                                  >
-                                    <option value="">Select Batch...</option>
-                                    {batches.map((b: any) => (
-                                      <option
-                                        key={b.batchNo || b.id}
-                                        value={b.batchNo}
-                                      >
-                                        {b.batchNo} ({b.quantity} in stock)
-                                      </option>
-                                    ))}
-                                  </select>
+                          <PlusCircle className="w-4 h-4 text-white stroke-[2.2]" />
+                        </button>
+                      </div>
+
+                      {/* Customization Dropdown Popover */}
+                      {showColumnCustomizePopover && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="table-column-customize-popover absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 text-left normal-case tracking-normal animate-in fade-in zoom-in-95 duration-100"
+                        >
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showItemCategory}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({
+                                    ...prev,
+                                    showItemCategory: e.target.checked,
+                                  }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">
+                                Item Category
+                              </span>
+                            </label>
+
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showItemCode}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({
+                                    ...prev,
+                                    showItemCode: e.target.checked,
+                                  }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">
+                                Item Code
+                              </span>
+                            </label>
+
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showHsnSac}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({
+                                    ...prev,
+                                    showHsnSac: e.target.checked,
+                                  }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">
+                                HSN/SAC Code
+                              </span>
+                            </label>
+
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showDescription}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({
+                                    ...prev,
+                                    showDescription: e.target.checked,
+                                  }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">
+                                Description
+                              </span>
+                            </label>
+
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showDiscount}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({
+                                    ...prev,
+                                    showDiscount: e.target.checked,
+                                  }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">
+                                Discount
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="py-2.5 px-2 text-center w-10 text-slate-400"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {activeTab.formData.items.map((rowItem, idx) => (
+                    <tr
+                      key={rowItem.id || idx}
+                      className="hover:bg-slate-50/70 transition-colors"
+                    >
+                      <td className="py-3 px-3 text-center text-slate-400 font-semibold">
+                        {idx + 1}
+                      </td>
+                      <td className="so-product-cell py-2.5 px-3 min-w-[200px] relative">
+                        <div className="relative">
+                          <div
+                            onClick={() => {
+                              if (openProductDropdownRow === idx) {
+                                setOpenProductDropdownRow(null);
+                              } else {
+                                setOpenProductDropdownRow(idx);
+                                setProductSearchQuery(
+                                  rowItem.productName || "",
                                 );
+                                if (liveProducts.length === 0) {
+                                  fetchLiveProducts();
+                                }
                               }
-                              return (
-                                <input
-                                  type="text"
-                                  placeholder="Batch No"
-                                  value={rowItem.batch || ""}
-                                  onChange={(e) =>
-                                    handleItemChange(
-                                      idx,
-                                      "batch",
-                                      e.target.value,
-                                    )
-                                  }
-                                  className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
-                                />
-                              );
-                            })()}
-                          </td>
-                          <td className="py-2.5 px-2">
+                            }}
+                            className={`w-full h-9 px-3 bg-white border rounded-xl flex items-center justify-between text-xs font-semibold cursor-pointer transition-all ${
+                              openProductDropdownRow === idx
+                                ? "border-[#4309A2] ring-2 ring-[#4309A2]/10"
+                                : rowItem.productName
+                                  ? "border-slate-300 hover:border-slate-400"
+                                  : "border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
                             <input
-                              type="number"
-                              min="1"
-                              value={rowItem.quantity || ""}
-                              onChange={(e) =>
-                                handleItemChange(
-                                  idx,
-                                  "quantity",
-                                  Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2]"
+                              type="text"
+                              placeholder="Type or select product item..."
+                              value={rowItem.productName || ""}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenProductDropdownRow(idx);
+                                setProductSearchQuery(
+                                  rowItem.productName || "",
+                                );
+                                if (liveProducts.length === 0) {
+                                  fetchLiveProducts();
+                                }
+                              }}
+                              onFocus={() => {
+                                setOpenProductDropdownRow(idx);
+                                setProductSearchQuery(
+                                  rowItem.productName || "",
+                                );
+                                if (liveProducts.length === 0) {
+                                  fetchLiveProducts();
+                                }
+                              }}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                handleItemChange(idx, "productName", val);
+                                setProductSearchQuery(val);
+                                setOpenProductDropdownRow(idx);
+                                if (productSearchTimerRef.current) {
+                                  clearTimeout(productSearchTimerRef.current);
+                                }
+                                if (val.trim()) {
+                                  productSearchTimerRef.current = setTimeout(
+                                    () => {
+                                      fetchLiveProducts(val.trim());
+                                    },
+                                    300,
+                                  );
+                                }
+                              }}
+                              className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
                             />
-                          </td>
-                          <td className="py-2.5 px-2">
-                            <select
-                              value={rowItem.unit || "NONE"}
-                              onChange={(e) =>
-                                handleItemChange(idx, "unit", e.target.value)
-                              }
-                              className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
+                            {isLoadingProducts ? (
+                              <Loader2 className="w-3.5 h-3.5 text-[#33077C] animate-spin shrink-0 ml-1" />
+                            ) : (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (openProductDropdownRow === idx) {
+                                    setOpenProductDropdownRow(null);
+                                  } else {
+                                    setOpenProductDropdownRow(idx);
+                                    setProductSearchQuery(
+                                      rowItem.productName || "",
+                                    );
+                                    if (liveProducts.length === 0) {
+                                      fetchLiveProducts();
+                                    }
+                                  }
+                                }}
+                                className="p-0.5 hover:bg-slate-100 rounded cursor-pointer shrink-0 ml-1"
+                              >
+                                <ChevronDown
+                                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                                    openProductDropdownRow === idx
+                                      ? "rotate-180 text-[#33077C]"
+                                      : ""
+                                  }`}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Searchable Dropdown Popover */}
+                          {openProductDropdownRow === idx && (
+                            <div
+                              ref={productDropdownRef}
+                              className="product-dropdown-popover absolute left-0 top-full mt-1.5 w-80 sm:w-96 max-w-[90vw] bg-white rounded-2xl shadow-2xl shadow-purple-900/15 border border-purple-100 z-50 p-2 text-xs animate-in fade-in zoom-in-95 duration-100 overflow-hidden text-left"
                             >
-                              {UNIT_OPTIONS.map((u) => (
-                                <option key={u} value={u}>
-                                  {u}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2.5 px-2">
+                              {/* Search Bar matching Customer Dropdown */}
+                              <div className="relative mb-2">
+                                <div className="flex items-center w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-xl focus-within:border-[#33077C] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all">
+                                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+                                  <input
+                                    type="text"
+                                    placeholder="Search product by name, SKU or category..."
+                                    value={productSearchQuery}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setProductSearchQuery(val);
+                                      if (productSearchTimerRef.current) {
+                                        clearTimeout(
+                                          productSearchTimerRef.current,
+                                        );
+                                      }
+                                      if (val.trim().length >= 1) {
+                                        productSearchTimerRef.current =
+                                          setTimeout(() => {
+                                            fetchLiveProducts(val.trim());
+                                          }, 300);
+                                      }
+                                    }}
+                                    autoFocus
+                                    className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                  />
+                                  {productSearchQuery && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setProductSearchQuery("")}
+                                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* 1. Add New Product Button */}
+                              <div className="pb-1.5 mb-1 border-b border-slate-100">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveItemRowIndex(idx);
+                                    setOpenProductDropdownRow(null);
+                                    setIsAddItemModalOpen(true);
+                                  }}
+                                  className="w-full py-1.5 px-2.5 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Add New Product</span>
+                                </button>
+                              </div>
+
+                              {/* 2. Options List */}
+                              <div className="max-h-64 overflow-y-auto p-0.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
+                                {/* Option: Clear / None */}
+                                <div
+                                  onClick={() => {
+                                    handleItemChange(idx, "productId", "");
+                                    handleItemChange(idx, "productName", "");
+                                    setOpenProductDropdownRow(null);
+                                  }}
+                                  className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                    !rowItem.productName
+                                      ? "bg-purple-50 text-[#33077C] font-bold"
+                                      : "hover:bg-slate-50 text-slate-600"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-slate-400 italic">
+                                      None / Clear Product
+                                    </span>
+                                  </div>
+                                  {!rowItem.productName && (
+                                    <Check className="w-4 h-4 text-[#33077C]" />
+                                  )}
+                                </div>
+
+                                {isLoadingProducts &&
+                                matchingProducts.length === 0 ? (
+                                  <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                                    <span>Loading products...</span>
+                                  </div>
+                                ) : matchingProducts.length === 0 ? (
+                                  <div className="py-6 px-3 text-center text-slate-400">
+                                    <p className="text-xs font-semibold text-slate-600">
+                                      No products found
+                                    </p>
+                                    <p className="text-[11px] text-slate-400 mt-0.5">
+                                      Try typing a different name, category, or
+                                      SKU
+                                    </p>
+                                    {productSearchQuery.trim() && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveItemRowIndex(idx);
+                                          setOpenProductDropdownRow(null);
+                                          setIsAddItemModalOpen(true);
+                                        }}
+                                        className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
+                                      >
+                                        <Plus className="w-3 h-3" />
+                                        <span>
+                                          Add "{productSearchQuery.trim()}"
+                                        </span>
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  matchingProducts.map((p: any) => {
+                                    const isSelected =
+                                      rowItem.productId === p.productId ||
+                                      (rowItem.productName &&
+                                        rowItem.productName === p.productName);
+                                    const imgUrl = p.imageUrl || p.image;
+                                    return (
+                                      <div
+                                        key={p.productId || p.id}
+                                        onClick={() =>
+                                          handleSelectProduct(idx, p)
+                                        }
+                                        className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
+                                          isSelected
+                                            ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
+                                            : "hover:bg-slate-50/80 text-slate-800"
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                          <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60 overflow-hidden">
+                                            {imgUrl ? (
+                                              <img
+                                                src={imgUrl}
+                                                alt={p.productName}
+                                                className="w-full h-full object-cover"
+                                              />
+                                            ) : (
+                                              <span>
+                                                {getInitials(
+                                                  p.productName,
+                                                  "PR",
+                                                )}
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <span className="font-bold text-slate-900 truncate">
+                                                {p.productName}
+                                              </span>
+                                              {p.category && (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[120px]">
+                                                  {p.category}
+                                                </span>
+                                              )}
+                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                Active
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                                              <span className="font-mono text-slate-600">
+                                                SKU:{" "}
+                                                {p.sku ||
+                                                  p.productCode ||
+                                                  "PRD"}
+                                              </span>
+                                              {p.unit && (
+                                                <span>• {p.unit}</span>
+                                              )}
+                                              {p.hsnCode && (
+                                                <span className="text-slate-400 font-mono text-[10px]">
+                                                  • HSN: {p.hsnCode}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span className="font-bold text-[#33077C] text-xs">
+                                            ₹
+                                            {Number(
+                                              p.unitPrice || 0,
+                                            ).toLocaleString("en-IN")}
+                                          </span>
+                                          {isSelected && (
+                                            <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      {/* Batch No */}
+                      <td className="py-2.5 px-2">
+                        {(() => {
+                          const matchedStock = allStockItems.find(
+                            (s: any) =>
+                              s.productId === rowItem.productId ||
+                              s.id === rowItem.productId,
+                          );
+                          const batches = (matchedStock as any)?.batches || [];
+                          const resolvedBatches = batches;
+                          if (rowItem.productId || batches.length > 0) {
+                            return (
+                              <select
+                                value={rowItem.batch || ""}
+                                onChange={(e) =>
+                                  handleItemChange(idx, "batch", e.target.value)
+                                }
+                                className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
+                              >
+                                <option value="">Select Batch...</option>
+                                {resolvedBatches.map((b: any) => (
+                                  <option
+                                    key={b.batchNo || b.id}
+                                    value={b.batchNo}
+                                  >
+                                    {b.batchNo}{" "}
+                                    {b.quantity !== undefined
+                                      ? `(${b.quantity} in stock)`
+                                      : ""}
+                                  </option>
+                                ))}
+                                {rowItem.batch &&
+                                  !resolvedBatches.some(
+                                    (b: any) => b.batchNo === rowItem.batch,
+                                  ) && (
+                                    <option value={rowItem.batch}>
+                                      {rowItem.batch}
+                                    </option>
+                                  )}
+                              </select>
+                            );
+                          }
+                          return (
+                            <input
+                              type="text"
+                              placeholder="Batch No"
+                              value={rowItem.batch || ""}
+                              onChange={(e) =>
+                                handleItemChange(idx, "batch", e.target.value)
+                              }
+                              className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
+                            />
+                          );
+                        })()}
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <input
+                          type="number"
+                          min="1"
+                          value={rowItem.quantity || ""}
+                          onKeyDown={handleNonNegativeKeyDown}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "quantity",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2]"
+                        />
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <select
+                          value={rowItem.unit || "NONE"}
+                          onChange={(e) =>
+                            handleItemChange(idx, "unit", e.target.value)
+                          }
+                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
+                        >
+                          {UNIT_OPTIONS.map((u) => (
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0.00"
+                          value={rowItem.unitPrice || ""}
+                          onKeyDown={handleNonNegativeKeyDown}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "unitPrice",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2.5 text-right bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                        />
+                      </td>
+                      {columnSettings.showDiscount && (
+                        <td className="py-2.5 px-2">
+                          <div className="flex items-center gap-1">
                             <input
                               type="number"
                               min="0"
-                              placeholder="0.00"
-                              value={rowItem.unitPrice || ""}
+                              max="100"
+                              placeholder="%"
+                              value={rowItem.discountPercent || ""}
+                              onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) =>
                                 handleItemChange(
                                   idx,
-                                  "unitPrice",
+                                  "discountPercent",
                                   Number(e.target.value),
                                 )
                               }
-                              className="w-full h-9 px-2.5 text-right bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                              className="w-16 h-9 px-1.5 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
                             />
-                          </td>
-                          {columnSettings.showDiscount && (
-                            <td className="py-2.5 px-2">
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  placeholder="%"
-                                  value={rowItem.discountPercent || ""}
-                                  onChange={(e) =>
-                                    handleItemChange(
-                                      idx,
-                                      "discountPercent",
-                                      Number(e.target.value),
-                                    )
-                                  }
-                                  className="w-16 h-9 px-1.5 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                                />
-                                <span className="text-[11px] text-slate-400">
-                                  ₹{rowItem.discountAmount?.toFixed(0) || 0}
-                                </span>
-                              </div>
-                            </td>
-                          )}
-                          <td className="py-2.5 px-2">
-                            <select
-                              value={rowItem.taxPercent || 0}
-                              onChange={(e) =>
-                                handleItemChange(
-                                  idx,
-                                  "taxPercent",
-                                  Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
-                            >
-                              {TAX_RATE_OPTIONS.map((tx) => (
-                                <option key={tx.label} value={tx.rate}>
-                                  {tx.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2.5 px-4 text-right font-bold text-slate-900">
-                            ₹
-                            {rowItem.total?.toLocaleString("en-IN", {
-                              minimumFractionDigits: 2,
-                            }) || "0.00"}
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveRow(idx)}
-                              className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Delete Row"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    {/* Totals Summary Footer Row */}
-                    <tfoot className="bg-slate-50 font-bold text-xs text-slate-800 border-t border-slate-200">
-                      <tr>
-                        <td colSpan={2} className="py-3 px-4">
-                          <button
-                            type="button"
-                            onClick={handleAddRow}
-                            className="h-8 px-3 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-[#33077C] font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>ADD ROW</span>
-                          </button>
+                            <span className="text-[11px] text-slate-400">
+                              ₹{rowItem.discountAmount?.toFixed(0) || 0}
+                            </span>
+                          </div>
                         </td>
-                        <td className="py-3 px-2 text-center font-black">
-                          {currentCalculations.totalQty}
-                        </td>
-                        <td></td>
-                        <td></td>
-                        {columnSettings.showDiscount && (
-                          <td className="py-3 px-2 text-slate-600">
-                            ₹{currentCalculations.totalDiscount.toFixed(2)}
-                          </td>
-                        )}
-                        <td className="py-3 px-2 text-slate-600">
-                          ₹{currentCalculations.totalTax.toFixed(2)}
-                        </td>
-                        <td className="py-3 px-4 text-right font-black text-slate-900 text-sm">
-                          ₹
-                          {currentCalculations.finalAmount.toLocaleString(
-                            "en-IN",
-                            { minimumFractionDigits: 2 },
-                          )}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </div>
-
-              {/* 4. Bottom Options: Payment Type, Terms, Notes & Round Off */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
-                {/* Left Column Controls */}
-                <div className="lg:col-span-7 space-y-4">
-                  {/* Payment Type Section */}
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                        Payment Type
-                      </label>
-                      <span className="text-xs font-bold text-[#33077C] hover:underline cursor-pointer">
-                        + Add Payment type
-                      </span>
-                    </div>
-                    <select
-                      value={activeTab.formData.paymentType}
-                      onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({
-                          ...prev,
-                          paymentType: e.target.value,
-                        }))
-                      }
-                      className="w-full sm:w-64 h-10 px-3.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#4309A2] cursor-pointer"
-                    >
-                      {PAYMENT_TYPES.map((pt) => (
-                        <option key={pt} value={pt}>
-                          {pt}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Additional Buttons Row */}
-                  <div className="flex flex-wrap gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setShowTermsSection(!showTermsSection)}
-                      className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                        showTermsSection
-                          ? "bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs"
-                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      <FileEdit className="w-3.5 h-3.5" />
-                      <span>ADD TERMS &amp; CONDITIONS</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShowDescriptionSection(!showDescriptionSection)
-                      }
-                      className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                        showDescriptionSection
-                          ? "bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs"
-                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      <AlignLeft className="w-3.5 h-3.5" />
-                      <span>ADD DESCRIPTION</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowImageSection(!showImageSection);
-                        if (!attachedImageName)
-                          setAttachedImageName("purchase_po_scan.jpg");
-                      }}
-                      className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                        showImageSection
-                          ? "bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs"
-                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      <ImageIcon className="w-3.5 h-3.5" />
-                      <span>ADD IMAGE</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowDocumentSection(!showDocumentSection);
-                        if (!attachedDocName)
-                          setAttachedDocName("signed_order_sheet.pdf");
-                      }}
-                      className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                        showDocumentSection
-                          ? "bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs"
-                          : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      <Paperclip className="w-3.5 h-3.5" />
-                      <span>ADD DOCUMENT</span>
-                    </button>
-                  </div>
-
-                  {showTermsSection && (
-                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 animate-in fade-in">
-                      <label className="text-xs font-bold text-slate-700">
-                        Terms &amp; Conditions
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={activeTab.formData.terms}
-                        onChange={(e) =>
-                          updateActiveTabFormData((prev) => ({
-                            ...prev,
-                            terms: e.target.value,
-                          }))
-                        }
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#4309A2]"
-                      />
-                    </div>
-                  )}
-
-                  {showDescriptionSection && (
-                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 animate-in fade-in">
-                      <label className="text-xs font-bold text-slate-700">
-                        Order Description / Notes
-                      </label>
-                      <textarea
-                        rows={2}
-                        placeholder="Add any delivery notes or packaging instructions..."
-                        value={activeTab.formData.notes}
-                        onChange={(e) =>
-                          updateActiveTabFormData((prev) => ({
-                            ...prev,
-                            notes: e.target.value,
-                          }))
-                        }
-                        className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#4309A2]"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* Right Side: Round Off & Total */}
-                <div className="lg:col-span-5 bg-slate-50 p-5 rounded-2xl border border-slate-200/80 space-y-3">
-                  <div className="flex items-center justify-between text-xs text-slate-600">
-                    <span>Sub Total (Taxable)</span>
-                    <span className="font-semibold text-slate-800">
-                      ₹
-                      {currentCalculations.netTaxable.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
-
-                  {currentCalculations.totalTax > 0 && (
-                    <div className="flex items-center justify-between text-xs text-slate-600">
-                      <span>Total Tax</span>
-                      <span className="font-semibold text-slate-800">
+                      )}
+                      <td className="py-2.5 px-2">
+                        <select
+                          value={rowItem.taxPercent || 0}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "taxPercent",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
+                        >
+                          {TAX_RATE_OPTIONS.map((tx) => (
+                            <option key={tx.label} value={tx.rate}>
+                              {tx.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">
                         ₹
-                        {currentCalculations.totalTax.toLocaleString("en-IN", {
+                        {rowItem.total?.toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                  )}
+                        }) || "0.00"}
+                      </td>
+                      <td className="py-2.5 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRow(idx)}
+                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Delete Row"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {/* Totals Summary Footer Row */}
+                <tfoot>
+                  <tr className="bg-slate-50/90 border-t border-slate-200 font-bold text-slate-800 text-xs">
+                    {/* Add Row Button Column */}
+                    <td
+                      colSpan={
+                        2 +
+                        (columnSettings.showItemCategory ? 1 : 0) +
+                        (columnSettings.showItemCode ? 1 : 0) +
+                        (columnSettings.showHsnSac ? 1 : 0) +
+                        (columnSettings.showDescription ? 1 : 0) +
+                        1
+                      }
+                      className="py-2.5 px-3 border-r border-slate-200"
+                    >
+                      <button
+                        type="button"
+                        onClick={handleAddRow}
+                        className="px-3 py-1.5 rounded-lg border border-[#33077C] text-[#33077C] hover:bg-purple-50 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>ADD ROW</span>
+                      </button>
+                    </td>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={enableRoundOff}
-                        onChange={(e) => setEnableRoundOff(e.target.checked)}
-                        className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C]"
-                      />
-                      <span className="text-xs font-bold text-slate-700">
-                        Round Off
-                      </span>
-                    </label>
-                    <span className="text-xs font-bold text-slate-600">
-                      ₹{currentCalculations.roundOff.toFixed(2)}
-                    </span>
-                  </div>
+                    {/* Total QTY */}
+                    <td className="py-2.5 px-2 text-center border-r border-slate-200 font-extrabold text-[#33077C]">
+                      {currentCalculations.totalQty}
+                    </td>
 
-                  <div className="flex items-center justify-between pt-3 border-t-2 border-slate-300">
-                    <span className="text-sm font-black text-slate-900 uppercase">
-                      Total Amount
-                    </span>
-                    <span className="text-xl font-black text-[#33077C]">
+                    {/* Total label */}
+                    <td className="py-2.5 px-2 text-center border-r border-slate-200 text-slate-500 uppercase text-[11px]">
+                      TOTAL
+                    </td>
+
+                    {/* Price total placeholder */}
+                    <td className="border-r border-slate-200"></td>
+
+                    {/* Discount total placeholder & amount */}
+                    {columnSettings.showDiscount && (
+                      <>
+                        <td className="border-r border-slate-200"></td>
+                        <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
+                          {currentCalculations.totalDiscount > 0
+                            ? currentCalculations.totalDiscount.toFixed(2)
+                            : "0"}
+                        </td>
+                      </>
+                    )}
+
+                    {/* Tax placeholder */}
+                    <td className="border-r border-slate-200"></td>
+
+                    {/* Total Tax Amount */}
+                    <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
+                      {currentCalculations.totalTax > 0
+                        ? currentCalculations.totalTax.toFixed(2)
+                        : "0"}
+                    </td>
+
+                    {/* Total Line Amount */}
+                    <td className="py-2.5 px-3 text-right border-r border-slate-200 font-extrabold text-[#33077C]">
                       ₹
                       {currentCalculations.finalAmount.toLocaleString("en-IN", {
                         minimumFractionDigits: 2,
                       })}
-                    </span>
+                    </td>
+
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* 5. BOTTOM SECTION: ACTION TILES (LEFT) & ROUND OFF / TOTAL (RIGHT) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-8 items-start">
+              {/* Left Column: 4 Action Buttons & Expandable Cards */}
+              <div className="lg:col-span-7 space-y-3">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowTermsSection(!showTermsSection)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      showTermsSection
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
+                    }`}
+                  >
+                    <AlignLeft className="w-3.5 h-3.5" />
+                    <span>ADD TERMS & CONDITIONS</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowDescriptionSection(!showDescriptionSection)
+                    }
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      showDescriptionSection
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
+                    }`}
+                  >
+                    <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>ADD DESCRIPTION</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowImageSection(!showImageSection)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      showImageSection
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
+                    }`}
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>ADD IMAGE</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowDocumentSection(!showDocumentSection)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      showDocumentSection
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
+                    }`}
+                  >
+                    <Paperclip className="w-3.5 h-3.5" />
+                    <span>ADD DOCUMENT</span>
+                  </button>
+                </div>
+
+                {/* Expandable Sections */}
+                {showTermsSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Terms & Conditions
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={activeTab.formData.terms || ""}
+                      onChange={(e) =>
+                        updateActiveTabFormData((prev) => ({
+                          ...prev,
+                          terms: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter sale order terms and conditions..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#33077C]"
+                    />
+                  </div>
+                )}
+
+                {showDescriptionSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Order Description / Notes
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={activeTab.formData.notes || ""}
+                      onChange={(e) =>
+                        updateActiveTabFormData((prev) => ({
+                          ...prev,
+                          notes: e.target.value,
+                        }))
+                      }
+                      placeholder="Add custom notes or delivery remarks for this sale order..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#33077C]"
+                    />
+                  </div>
+                )}
+
+                {showImageSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Attach Image
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
+                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
+                        <span>Choose Image</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              setAttachedImageName(e.target.files[0].name);
+                              toast.success(
+                                `Image "${e.target.files[0].name}" attached!`,
+                              );
+                            }
+                          }}
+                        />
+                      </label>
+                      {attachedImageName && (
+                        <span className="text-slate-600 font-medium truncate max-w-xs">
+                          {attachedImageName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {showDocumentSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Attach Document / PDF
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
+                        <FileUp className="w-3.5 h-3.5 text-[#33077C]" />
+                        <span>Choose Document</span>
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              setAttachedDocName(e.target.files[0].name);
+                              toast.success(
+                                `Document "${e.target.files[0].name}" attached!`,
+                              );
+                            }
+                          }}
+                        />
+                      </label>
+                      {attachedDocName && (
+                        <span className="text-slate-600 font-medium truncate max-w-xs">
+                          {attachedDocName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Right Column: Round Off & Grand Total Box (CRM Theme) */}
+              <div className="lg:col-span-5 flex flex-col items-end gap-4">
+                {/* Round Off Input */}
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={enableRoundOff}
+                      onChange={(e) => {
+                        setEnableRoundOff(e.target.checked);
+                        if (!e.target.checked) setManualRoundOff(null);
+                      }}
+                      className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C] border-slate-300 accent-[#33077C]"
+                    />
+                    <span>Round Off</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    disabled={!enableRoundOff}
+                    value={
+                      currentCalculations.roundOff
+                        ? currentCalculations.roundOff
+                        : ""
+                    }
+                    placeholder="0.00"
+                    onChange={(e) => setManualRoundOff(Number(e.target.value))}
+                    className="w-24 h-8 px-2.5 text-right bg-white border border-slate-200 disabled:bg-slate-50 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
+                  />
+                </div>
+
+                {/* Grand Total Display */}
+                <div className="flex items-center gap-4">
+                  <span className="text-sm font-bold text-slate-800">
+                    Total
+                  </span>
+                  <div className="w-48 sm:w-56 h-11 px-3.5 bg-purple-50/30 border-2 border-purple-200 rounded-xl flex items-center justify-end text-base font-extrabold text-[#33077C] shadow-2xs">
+                    ₹{" "}
+                    {currentCalculations.finalAmount.toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                    })}
                   </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* 5. Sticky Bottom Bar */}
-          <div className="bg-white border-t border-slate-200 px-6 py-4 flex items-center justify-between sticky bottom-0 z-30 shadow-lg">
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className="h-10 px-5 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
-            >
-              <ArrowLeft className="w-4 h-4 text-slate-500 stroke-[2.5]" />
-              <span>Back to List</span>
-            </button>
+            {/* 6. BOTTOM ACTION FOOTER (CRM THEME) */}
+            <div className="flex items-center justify-end gap-3 pt-6 mt-8 border-t border-slate-200">
+              <div className="flex items-center gap-3">
+                {/* Cancel / Back Button */}
+                <Button
+                  variant="secondary"
+                  size="md"
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                >
+                  Cancel
+                </Button>
 
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() =>
-                  toast.success("Sale Order link copied & ready to share!")
-                }
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-xs sm:text-[13px] font-bold text-slate-700 hover:bg-slate-50 transition-all flex items-center gap-2"
-              >
-                <Share2 className="w-4 h-4 text-slate-600" />
-                <span>Share</span>
-              </button>
+                {/* Share Dropdown Button */}
+                <div className="so-share-footer-container relative">
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    type="button"
+                    onClick={() => setShowShareFooterMenu(!showShareFooterMenu)}
+                    icon={<ChevronDown className="w-3.5 h-3.5 ml-1" />}
+                  >
+                    Share
+                  </Button>
 
-              <button
-                type="button"
-                disabled={isActionLoading}
-                onClick={() => handleSaveSaleOrder(true)}
-                className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
-              >
-                {isActionLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
-                ) : (
-                  <ShoppingCart className="w-4 h-4" />
-                )}
-                <span>Save &amp; Convert to Sale</span>
-              </button>
+                  {/* Share Popover */}
+                  {showShareFooterMenu && (
+                    <div className="absolute right-0 bottom-full mb-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs text-left">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowShareFooterMenu(false);
+                          const text = encodeURIComponent(
+                            `Sale Order from YAA Mart\nOrder No: ${activeTab.formData.orderNo}\nCustomer: ${activeTab.formData.partyName}\nAmount: ₹${currentCalculations.finalAmount}`,
+                          );
+                          window.open(`https://wa.me/?text=${text}`, "_blank");
+                        }}
+                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <span>Share via WhatsApp</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowShareFooterMenu(false);
+                          const subject = encodeURIComponent(
+                            `Sale Order ${activeTab.formData.orderNo}`,
+                          );
+                          const body = encodeURIComponent(
+                            `Dear ${activeTab.formData.partyName},\n\nOrder amount: ₹${currentCalculations.finalAmount}`,
+                          );
+                          window.open(
+                            `mailto:${activeTab.formData.customerEmail}?subject=${subject}&body=${body}`,
+                            "_blank",
+                          );
+                        }}
+                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <span>Share via Email</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-              <button
-                type="submit"
-                form="sale-order-form"
-                disabled={isActionLoading}
-                className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
-              >
-                {isActionLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-white" />
-                ) : (
-                  <Check className="w-4 h-4 stroke-[2.5]" />
-                )}
-                <span>
-                  {activeTab.editingOrder ? "Update Order" : "Save Order"}
-                </span>
-              </button>
+                <Button
+                  variant="secondary"
+                  size="md"
+                  type="button"
+                  disabled={isActionLoading}
+                  onClick={() => handleSaveSaleOrder(true)}
+                  className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
+                  icon={
+                    isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                    ) : (
+                      <ShoppingCart className="w-4 h-4" />
+                    )
+                  }
+                >
+                  Save & Convert to Sale
+                </Button>
+
+                {/* Save Button (CRM Primary Theme #33077C) */}
+                <Button
+                  variant="primary"
+                  size="md"
+                  type="submit"
+                  form="sale-order-form"
+                  disabled={isActionLoading}
+                  icon={
+                    isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    ) : (
+                      <Check className="w-4 h-4 text-white stroke-[3]" />
+                    )
+                  }
+                >
+                  {isActionLoading
+                    ? "Saving..."
+                    : activeTab.editingOrder
+                      ? "Update Order"
+                      : "Save"}
+                </Button>
+              </div>
             </div>
           </div>
         </form>
 
-        {/* Quick Customer Add Modal */}
-        {isQuickCustomerModalOpen && (
-          <Modal
-            isOpen={isQuickCustomerModalOpen}
-            onClose={() => setIsQuickCustomerModalOpen(false)}
-            title="Add New Customer"
-            subtitle="Register customer details to link with this Sale Order"
-            maxWidth="md"
-            headerGradient={true}
-            showBackIcon={true}
-            hideCloseButton={true}
-          >
-            <form
-              noValidate
-              onSubmit={handleSaveQuickCustomer}
-              className="p-4 sm:p-6 space-y-4 pt-5"
-            >
-              <div>
-                <FormLabel required>Customer / Business Name</FormLabel>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Keerthivasan Retail Store"
-                  value={quickCustName}
-                  onChange={(e) => setQuickCustName(e.target.value)}
-                  className={FORM_INPUT_CLS}
-                />
-              </div>
+        {/* Reusable Customer Creation Modal */}
+        <AddCustomerModal
+          isOpen={isAddCustomerModalOpen}
+          onClose={() => setIsAddCustomerModalOpen(false)}
+          onCustomerCreated={(newCust) => {
+            dispatch(
+              baseApi.util.invalidateTags([
+                "CommerceCustomer",
+                "Customer",
+              ] as any),
+            );
+            setLiveCustomers((prev) => [newCust as any, ...prev]);
+            updateActiveTabFormData((prev) => ({
+              ...prev,
+              customerId: newCust.id,
+              partyName: newCust.name,
+              customerPhone: newCust.phone || "",
+              customerEmail: newCust.email || "",
+              customerCompany: newCust.company || "",
+              billingAddress: newCust.billingAddress || newCust.address || "",
+              stateOfSupply: newCust.state
+                ? `${newCust.state}`
+                : prev.stateOfSupply,
+            }));
+            setPartySearchQuery(newCust.name);
+            setIsPartyDropdownOpen(false);
+            setIsAddCustomerModalOpen(false);
+          }}
+        />
 
-              <div className="grid grid-cols-2 gap-4 pt-1">
-                <div>
-                  <FormLabel>Phone Number</FormLabel>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 9876543210"
-                    maxLength={10}
-                    value={quickCustPhone}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onChange={(e) => {
-                      const clean = normalizeIndianPhoneTo10Digits(e.target.value);
-                      setQuickCustPhone(clean);
-                      if (clean && !/^[6-9]\d{9}$/.test(clean)) {
-                        setQuickCustPhoneError("Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)");
-                      } else {
-                        setQuickCustPhoneError("");
-                      }
-                    }}
-                    className={getFormInputCls(Boolean(quickCustPhoneError))}
-                  />
-                  {quickCustPhoneError && <FormError message={quickCustPhoneError} />}
-                </div>
-                <div>
-                  <FormLabel>Opening Balance</FormLabel>
-                  <input
-                    type="number"
-                    placeholder="600"
-                    value={quickCustOpeningBal}
-                    onChange={(e) => setQuickCustOpeningBal(e.target.value)}
-                    className={FORM_INPUT_CLS}
-                  />
-                </div>
-              </div>
-
-              <div className="pt-1">
-                <FormLabel>Billing Address</FormLabel>
-                <input
-                  type="text"
-                  placeholder="Full street address and state"
-                  value={quickCustAddress}
-                  onChange={(e) => setQuickCustAddress(e.target.value)}
-                  className={FORM_INPUT_CLS}
-                />
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsQuickCustomerModalOpen(false)}
-                  className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isActionLoading}
-                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md disabled:opacity-50"
-                >
-                  {isActionLoading ? "Saving..." : "Save Customer"}
-                </button>
-              </div>
-            </form>
-          </Modal>
-        )}
+        {/* Reusable Item Creation Modal */}
+        <AddItemModal
+          isOpen={isAddItemModalOpen}
+          onClose={() => {
+            setIsAddItemModalOpen(false);
+            setActiveItemRowIndex(null);
+          }}
+          onProductCreated={(newProduct) => {
+            dispatch(
+              baseApi.util.invalidateTags(["Product", "InventoryStock"] as any),
+            );
+            setLiveProducts((prev) => [newProduct, ...prev]);
+            fetchLiveProducts();
+            if (activeItemRowIndex !== null) {
+              handleSelectProduct(activeItemRowIndex, newProduct);
+            }
+            setIsAddItemModalOpen(false);
+            setActiveItemRowIndex(null);
+          }}
+        />
       </div>
     );
   }
@@ -2793,16 +3689,23 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       return;
     }
 
-    const excelRows = filteredOrders.map((o) => ({
-      date: isoToDdmmyyyy(o.orderDate),
-      dueDate: isoToDdmmyyyy(o.dueDate),
-      orderNo: o.orderNo,
-      partyName: o.partyName,
-      customerPhone: o.customerPhone || "-",
-      amount: Number(o.amount || 0),
-      balance: Number(o.balance || 0),
-      status: o.status,
-    }));
+    const excelRows = filteredOrders.map((o) => {
+      const createdDt = formatDateTime(o.createdAt);
+      const convertedAt = resolveDocumentConvertedAt("Order", o);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        date: isoToDdmmyyyy(o.orderDate),
+        dueDate: isoToDdmmyyyy(o.dueDate),
+        createdDateTime: createdDt?.full || "—",
+        convertedDateTime: convertedDt?.full || "—",
+        orderNo: o.orderNo,
+        partyName: o.partyName,
+        customerPhone: o.customerPhone || "-",
+        amount: Number(o.amount || 0),
+        balance: Number(o.balance || 0),
+        status: o.status,
+      };
+    });
 
     exportTableToExcel({
       filename: `Sale_Orders_Report_${new Date().toISOString().split("T")[0]}`,
@@ -2810,8 +3713,18 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       title: "YAA CREATIONS CRM - SALES ORDER REPORT",
       subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
-        { header: "Order Date", key: "date", align: "center", width: 15 },
-        { header: "Due Date", key: "dueDate", align: "center", width: 15 },
+        {
+          header: "Created Date & Time",
+          key: "createdDateTime",
+          align: "center",
+          width: 22,
+        },
+        {
+          header: "Converted Date & Time",
+          key: "convertedDateTime",
+          align: "center",
+          width: 22,
+        },
         { header: "Order No.", key: "orderNo", align: "center", width: 18 },
         { header: "Customer Name", key: "partyName", align: "left", width: 28 },
         { header: "Phone", key: "customerPhone", align: "left", width: 18 },
@@ -2833,7 +3746,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       ],
       data: excelRows,
       summaryRow: {
-        date: "TOTAL",
+        createdDateTime: "TOTAL",
         partyName: `${filteredOrders.length} Orders`,
         amount: metrics.totalVal,
         balance: metrics.openVal,
@@ -2852,28 +3765,65 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       return;
     }
 
-    const printRows = filteredOrders.map((o) => ({
-      orderNo: o.orderNo,
-      orderDate: isoToDdmmyyyy(o.orderDate),
-      dueDate: isoToDdmmyyyy(o.dueDate),
-      partyName: o.partyName,
-      customerPhone: o.customerPhone || "-",
-      amount: Number(o.amount || 0),
-      balance: Number(o.balance || 0),
-      status: o.status,
-    }));
+    const printRows = filteredOrders.map((o) => {
+      const createdDt = formatDateTime(o.createdAt);
+      const convertedAt = resolveDocumentConvertedAt("Order", o);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        orderNo: o.orderNo,
+        createdDateTime: createdDt?.full || "—",
+        convertedDateTime: convertedDt?.full || "—",
+        partyName: o.partyName,
+        customerPhone: o.customerPhone || "-",
+        amount: Number(o.amount || 0),
+        balance: Number(o.balance || 0),
+        status: o.status,
+      };
+    });
 
     printTableReport({
       title: "SALES ORDER REGISTER",
       subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length}`,
       columns: [
-        { header: "Order No.", key: "orderNo", align: "center", width: "15%" },
-        { header: "Date", key: "orderDate", align: "center", width: "12%" },
-        { header: "Due Date", key: "dueDate", align: "center", width: "12%" },
-        { header: "Customer Name", key: "partyName", align: "left", width: "25%" },
-        { header: "Contact", key: "customerPhone", align: "left", width: "14%" },
-        { header: "Total (₹)", key: "amount", align: "right", type: "currency", width: "14%" },
-        { header: "Balance (₹)", key: "balance", align: "right", type: "currency", width: "14%" },
+        { header: "Order No.", key: "orderNo", align: "center", width: "16%" },
+        {
+          header: "Created Date & Time",
+          key: "createdDateTime",
+          align: "center",
+          width: "18%",
+        },
+        {
+          header: "Converted Date & Time",
+          key: "convertedDateTime",
+          align: "center",
+          width: "18%",
+        },
+        {
+          header: "Customer Name",
+          key: "partyName",
+          align: "left",
+          width: "22%",
+        },
+        {
+          header: "Contact",
+          key: "customerPhone",
+          align: "left",
+          width: "12%",
+        },
+        {
+          header: "Total (₹)",
+          key: "amount",
+          align: "right",
+          type: "currency",
+          width: "12%",
+        },
+        {
+          header: "Balance (₹)",
+          key: "balance",
+          align: "right",
+          type: "currency",
+          width: "12%",
+        },
         { header: "Status", key: "status", align: "center", width: "10%" },
       ],
       data: printRows,
@@ -2892,8 +3842,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* 1. TOP HEADER CARD (CRM BRAND THEME) */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-[220px] flex-1">
           <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <ShoppingBag className="w-4 h-4" />
           </div>
@@ -2915,7 +3865,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         </div>
 
         {/* Top Right Actions */}
-        <div className="flex items-center gap-3 self-end sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
@@ -3042,35 +3992,62 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         }}
         placeholder="Search by customer name, order no, phone..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedPeriod === pendingPeriod &&
+            appliedStatus === pendingStatus &&
+            page === 1;
+
+          setAppliedSearch(trimmed);
+          setAppliedPeriod(pendingPeriod);
+          setAppliedStatus(pendingStatus);
           setPage(1);
+
+          if (isSame) {
+            isFetchingOrdersRef.current = false;
+            fetchSaleOrders();
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === "" &&
+            pendingSearch === "" &&
+            appliedPeriod === "This Month" &&
+            pendingPeriod === "This Month" &&
+            appliedStatus === "ALL" &&
+            pendingStatus === "ALL" &&
+            page === 1;
+
           setPendingSearch("");
           setAppliedSearch("");
           setPendingPeriod("This Month");
           setAppliedPeriod("This Month");
+          setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setPage(1);
+
+          if (isSame) {
+            isFetchingOrdersRef.current = false;
+            fetchSaleOrders();
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Period : This Month"
-              value={appliedPeriod}
+              value={pendingPeriod}
               options={PERIOD_FILTER_OPTIONS}
               onChange={(val) => {
-                setAppliedPeriod(val);
-                setPage(1);
+                setPendingPeriod(val);
               }}
             />
             <FilterDropdown
               placeholder="Status : All"
-              value={appliedStatus}
+              value={pendingStatus}
               options={STATUS_FILTER_OPTIONS}
               onChange={(val) => {
-                setAppliedStatus(val);
-                setPage(1);
+                setPendingStatus(val);
               }}
             />
           </div>
@@ -3081,7 +4058,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               variant="secondary"
               size="md"
               onClick={() => {
-                const openOrders = saleOrders.filter((o) => o.status === "Open");
+                const openOrders = saleOrders.filter(
+                  (o) => o.status === "Open",
+                );
                 if (openOrders.length === 0) {
                   toast.info(
                     "No open sale orders available for bulk conversion.",
@@ -3132,7 +4111,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             <button
               type="button"
               onClick={handleOpenCreateForm}
-              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-sm font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2"
+              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-sm font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>Add Sale Order</span>
@@ -3141,61 +4120,20 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-[13px] border-collapse min-w-[850px]">
-              {/* Royal Purple Header */}
-              <thead>
-                <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                  <th className="py-3.5 px-4 border-r border-[#4309A2]/70 whitespace-nowrap text-white min-w-[180px]">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>CUSTOMER NAME</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[140px] text-white">
-                    <div className="flex items-center justify-center gap-1">
-                      <span>SALE ORDER NO.</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="flex items-center gap-1">
-                        DATE <span className="text-purple-200">↓</span>
-                      </span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>DUE DATE</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-right whitespace-nowrap min-w-[120px] text-white">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span>TOTAL AMOUNT</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-right whitespace-nowrap min-w-[120px] text-white">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span>BALANCE</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[100px] text-white">
-                    TYPE
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-center gap-1.5">
-                      <span>STATUS</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-4 text-center whitespace-nowrap min-w-[140px] w-40 text-white">
-                    ACTION
-                  </th>
-                </tr>
-              </thead>
+              {/* Royal Purple Header with Standard Icons */}
+              <CommonTableHead
+                columns={[
+                  { label: "SALE ORDER NO.", align: "center", minWidth: "140px" },
+                  { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
+                  { label: "CREATED DATE & TIME", align: "left", minWidth: "140px" },
+                  { label: "CONVERTED DATE & TIME", align: "left", minWidth: "140px" },
+                  { label: "TOTAL AMOUNT", align: "right", minWidth: "120px" },
+                  { label: "BALANCE", align: "right", minWidth: "120px" },
+                  { label: "TYPE", align: "left", minWidth: "100px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTION", align: "center", minWidth: "190px" },
+                ]}
+              />
 
               {/* Table Rows */}
               <tbody className="divide-y divide-slate-200 text-slate-800 font-sans">
@@ -3215,24 +4153,48 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   </tr>
                 ) : (
                   paginatedOrders.map((item) => {
+                    const orderStages = getOrderStages(item);
+                    const isConvertOpen = activeConvertDropdownId === item.id;
                     const isActionOpen = activeDropdownId === item.id;
+                    const createdDt = formatDateTime(item.createdAt);
+                    const convertedAt = resolveDocumentConvertedAt(
+                      "Order",
+                      item,
+                    );
+                    const convertedDt = formatDateTime(convertedAt);
+                    const resolvedCustomerCode =
+                      (item as any).customerCode ||
+                      liveCustomers.find(
+                        (c) =>
+                          (item.customerId && c.id === item.customerId) ||
+                          (c.phone &&
+                            item.customerPhone &&
+                            c.phone === item.customerPhone) ||
+                          (c.name &&
+                            item.partyName &&
+                            c.name.trim().toLowerCase() ===
+                              item.partyName.trim().toLowerCase()),
+                      )?.customerCode ||
+                      localCustomers.find(
+                        (c) =>
+                          (item.customerId && c.id === item.customerId) ||
+                          (c.phone &&
+                            item.customerPhone &&
+                            c.phone === item.customerPhone) ||
+                          (c.name &&
+                            item.partyName &&
+                            c.name.trim().toLowerCase() ===
+                              item.partyName.trim().toLowerCase()),
+                      )?.customerCode ||
+                      findDocumentLineage(item.orderNo)?.customerCode ||
+                      "";
 
                     return (
                       <tr
                         key={item.id}
                         className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                       >
-                        {/* 1. PARTY */}
-                        <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
-                          <div>{item.partyName}</div>
-                          {item.customerPhone && (
-                            <div className="text-[11px] text-slate-400 font-normal">
-                              {item.customerPhone}
-                            </div>
-                          )}
-                        </td>
-
-                        {/* 2. NO. */}
+                        {/* 1. NO. */}
                         <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                           <div className="flex flex-col items-center justify-center gap-1">
                             <span>
@@ -3246,14 +4208,57 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           </div>
                         </td>
 
-                        {/* 3. DATE */}
-                        <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap align-middle">
-                          {isoToDdmmyyyy(item.orderDate)}
+                        {/* 2. PARTY */}
+                        <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-900">
+                              {item.partyName}
+                            </span>
+                            {resolvedCustomerCode && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                                {resolvedCustomerCode}
+                              </span>
+                            )}
+                          </div>
+                          {item.customerPhone && (
+                            <div className="text-[11px] text-slate-400 font-normal">
+                              {item.customerPhone}
+                            </div>
+                          )}
                         </td>
 
-                        {/* 4. DUE DATE */}
-                        <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap align-middle">
-                          {isoToDdmmyyyy(item.dueDate)}
+                        {/* CREATED DATE & TIME */}
+                        <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                          {createdDt ? (
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-slate-800">
+                                {createdDt.date}
+                              </span>
+                              <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                                <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span>{createdDt.time}</span>
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+
+                        {/* 6. CONVERTED DATE & TIME */}
+                        <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                          {convertedDt ? (
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-emerald-800">
+                                {convertedDt.date}
+                              </span>
+                              <span className="text-[11px] text-emerald-600 font-mono flex items-center gap-1 mt-0.5">
+                                <Clock className="w-3 h-3 text-emerald-500 shrink-0" />
+                                <span>{convertedDt.time}</span>
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs">—</span>
+                          )}
                         </td>
 
                         {/* 5. TOTAL AMOUNT */}
@@ -3280,7 +4285,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                         {/* 8. STATUS */}
                         <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap text-center align-middle">
                           <div className="flex items-center justify-center">
-                            {item.status === "Converted" ||
+                            {orderStages.isFullyConverted ||
+                            item.status === "Converted" ||
                             item.status === "Completed" ? (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -3301,19 +4307,107 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                         </td>
 
                         {/* 9. ACTION */}
-                        <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                          <div className="inline-flex items-center justify-center gap-1.5">
-                            {/* CONVERT TO SALE Button */}
-                            <button
-                              type="button"
-                              disabled={
-                                isActionLoading || item.status === "Converted"
-                              }
-                              onClick={() => handleConvertExistingToSale(item)}
-                              className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs disabled:opacity-40"
-                            >
-                              CONVERT TO SALE
-                            </button>
+                        <td className="py-3.5 px-4 text-center whitespace-nowrap min-w-[190px] w-48 align-middle">
+                          <div className="flex items-center justify-center gap-1.5">
+                            {/* Convert ⌄ Dropdown Button slot with fixed width */}
+                            <div className="w-[104px] shrink-0 flex items-center justify-center">
+                            {orderStages.isFullyConverted ||
+                            orderStages.availableCount === 0 ? (
+                              <button
+                                type="button"
+                                disabled
+                                aria-disabled="true"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                title={`Sale Order has been converted (${item.convertedToInvoiceNo || "Converted"})`}
+                                className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
+                              >
+                                <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
+                                <span>Converted</span>
+                              </button>
+                            ) : (
+                              <div className="relative inline-block text-left order-convert-dropdown-container">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isConvertOpen) {
+                                      setActiveConvertDropdownId(null);
+                                      setConvertDropdownPos(null);
+                                    } else {
+                                      const rect =
+                                        e.currentTarget.getBoundingClientRect();
+                                      setConvertDropdownPos({
+                                        top: rect.bottom + 4,
+                                        right: window.innerWidth - rect.right,
+                                      });
+                                      setActiveConvertDropdownId(item.id);
+                                      setActiveDropdownId(null);
+                                      setDropdownPos(null);
+                                    }
+                                  }}
+                                  className="order-convert-btn text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none"
+                                  title="Convert to next sales stage"
+                                >
+                                  <span>Convert</span>
+                                  <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                </button>
+
+                                {/* Convert Floating Dropdown Menu */}
+                                {isConvertOpen && convertDropdownPos && (
+                                  <div
+                                    style={{
+                                      position: "fixed",
+                                      top: `${convertDropdownPos.top}px`,
+                                      right: `${convertDropdownPos.right}px`,
+                                      zIndex: 9999,
+                                    }}
+                                    className="order-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {!orderStages.isChallanConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveConvertDropdownId(null);
+                                          setConvertDropdownPos(null);
+                                          handleConvertExistingToChallan(item);
+                                        }}
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <Truck className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Delivery Challan</span>
+                                      </button>
+                                    )}
+                                    {!orderStages.isInvoiceConverted && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveConvertDropdownId(null);
+                                          setConvertDropdownPos(null);
+                                          handleConvertExistingToSale(item);
+                                        }}
+                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                      >
+                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                        <span>Convert to Sale Invoice</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            </div>
+
+                            {/* Send / Share Popover Button */}
+                            <DocumentSharePopover
+                              id={item.id}
+                              getShareData={() => formatSaleOrderShare(item)}
+                              title="Share Sale Order"
+                            />
 
                             {/* 3-Dots Actions Menu */}
                             <SaleActionDropdown
@@ -3321,13 +4415,20 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                 {
                                   label: "Convert to Delivery Challan",
                                   variant: "challan",
-                                  onClick: () => handleConvertExistingToChallan(item),
+                                  disabled:
+                                    orderStages.isChallanConverted ||
+                                    orderStages.isFullyConverted,
+                                  onClick: () =>
+                                    handleConvertExistingToChallan(item),
                                 },
                                 {
                                   label: "Convert to Sales Invoice",
                                   variant: "invoice",
-                                  hidden: item.status === "Converted",
-                                  onClick: () => handleConvertExistingToSale(item),
+                                  disabled:
+                                    orderStages.isInvoiceConverted ||
+                                    orderStages.isFullyConverted,
+                                  onClick: () =>
+                                    handleConvertExistingToSale(item),
                                 },
                                 {
                                   label: "View/Edit",
@@ -3339,15 +4440,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                   variant: "duplicate",
                                   onClick: () => handleDuplicateOrder(item),
                                 },
-                                {
-                                  label: "Preview",
-                                  variant: "preview",
-                                  onClick: () => setPreviewOrder(item),
-                                },
+
                                 {
                                   label: "Print Order",
                                   variant: "print",
                                   onClick: () => handlePrintOrder(item),
+                                },
+                                {
+                                  label: "Download Order",
+                                  variant: "download",
+                                  onClick: () => handleDownloadSaleOrder(item),
                                 },
                                 {
                                   label: "View History",
@@ -3385,7 +4487,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           total={totalApiRecords || filteredOrders.length}
           currentPage={safePage}
           pageSize={pageSize}
-          pageSizeOptions={[10, 20, 50]}
+          pageSizeOptions={[5, 10, 20, 50]}
           onPageChange={(newPage) => setPage(newPage)}
           onPageSizeChange={(newSize) => {
             setPageSize(newSize);
@@ -3435,7 +4537,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-4 text-xs">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
                 <p className="text-[11px] font-bold text-slate-400 uppercase">
                   Customer Details:
@@ -3476,48 +4578,52 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               </div>
             </div>
 
-            <table className="w-full text-xs text-left border border-slate-200 rounded-xl overflow-hidden">
-              <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
-                <tr>
-                  <th className="p-2.5 text-white">#</th>
-                  <th className="p-2.5 text-white">Item &amp; Description</th>
-                  <th className="p-2.5 text-center text-white">Batch No</th>
-                  <th className="p-2.5 text-center text-white">Qty</th>
-                  <th className="p-2.5 text-right text-white">Unit Price</th>
-                  <th className="p-2.5 text-right text-white">Tax (%)</th>
-                  <th className="p-2.5 text-right text-white">Total (₹)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {previewOrder.items.map((it, i) => (
-                  <tr key={i}>
-                    <td className="p-2.5 text-slate-400">{i + 1}</td>
-                    <td className="p-2.5 font-bold text-slate-800">
-                      {it.productName}
-                    </td>
-                    <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">
-                      {it.batch || "—"}
-                    </td>
-                    <td className="p-2.5 text-center">
-                      {it.quantity} {it.unit || ""}
-                    </td>
-                    <td className="p-2.5 text-right">
-                      ₹{it.unitPrice.toLocaleString("en-IN")}
-                    </td>
-                    <td className="p-2.5 text-right">{it.taxPercent || 0}%</td>
-                    <td className="p-2.5 text-right font-bold">
-                      ₹
-                      {it.total.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </td>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[560px] text-xs text-left">
+                <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
+                  <tr>
+                    <th className="p-2.5 text-white">#</th>
+                    <th className="p-2.5 text-white">Item &amp; Description</th>
+                    <th className="p-2.5 text-center text-white">Batch No</th>
+                    <th className="p-2.5 text-center text-white">Qty</th>
+                    <th className="p-2.5 text-right text-white">Unit Price</th>
+                    <th className="p-2.5 text-right text-white">Tax (%)</th>
+                    <th className="p-2.5 text-right text-white">Total (₹)</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {previewOrder.items.map((it, i) => (
+                    <tr key={i}>
+                      <td className="p-2.5 text-slate-400">{i + 1}</td>
+                      <td className="p-2.5 font-bold text-slate-800">
+                        {it.productName}
+                      </td>
+                      <td className="p-2.5 text-center font-mono font-bold text-[#33077C]">
+                        {it.batch || "—"}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        {it.quantity} {it.unit || ""}
+                      </td>
+                      <td className="p-2.5 text-right">
+                        ₹{it.unitPrice.toLocaleString("en-IN")}
+                      </td>
+                      <td className="p-2.5 text-right">
+                        {it.taxPercent || 0}%
+                      </td>
+                      <td className="p-2.5 text-right font-bold">
+                        ₹
+                        {it.total.toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                        })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div className="flex justify-end pt-2">
-              <div className="w-64 space-y-1.5 text-xs text-slate-600">
+              <div className="w-full sm:w-64 space-y-1.5 text-xs text-slate-600">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
                   <span className="font-semibold text-slate-800">
@@ -3569,7 +4675,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               </div>
             )}
 
-            <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
+            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setPreviewOrder(null)}
@@ -3580,10 +4686,19 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               <button
                 type="button"
                 onClick={() => handlePrintOrder(previewOrder)}
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                <span>Print Order</span>
+              </button>
+              <button
+                type="button"
+                disabled={isDownloadingPdf}
+                onClick={() => handleDownloadSaleOrder(previewOrder)}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
               >
-                <Printer className="w-4 h-4" />
-                <span>Print Order</span>
+                <Download className="w-4 h-4" />
+                <span>Download Order</span>
               </button>
             </div>
           </div>
@@ -3598,7 +4713,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           title={`Order History - ${historyOrder.orderNo}`}
           maxWidth="md"
         >
-          <div className="p-6 space-y-4 text-xs font-sans">
+          <div className="p-1 sm:p-2 space-y-4 text-xs font-sans">
             <div className="p-4 bg-purple-50/60 rounded-2xl border border-purple-100 flex items-center justify-between">
               <div>
                 <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">

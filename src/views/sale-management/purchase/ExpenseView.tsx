@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -33,6 +35,7 @@ import {
   Search,
   CheckCircle2,
   XCircle,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -42,9 +45,8 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { UniversalShareDropdown, formatExpenseShare } from '../../../utils/shareUtils';
-import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
-import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
+import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
 import {
@@ -58,8 +60,10 @@ import {
   supplierApi,
   ApiSupplier,
   isValidUuid,
+  baseClient,
 } from '../../../api';
 
+import { formatDate } from '../utils/dateUtils';
 export interface ExpenseItem {
   id: string;
   expenseNo: string;
@@ -171,6 +175,16 @@ export const ExpenseView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('All Expenses');
   const [appliedPeriod, setAppliedPeriod] = useState('All Expenses');
   const [customStartDate, setCustomStartDate] = useState('');
@@ -182,7 +196,7 @@ export const ExpenseView: React.FC = () => {
   const [pendingPaymentMode, setPendingPaymentMode] = useState('All');
   const [appliedPaymentMode, setAppliedPaymentMode] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const periodDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -330,8 +344,6 @@ export const ExpenseView: React.FC = () => {
   // 3-Dots Action dropdown & Share Popover
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -341,18 +353,12 @@ export const ExpenseView: React.FC = () => {
         setDropdownPos(null);
       }
       if (!target.closest('.share-popover-container') && !target.closest('.share-popover-menu')) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     window.addEventListener('click', handleOutside);
@@ -361,7 +367,7 @@ export const ExpenseView: React.FC = () => {
       window.removeEventListener('click', handleOutside);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
   // Modals state
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
@@ -369,12 +375,16 @@ export const ExpenseView: React.FC = () => {
   const [selectedExpense, setSelectedExpense] = useState<ExpenseItem | null>(null);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [receiptImageState, setReceiptImageState] = useState<string>('');
+  const [isBillModalOpen, setIsBillModalOpen] = useState(false);
+  const [selectedBillExpense, setSelectedBillExpense] = useState<ExpenseItem | null>(null);
+  const [isLoadingBillReceipt, setIsLoadingBillReceipt] = useState(false);
 
   // Delete Modal State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteTargetExpense, setDeleteTargetExpense] = useState<ExpenseItem | null>(null);
   const [isDeletingExpense, setIsDeletingExpense] = useState(false);
   const [deleteExpenseError, setDeleteExpenseError] = useState<string | null>(null);
+  const [isDownloadingExpense, setIsDownloadingExpense] = useState(false);
 
   // Category Manager Modal state
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -531,9 +541,79 @@ export const ExpenseView: React.FC = () => {
     toast.info(`Cloned details from ${exp.expenseNo} into expense form.`);
   };
 
-  const handleOpenDetailModal = (exp: ExpenseItem) => {
-    setSelectedExpense(exp);
+  const handleOpenDetailModal = async (exp: ExpenseItem) => {
+    let currentReceipt = exp.receiptImage;
+    if (!currentReceipt && exp.id) {
+      currentReceipt =
+        localStorage.getItem(`crm_exp_receipt_${exp.id}`) ||
+        (exp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${exp.expenseNo}`) : '') ||
+        '';
+    }
+    const updatedExp = currentReceipt ? { ...exp, receiptImage: currentReceipt } : exp;
+    setSelectedExpense(updatedExp);
     setIsDetailModalOpen(true);
+
+    if (!currentReceipt && exp.id && isValidUuid(exp.id)) {
+      try {
+        const detail = await workExpenseApi.getExpenseById(exp.id);
+        const fetchedImage =
+          (detail.data as any)?.receiptImage ||
+          (detail.data as any)?.receiptUrl ||
+          (detail.data as any)?.attachmentUrl ||
+          (detail.data as any)?.attachment ||
+          (detail.data as any)?.billUrl ||
+          (detail.data as any)?.billImage ||
+          (detail.data as any)?.fileUrl ||
+          '';
+        if (fetchedImage) {
+          localStorage.setItem(`crm_exp_receipt_${exp.id}`, fetchedImage);
+          if (exp.expenseNo) localStorage.setItem(`crm_exp_receipt_${exp.expenseNo}`, fetchedImage);
+          setSelectedExpense((prev) => (prev && prev.id === exp.id ? { ...prev, receiptImage: fetchedImage } : prev));
+          setExpenses((prev) => prev.map((e) => (e.id === exp.id ? { ...e, receiptImage: fetchedImage } : e)));
+        }
+      } catch (err) {
+        console.warn('Could not fetch expense detail for receipt in detail modal:', err);
+      }
+    }
+  };
+
+  const handleOpenBillModal = async (exp: ExpenseItem) => {
+    let currentReceipt = exp.receiptImage;
+    if (!currentReceipt && exp.id) {
+      currentReceipt =
+        localStorage.getItem(`crm_exp_receipt_${exp.id}`) ||
+        (exp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${exp.expenseNo}`) : '') ||
+        '';
+    }
+    const initialExp = currentReceipt ? { ...exp, receiptImage: currentReceipt } : exp;
+    setSelectedBillExpense(initialExp);
+    setIsBillModalOpen(true);
+
+    if (!currentReceipt && exp.id && isValidUuid(exp.id)) {
+      setIsLoadingBillReceipt(true);
+      try {
+        const detail = await workExpenseApi.getExpenseById(exp.id);
+        const fetchedImage =
+          (detail.data as any)?.receiptImage ||
+          (detail.data as any)?.receiptUrl ||
+          (detail.data as any)?.attachmentUrl ||
+          (detail.data as any)?.attachment ||
+          (detail.data as any)?.billUrl ||
+          (detail.data as any)?.billImage ||
+          (detail.data as any)?.fileUrl ||
+          '';
+        if (fetchedImage) {
+          localStorage.setItem(`crm_exp_receipt_${exp.id}`, fetchedImage);
+          if (exp.expenseNo) localStorage.setItem(`crm_exp_receipt_${exp.expenseNo}`, fetchedImage);
+          setSelectedBillExpense((prev) => (prev && prev.id === exp.id ? { ...prev, receiptImage: fetchedImage } : prev));
+          setExpenses((prev) => prev.map((e) => (e.id === exp.id ? { ...e, receiptImage: fetchedImage } : e)));
+        }
+      } catch (err) {
+        console.warn('Could not fetch expense detail for bill:', err);
+      } finally {
+        setIsLoadingBillReceipt(false);
+      }
+    }
   };
 
   // Delete Expense via Work API with confirmation modal
@@ -572,15 +652,28 @@ export const ExpenseView: React.FC = () => {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        toast.error('Image size must be less than 2MB');
+      const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.avif'];
+      const fileName = (file.name || '').toLowerCase();
+      const hasValidExtension = allowedExtensions.some((ext) => fileName.endsWith(ext));
+      const isImageMime = Boolean(file.type && file.type.startsWith('image/'));
+
+      if (!isImageMime && !hasValidExtension) {
+        toast.error('Only image formats (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg) are allowed');
+        e.target.value = '';
+        return;
+      }
+
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('Image size must be less than 5MB');
+        e.target.value = '';
         return;
       }
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
         setReceiptImageState(result);
-        setValue('receiptImage', result);
+        setValue('receiptImage', result, { shouldValidate: true, shouldDirty: true });
+        toast.success('Receipt image attached successfully');
       };
       reader.readAsDataURL(file);
     }
@@ -588,6 +681,17 @@ export const ExpenseView: React.FC = () => {
 
   // Submit Expense Form (Create or Update)
   const onSubmitExpense = async (data: ExpenseFormData) => {
+    const amountNum = Number(data.amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      toast.error('Expense amount must be greater than zero.');
+      return;
+    }
+    const taxPercentNum = Number(data.taxPercent || 0);
+    if (isNaN(taxPercentNum) || taxPercentNum < 0 || taxPercentNum > 100) {
+      toast.error('Tax percentage must be between 0 and 100.');
+      return;
+    }
+
     // Validate Category
     let targetCatId = data.categoryId;
     if (!targetCatId || !isValidUuid(targetCatId)) {
@@ -615,6 +719,47 @@ export const ExpenseView: React.FC = () => {
 
     setIsSubmittingForm(true);
 
+    // Upload receipt to S3 via /uploads/base64 if it's a data URL, or use direct URL
+    let finalReceiptImage: string | null = null;
+    const rawImage = (receiptImageState || data.receiptImage || '').trim();
+
+    if (rawImage) {
+      if (rawImage.startsWith('data:')) {
+        try {
+          const uploadRes = await baseClient.post('/uploads/base64', {
+            image: rawImage,
+            folder: 'attachments',
+            fileName: `expense_${Date.now()}.png`,
+          });
+          const returnedUrl =
+            (typeof uploadRes.data?.data === 'string' ? uploadRes.data.data : null) ||
+            uploadRes.data?.data?.url ||
+            uploadRes.data?.data?.fileUrl ||
+            uploadRes.data?.data?.imageUrl ||
+            uploadRes.data?.data?.location ||
+            uploadRes.data?.data?.path ||
+            (typeof uploadRes.data === 'string' ? uploadRes.data : null) ||
+            uploadRes.data?.url ||
+            uploadRes.data?.fileUrl ||
+            uploadRes.data?.imageUrl ||
+            uploadRes.data?.location;
+
+          if (returnedUrl && typeof returnedUrl === 'string') {
+            finalReceiptImage = returnedUrl;
+          } else {
+            finalReceiptImage = rawImage;
+          }
+        } catch (upErr) {
+          console.warn('Failed to upload receipt base64 to S3, using data directly:', upErr);
+          finalReceiptImage = rawImage;
+        }
+      } else {
+        finalReceiptImage = rawImage;
+      }
+    } else {
+      finalReceiptImage = null;
+    }
+
     try {
       if (editingExpenseId) {
         // Update existing expense via PUT /work/expenses/{id}
@@ -628,9 +773,14 @@ export const ExpenseView: React.FC = () => {
           paymentMode: data.paymentMode,
           referenceNo: data.referenceNo,
           notes: data.notes,
+          receiptImage: finalReceiptImage,
         });
 
         await workExpenseApi.updateExpense(editingExpenseId, payload);
+        if (finalReceiptImage) {
+          localStorage.setItem(`crm_exp_receipt_${editingExpenseId}`, finalReceiptImage);
+          if (data.expenseNo) localStorage.setItem(`crm_exp_receipt_${data.expenseNo}`, finalReceiptImage);
+        }
         toast.success(`Expense ${data.expenseNo || ''} updated successfully.`);
       } else {
         // Create new expense via POST /work/expenses
@@ -644,17 +794,22 @@ export const ExpenseView: React.FC = () => {
           paymentMode: data.paymentMode,
           referenceNo: data.referenceNo,
           notes: data.notes,
+          receiptImage: finalReceiptImage,
         });
 
         const res = await workExpenseApi.createExpense(payload);
         const createdNo = res.data?.expenseNo || 'new expense';
+        if (finalReceiptImage) {
+          if (res.data?.id) localStorage.setItem(`crm_exp_receipt_${res.data.id}`, finalReceiptImage);
+          if (res.data?.expenseNo) localStorage.setItem(`crm_exp_receipt_${res.data.expenseNo}`, finalReceiptImage);
+        }
         toast.success(`Expense ${createdNo} created successfully.`);
       }
 
       setIsFormModalOpen(false);
       fetchExpenses(true);
     } catch (err: any) {
-      const msg = err?.message || 'Failed to save expense';
+      const msg = err?.response?.data?.message || err?.message || 'Failed to save expense';
       toast.error(msg);
     } finally {
       setIsSubmittingForm(false);
@@ -820,9 +975,9 @@ export const ExpenseView: React.FC = () => {
     toast.success(`Expenses Excel report downloaded (${excelRows.length} records in view)!`);
   };
 
-  // Print Expense Voucher via universal printUtils
-  const handlePrintExpense = (exp: ExpenseItem) => {
-    printBusinessDocument({
+  // Print & Download Expense Voucher via universal printUtils
+  const buildExpensePrintOptions = (exp: ExpenseItem): DocumentPrintOptions => {
+    return {
       docTypeTitle: 'EXPENSE VOUCHER',
       docNo: exp.expenseNo,
       docDate: exp.expenseDate,
@@ -863,7 +1018,26 @@ export const ExpenseView: React.FC = () => {
       paidAmountLabel: 'Amount Disbursed',
       balanceLabel: 'Balance',
       notes: exp.notes || 'Operating expense processed and verified.',
-    });
+    };
+  };
+
+  const handlePrintExpense = (exp: ExpenseItem) => {
+    printBusinessDocument(buildExpensePrintOptions(exp));
+  };
+
+  const handleDownloadExpense = async (exp: ExpenseItem) => {
+    if (isDownloadingExpense) return;
+    setIsDownloadingExpense(true);
+    const filename = `ExpenseVoucher_${(exp.expenseNo || 'expense').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildExpensePrintOptions(exp), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download expense voucher PDF:', err);
+      toast.error('Failed to download expense voucher PDF. Please try again.');
+    } finally {
+      setIsDownloadingExpense(false);
+    }
   };
 
   // Print Table Report for Expenses
@@ -908,11 +1082,19 @@ export const ExpenseView: React.FC = () => {
     });
   };
 
+  const pagedExpenses = useMemo(() => {
+    if (expenses.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return expenses.slice(start, start + pageSize);
+    }
+    return expenses;
+  }, [expenses, currentPage, pageSize]);
+
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0 shadow-xs">
               <Receipt className="w-5 h-5" />
@@ -930,12 +1112,12 @@ export const ExpenseView: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           {/* Categories Master Management Button */}
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={() => {
               fetchCategories();
               setIsCategoryModalOpen(true);
@@ -954,7 +1136,7 @@ export const ExpenseView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -965,7 +1147,7 @@ export const ExpenseView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -977,7 +1159,7 @@ export const ExpenseView: React.FC = () => {
             variant="primary"
             size="md"
             onClick={handleOpenCreateModal}
-            className="col-span-2 sm:col-span-1 w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<Plus className="w-4 h-4 text-white shrink-0" />}
           >
             <span>Add Expense</span>
@@ -1195,20 +1377,20 @@ export const ExpenseView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">EXPENSE NO</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CATEGORY</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">EXPENSE TITLE / PAYEE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PAYMENT MODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REFERENCE / BILL</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TAX AMOUNT</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL AMOUNT</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+                columns={[
+                  { label: "EXPENSE NO", align: "left", minWidth: "140px" },
+                  { label: "DATE", align: "left", minWidth: "120px" },
+                  { label: "CATEGORY", align: "left", minWidth: "140px" },
+                  { label: "EXPENSE TITLE / PAYEE", align: "left", minWidth: "180px" },
+                  { label: "PAYMENT MODE", align: "center", minWidth: "130px" },
+                  { label: "REFERENCE / BILL", align: "left", minWidth: "150px" },
+                  { label: "TAX AMOUNT", align: "right", minWidth: "120px" },
+                  { label: "TOTAL AMOUNT", align: "right", minWidth: "130px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTION", align: "center", minWidth: "120px" },
+                ]}
+              />
             <tbody className="text-sm">
               {isApiLoading ? (
                 <tr>
@@ -1241,7 +1423,7 @@ export const ExpenseView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                expenses.map((exp) => (
+                pagedExpenses.map((exp) => (
                   <tr
                     key={exp.id}
                     className="hover:bg-purple-50/20 transition-colors border-b border-slate-200"
@@ -1294,7 +1476,25 @@ export const ExpenseView: React.FC = () => {
 
                     {/* Reference / Bill */}
                     <td className="py-3 px-5 text-slate-600 text-xs border border-slate-200">
-                      {exp.referenceNo || '—'}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{exp.referenceNo || '—'}</span>
+                        <button
+                          type="button"
+                          title="View attached bill / receipt"
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                            exp.receiptImage
+                              ? 'bg-purple-50 text-[#4309A2] hover:bg-purple-100 border border-purple-200'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenBillModal(exp);
+                          }}
+                        >
+                          <Receipt className="w-3 h-3" />
+                          <span>View Bill</span>
+                        </button>
+                      </div>
                     </td>
 
                     {/* Tax Amount */}
@@ -1332,16 +1532,7 @@ export const ExpenseView: React.FC = () => {
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
 
-                        {/* Share Popover */}
-                        <UniversalShareDropdown
-                          id={exp.id}
-                          activeShareId={activeShareId}
-                          setActiveShareId={setActiveShareId}
-                          sharePos={sharePos}
-                          setSharePos={setSharePos}
-                          getShareData={() => formatExpenseShare(exp)}
-                          title="Share Expense Voucher"
-                        />
+                        
 
                         {/* 3-dots Actions Dropdown */}
                         <SaleActionDropdown
@@ -1357,9 +1548,19 @@ export const ExpenseView: React.FC = () => {
                               onClick: () => handlePrintExpense(exp),
                             },
                             {
+                              label: 'Download Voucher',
+                              variant: 'download',
+                              onClick: () => handleDownloadExpense(exp),
+                            },
+                            {
                               label: 'Preview',
                               variant: 'preview',
                               onClick: () => handleOpenDetailModal(exp),
+                            },
+                            {
+                              label: 'View Attached Bill',
+                              variant: 'preview',
+                              onClick: () => handleOpenBillModal(exp),
                             },
                             {
                               label: 'Duplicate',
@@ -1637,8 +1838,10 @@ export const ExpenseView: React.FC = () => {
                 <input
                   type="number"
                   step="any"
+                  min="0.01"
                   placeholder="0.00"
                   {...register('amount')}
+                  onKeyDown={handleNonNegativeKeyDown}
                   className={`${FORM_INPUT_CLS} pl-7 font-bold`}
                 />
               </div>
@@ -1717,11 +1920,19 @@ export const ExpenseView: React.FC = () => {
               <FormLabel>Upload Receipt / Proof</FormLabel>
               {receiptImageState ? (
                 <div className="flex items-center gap-3 h-11 px-3.5 rounded-xl border border-slate-200 bg-slate-50">
-                  <img
-                    src={receiptImageState}
-                    alt="Receipt"
-                    className="w-7 h-7 rounded-lg object-cover border border-slate-200"
-                  />
+                  <a
+                    href={receiptImageState}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 cursor-pointer hover:opacity-80"
+                    title="Click to view full receipt"
+                  >
+                    <img
+                      src={receiptImageState}
+                      alt="Receipt"
+                      className="w-7 h-7 rounded-lg object-cover border border-slate-200"
+                    />
+                  </a>
                   <span className="text-xs sm:text-[13px] text-slate-700 font-medium truncate flex-1">
                     Receipt Attached
                   </span>
@@ -1729,7 +1940,7 @@ export const ExpenseView: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setReceiptImageState('');
-                      setValue('receiptImage', '');
+                      setValue('receiptImage', '', { shouldValidate: true, shouldDirty: true });
                     }}
                     className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
                     title="Remove Receipt"
@@ -1743,7 +1954,7 @@ export const ExpenseView: React.FC = () => {
                   <span>Upload Receipt</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,image/bmp,image/svg+xml,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.avif"
                     onChange={handleImageUpload}
                     className="hidden"
                   />
@@ -1828,15 +2039,11 @@ export const ExpenseView: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
                 <span className="text-slate-400 font-semibold block text-[10px] uppercase">Expense Date</span>
                 <span className="font-bold text-slate-800">
-                  {new Date(selectedExpense.expenseDate).toLocaleDateString('en-GB', {
-                    day: '2-digit',
-                    month: 'long',
-                    year: 'numeric',
-                  })}
+                  {formatDate(selectedExpense.expenseDate)}
                 </span>
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
@@ -1864,17 +2071,35 @@ export const ExpenseView: React.FC = () => {
 
             {selectedExpense.receiptImage && (
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
-                <span className="text-slate-400 font-semibold block text-[10px] uppercase">Attached Receipt</span>
-                <img
-                  src={selectedExpense.receiptImage}
-                  alt="Receipt"
-                  className="w-full max-h-48 object-contain rounded-lg border border-slate-200 bg-white"
-                />
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 font-semibold block text-[10px] uppercase">Attached Receipt</span>
+                  <a
+                    href={selectedExpense.receiptImage}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-[#4309A2] hover:underline font-semibold"
+                  >
+                    Open in new tab
+                  </a>
+                </div>
+                <a
+                  href={selectedExpense.receiptImage}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block cursor-pointer hover:opacity-95"
+                  title="Click to open receipt in new tab"
+                >
+                  <img
+                    src={selectedExpense.receiptImage}
+                    alt="Receipt"
+                    className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-white"
+                  />
+                </a>
               </div>
             )}
 
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-400">
-              <span>Created: {new Date(selectedExpense.createdAt).toLocaleDateString('en-IN')}</span>
+              <span>Created: {formatDate(selectedExpense.createdAt)}</span>
               <div className="flex items-center gap-2">
                 <Button
                   variant="secondary"
@@ -1902,7 +2127,140 @@ export const ExpenseView: React.FC = () => {
                   <Printer className="w-3.5 h-3.5" />
                   <span>Print Expense Voucher</span>
                 </button>
+                <button
+                  type="button"
+                  disabled={isDownloadingExpense}
+                  onClick={() => handleDownloadExpense(selectedExpense)}
+                  className="h-8.5 px-4 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {isDownloadingExpense ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  <span>{isDownloadingExpense ? 'Generating...' : 'Download Voucher'}</span>
+                </button>
               </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* DEDICATED ATTACHED BILL VIEWER MODAL */}
+      <Modal
+        isOpen={isBillModalOpen}
+        onClose={() => {
+          setIsBillModalOpen(false);
+          setSelectedBillExpense(null);
+        }}
+        title={`Attached Bill & Receipts`}
+        subtitle={selectedBillExpense ? `${selectedBillExpense.expenseNo} • ${selectedBillExpense.title} • ₹${selectedBillExpense.totalAmount.toLocaleString('en-IN')}` : 'Expense Bill Viewer'}
+        maxWidth="3xl"
+        headerGradient={true}
+      >
+        {selectedBillExpense && (
+          <div className="space-y-4 p-2 sm:p-4">
+            {/* Meta summary strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 bg-purple-50/60 rounded-xl border border-purple-100 text-xs">
+              <div>
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">Expense No</span>
+                <span className="font-bold text-[#33077C]">{selectedBillExpense.expenseNo}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">Category</span>
+                <span className="font-semibold text-slate-700">{selectedBillExpense.category}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">Payee / Vendor</span>
+                <span className="font-semibold text-slate-700">{selectedBillExpense.payee}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">Total Amount</span>
+                <span className="font-bold text-[#33077C]">₹{selectedBillExpense.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            {/* Bill / Receipt content */}
+            {isLoadingBillReceipt ? (
+              <div className="flex flex-col items-center justify-center p-12 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                <Loader2 className="w-8 h-8 text-[#33077C] animate-spin mb-2" />
+                <p className="text-xs font-semibold text-slate-600">Retrieving attached bill document...</p>
+              </div>
+            ) : selectedBillExpense.receiptImage ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <Receipt className="w-3.5 h-3.5 text-[#33077C]" />
+                    <span>Attached Document / Receipt</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={selectedBillExpense.receiptImage}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#4309A2] hover:text-[#33077C] bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200 transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open in New Tab</span>
+                    </a>
+                    <a
+                      href={selectedBillExpense.receiptImage}
+                      download={`Bill_${selectedBillExpense.expenseNo || 'receipt'}.png`}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </a>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-center min-h-[260px] max-h-[500px] overflow-auto">
+                  {selectedBillExpense.receiptImage.includes('application/pdf') || selectedBillExpense.receiptImage.endsWith('.pdf') ? (
+                    <iframe
+                      src={selectedBillExpense.receiptImage}
+                      title="Attached Bill PDF"
+                      className="w-full h-[450px] rounded-lg border border-slate-200 bg-white"
+                    />
+                  ) : (
+                    <img
+                      src={selectedBillExpense.receiptImage}
+                      alt={`Receipt for ${selectedBillExpense.expenseNo}`}
+                      className="max-h-[460px] max-w-full object-contain rounded-lg shadow-sm border border-slate-200 bg-white"
+                    />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center p-10 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center space-y-3">
+                <Receipt className="w-12 h-12 text-slate-300 stroke-[1.5]" />
+                <div>
+                  <h4 className="text-sm font-bold text-slate-700">No Bill Attached</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                    No receipt or bill document was attached when recording this expense. You can attach one by editing this expense.
+                  </p>
+                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    setIsBillModalOpen(false);
+                    handleOpenEditModal(selectedBillExpense);
+                  }}
+                  icon={<Upload className="w-3.5 h-3.5" />}
+                >
+                  Upload &amp; Attach Bill Now
+                </Button>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              <span className="text-xs text-slate-400">Reference: {selectedBillExpense.referenceNo || 'None'}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBillModalOpen(false);
+                  setSelectedBillExpense(null);
+                }}
+                className="h-8.5 px-4 rounded-lg border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+              >
+                Close
+              </button>
             </div>
           </div>
         )}

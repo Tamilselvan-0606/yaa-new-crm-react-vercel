@@ -3,6 +3,7 @@ export type ProformaInvoiceStatus = 'Draft' | 'Sent' | 'Approved' | 'Converted' 
 export interface ProformaItem {
   id?: string;
   itemId?: string;
+  title?: string;
   itemDescription?: string;
   description?: string;
   hsnCode?: string;
@@ -128,7 +129,8 @@ export interface ProformaListParams {
 
 export interface CreateProformaItemPayload {
   itemId?: string;
-  itemDescription: string;
+  title: string;
+  itemDescription?: string;
   hsnCode?: string;
   quantity: number;
   unitPrice: number;
@@ -140,6 +142,8 @@ export interface CreateProformaRequest {
   dueDate: string; // YYYY-MM-DD
   customerId: string; // UUID
   organizationId?: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
   discountTotal?: number;
   billingAddress?: string;
   shippingAddress?: string;

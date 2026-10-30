@@ -1,3 +1,6 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { SupplierSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -26,6 +29,7 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
+  Download,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -54,11 +58,12 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { CustomSelect } from '../../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/shareUtils';
-import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
-import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls } from '../utils/formUtils';
+import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
+import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 import { toast } from 'sonner';
 
+import { formatDate } from '../utils/dateUtils';
 const PERIOD_FILTER_OPTIONS = [
   { label: 'Today', value: 'Today' },
   { label: 'All Payment-Out Invoices', value: 'All Payment-Out Invoices' },
@@ -97,6 +102,16 @@ export const PaymentOutView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('All Payment-Out Invoices');
   const [appliedPeriod, setAppliedPeriod] = useState('All Payment-Out Invoices');
   const [pendingStatus, setPendingStatus] = useState('All');
@@ -110,7 +125,7 @@ export const PaymentOutView: React.FC = () => {
   const [pendingSupplier, setPendingSupplier] = useState('All');
   const [appliedSupplier, setAppliedSupplier] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   const periodDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -316,6 +331,7 @@ export const PaymentOutView: React.FC = () => {
   const [deleteTargetPayment, setDeleteTargetPayment] = useState<PaymentOut | null>(null);
   const [isDeletingPayment, setIsDeletingPayment] = useState(false);
   const [deletePaymentError, setDeletePaymentError] = useState<string | null>(null);
+  const [isDownloadingPayment, setIsDownloadingPayment] = useState(false);
 
   // Only load registered suppliers & purchases on demand when the form modal opens
   useEffect(() => {
@@ -531,6 +547,10 @@ export const PaymentOutView: React.FC = () => {
     }
 
     const purchaseObj = mergedPurchases.find((p) => p.id === data.purchaseId);
+    if (purchaseObj && !editingPaymentId && purchaseObj.balance > 0 && numAmount > purchaseObj.balance + 0.01) {
+      toast.error(`Payment amount (₹${numAmount.toLocaleString('en-IN')}) cannot exceed the outstanding balance of ₹${purchaseObj.balance.toLocaleString('en-IN')}.`);
+      return;
+    }
     const existing = editingPaymentId ? activePool.find((p) => p.id === editingPaymentId) : null;
 
     if (existing && existing.status === 'Cancelled') {
@@ -741,7 +761,8 @@ export const PaymentOutView: React.FC = () => {
       isApiConnected &&
       totalApiRecords !== null &&
       appliedPeriod === 'All Payment-Out Invoices' &&
-      appliedPaymentMode === 'All'
+      appliedPaymentMode === 'All' &&
+      filteredPayments.length <= pageSize
     ) {
       return filteredPayments;
     }
@@ -845,11 +866,11 @@ export const PaymentOutView: React.FC = () => {
     toast.success(`Payment Out Excel report downloaded (${filteredPayments.length} records)!`);
   };
 
-  // Print Payment-Out Voucher via universal printUtils
-  const handlePrintPaymentOut = (po: PaymentOut) => {
+  // Print & Download Payment-Out Voucher via universal printUtils
+  const buildPaymentOutPrintOptions = (po: PaymentOut): DocumentPrintOptions => {
     const matchedSup = mergedSuppliers.find((s) => s.id === po.supplierId || s.name === po.supplierName);
 
-    printBusinessDocument({
+    return {
       docTypeTitle: 'PAYMENT-OUT VOUCHER',
       docNo: po.paymentNo,
       docDate: po.paymentDate,
@@ -888,7 +909,26 @@ export const PaymentOutView: React.FC = () => {
       paidAmountLabel: 'Amount Disbursed',
       balanceLabel: 'Balance',
       notes: po.notes || 'Vendor disbursement processed and verified.',
-    });
+    };
+  };
+
+  const handlePrintPaymentOut = (po: PaymentOut) => {
+    printBusinessDocument(buildPaymentOutPrintOptions(po));
+  };
+
+  const handleDownloadPaymentOut = async (po: PaymentOut) => {
+    if (isDownloadingPayment) return;
+    setIsDownloadingPayment(true);
+    const filename = `PaymentVoucher_${(po.paymentNo || 'voucher').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildPaymentOutPrintOptions(po), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download payment voucher PDF:', err);
+      toast.error('Failed to download payment voucher PDF. Please try again.');
+    } finally {
+      setIsDownloadingPayment(false);
+    }
   };
 
   // Print Table Report for Payment Out
@@ -942,8 +982,8 @@ export const PaymentOutView: React.FC = () => {
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <CreditCard className="w-4.5 h-4.5" />
@@ -957,11 +997,11 @@ export const PaymentOutView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -971,7 +1011,7 @@ export const PaymentOutView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -981,7 +1021,7 @@ export const PaymentOutView: React.FC = () => {
           <Button
             variant="primary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleOpenCreateModal}
             icon={<Plus className="w-4 h-4 text-white" />}
           >
@@ -1182,19 +1222,19 @@ export const PaymentOutView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">VOUCHER NO</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUPPLIER / VENDOR</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">AGAINST BILL</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PAYMENT MODE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REFERENCE / UTR</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">AMOUNT PAID</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+                columns={[
+                  { label: "VOUCHER NO", align: "left", minWidth: "140px" },
+                  { label: "DATE", align: "left", minWidth: "120px" },
+                  { label: "SUPPLIER / VENDOR", align: "left", minWidth: "180px" },
+                  { label: "AGAINST BILL", align: "center", minWidth: "130px" },
+                  { label: "PAYMENT MODE", align: "center", minWidth: "130px" },
+                  { label: "REFERENCE / UTR", align: "left", minWidth: "150px" },
+                  { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTION", align: "center", minWidth: "130px" },
+                ]}
+              />
             <tbody className="text-sm">
               {isApiLoading ? (
                 <tr>
@@ -1290,7 +1330,7 @@ export const PaymentOutView: React.FC = () => {
                       </td>
 
                       {/* 9. Actions */}
-                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap min-w-[130px] w-36 align-middle">
                         <div className="flex items-center justify-center gap-1.5">
 
                           {/* Share / Forward Popover */}
@@ -1330,6 +1370,11 @@ export const PaymentOutView: React.FC = () => {
                                 label: 'Print Voucher',
                                 variant: 'print',
                                 onClick: () => handlePrintPaymentOut(po),
+                              },
+                              {
+                                label: 'Download Voucher',
+                                variant: 'download',
+                                onClick: () => handleDownloadPaymentOut(po),
                               },
                               {
                                 label: 'Preview',
@@ -1479,7 +1524,7 @@ export const PaymentOutView: React.FC = () => {
           </div>
         }
       >
-        <form noValidate onSubmit={handleSubmit(onSubmitPayment)} className="space-y-4.5 p-2 sm:p-4">
+        <form noValidate onSubmit={handleSubmit(onSubmitPayment)} className="space-y-4.5 p-0.5 sm:p-2">
           {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
           {/* Row 1: 3 Fields (Supplier / Vendor, Bill No, Voucher No) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
@@ -1490,19 +1535,16 @@ export const PaymentOutView: React.FC = () => {
                 control={control}
                 name="supplierId"
                 render={({ field }) => (
-                  <CustomSelect
+                  <SupplierSearchableSelect
                     value={field.value}
-                    onChange={(val) => {
+                    onChange={(val, sup) => {
                       field.onChange(val);
                       setValue('purchaseId', '');
                       setValue('amount', '');
+                      // supplierName not in PaymentOutFormData
                     }}
                     placeholder="Select supplier / vendor"
-                    allowClear={true}
-                    options={mergedSuppliers.map((s) => ({
-                      value: s.id,
-                      label: `${s.name} (Payable: ₹${(s.payable || 0).toLocaleString('en-IN')})`,
-                    }))}
+                    allowNone
                   />
                 )}
               />
@@ -1565,8 +1607,10 @@ export const PaymentOutView: React.FC = () => {
                 <input
                   type="number"
                   step="0.01"
+                  min="0.01"
                   placeholder="0.00"
                   {...register('amount')}
+                  onKeyDown={handleNonNegativeKeyDown}
                   className={`${getFormInputCls(!!errors.amount)} pl-8 font-bold text-slate-900`}
                 />
               </div>
@@ -1722,7 +1766,7 @@ export const PaymentOutView: React.FC = () => {
               <div>
                 <span className="text-xs font-bold text-[#33077C] uppercase tracking-wider">Payment Out Voucher</span>
                 <div className="text-lg font-bold font-mono text-slate-900">{selectedPayment.paymentNo}</div>
-                <div className="text-xs text-slate-500 mt-0.5">Date: {selectedPayment.paymentDate}</div>
+                <div className="text-xs text-slate-500 mt-0.5">Date: {formatDate(selectedPayment.paymentDate)}</div>
               </div>
               <div className="text-right">
                 <span className="text-xs font-semibold text-slate-500">Amount Paid</span>
@@ -1736,7 +1780,7 @@ export const PaymentOutView: React.FC = () => {
             </div>
 
             {/* Grid Information */}
-            <div className="grid grid-cols-2 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 text-xs">
               <div className="bg-white p-3 rounded-lg border border-slate-200">
                 <span className="text-slate-400 block font-semibold">Vendor / Supplier</span>
                 <span className="font-bold text-slate-800 text-sm mt-0.5 block">{selectedPayment.supplierName}</span>
@@ -1802,6 +1846,15 @@ export const PaymentOutView: React.FC = () => {
                 <Printer className="w-4 h-4" />
                 <span>Print Voucher</span>
               </button>
+              <button
+                type="button"
+                disabled={isDownloadingPayment}
+                onClick={() => handleDownloadPaymentOut(selectedPayment)}
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDownloadingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>{isDownloadingPayment ? 'Generating...' : 'Download Voucher'}</span>
+              </button>
             </div>
           </div>
         )}
@@ -1844,7 +1897,7 @@ export const PaymentOutView: React.FC = () => {
                 <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-800">Payment Out Recorded</span>
-                    <span className="text-[11px] text-slate-400 font-medium">{selectedPayment.paymentDate}</span>
+                    <span className="text-[11px] text-slate-400 font-medium">{formatDate(selectedPayment.paymentDate)}</span>
                   </div>
                   <p className="text-xs text-slate-600 mt-1">
                     Voucher disbursed via <strong className="text-slate-800">{selectedPayment.paymentMode}</strong> to{' '}

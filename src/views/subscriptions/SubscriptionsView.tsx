@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { CommonTableHead } from '../../components/common/CommonTableHead';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import {
@@ -70,8 +71,8 @@ import {
   ClientProductApiItem,
   productPlanApi,
   ProductPlanApiItem,
-  customerApi,
-  mapApiCustomerToSalesCustomer,
+  platformClientApi,
+  PlatformClientItem,
 } from '../../api';
 
 export interface OrgSubscriptionItem {
@@ -328,10 +329,29 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             return [];
           })
           .catch(() => []),
-        customerApi.getCustomers({ pagination_required: false, page_size: 100 })
+        platformClientApi.getClients({ limit: 100 })
           .then((res) => {
             if (res && res.success && Array.isArray(res.data)) {
-              return res.data.map(mapApiCustomerToSalesCustomer) as any;
+              return res.data.map((c: PlatformClientItem) => ({
+                id: c.id,
+                clientId: c.code || c.id,
+                clientName: c.name,
+                businessName: c.legalName || c.name,
+                name: c.name,
+                company: c.legalName || c.name,
+                email: c.email || '',
+                phone: c.phone || '',
+                whatsapp: c.whatsapp || c.phone || '',
+                contactPerson: c.contactPerson || c.name,
+                address: c.address || c.location || '',
+                location: c.location || '',
+                city: c.location || '',
+                industry: c.industry || '',
+                gstin: c.gstNumber || '',
+                pan: c.panNumber || '',
+                status: c.status || (c.active ? 'Active' : 'Inactive'),
+                linkedProducts: [],
+              })) as Customer[];
             }
             return [];
           })
@@ -340,6 +360,12 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       const prods = prodsData || [];
       setProducts(prods);
       setCustomers(custsData || []);
+
+      const firstProdId = prods[0]?.id || '';
+      if (firstProdId) {
+        setPendingPlanProduct((prev) => (prev && prev !== 'ALL' ? prev : firstProdId));
+        setAppliedPlanProduct((prev) => (prev && prev !== 'ALL' ? prev : firstProdId));
+      }
 
       // Default selected product to Digital Marketing or the first loaded product
       setSelectedPlanProductId((prev) => {
@@ -415,10 +441,20 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     isPopular: false,
   });
 
-  const loadProductPlans = async (productId: string, status?: string) => {
+  const loadedProductPlansRef = useRef<Set<string>>(new Set());
+  const loadingProductPlansRef = useRef<Set<string>>(new Set());
+
+  const loadProductPlans = async (productId: string, status?: string, force = false) => {
     if (!productId) return;
     const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(productId);
     if (!isUuid) return; // Mock / local product ID, don't query remote API
+
+    // Avoid duplicate simultaneous or repeated requests if already loaded without specific status filter (unless force is requested)
+    if (!force && !status && (loadedProductPlansRef.current.has(productId) || loadingProductPlansRef.current.has(productId))) {
+      return;
+    }
+
+    loadingProductPlansRef.current.add(productId);
     setIsProductPlansLoading(true);
     try {
       const res = await productPlanApi.getProductPlans(productId, {
@@ -426,6 +462,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       });
       if (res.success && Array.isArray(res.data)) {
         const mappedPlans = res.data.map(mapApiProductPlanToProductPlan);
+        loadedProductPlansRef.current.add(productId);
         setProductPlansByProductId((prev) => ({
           ...prev,
           [productId]: mappedPlans,
@@ -435,15 +472,25 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       console.error('Failed to load product plans for productId:', productId, e);
       showToast('error', 'Plans Load Failed', e.message || 'Failed to fetch product plans');
     } finally {
+      loadingProductPlansRef.current.delete(productId);
       setIsProductPlansLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!isSuperAdmin && viewMode === 'plans' && selectedPlanProductId) {
-      loadProductPlans(selectedPlanProductId);
+    if (!isSuperAdmin && viewMode === 'plans') {
+      if (appliedPlanProduct && appliedPlanProduct !== 'ALL') {
+        loadProductPlans(appliedPlanProduct);
+      }
     }
-  }, [isSuperAdmin, viewMode, selectedPlanProductId]);
+  }, [isSuperAdmin, viewMode, appliedPlanProduct]);
+
+  // Ensure plans are loaded when the subscription modal opens for a selected product
+  useEffect(() => {
+    if (isSubModalOpen && subProductId && !productPlansByProductId[subProductId]) {
+      loadProductPlans(subProductId);
+    }
+  }, [isSubModalOpen, subProductId, productPlansByProductId]);
 
   // -------------------------------------------------------------
   // SUPER ADMIN: Organization Subscription Plans (Live API)
@@ -570,7 +617,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   // -------------------------------------------------------------
   const handleOpenCreatePlan = (productId?: string) => {
     setPlanModalProductId(
-      productId || (isSuperAdmin ? 'prod_org' : '')
+      productId || (isSuperAdmin ? 'prod_org' : (appliedPlanProduct || products[0]?.id || ''))
     );
     setEditingPlan(null);
     setIsPlanModalOpen(true);
@@ -699,7 +746,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       }
       setIsPlanModalOpen(false);
       if (isUuid) {
-        await loadProductPlans(productId);
+        loadedProductPlansRef.current.delete(productId);
+        await loadProductPlans(productId, undefined, true);
       }
     } catch (e: any) {
       console.error('Plan Save Failed:', e);
@@ -712,19 +760,30 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const handleDeletePlan = async (product: Product, plan: ProductPlan) => {
     try {
       if (isSuperAdmin || product.id === 'prod_org') {
+        setApiPlans((prev) => prev.filter((p) => p.id !== plan.id));
         await subscriptionPlanApi.deleteSubscriptionPlan(plan.id);
         showToast('success', 'Plan Removed', `Deleted ${plan.name} from enterprise plans.`);
         await loadSubscriptionPlans();
         return;
       }
 
+      // Optimistically remove from state immediately so UI updates without waiting
+      setProductPlansByProductId((prev) => ({
+        ...prev,
+        [product.id]: (prev[product.id] || []).filter((p) => p.id !== plan.id),
+      }));
+
       await productPlanApi.deleteProductPlan(product.id, plan.id);
+      loadedProductPlansRef.current.delete(product.id);
       showToast('success', 'Plan Removed', `Deleted ${plan.name} from ${product.name}.`);
-      await loadProductPlans(product.id);
+      await loadProductPlans(product.id, undefined, true);
     } catch (e: any) {
       console.error('Delete Failed:', e);
       const errMsg = e?.response?.data?.message || e?.response?.data?.error?.message || e.message || 'Failed to delete plan.';
       showToast('error', 'Delete Failed', errMsg);
+      // Re-fetch to restore state if deletion failed on server
+      loadedProductPlansRef.current.delete(product.id);
+      await loadProductPlans(product.id, undefined, true);
     }
   };
 
@@ -751,7 +810,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubCustomerId('');
     setSubCustomerName('');
     const targetProd = product || products[0];
-    setSubProductId(targetProd ? targetProd.id : '');
+    const initialProdId = targetProd ? targetProd.id : '';
+    setSubProductId(initialProdId);
+    if (initialProdId) {
+      loadProductPlans(initialProdId);
+    }
     setSubPlanId(plan ? plan.id : '');
     setSubPlanName(plan ? plan.name : '');
     setSubBillingCycle(plan ? plan.billingCycle : 'Monthly');
@@ -772,7 +835,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubCustomerName(sub.customerName || '');
 
     const matchedProd = products.find((p) => p.name === sub.productOrService || p.name === sub.productName || p.id === (sub as any).productId) || products[0];
-    setSubProductId(matchedProd ? matchedProd.id : 'prod_1');
+    const editProdId = matchedProd ? matchedProd.id : 'prod_1';
+    setSubProductId(editProdId);
+    if (editProdId) {
+      loadProductPlans(editProdId);
+    }
     const matchedPlan = matchedProd?.plans?.find((pl) => pl.name === sub.plan || pl.id === (sub as any).planId);
     setSubPlanId(matchedPlan?.id || (sub as any).planId || '');
     setSubPlanName(sub.plan || matchedPlan?.name || '');
@@ -793,6 +860,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setSubPlanName('');
     setSubAmount('');
     setSubBillingCycle('');
+    if (prodId) {
+      loadProductPlans(prodId);
+    }
   };
 
   const handlePlanChangeInSubModal = (planNameOrId: string) => {
@@ -822,9 +892,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     }
     if (!subProductId) {
       errors.productId = 'Target Product is required';
-    }
-    if (!subPlanName) {
-      errors.planTier = 'Select Plan Tier is required';
     }
     if (!subBillingCycle) {
       errors.billingCycle = 'Billing Cycle is required';
@@ -1283,13 +1350,16 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       }));
     }
 
-    return products.flatMap((product) =>
-      (product.plans || []).map((plan) => ({
+    return products.flatMap((product) => {
+      const plans = (productPlansByProductId[product.id] && productPlansByProductId[product.id].length > 0)
+        ? productPlansByProductId[product.id]
+        : (product.plans || []);
+      return plans.map((plan) => ({
         plan,
         product,
-      }))
-    );
-  }, [products, isSuperAdmin, orgPlans]);
+      }));
+    });
+  }, [products, isSuperAdmin, orgPlans, productPlansByProductId]);
 
   const filteredPlansList = useMemo(() => {
     return allPlansWithProduct.filter(({ plan, product }) => {
@@ -1304,12 +1374,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         planType.includes(q) ||
         String(plan.price).includes(q);
 
+      const matchesProduct =
+        appliedPlanProduct === 'ALL' || product.id === appliedPlanProduct || product.name.toLowerCase() === appliedPlanProduct.toLowerCase();
+
       const matchesStatus =
         appliedPlanStatus === 'ALL' || (plan.status || 'Active') === appliedPlanStatus;
 
-      return matchesSearch && matchesStatus;
+      return matchesSearch && matchesProduct && matchesStatus;
     });
-  }, [allPlansWithProduct, appliedPlanSearch, appliedPlanStatus]);
+  }, [allPlansWithProduct, appliedPlanSearch, appliedPlanProduct, appliedPlanStatus]);
 
   const totalPlansPages = isSuperAdmin
     ? Math.max(1, Math.ceil(apiPlansTotal / plansPageSize))
@@ -1362,39 +1435,26 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       {/* 1. Top Header Row with Title on Left and Action Buttons on Right */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
-              {isSuperAdmin ? (
-                viewMode === 'subscriptions' ? (
-                  <Building2 className="w-4.5 h-4.5" />
-                ) : (
-                  <Boxes className="w-4.5 h-4.5" />
-                )
-              ) : (
-                <Repeat className="w-4.5 h-4.5" />
-              )}
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-              {isSuperAdmin
-                ? (viewMode === 'subscriptions' ? 'Organization Subscriptions' : 'Subscription Plans')
-                : (viewMode === 'plans' ? 'Select Product Offering' : 'Client Subscriptions List')}
-            </h1>
-          </div>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            {isSuperAdmin
-              ? (viewMode === 'subscriptions'
-                ? 'Manage recurring organization subscriptions, assigned platform plans, and renewal cycles.'
-                : 'Streamline product plans, flexible pricing tiers, and manage recurring client subscriptions.')
-              : (viewMode === 'plans'
-                ? 'Filter by product suite to view and manage its subscription plan tiers.'
-                : 'Manage recurring client subscriptions, assigned product plans, and renewal cycles.')}
-          </p>
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+                {isSuperAdmin
+                  ? (viewMode === 'subscriptions' ? 'Organization Subscriptions' : 'Subscription Plans')
+                  : (viewMode === 'plans' ? 'Select Product Offering' : 'Client Subscriptions List')}
+              </h1>
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
+                {isSuperAdmin
+                  ? (viewMode === 'subscriptions'
+                    ? 'Manage recurring organization subscriptions, assigned platform plans, and renewal cycles.'
+                    : 'Streamline product plans, flexible pricing tiers, and manage recurring client subscriptions.')
+                  : (viewMode === 'plans'
+                    ? 'Filter by product suite to view and manage its subscription plan tiers.'
+                    : 'Manage recurring client subscriptions, assigned product plans, and renewal cycles.')}
+              </p>
         </div>
 
         {/* Top Right Action Button */}
         {!isSuperAdmin ? (
           <div className="flex items-center gap-3 shrink-0">
-            {viewMode === 'subscriptions' && (
+            {viewMode === 'subscriptions' ? (
               <Button
                 variant="primary"
                 size="md"
@@ -1402,6 +1462,21 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 icon={<UserPlus className="w-4 h-4 text-white" />}
               >
                 Assign Subscription
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() =>
+                  handleOpenCreatePlan(
+                    appliedPlanProduct !== 'ALL'
+                      ? appliedPlanProduct
+                      : (pendingPlanProduct !== 'ALL' ? pendingPlanProduct : (products[0]?.id || ''))
+                  )
+                }
+                icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
+              >
+                Add Plan
               </Button>
             )}
           </div>
@@ -1430,32 +1505,38 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         )}
       </div>
 
-      {/* Standalone Centered View Switcher (Below the Card) */}
+      {/* Standalone Centered View Switcher (Pill Segmented Control) */}
       {!lockMode && (
         <div className="flex justify-center items-center w-full">
-          <div className="flex flex-wrap items-center justify-center gap-2.5">
+          <div className="inline-flex p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200/80 shadow-xs backdrop-blur-sm gap-1.5">
             <button
               type="button"
               onClick={() => setViewMode('plans')}
-              className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${viewMode === 'plans'
-                ? 'bg-[#33077C] text-white shadow-sm'
-                : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
+              className={`px-5 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 ${viewMode === 'plans'
+                ? 'bg-gradient-to-r from-[#33077C] to-[#4309A2] text-white shadow-md shadow-[#33077C]/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                 }`}
             >
-              {viewMode === 'plans' && <Check className="w-3.5 h-3.5 stroke-[3] text-white" />}
+              <Boxes className={`w-4 h-4 ${viewMode === 'plans' ? 'text-white' : 'text-slate-500'}`} />
               <span>Product Subscription Plans</span>
+              {viewMode === 'plans' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />
+              )}
             </button>
 
             <button
               type="button"
               onClick={() => setViewMode('subscriptions')}
-              className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${viewMode === 'subscriptions'
-                ? 'bg-[#33077C] text-white shadow-sm'
-                : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
+              className={`px-5 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 ${viewMode === 'subscriptions'
+                ? 'bg-gradient-to-r from-[#33077C] to-[#4309A2] text-white shadow-md shadow-[#33077C]/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
                 }`}
             >
-              {viewMode === 'subscriptions' && <Check className="w-3.5 h-3.5 stroke-[3] text-white" />}
+              <Repeat className={`w-4 h-4 ${viewMode === 'subscriptions' ? 'text-white' : 'text-slate-500'}`} />
               <span>Client Subscriptions List</span>
+              {viewMode === 'subscriptions' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />
+              )}
             </button>
           </div>
         </div>
@@ -1824,17 +1905,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-                    <thead>
-                      <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUBSCRIPTION & CLIENT</th>
-                        <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRODUCT & OFFERING</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN & PRICING</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">STATUS & CYCLE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">NEXT RENEWAL</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
-                      </tr>
-                    </thead>
+                    <CommonTableHead
+              columns={[
+                { label: "SUBSCRIPTION & CLIENT", align: "left", minWidth: "180px" },
+                { label: "CONTACT INFO", align: "center", minWidth: "140px" },
+                { label: "PRODUCT & OFFERING", align: "left", minWidth: "160px" },
+                { label: "PLAN & PRICING", align: "left", minWidth: "150px" },
+                { label: "STATUS & CYCLE", align: "center", minWidth: "130px" },
+                { label: "NEXT RENEWAL", align: "left", minWidth: "130px" },
+                { label: "ACTION", align: "center", minWidth: "110px" },
+              ]}
+            />
                     <tbody className="text-sm">
                       {isClientSubsLoading ? (
                         <tr>
@@ -2161,17 +2242,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-                    <thead>
-                      <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN NAME</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRICE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">TOTAL PRICE WITH GST</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BILLING CYCLE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PLAN TYPE</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
-                      </tr>
-                    </thead>
+                    <CommonTableHead
+              columns={[
+                { label: "PLAN NAME", align: "left", minWidth: "160px" },
+                { label: "PRICE", align: "right", minWidth: "120px" },
+                { label: "TOTAL PRICE WITH GST", align: "right", minWidth: "140px" },
+                { label: "BILLING CYCLE", align: "center", minWidth: "130px" },
+                { label: "PLAN TYPE", align: "center", minWidth: "120px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTION", align: "center", minWidth: "110px" },
+              ]}
+            />
                     <tbody className="text-sm">
                       {isPlansLoading ? (
                         <tr>
@@ -2404,272 +2485,307 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             </div>
           ) : (
             // =====================================================
-            // ADMIN / STAFF: Original Product Plan Selector & Cards UI
+            // ADMIN / STAFF: Modern Product Plans Table UI (Matching Reference)
             // =====================================================
             <div className="space-y-6">
-              {/* Product Filter Pill Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {products.map((p) => {
-                    const isSelected = selectedPlanProductId === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setSelectedPlanProductId(isSelected ? null : p.id)}
-                        className={`h-11 px-6 rounded-xl text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-2xs hover:scale-[1.02] active:scale-[0.98] ${isSelected
-                          ? 'bg-[#33077C] text-white shadow-xs'
-                          : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
-                          }`}
-                      >
-                        {isSelected && (
-                          <Check className="w-4 h-4 stroke-[3] text-white" />
-                        )}
-                        <span>{p.name}</span>
-                      </button>
-                    );
-                  })}
+              {/* Top SearchBar with Product & Status FilterDropdowns, Apply, Reset, and RightSlot */}
+              <SearchBar
+                value={pendingPlanSearch}
+                onChange={(val) => setPendingPlanSearch(val)}
+                placeholder="Search plans by name, price, billing cycle, plan type..."
+                onSubmit={() => {
+                  setAppliedPlanSearch(pendingPlanSearch);
+                  setAppliedPlanProduct(pendingPlanProduct);
+                  setAppliedPlanStatus(pendingPlanStatus);
+                  setPlansPage(1);
+                }}
+                onReset={() => {
+                  setPendingPlanSearch('');
+                  setAppliedPlanSearch('');
+                  const firstProdId = products[0]?.id || '';
+                  setPendingPlanProduct(firstProdId);
+                  setAppliedPlanProduct(firstProdId);
+                  setPendingPlanStatus('ALL');
+                  setAppliedPlanStatus('ALL');
+                  setPlansPage(1);
+                }}
+                filterSlot={
+                  <div className="flex items-center gap-2.5">
+                    {/* Product Filter Dropdown */}
+                    <FilterDropdown
+                      options={products.map((p) => ({
+                        label: p.name,
+                        value: p.id,
+                      }))}
+                      value={pendingPlanProduct}
+                      onChange={(val) => setPendingPlanProduct(val)}
+                      placeholder="Select Product"
+                    />
+
+                    {/* Status Filter Dropdown */}
+                    <FilterDropdown
+                      options={[
+                        { label: 'Status : All', value: 'ALL' },
+                        { label: 'Active', value: 'Active', dotColor: '#10b981' },
+                        { label: 'Inactive', value: 'Inactive', dotColor: '#f43f5e' },
+                      ]}
+                      value={pendingPlanStatus}
+                      onChange={(val) => setPendingPlanStatus(val)}
+                      placeholder="Status : All"
+                    />
+                  </div>
+                }
+                rightSlot={
+                  <span className="text-xs font-semibold text-slate-500 pr-2">
+                    Total Plans :{' '}
+                    <span className="text-[#33077C] font-bold">{filteredPlansList.length}</span>
+                  </span>
+                }
+              />
+
+              {/* Modern Product Plans Table */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
+                    <CommonTableHead
+              columns={[
+                { label: "PRODUCT NAME", align: "left", minWidth: "160px" },
+                { label: "PLAN NAME", align: "left", minWidth: "150px" },
+                { label: "PRICE", align: "right", minWidth: "120px" },
+                { label: "TOTAL PRICE WITH GST", align: "right", minWidth: "140px" },
+                { label: "BILLING CYCLE", align: "center", minWidth: "130px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTION", align: "center", minWidth: "110px" },
+              ]}
+            />
+                    <tbody className="text-sm">
+                      {loading || isProductPlansLoading ? (
+                        <tr>
+                          <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                            <div className="flex flex-col items-center justify-center gap-2">
+                              <div className="w-7 h-7 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
+                              <span className="text-xs text-slate-500 font-medium">Loading subscription plans...</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : pagedPlans.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-16 text-center text-slate-400 border border-slate-200 font-medium">
+                            No subscription plans found matching your filter criteria.
+                          </td>
+                        </tr>
+                      ) : (
+                        pagedPlans.map((item) => {
+                          const { plan, product } = item;
+                          const isDropdownOpen = activePlanDropdownId === plan.id;
+                          const currencySymbol = plan.currency || '₹';
+                          const isCustom = plan.customizablePrice;
+                          const basePrice = plan.price || 0;
+                          const totalPriceWithGst = Math.round(basePrice * 1.18);
+
+                          return (
+                            <tr key={`${product.id}-${plan.id}`} className="hover:bg-slate-50/80 transition-colors">
+                              {/* 1. Product Name */}
+                              <td className="py-4 px-5 border border-slate-200">
+                                <span className="font-bold text-slate-900 text-sm block">
+                                  {product?.name || 'CRM Product'}
+                                </span>
+                              </td>
+
+                              {/* 2. Plan Name */}
+                              <td className="py-4 px-5 border border-slate-200">
+                                <span className="font-bold text-slate-900 text-sm block">
+                                  {plan.name}
+                                </span>
+                              </td>
+
+                              {/* 3. Price */}
+                              <td className="py-4 px-5 border border-slate-200">
+                                <span className="font-bold text-slate-900 text-sm">
+                                  {isCustom ? (
+                                    <span className="text-slate-700">Custom Quote</span>
+                                  ) : (
+                                    `${currencySymbol}${basePrice.toLocaleString()}`
+                                  )}
+                                </span>
+                              </td>
+
+                              {/* 4. Total Price with GST (18%) */}
+                              <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
+                                {isCustom ? (
+                                  <span className="text-xs font-semibold text-slate-500">Subject to GST</span>
+                                ) : (
+                                  <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+                                    <span className="font-bold text-[#33077C] text-sm sm:text-base">
+                                      {currencySymbol}{totalPriceWithGst.toLocaleString()}
+                                    </span>
+                                    <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap">
+                                      (Incl. 18% GST)
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* 5. Billing Cycle */}
+                              <td className="py-4 px-5 border border-slate-200">
+                                {(() => {
+                                  const cycle = plan.billingCycle || 'Monthly';
+                                  const isYearly = cycle.toLowerCase().includes('year') || cycle.toLowerCase().includes('annual');
+                                  const badgeClass = isYearly
+                                    ? 'bg-purple-50 text-[#33077C]'
+                                    : 'bg-[#FFF4EB] text-[#FF5A1F]';
+                                  return (
+                                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${badgeClass}`}>
+                                      {cycle}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+
+                              {/* 6. Status Badge */}
+                              <td className="py-4 px-5 border border-slate-200 text-center">
+                                <span
+                                  className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold ${plan.status === 'Inactive'
+                                    ? 'bg-rose-50 text-rose-600'
+                                    : 'bg-emerald-50 text-emerald-600'
+                                    }`}
+                                >
+                                  {plan.status || 'Active'}
+                                </span>
+                              </td>
+
+                              {/* 7. Action (3-Dots Menu) */}
+                              <td className="py-4 px-5 border border-slate-200 text-center">
+                                <div className="relative inline-block text-left plan-action-dropdown-container">
+                                  <button
+                                    type="button"
+                                    title="Plan Actions"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (activePlanDropdownId === plan.id) {
+                                        setActivePlanDropdownId(null);
+                                        setPlanDropdownPos(null);
+                                      } else {
+                                        const rect = e.currentTarget.getBoundingClientRect();
+                                        const spaceBelow = window.innerHeight - rect.bottom;
+                                        const dropdownHeight = 150;
+                                        const rightPos = window.innerWidth - rect.right;
+
+                                        if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
+                                          setPlanDropdownPos({
+                                            bottom: window.innerHeight - rect.top + 6,
+                                            right: rightPos,
+                                          });
+                                        } else {
+                                          setPlanDropdownPos({
+                                            top: rect.bottom + 6,
+                                            right: rightPos,
+                                          });
+                                        }
+                                        setActivePlanDropdownId(plan.id);
+                                      }
+                                    }}
+                                    className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
+                                  >
+                                    <MoreVertical className="w-4 h-4 fill-white" />
+                                  </button>
+
+                                  {/* Portal Dropdown Menu */}
+                                  {isDropdownOpen && planDropdownPos && (
+                                    <div
+                                      className="plan-action-dropdown-menu fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
+                                      style={{
+                                        top: planDropdownPos.top !== undefined ? `${planDropdownPos.top}px` : undefined,
+                                        bottom: planDropdownPos.bottom !== undefined ? `${planDropdownPos.bottom}px` : undefined,
+                                        right: `${planDropdownPos.right}px`,
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActivePlanDropdownId(null);
+                                          handleOpenEditPlan(product, plan);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#6342E8] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Edit2 style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>Edit</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActivePlanDropdownId(null);
+                                          handleDuplicatePlan(product, plan);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#F59E0B] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Copy style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>Duplicate</span>
+                                      </button>
+
+                                      <div className="my-1.5 mx-2 border-t border-slate-100" />
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActivePlanDropdownId(null);
+                                          setSubConfirmAction({
+                                            type: 'plan',
+                                            title: 'Delete Subscription Plan',
+                                            description: `Are you sure you want to remove the plan "${plan.name}"? This action cannot be undone.`,
+                                            buttonText: 'Yes, Delete',
+                                            targetId: plan.id,
+                                            targetName: plan.name,
+                                            extraData: { product, plan },
+                                          });
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-[#E11D48] hover:bg-rose-50/70 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#E11D48] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Trash2 style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>Delete</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
-              {/* Product Cards Grid */}
-              <div className="space-y-8">
-                {!selectedPlanProductId ? (
-                  <div className="bg-white rounded-2xl border border-slate-200/90 p-12 text-center shadow-xs">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-orange-50 text-[#4309A2] flex items-center justify-center mb-3.5 shadow-2xs">
-                      <Boxes className="w-7 h-7" />
-                    </div>
-                    <h3 className="text-base font-bold text-slate-900 tracking-tight">No Product Selected</h3>
-                    <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto mt-1 font-normal">
-                      Please select a product offering above to view and manage its subscription plan tiers.
-                    </p>
-                  </div>
-                ) : (
-                  products
-                    .filter((p) => p.id === selectedPlanProductId)
-                    .map((product) => {
-                      return (
-                        <div key={product.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-                          {/* Banner */}
-                          <div className="p-5 sm:p-6 bg-slate-50/50 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            <div>
-                              <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">{product.name}</h2>
-                              {product.tagline && (
-                                <p className="text-xs sm:text-sm text-slate-500 font-normal mt-0.5">{product.tagline}</p>
-                              )}
-                            </div>
-                            <Button
-                              variant="primary"
-                              size="md"
-                              onClick={() => handleOpenCreatePlan(product.id)}
-                              icon={<Plus className="w-4 h-4 text-white" strokeWidth={2.5} />}
-                            >
-                              Add Plan
-                            </Button>
-                          </div>
-
-                          {/* Plans Grid */}
-                          <div className="p-5 sm:p-6">
-                            {isProductPlansLoading ? (
-                              <div className="text-center py-16 bg-slate-50/50 rounded-xl border border-slate-200">
-                                <div className="flex flex-col items-center justify-center gap-2.5">
-                                  <div className="w-8 h-8 border-3 border-[#33077C] border-t-transparent rounded-full animate-spin" />
-                                  <span className="text-xs sm:text-sm text-slate-500 font-semibold">Loading plans for {product.name}...</span>
-                                </div>
-                              </div>
-                            ) : (() => {
-                              const currentPlans = productPlansByProductId[product.id] || [];
-                              if (currentPlans.length === 0) {
-                                return (
-                                  <div className="text-center py-10 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
-                                    <Zap className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                                    <p className="text-sm font-semibold text-slate-700">No plans created yet</p>
-                                  </div>
-                                );
-                              }
-
-                              return (
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                  {currentPlans.map((plan) => (
-                                  <div
-                                    key={plan.id}
-                                    className="bg-white rounded-[26px] border border-slate-200/80 shadow-md shadow-slate-200/40 overflow-hidden flex flex-col justify-between hover:shadow-xl hover:border-[#33077C]/20 transition-all duration-300 relative group"
-                                  >
-                                    {/* Top Header Banner */}
-                                    <div className="relative overflow-hidden bg-gradient-to-r from-[#33077C] via-[#3E0A96] to-[#4309A2] px-6 py-5 flex items-center justify-between shadow-xs">
-                                      <div className="flex items-center min-w-0 mr-2">
-                                        <div className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-xs flex items-center justify-center text-white mr-3 shrink-0 shadow-inner">
-                                          <Zap className="w-4.5 h-4.5 fill-white text-white" />
-                                        </div>
-                                        <h3 className="text-white text-lg font-bold tracking-tight line-clamp-1 relative z-10">
-                                          {plan.name}
-                                        </h3>
-                                      </div>
-
-                                      <div className="flex items-center gap-1.5 shrink-0 relative z-10">
-                                        <span
-                                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${plan.status === 'Inactive'
-                                            ? 'bg-white/20 text-white/70 border border-white/30'
-                                            : 'bg-white text-[#33077C] shadow-xs'
-                                            }`}
-                                        >
-                                          {plan.status || 'Active'}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    {/* Card Body */}
-                                    <div className="p-6 sm:p-7 flex-1 flex flex-col justify-between space-y-6">
-                                      <div className="space-y-4">
-                                        {plan.description && (
-                                          <p className="text-slate-500 text-xs sm:text-[13px] font-normal leading-relaxed line-clamp-2">
-                                            {plan.description}
-                                          </p>
-                                        )}
-
-                                        {/* Price */}
-                                        <div className="flex items-baseline gap-1 pt-1 pb-1">
-                                          <span className="text-3xl sm:text-4xl font-extrabold text-[#0B1E33] tracking-tight">
-                                            {plan.customizablePrice
-                                              ? 'Flexible'
-                                              : `${plan.currency || '₹'}${plan.price.toLocaleString()}`}
-                                          </span>
-                                          <span className="text-xs sm:text-sm font-semibold text-slate-400 ml-1">
-                                            / {plan.billingCycle ? plan.billingCycle.toLowerCase() : 'month'}
-                                          </span>
-                                        </div>
-
-                                        {/* Deliverables & Limits Badges */}
-                                        {(() => {
-                                          const specs = plan.specs || {};
-                                          let posts = specs.monthlyPostLimit;
-                                          let videos = specs.monthlyVideoLimit;
-
-                                          if (!posts) {
-                                            const postFeat = plan.features?.find(f => /post|graphic/i.test(f));
-                                            if (postFeat) {
-                                              const match = postFeat.match(/(\d+)\s*(custom graphic|content post|post|graphic)/i);
-                                              if (match) posts = Number(match[1]);
-                                            }
-                                          }
-                                          if (!videos) {
-                                            const vidFeat = plan.features?.find(f => /video/i.test(f));
-                                            if (vidFeat) {
-                                              const match = vidFeat.match(/(\d+)\s*video/i);
-                                              if (match) videos = match ? Number(match[1]) : (vidFeat.toLowerCase().includes('daily') ? 30 : 2);
-                                            }
-                                          }
-
-                                          const hasDeliverables = posts || videos;
-                                          if (!hasDeliverables) return null;
-
-                                          return (
-                                            <div className="space-y-1.5">
-                                              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Deliverables:</span>
-                                              <div className="flex flex-wrap gap-1.5">
-                                                {posts && (
-                                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#33077C]/10 text-[#33077C] inline-flex items-center">
-                                                    {posts} Posts/Month
-                                                  </span>
-                                                )}
-                                                {videos && (
-                                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#33077C]/10 text-[#33077C] inline-flex items-center">
-                                                    {videos} Videos/Month
-                                                  </span>
-                                                )}
-                                              </div>
-                                            </div>
-                                          );
-                                        })()}
-
-                                        {/* Services Included Badges */}
-                                        {(() => {
-                                          const specs = plan.specs || {};
-                                          const activeServices: string[] = [];
-                                          if (specs.socialMediaManagement || plan.features?.some(f => /social media/i.test(f))) activeServices.push('Social Media');
-                                          if (specs.seo || plan.features?.some(f => /seo/i.test(f))) activeServices.push('SEO');
-                                          if (specs.adsManagement || plan.features?.some(f => /ads/i.test(f))) activeServices.push('Ads Management');
-
-                                          if (activeServices.length === 0) return null;
-
-                                          return (
-                                            <div className="space-y-1.5">
-                                              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Included Services:</span>
-                                              <div className="flex flex-wrap gap-1.5">
-                                                {activeServices.map((srv, sIdx) => (
-                                                  <span
-                                                    key={sIdx}
-                                                    className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#33077C]/10 text-[#33077C] inline-flex items-center"
-                                                  >
-                                                    {srv}
-                                                  </span>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          );
-                                        })()}
-
-                                        {/* Features Checklist */}
-                                        <div className="space-y-3.5 pt-2">
-                                          {plan.features && plan.features.length > 0 ? (
-                                            plan.features.map((feat, fIdx) => (
-                                              <div key={fIdx} className="flex items-center gap-3">
-                                                <div className="w-5 h-5 rounded-full bg-[#33077C]/10 text-[#33077C] flex items-center justify-center shrink-0 shadow-2xs">
-                                                  <Check className="w-3 h-3 text-[#33077C] stroke-[3.5]" />
-                                                </div>
-                                                <span className="text-xs sm:text-[13px] font-semibold text-slate-800 tracking-tight line-clamp-1">
-                                                  {feat}
-                                                </span>
-                                              </div>
-                                            ))
-                                          ) : (
-                                            <p className="text-xs text-slate-400 italic">No features specified yet.</p>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      {/* Bottom Action Buttons */}
-                                      <div className="grid grid-cols-2 gap-3 pt-4 border-t border-slate-100">
-                                        <button
-                                          type="button"
-                                          onClick={() => handleOpenEditPlan(product, plan)}
-                                          className="h-10 rounded-xl bg-slate-50 hover:bg-[#33077C]/10 text-slate-700 hover:text-[#33077C] border border-slate-200 hover:border-[#33077C]/30 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs active:scale-[0.98]"
-                                        >
-                                          <Pencil className="w-3.5 h-3.5" />
-                                          <span>Edit</span>
-                                        </button>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setSubConfirmAction({
-                                              type: 'plan',
-                                              title: 'Delete Subscription Plan',
-                                              description: `Are you sure you want to remove the plan "${plan.name}"? This action cannot be undone.`,
-                                              buttonText: 'Yes, Delete',
-                                              targetId: plan.id,
-                                              targetName: plan.name,
-                                              extraData: { product, plan },
-                                            });
-                                          }}
-                                          className="h-10 rounded-xl bg-rose-50/70 hover:bg-rose-100 text-rose-600 border border-rose-200/80 hover:border-rose-300 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-2xs active:scale-[0.98]"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                          <span>Delete</span>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          })()}
-                          </div>
-                        </div>
-                      );
-                    })
-                )}
-              </div>
+              {/* Standalone Pagination Card */}
+              {filteredPlansList.length > 0 && (
+                <Pagination
+                  currentPage={safePlansPage}
+                  total={filteredPlansList.length}
+                  pageSize={plansPageSize}
+                  onPageChange={(page) => setPlansPage(page)}
+                  onPageSizeChange={(size) => {
+                    setPlansPageSize(size);
+                    setPlansPage(1);
+                  }}
+                />
+              )}
             </div>
           )}
         </div>
@@ -2699,7 +2815,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       >
         <form noValidate onSubmit={handleSaveSubscription} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
           <div className="space-y-4">
-            {/* Row 1: Select Customer, Target Product, Select Plan Tier */}
+            {/* Row 1: Select Customer, Target Product, Billing Cycle */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -2751,39 +2867,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Select Plan Tier <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <CustomSelect
-                  value={subPlanName}
-                  error={!!subFormErrors.planTier}
-                  onChange={(val) => {
-                    handlePlanChangeInSubModal(val);
-                    if (subFormErrors.planTier) setSubFormErrors((prev) => ({ ...prev, planTier: '' }));
-                  }}
-                  options={
-                    subProductId
-                      ? ((productPlansByProductId[subProductId] && productPlansByProductId[subProductId].length > 0)
-                          ? productPlansByProductId[subProductId]
-                          : products.find((p) => p.id === subProductId)?.plans || []
-                        ).map((pl) => ({
-                          value: pl.name,
-                          label: `${pl.name} (₹${pl.price.toLocaleString()} / ${pl.billingCycle})`,
-                        }))
-                      : []
-                  }
-                  placeholder="Select Plan Tier"
-                  activeColor="brand"
-                />
-                {subFormErrors.planTier && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.planTier}</p>
-                )}
-              </div>
-            </div>
-
-            {/* Row 2: Billing Cycle, Agreed Fee Amount, Start Date */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Billing Cycle <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <CustomSelect
@@ -2810,7 +2893,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.billingCycle}</p>
                 )}
               </div>
+            </div>
 
+            {/* Row 2: Agreed Fee Amount, Start Date, Renewal Date */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Agreed Fee Amount (₹) <span className="text-rose-500 font-bold">*</span>
@@ -2864,10 +2950,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.startDate}</p>
                 )}
               </div>
-            </div>
 
-            {/* Row 3: Renewal Date, Status, Notes */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Renewal Date <span className="text-rose-500 font-bold">*</span>
@@ -2894,7 +2977,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   <p className="text-[11px] font-medium text-red-500 mt-1">{subFormErrors.endDate}</p>
                 )}
               </div>
+            </div>
 
+            {/* Row 3: Status, Notes / Contract Info */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Status <span className="text-rose-500 font-bold">*</span>

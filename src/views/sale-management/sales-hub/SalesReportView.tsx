@@ -13,6 +13,7 @@ import {
   Layers,
   ArrowUpRight,
   FileSpreadsheet,
+  Loader2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -34,8 +35,9 @@ import { Button } from '../../../components/common/Button';
 import { Badge } from '../../../components/common/Badge';
 import { toast } from 'sonner';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printTableReport } from '../../../utils/printUtils';
+import { printTableReport, downloadTableReport } from '../../../utils/printUtils';
 
+import { formatDate } from '../utils/dateUtils';
 const CHART_COLORS = ['#4309A2', '#7C3AED', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
 
 export const SalesReportView: React.FC = () => {
@@ -70,7 +72,9 @@ export const SalesReportView: React.FC = () => {
         return new Date(s.saleDate) >= yearStart;
       }
       if (timeRange === 'custom') {
-        return s.saleDate >= customStartDate && s.saleDate <= customEndDate;
+        const start = customStartDate <= customEndDate ? customStartDate : customEndDate;
+        const end = customStartDate <= customEndDate ? customEndDate : customStartDate;
+        return s.saleDate >= start && s.saleDate <= end;
       }
       return true;
     });
@@ -87,7 +91,8 @@ export const SalesReportView: React.FC = () => {
       // Est cost 55% of subtotal
       return acc + s.subtotal * 0.55;
     }, 0);
-    const totalProfit = Math.max(0, netSales - estimatedCost - (totalReturns * 0.45));
+    // Preserves negative profit (net loss) when costs exceed revenue
+    const totalProfit = netSales - estimatedCost - (totalReturns * 0.45);
     const outstandingAmount = filteredSales.reduce((acc, s) => acc + s.balance, 0);
 
     return {
@@ -236,12 +241,9 @@ export const SalesReportView: React.FC = () => {
     toast.success(`Sales report Excel downloaded (${filteredSales.length} records)!`);
   };
 
-  const handlePrintReport = () => {
-    if (filteredSales.length === 0) {
-      toast.error('No sales data to print');
-      return;
-    }
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
+  const getReportTableOptions = () => {
     const printRows = filteredSales.map((s) => ({
       invoiceNo: s.invoiceNo,
       date: s.saleDate,
@@ -252,17 +254,17 @@ export const SalesReportView: React.FC = () => {
       status: s.saleStatus,
     }));
 
-    printTableReport({
+    return {
       title: 'SALES ANALYTICS & REVENUE REPORT',
       subtitle: `Filter: ${timeRange} | Total Records: ${filteredSales.length}`,
       columns: [
-        { header: 'Invoice No.', key: 'invoiceNo', align: 'center', width: '15%' },
-        { header: 'Date', key: 'date', align: 'center', width: '12%' },
-        { header: 'Customer', key: 'customer', align: 'left', width: '25%' },
-        { header: 'Items', key: 'itemsCount', align: 'center', width: '8%' },
-        { header: 'Tax (₹)', key: 'tax', align: 'right', type: 'currency', width: '15%' },
-        { header: 'Grand Total (₹)', key: 'grandTotal', align: 'right', type: 'currency', width: '15%' },
-        { header: 'Status', key: 'status', align: 'center', width: '10%' },
+        { header: 'Invoice No.', key: 'invoiceNo', align: 'center' as const, width: '15%' },
+        { header: 'Date', key: 'date', align: 'center' as const, width: '12%' },
+        { header: 'Customer', key: 'customer', align: 'left' as const, width: '25%' },
+        { header: 'Items', key: 'itemsCount', align: 'center' as const, width: '8%' },
+        { header: 'Tax (₹)', key: 'tax', align: 'right' as const, type: 'currency' as const, width: '15%' },
+        { header: 'Grand Total (₹)', key: 'grandTotal', align: 'right' as const, type: 'currency' as const, width: '15%' },
+        { header: 'Status', key: 'status', align: 'center' as const, width: '10%' },
       ],
       data: printRows,
       summaryRow: {
@@ -276,14 +278,41 @@ export const SalesReportView: React.FC = () => {
         { label: 'Total Tax', value: kpis.totalTax },
         { label: 'Net Sales', value: kpis.netSales },
       ],
-    });
+    };
+  };
+
+  const handlePrintReport = () => {
+    if (filteredSales.length === 0) {
+      toast.error('No sales data to print');
+      return;
+    }
+    printTableReport(getReportTableOptions());
+  };
+
+  const handleDownloadPdfReport = async () => {
+    if (filteredSales.length === 0) {
+      toast.error('No sales data to download');
+      return;
+    }
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const filename = `Sales_Report_${timeRange}_${new Date().toISOString().split('T')[0]}.pdf`;
+    try {
+      await downloadTableReport(getReportTableOptions(), filename);
+      toast.success('Sales report PDF downloaded successfully!');
+    } catch (err) {
+      console.error('Failed to download sales report PDF:', err);
+      toast.error('Failed to download sales report PDF. Please try again.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-[220px] flex-1">
           <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <BarChart3 className="w-4 h-4" />
           </div>
@@ -302,7 +331,7 @@ export const SalesReportView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-end sm:self-auto flex-wrap">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             size="md"
             variant="secondary"
@@ -320,6 +349,16 @@ export const SalesReportView: React.FC = () => {
             className="bg-[#33077C] hover:bg-[#280563] text-white shadow-sm hover:shadow transition-all"
           >
             Print Report
+          </Button>
+          <Button
+            size="md"
+            variant="secondary"
+            disabled={isDownloadingPdf}
+            onClick={handleDownloadPdfReport}
+            icon={isDownloadingPdf ? <Loader2 className="w-4 h-4 animate-spin text-orange-600" /> : <Download className="w-4 h-4 text-orange-600" />}
+            className="hover:border-orange-500 hover:text-orange-700 transition-colors"
+          >
+            {isDownloadingPdf ? 'Generating...' : 'Download PDF'}
           </Button>
         </div>
       </div>
@@ -406,8 +445,8 @@ export const SalesReportView: React.FC = () => {
 
         <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Gross Profit</span>
-          <div className="text-base font-extrabold text-emerald-600 mt-1">
-            ₹{kpis.totalProfit.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+          <div className={`text-base font-extrabold ${kpis.totalProfit < 0 ? 'text-rose-600' : 'text-emerald-600'} mt-1`}>
+            {kpis.totalProfit < 0 ? '-' : ''}₹{Math.abs(kpis.totalProfit).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
           </div>
         </div>
 
@@ -614,7 +653,7 @@ export const SalesReportView: React.FC = () => {
                 const profit = (s.subtotal - s.totalDiscount) * 0.45;
                 return (
                   <tr key={s.id} className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans">
-                    <td className="py-4 px-5 border border-slate-200 text-slate-600 text-xs align-middle">{s.saleDate}</td>
+                    <td className="py-4 px-5 border border-slate-200 text-slate-600 text-xs align-middle">{formatDate(s.saleDate)}</td>
                     <td className="py-4 px-5 border border-slate-200 font-bold text-[#33077C] text-xs align-middle">{s.invoiceNo}</td>
                     <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                       <div className="font-bold text-slate-900 text-xs sm:text-[13px]">{s.customerName}</div>

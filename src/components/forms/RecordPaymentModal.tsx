@@ -7,6 +7,7 @@ import {
   Paperclip,
   Upload,
   Building2,
+  Clock,
 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { CustomSelect } from '../common/CustomSelect';
@@ -67,31 +68,40 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   // Initialize or reset when modal opens or invoice changes
   useEffect(() => {
     if (isOpen && invoice) {
-      const amt = invoice.paymentDetails?.amountPaid || invoice.grandTotal || 0;
+      const grandTotal = Number(invoice.grandTotal) || 0;
+      const alreadyPaid = Number(invoice.amountPaid ?? 0);
+      const remainingDue = Number(
+        invoice.balanceDue !== undefined && invoice.balanceDue !== null
+          ? invoice.balanceDue
+          : Math.max(0, grandTotal - alreadyPaid)
+      );
+
+      // Default the new payment amount to the remaining outstanding due balance
+      const defaultAmt = remainingDue > 0 ? remainingDue : grandTotal;
       const hasTds = (invoice.paymentDetails?.tdsDeduction || 0) > 0;
       const currentType = (invoice.paymentDetails?.taxDeductedType as any) || (hasTds ? 'income_tax' : 'none');
 
       let gstPct: any = '';
       let itPct: any = '';
       if (currentType === 'gst') {
-        gstPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : '');
+        gstPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && defaultAmt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / defaultAmt) * 10000) / 100 : '');
       } else if (currentType === 'income_tax') {
-        itPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && amt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / amt) * 10000) / 100 : '');
+        itPct = invoice.paymentDetails?.tdsPercentage ?? (hasTds && defaultAmt > 0 ? Math.round(((invoice.paymentDetails?.tdsDeduction || 0) / defaultAmt) * 10000) / 100 : '');
       } else if (currentType === 'both') {
         gstPct = (invoice.paymentDetails as any)?.gstTdsPercentage ?? '';
         itPct = (invoice.paymentDetails as any)?.incomeTaxTdsPercentage ?? '';
       }
 
       reset({
-        amountPaid: amt,
+        amountPaid: defaultAmt,
         taxDeductedType: currentType,
         gstTdsPercentage: gstPct,
         incomeTaxTdsPercentage: itPct,
         bankDeductions: invoice.paymentDetails?.bankDeductions || 0,
         paymentMode: '',
-        paymentDate: invoice.paymentDetails?.paymentDate || new Date().toISOString().split('T')[0],
-        referenceId: invoice.paymentDetails?.referenceId || '',
-        notes: invoice.paymentDetails?.notes || '',
+        paymentDate: new Date().toISOString().split('T')[0],
+        referenceId: '',
+        notes: '',
       });
 
       setAttachments(invoice.paymentDetails?.attachments || []);
@@ -194,6 +204,15 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     onConfirmPayment(paymentDetails);
   };
 
+  const grandTotal = Number(invoice.grandTotal) || 0;
+  const alreadyPaid = Number(invoice.amountPaid ?? 0);
+  const remainingDue = Number(
+    invoice.balanceDue !== undefined && invoice.balanceDue !== null
+      ? invoice.balanceDue
+      : Math.max(0, grandTotal - alreadyPaid)
+  );
+  const isPartiallyPaid = invoice.status === 'Partially Paid' || (alreadyPaid > 0 && remainingDue > 0);
+
   return (
     <Modal
       isOpen={isOpen}
@@ -204,37 +223,98 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       headerGradient={true}
       showBackIcon={true}
       hideCloseButton={true}
+      headerRightSlot={
+        <div className="flex items-center gap-1.5 sm:gap-2 text-white flex-wrap justify-end">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+          <span className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-white/80">
+            Invoice Total:
+          </span>
+          <span className="text-xs sm:text-base font-bold text-white whitespace-nowrap">
+            ₹{grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </div>
+      }
     >
       <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-5 sm:space-y-6">
-        {/* Highlighted Invoice Summary Card */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-gradient-to-r from-slate-50 via-[#33077C]/[0.02] to-indigo-50/30 border border-slate-200/90 rounded-[4px] shadow-2xs">
+        {/* Highlighted Invoice Summary Card with Outstanding Balance */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 py-3.5 bg-slate-50/70 border border-slate-200/80 rounded-md">
+          {/* Left: Invoice & Client Details */}
           <div className="min-w-0">
-            <div className="text-xs sm:text-[13px] font-bold text-slate-900 font-sans">
-              Invoice #{invoice.invoiceNumber}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs sm:text-[13px] font-bold text-slate-900 tracking-tight">
+                Invoice #{invoice.invoiceNumber}
+              </span>
+              {isPartiallyPaid ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80">
+                  Partially Paid
+                </span>
+              ) : (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200/80">
+                  {invoice.status || 'Unpaid'}
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium truncate mt-0.5">
-              <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span className="truncate">{invoice.client.company}</span>
+            <div className="text-sm sm:text-base font-semibold text-slate-700 truncate mt-1">
+              {invoice.client.company || invoice.client.name}
             </div>
           </div>
 
-          <div className="flex sm:flex-col items-center sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-              Total Invoice Amount
-            </span>
-            <span className="text-base font-extrabold text-[#33077C] font-sans">
-              ${invoice.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
+          {/* Right: Vertical Stacked Text Metrics with Dots */}
+          <div className="flex flex-col gap-1.5 border-t sm:border-t-0 sm:border-l pt-3 sm:pt-0 sm:pl-5 border-slate-200/70">
+            {/* Paid So Far */}
+            {alreadyPaid > 0 && (
+              <div className="flex items-center justify-between sm:justify-end gap-3 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
+                    Paid So Far:
+                  </span>
+                </div>
+                <span className="font-bold text-emerald-600">
+                  ₹{alreadyPaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
+
+            {/* Outstanding Balance */}
+            <div className="flex items-center justify-between sm:justify-end gap-3 text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">
+                  Outstanding Balance:
+                </span>
+              </div>
+              <span className="font-extrabold text-rose-600 text-sm">
+                ₹{remainingDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
           </div>
         </div>
+
 
         {/* 3 Fields Per Row Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Field 1: Amount Paid */}
           <div>
-            <label className={labelClass}>
-              Amount Paid (₹) <span className="text-rose-500 font-bold">*</span>
-            </label>
+            <div className="flex items-center justify-between mb-2.5">
+              <label className="text-xs sm:text-[13px] font-semibold text-slate-700">
+                Amount Paid (₹) <span className="text-rose-500 font-bold">*</span>
+              </label>
+              {(() => {
+                const grandTotal = Number(invoice.grandTotal) || 0;
+                const alreadyPaid = Number(invoice.amountPaid ?? 0);
+                const remainingDue = Number(
+                  invoice.balanceDue !== undefined && invoice.balanceDue !== null
+                    ? invoice.balanceDue
+                    : Math.max(0, grandTotal - alreadyPaid)
+                );
+                return remainingDue > 0 ? (
+                  <span className="text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                    Due: ₹{remainingDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                ) : null;
+              })()}
+            </div>
             <div className="relative">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold text-xs">₹</span>
               <input
@@ -500,11 +580,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="pt-4 mt-2 border-t border-slate-100 flex items-center justify-end gap-3">
+        <div className="pt-4 mt-2 border-t border-slate-100 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
           <button
             type="button"
             onClick={onClose}
-            className="h-11 px-5 bg-white hover:bg-slate-100 text-slate-700 font-bold rounded-[4px] text-sm border border-slate-200 transition-colors cursor-pointer shadow-2xs flex items-center justify-center gap-2"
+            className="w-full sm:w-auto h-11 px-5 bg-white hover:bg-slate-100 text-slate-700 font-bold rounded-[4px] text-sm border border-slate-200 transition-colors cursor-pointer shadow-2xs flex items-center justify-center gap-2"
           >
             <X className="w-4 h-4" />
             Cancel
@@ -512,7 +592,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
           <button
             type="submit"
-            className="h-11 px-6 bg-[#33077C] hover:bg-[#4309A2] text-white font-bold rounded-[4px] text-sm transition-all shadow-md shadow-[#33077C]/20 hover:shadow-lg hover:shadow-[#33077C]/30 cursor-pointer flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+            className="w-full sm:w-auto h-11 px-6 bg-[#33077C] hover:bg-[#4309A2] text-white font-bold rounded-[4px] text-sm transition-all shadow-md shadow-[#33077C]/20 hover:shadow-lg hover:shadow-[#33077C]/30 cursor-pointer flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>

@@ -17,6 +17,7 @@ export * from './productTypes';
 
 export interface ProductItemModel {
   id: string;
+  productId?: string;
   sNo: number;
   itemType: 'Product' | 'Service';
   productCode: string;
@@ -93,6 +94,22 @@ export const cleanProductImage = (img?: string | null): string | undefined => {
   return trimmed;
 };
 
+/**
+ * Robustly unpacks product or stock arrays from diverse backend API response envelopes
+ */
+export const unpackProducts = (res: any): any[] => {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.data)) return res.data;
+  if (Array.isArray(res.items)) return res.items;
+  if (Array.isArray(res.products)) return res.products;
+  if (Array.isArray(res.data?.items)) return res.data.items;
+  if (Array.isArray(res.data?.products)) return res.data.products;
+  if (Array.isArray(res.data?.data)) return res.data.data;
+  if (Array.isArray(res.data?.rows)) return res.data.rows;
+  return [];
+};
+
 export const mapApiProductToProductItem = (
   apiProd: ApiProduct,
   index?: number
@@ -107,12 +124,14 @@ export const mapApiProductToProductItem = (
     cleanProductImage((apiProd as any).thumbnail);
 
   const effectiveImage = rawImage || rawBase64;
+  const resolvedId = String(apiProd.id || (apiProd as any).productId || (apiProd as any)._id || '');
   return {
-    id: apiProd.id,
+    id: resolvedId,
+    productId: resolvedId,
     sNo: apiProd.sNo ?? (index !== undefined ? index + 1 : 1),
     itemType: apiProd.itemType || 'Product',
-    productCode: apiProd.productCode || apiProd.sku || '',
-    productName: apiProd.productName || apiProd.name || '',
+    productCode: apiProd.productCode || apiProd.sku || (apiProd as any).code || '',
+    productName: apiProd.productName || apiProd.name || (apiProd as any).title || '',
     hsnCode: apiProd.hsnCode || '',
     unit: apiProd.unit || 'PCS',
     baseUnitId: apiProd.baseUnitId || undefined,

@@ -73,7 +73,11 @@ baseClient.interceptors.response.use(
     } else if (error.message) {
       message = error.message;
     }
-    return Promise.reject(new Error(message));
+    const customErr: any = new Error(message);
+    customErr.response = error.response;
+    customErr.data = data;
+    customErr.status = error.response?.status;
+    return Promise.reject(customErr);
   }
 );
 
@@ -111,14 +115,9 @@ const dynamicBaseQuery: BaseQueryFn<
   let adjustedArgs: FetchArgs = typeof args === 'string' ? { url: args } : { ...args };
 
   if (!adjustedArgs.url.startsWith('http://') && !adjustedArgs.url.startsWith('https://')) {
-    if (adjustedArgs.url.startsWith('/api/')) {
-      // Local development server routes
-      adjustedArgs.url = adjustedArgs.url;
-    } else {
-      // Platform / Commerce backend endpoints
-      const cleanUrl = adjustedArgs.url.startsWith('/') ? adjustedArgs.url : `/${adjustedArgs.url}`;
-      adjustedArgs.url = `${API_BASE_URL}${cleanUrl}`;
-    }
+    // Platform / Commerce backend endpoints (https://api.dev.crm.yaacreations.com/api/v1)
+    const cleanUrl = adjustedArgs.url.startsWith('/') ? adjustedArgs.url : `/${adjustedArgs.url}`;
+    adjustedArgs.url = `${API_BASE_URL}${cleanUrl}`;
   }
 
   const sentToken = getStoredToken();

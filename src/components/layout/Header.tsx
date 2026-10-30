@@ -29,6 +29,29 @@ import { Branch } from '../../types';
 import { subOrganizationApi, branchApi, clientProductApi, getStoredOrganizationId } from '../../api';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
+// Helper to safely extract a normalized string from primitive or object values (e.g. organizationType)
+const normalizeTypeString = (val: any): string => {
+  if (val == null) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object') {
+    const candidate =
+      val.name ||
+      val.type ||
+      val.title ||
+      val.organizationType ||
+      val.organizationTypeName ||
+      val.value ||
+      val.label;
+    if (typeof candidate === 'string') return candidate.trim();
+    if (candidate != null && typeof candidate === 'object') {
+      return normalizeTypeString(candidate);
+    }
+    if (candidate != null) return String(candidate).trim();
+    return '';
+  }
+  return String(val).trim();
+};
+
 // Helper to extract the branch location only (e.g., Chennai, Rasipuram, Coimbatore)
 const getBranchLocationName = (name: string, location?: string, city?: string) => {
   if (!name || name === 'All' || name === 'All Branches') return 'All';
@@ -231,19 +254,22 @@ export const Header: React.FC<HeaderProps> = ({
     const fetchApiSubOrgs = async () => {
       try {
         const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
+        if (!activeOrgId || activeOrgId === '11111111-1111-4111-8111-111111111111') {
+          return;
+        }
         const res = await subOrganizationApi.getSubOrganizations(
           {
             page_no: 1,
             page_size: 100,
             pagination_required: 'false',
           },
-          activeOrgId || undefined
+          activeOrgId
         );
         if (isMounted && res && Array.isArray(res.data)) {
           const mapped = res.data.map((item: any) => ({
             id: item.id,
-            name: item.name,
-            organizationType: item.organizationType || item.organizationTypeName,
+            name: typeof item.name === 'string' ? item.name : String(item.name || ''),
+            organizationType: normalizeTypeString(item.organizationType || item.organizationTypeName),
           }));
           setApiSubOrgs(mapped);
         }
@@ -265,8 +291,8 @@ export const Header: React.FC<HeaderProps> = ({
     const isSales = isSalesMode;
     const seenNames = new Set<string>(['all']);
 
-    const isMatch = (typeStr?: string) => {
-      const t = (typeStr || '').toLowerCase();
+    const isMatch = (typeStr?: any) => {
+      const t = String(normalizeTypeString(typeStr) || '').toLowerCase();
       if (isSales) {
         return t.includes('sale');
       } else {
@@ -275,12 +301,13 @@ export const Header: React.FC<HeaderProps> = ({
     };
 
     apiSubOrgs.forEach((s) => {
-      const lower = (s.name || '').toLowerCase().trim();
+      const sName = typeof s.name === 'string' ? s.name : String(s.name || '');
+      const lower = sName.toLowerCase().trim();
       if (isMatch(s.organizationType) && lower && !seenNames.has(lower)) {
         seenNames.add(lower);
         list.push({
           id: s.id,
-          name: s.name.trim(),
+          name: sName.trim(),
           organizationType: isSales ? 'Sales Management' : 'Client Management',
         });
       }
@@ -290,7 +317,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, [isSalesMode, apiSubOrgs]);
 
   const [selectedSubOrg, setSelectedSubOrg] = useState<string>(() => {
-    const isSales = selectedOrgType.toLowerCase().includes('sale');
+    const isSales = normalizeTypeString(selectedOrgType).toLowerCase().includes('sale');
     const savedKey = isSales ? 'active_sub_organization_sales' : 'active_sub_organization_client';
     return localStorage.getItem(savedKey) || localStorage.getItem('active_sub_organization') || 'All';
   });
@@ -305,7 +332,7 @@ export const Header: React.FC<HeaderProps> = ({
   // Resolve active sub-organization ID
   const currentSubOrgId = useMemo(() => {
     if (!selectedSubOrg || selectedSubOrg === 'All') return undefined;
-    const match = subOrgOptions.find((s) => s.name.toLowerCase() === selectedSubOrg.toLowerCase());
+    const match = subOrgOptions.find((s) => (s.name || '').toLowerCase() === (selectedSubOrg || '').toLowerCase());
     return match && match.id !== 'all' ? match.id : undefined;
   }, [selectedSubOrg, subOrgOptions]);
 
@@ -389,7 +416,7 @@ export const Header: React.FC<HeaderProps> = ({
               item.location ||
               item.branch_location ||
               '',
-            organizationType: item.organizationType || item.organizationTypeName || '',
+            organizationType: normalizeTypeString(item.organizationType || item.organizationTypeName || ''),
             status: item.status || 'Active',
             subOrganizationId:
               item.subOrganizationId ||
@@ -412,8 +439,8 @@ export const Header: React.FC<HeaderProps> = ({
   }, [currentSubOrgId, branchChangeTrigger, currentUser, isSalesMode, isSuperAdmin]);
 
   const branches = useMemo<Branch[]>(() => {
-    const isMatch = (bTypeStr?: string) => {
-      const bType = (bTypeStr || '').toLowerCase();
+    const isMatch = (bTypeStr?: any) => {
+      const bType = String(normalizeTypeString(bTypeStr) || '').toLowerCase();
       return isSalesMode
         ? bType.includes('sale')
         : bType.includes('client') || !bType.includes('sale');
@@ -449,7 +476,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, [branches]);
 
   const [selectedBranch, setSelectedBranch] = useState<string>(() => {
-    const isSales = selectedOrgType.toLowerCase().includes('sale');
+    const isSales = normalizeTypeString(selectedOrgType).toLowerCase().includes('sale');
     const savedKey = isSales ? 'active_branch_sales' : 'active_branch_client';
     return localStorage.getItem(savedKey) || localStorage.getItem('active_branch') || 'All';
   });
@@ -466,9 +493,9 @@ export const Header: React.FC<HeaderProps> = ({
     if (!selectedBranch || selectedBranch === 'All') return undefined;
     const match = branchOptions.find(
       (b) =>
-        b.name.toLowerCase() === selectedBranch.toLowerCase() ||
-        b.fullBranchName?.toLowerCase() === selectedBranch.toLowerCase() ||
-        (b.location && b.location.toLowerCase() === selectedBranch.toLowerCase())
+        (b.name || '').toLowerCase() === (selectedBranch || '').toLowerCase() ||
+        (b.fullBranchName || '').toLowerCase() === (selectedBranch || '').toLowerCase() ||
+        (b.location && (b.location || '').toLowerCase() === (selectedBranch || '').toLowerCase())
     );
     return match && match.id !== 'all' ? match.id : undefined;
   }, [selectedBranch, branchOptions]);
@@ -771,7 +798,7 @@ export const Header: React.FC<HeaderProps> = ({
   const orgOptions = useMemo(() => {
     if (isOrgSuperAdmin || isOrgAdmin) {
       const currentOrgName = currentUser?.name || 'Yaa Creations';
-      const isSales = selectedOrgType.toLowerCase().includes('sale');
+      const isSales = normalizeTypeString(selectedOrgType).toLowerCase().includes('sale');
 
       const targetList: { id: string; name: string; organizationType?: string }[] = [
         {
@@ -917,10 +944,10 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       id="app-header"
-      className="h-16 bg-white border-b border-[#E2E8F0] flex items-center justify-between px-3.5 sm:px-6 lg:px-8 shrink-0 z-20 sticky top-0 print:hidden gap-2"
+      className="h-16 bg-white border-b border-[#E2E8F0] flex items-center justify-between px-3 sm:px-6 lg:px-8 shrink-0 z-20 sticky top-0 print:hidden gap-2"
     >
       {/* Left: Mobile Toggle & Clean Page Title */}
-      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 shrink-0">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
@@ -931,13 +958,13 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        <h1 className="text-base sm:text-lg font-bold text-[#0F172A] tracking-tight whitespace-nowrap">
+        <h1 className="text-sm sm:text-lg font-bold text-[#0F172A] tracking-tight truncate">
           {getPageTitle()}
         </h1>
       </div>
 
       {/* Right: Organization Selector, Branch Selector, Notification Bell & User Avatar */}
-      <div className="flex items-center gap-1.5 sm:gap-2.5 lg:gap-3 min-w-0 justify-end">
+      <div className="flex items-center gap-1 sm:gap-2.5 lg:gap-3 shrink-0 justify-end">
 
         {/* Organisation Admin Header Filters: Sub-Org Dropdown, Branch Dropdown, Products Dropdown (Client only) */}
         {isOrgSuperAdmin || isOrgAdmin ? (
@@ -948,10 +975,10 @@ export const Header: React.FC<HeaderProps> = ({
                 id="suborg-selector-button"
                 type="button"
                 onClick={() => setIsSubOrgDropdownOpen(!isSubOrgDropdownOpen)}
-                className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
+                className="inline-flex items-center gap-1 sm:gap-1.5 h-9 sm:h-10 px-2 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
                 title="Select Sub-Organization"
               >
-                <span className="whitespace-nowrap truncate max-w-[100px] sm:max-w-[130px] xl:max-w-none">
+                <span className="whitespace-nowrap truncate max-w-[72px] sm:max-w-[130px] xl:max-w-none">
                   <span className="hidden xl:inline text-slate-500 font-normal">Sub Org: </span>
                   <span className="text-slate-700 font-semibold">{selectedSubOrg}</span>
                 </span>
@@ -962,7 +989,7 @@ export const Header: React.FC<HeaderProps> = ({
 
               {isSubOrgDropdownOpen && (
                 <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[190px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
+                  className="absolute top-full mt-1.5 right-0 min-w-[190px] max-w-[calc(100vw-1.5rem)] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
                 >
                   {subOrgOptions.map((sub) => {
                     const isActive =
@@ -995,10 +1022,10 @@ export const Header: React.FC<HeaderProps> = ({
                 id="branch-selector-button"
                 type="button"
                 onClick={() => setIsBranchDropdownOpen(!isBranchDropdownOpen)}
-                className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
+                className="inline-flex items-center gap-1 sm:gap-1.5 h-9 sm:h-10 px-2 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
                 title="Switch Branch"
               >
-                <span className="whitespace-nowrap truncate max-w-[80px] sm:max-w-[100px] xl:max-w-none">
+                <span className="whitespace-nowrap truncate max-w-[64px] sm:max-w-[100px] xl:max-w-none">
                   <span className="hidden xl:inline text-slate-500 font-normal">Branch: </span>
                   <span className="text-slate-700 font-semibold">{selectedBranch}</span>
                 </span>
@@ -1009,7 +1036,7 @@ export const Header: React.FC<HeaderProps> = ({
 
               {isBranchDropdownOpen && (
                 <div
-                  className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
+                  className="absolute top-full mt-1.5 right-0 min-w-[170px] max-w-[calc(100vw-1.5rem)] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
                 >
                   {branchOptions.map((b) => {
                     const isActive =
@@ -1039,7 +1066,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Products Selector: Only Rendered in Client Management, Removed in Sale Management */}
             {!isSalesMode && (
-              <div className="relative shrink-0" ref={prodRef}>
+              <div className="relative hidden sm:block shrink-0" ref={prodRef}>
                 <button
                   id="product-selector-button"
                   type="button"
@@ -1058,7 +1085,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {isProductDropdownOpen && (
                   <div
-                    className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
+                    className="absolute top-full mt-1.5 right-0 min-w-[170px] max-w-[calc(100vw-1.5rem)] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl max-h-72 overflow-y-auto"
                   >
                     {productOptions.map((prod) => {
                       const isActive =
@@ -1090,16 +1117,16 @@ export const Header: React.FC<HeaderProps> = ({
           <>
             {/* Branch Selector Dropdown - Visible in Admin (Hidden for Branch Admin) */}
             {!isSuperAdmin && !isBranchAdmin && (
-              <div className="relative" ref={branchRef}>
+              <div className="relative shrink-0" ref={branchRef}>
                 <button
                   id="branch-selector-button"
                   type="button"
                   onClick={() => setIsBranchDropdownOpen(!isBranchDropdownOpen)}
-                  className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
+                  className="inline-flex items-center gap-1 sm:gap-1.5 h-9 sm:h-10 px-2 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
                   title="Switch Branch"
                 >
-                  <span className="whitespace-nowrap truncate max-w-[110px] sm:max-w-none">
-                    <span className="hidden sm:inline text-slate-500 font-normal">Select Branch: </span>
+                  <span className="whitespace-nowrap truncate max-w-[80px] sm:max-w-[150px] xl:max-w-none">
+                    <span className="hidden md:inline text-slate-500 font-normal">Select Branch: </span>
                     <span className="text-slate-700 font-semibold">{selectedBranch}</span>
                   </span>
                   <ChevronDown
@@ -1109,7 +1136,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {isBranchDropdownOpen && (
                   <div
-                    className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
+                    className="absolute top-full mt-1.5 right-0 min-w-[170px] max-w-[calc(100vw-1.5rem)] max-h-72 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
                   >
                     {branchOptions.map((b) => {
                       const isActive =
@@ -1140,16 +1167,16 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Product Selector Dropdown - Visible in Admin */}
             {!isSuperAdmin && (
-              <div className="relative" ref={prodRef}>
+              <div className="relative shrink-0" ref={prodRef}>
                 <button
                   id="product-selector-button"
                   type="button"
                   onClick={() => setIsProductDropdownOpen(!isProductDropdownOpen)}
-                  className="inline-flex items-center gap-1.5 h-9 sm:h-10 px-2.5 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
+                  className="inline-flex items-center gap-1 sm:gap-1.5 h-9 sm:h-10 px-2 sm:px-3 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700 rounded-xl"
                   title="Select Product"
                 >
-                  <span className="whitespace-nowrap">
-                    <span className="text-slate-500 font-normal">Product: </span>
+                  <span className="whitespace-nowrap truncate max-w-[85px] sm:max-w-[150px] xl:max-w-none">
+                    <span className="hidden md:inline text-slate-500 font-normal">Product: </span>
                     <span className="text-slate-700 font-semibold">{selectedProduct}</span>
                   </span>
                   <ChevronDown
@@ -1159,7 +1186,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {isProductDropdownOpen && (
                   <div
-                    className="absolute top-full mt-1.5 right-0 min-w-[170px] bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded"
+                    className="absolute top-full mt-1.5 right-0 min-w-[170px] max-w-[calc(100vw-1.5rem)] max-h-72 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 overflow-hidden space-y-0.5 rounded-xl"
                   >
                     {productOptions.map((prod) => {
                       const isActive =
@@ -1204,7 +1231,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {isNotificationsOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-xl border border-[#E2E8F0] overflow-hidden z-50">
+            <div className="fixed sm:absolute left-3 right-3 sm:left-auto sm:right-0 top-16 sm:top-full sm:mt-2 w-auto sm:w-96 max-w-[calc(100vw-1.5rem)] bg-white rounded-xl shadow-xl border border-[#E2E8F0] overflow-hidden z-50">
               <div className="flex items-center justify-between px-4 py-3 bg-[#33077C] text-white">
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-[#4309A2]" />
@@ -1288,7 +1315,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {isUserSwitcherOpen && (
-            <div className="absolute right-0 mt-2 w-68 bg-white rounded-2xl shadow-xl border border-[#E2E8F0] overflow-hidden z-50 p-2">
+            <div className="fixed sm:absolute right-3 sm:right-0 top-16 sm:top-full sm:mt-2 w-68 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto bg-white rounded-2xl shadow-xl border border-[#E2E8F0] z-50 p-2">
               {/* User Summary Header */}
               <div className="px-3.5 py-3 border-b border-slate-100 flex items-center gap-3">
                 <div className="w-11 h-11 rounded-full bg-[#00A859] text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">

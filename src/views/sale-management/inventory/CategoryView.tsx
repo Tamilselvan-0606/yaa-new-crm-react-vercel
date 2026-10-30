@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Tag,
@@ -54,16 +56,26 @@ export const CategoryView: React.FC = () => {
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
 
   // Request Deduplication Refs
-  const isFetchingRef = useRef(false);
+  const requestSeqRef = useRef(0); // latest request wins; a superseded response is ignored
   const lastFetchKeyRef = useRef<string | null>(null);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -145,11 +157,10 @@ export const CategoryView: React.FC = () => {
       const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
       const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
 
-      // Prevent concurrent calls or redundant re-fetching of identical parameters
-      if (isFetchingRef.current) return;
+      // Skip redundant re-fetching of identical parameters
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
-      isFetchingRef.current = true;
+      const seq = ++requestSeqRef.current;
       lastFetchKeyRef.current = fetchKey;
       setIsLoading(true);
 
@@ -162,6 +173,7 @@ export const CategoryView: React.FC = () => {
           sortOrder: 'desc',
           status: targetStatus !== 'ALL' ? targetStatus : undefined,
         });
+        if (seq !== requestSeqRef.current) return;
 
         if (res && res.success && Array.isArray(res.data)) {
           const mapped = res.data.map((item, idx) =>
@@ -178,10 +190,12 @@ export const CategoryView: React.FC = () => {
         }
       } catch (err: any) {
         console.warn('Commerce Category API call failed, falling back to local state:', err?.message || err);
-        setIsApiConnected(false);
+        if (seq === requestSeqRef.current) {
+          setIsApiConnected(false);
+          lastFetchKeyRef.current = null; // allow a retry of the same parameters
+        }
       } finally {
-        setIsLoading(false);
-        isFetchingRef.current = false;
+        if (seq === requestSeqRef.current) setIsLoading(false);
       }
     },
     [page, pageSize, appliedSearch, appliedStatus]
@@ -190,18 +204,6 @@ export const CategoryView: React.FC = () => {
   useEffect(() => {
     loadCategories();
   }, [loadCategories]);
-
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
 
   // Filter categories in local fallback mode
   const filteredCategories = useMemo(() => {
@@ -316,12 +318,10 @@ export const CategoryView: React.FC = () => {
           });
 
           if (res?.success && res.data) {
-            const updated = mapApiCategoryToCategoryItem(res.data);
-            setCategories((prev) =>
-              prev.map((c) => (c.id === editingCategory.id ? { ...c, ...updated } : c))
-            );
-            toast.success(`Category "${updated.categoryName}" updated successfully.`);
+            toast.success(`Category "${res.data.categoryName || res.data.name || data.categoryName}" updated successfully.`);
             setIsModalOpen(false);
+            lastFetchKeyRef.current = '';
+            await loadCategories(true);
             return;
           }
         } catch (apiErr: any) {
@@ -339,11 +339,11 @@ export const CategoryView: React.FC = () => {
           });
 
           if (res?.success && res.data) {
-            const created = mapApiCategoryToCategoryItem(res.data);
-            setCategories((prev) => [created, ...prev]);
-            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
-            toast.success(`Category "${created.categoryName}" created successfully.`);
+            toast.success(`Category "${res.data.categoryName || res.data.name || data.categoryName}" created successfully.`);
             setIsModalOpen(false);
+            setPage(1);
+            lastFetchKeyRef.current = '';
+            await loadCategories(true, { page: 1 });
             return;
           }
         } catch (apiErr: any) {
@@ -367,20 +367,17 @@ export const CategoryView: React.FC = () => {
     try {
       const res = await categoryApi.patchCategory(item.id, { status: nextStatus });
       if (res?.success) {
-        setCategories((prev) =>
-          prev.map((c) => (c.id === item.id ? { ...c, status: nextStatus } : c))
-        );
         toast.success(`Category "${item.categoryName}" status set to ${nextStatus}.`);
+        lastFetchKeyRef.current = '';
+        await loadCategories(true);
         return;
       }
     } catch (apiErr: any) {
-      console.warn('Remote status patch failed, updating locally:', apiErr);
+      console.warn('Remote status patch failed:', apiErr);
+      const errMsg = apiErr?.response?.data?.error?.message || apiErr?.message || 'Failed to update category status.';
+      toast.error(errMsg);
+      return;
     }
-
-    setCategories((prev) =>
-      prev.map((c) => (c.id === item.id ? { ...c, status: nextStatus } : c))
-    );
-    toast.success(`Category "${item.categoryName}" status set to ${nextStatus}.`);
   };
 
   // Open Delete Confirmation Modal
@@ -462,8 +459,8 @@ export const CategoryView: React.FC = () => {
   return (
     <div className="space-y-5">
       {/* 1. Top Header Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <Tag className="w-4.5 h-4.5" />
@@ -483,12 +480,12 @@ export const CategoryView: React.FC = () => {
         </div>
 
         {/* Top Right Action Buttons: Excel Report & Add Category */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 w-full sm:w-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
             onClick={handleExport}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
             Excel Report
@@ -497,7 +494,7 @@ export const CategoryView: React.FC = () => {
             variant="primary"
             size="md"
             onClick={handleOpenAddModal}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             icon={<Plus className="w-4 h-4 text-white" />}
           >
             Add Category
@@ -564,22 +561,14 @@ export const CategoryView: React.FC = () => {
         {/* Desktop Table (sm: and above) */}
         <div className="hidden sm:block overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white w-12 sm:w-16 text-center">
-                  S.NO
-                </th>
-                <th className="py-3.5 px-3 sm:px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                  CATEGORY NAME
-                </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-24 sm:w-32">
-                  STATUS
-                </th>
-                <th className="py-3.5 px-2 sm:px-3 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-16 sm:w-20">
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "S.NO", align: "center", width: "60px" },
+                { label: "CATEGORY NAME", align: "left", minWidth: "200px" },
+                { label: "STATUS", align: "center", width: "120px" },
+                { label: "ACTIONS", align: "center", width: "90px" },
+              ]}
+            />
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>

@@ -60,12 +60,12 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
       closeOnOutsideClick={!isLoading}
       closeOnEscape={!isLoading}
     >
-      <div className="p-4 sm:p-6 space-y-4 text-xs font-sans animate-in fade-in duration-150">
+      <div className="p-0.5 sm:p-1 space-y-4 text-xs font-sans animate-in fade-in duration-150">
         {/* Error Alert if Deletion Failed */}
         {error && (
           <div className="flex items-start gap-2.5 p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 animate-shake">
             <AlertTriangle className="w-4 h-4 text-[#F51F4F] shrink-0 mt-0.5" />
-            <div className="text-xs">
+            <div className="text-xs min-w-0 break-words">
               <span className="font-bold">Deletion Failed: </span>
               <span>{error}</span>
             </div>
@@ -73,11 +73,11 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
         )}
 
         {/* Warning / Destructive Highlight Box */}
-        <div className="flex items-start gap-3.5 p-4 bg-rose-50/70 border border-rose-200/80 rounded-2xl">
+        <div className="flex items-start gap-3 sm:gap-3.5 p-3.5 sm:p-4 bg-rose-50/70 border border-rose-200/80 rounded-2xl">
           <div className="w-10 h-10 rounded-xl bg-[#F51F4F]/10 border border-[#F51F4F]/20 flex items-center justify-center shrink-0 shadow-2xs">
             <Trash2 className="w-5 h-5 text-[#F51F4F] stroke-[2.2]" />
           </div>
-          <div className="space-y-1 pt-0.5">
+          <div className="space-y-1 pt-0.5 min-w-0 flex-1 break-words">
             <h4 className="text-sm font-bold text-slate-900 tracking-tight">
               Are you sure you want to delete this {entityName.toLowerCase()}?
             </h4>

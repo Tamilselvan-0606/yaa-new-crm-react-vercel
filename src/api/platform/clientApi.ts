@@ -38,6 +38,16 @@ export const clientEndpoints = baseApi.injectEndpoints({
           if (params.sortBy) queryParams.sortBy = params.sortBy;
           if (params.sortOrder) queryParams.sortOrder = params.sortOrder;
           if (targetOrgId) queryParams.organization_id = targetOrgId;
+          const subId = params.sub_organization_id || params.subOrganizationId;
+          if (subId) {
+            queryParams.sub_organization_id = subId;
+            queryParams.subOrganizationId = subId;
+          }
+          const branchId = params.branch_id || params.branchId;
+          if (branchId) {
+            queryParams.branch_id = branchId;
+            queryParams.branchId = branchId;
+          }
         }
 
         return {
@@ -103,6 +113,26 @@ export const clientEndpoints = baseApi.injectEndpoints({
       ],
     }),
 
+    updatePlatformClientStatus: builder.mutation<
+      PlatformClientSingleResponse,
+      { id: string; status: string; organizationId?: string }
+    >({
+      query: ({ id, status, organizationId }) => {
+        const targetOrgId = organizationId || getStoredOrganizationId() || undefined;
+        return {
+          url: `/platform/clients/${id}/status`,
+          method: 'PATCH',
+          body: { status },
+          headers: targetOrgId ? { 'x-organization-id': targetOrgId } : undefined,
+          params: targetOrgId ? { organization_id: targetOrgId } : undefined,
+        };
+      },
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: 'PlatformClient', id },
+        { type: 'PlatformClient', id: 'LIST' },
+      ],
+    }),
+
     deletePlatformClient: builder.mutation<{ success: boolean; message: string }, { id: string; organizationId?: string } | string>({
       query: (arg) => {
         const id = typeof arg === 'string' ? arg : arg.id;
@@ -127,6 +157,7 @@ export const {
   useGetPlatformClientByIdQuery,
   useCreatePlatformClientMutation,
   useUpdatePlatformClientMutation,
+  useUpdatePlatformClientStatusMutation,
   useDeletePlatformClientMutation,
 } = clientEndpoints;
 

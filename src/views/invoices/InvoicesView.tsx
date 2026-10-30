@@ -24,7 +24,13 @@ import {
   Check,
   MoreVertical,
   Loader2,
-  Send
+  Send,
+  History,
+  CreditCard,
+  ShieldCheck,
+  Receipt,
+  Wallet,
+  Banknote,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { Link, useNavigate } from 'react-router-dom';
@@ -32,6 +38,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useInvoiceStore, SavedInvoice, SavedInvoiceItem, InvoicePaymentDetails } from '../../store/useInvoiceStore';
 import { useProformaInvoiceStore } from '../../store/useProformaInvoiceStore';
 import { CustomSelect } from '../../components/common/CustomSelect';
+import { Modal } from '../../components/common/Modal';
 import { RecordPaymentModal } from '../../components/forms/RecordPaymentModal';
 import { InvoicePDFDocument } from '../../components/invoices/InvoicePDFDocument';
 import { sendWhatsAppDocument } from '../../services/whatsappGateway';
@@ -53,6 +60,8 @@ import {
   getStoredOrganizationId,
   organizationApi,
   OrganizationApiItem,
+  platformClientApi,
+  subOrganizationApi,
 } from '../../api';
 
 interface InvoicesViewProps {
@@ -80,9 +89,70 @@ const formatDate = (dateStr?: string): string => {
   }
 };
 
+const getFallbackSellerDetails = (apiItem?: any) => {
+  let cachedSubOrgList: any[] = [];
+  try {
+    const rawList = localStorage.getItem('active_sub_orgs_list_cache');
+    if (rawList) cachedSubOrgList = JSON.parse(rawList);
+  } catch {}
+
+  let cachedSubOrg: any = null;
+  // 1. If invoice explicitly has a subOrganizationId, find its details!
+  if (apiItem?.subOrganizationId && Array.isArray(cachedSubOrgList)) {
+    cachedSubOrg = cachedSubOrgList.find((s) => s.id === apiItem.subOrganizationId);
+  }
+
+  // 2. If invoice was created with SUB_ORGANIZATION scope or sub-org matches cached active sub-org
+  if (!cachedSubOrg && (apiItem?.createdScope === 'SUB_ORGANIZATION' || !apiItem?.createdScope)) {
+    try {
+      const rawSub = localStorage.getItem('active_sub_org_seller_cache');
+      if (rawSub) cachedSubOrg = JSON.parse(rawSub);
+    } catch {}
+  }
+
+  // 3. Fallback to parent organization details
+  let cachedOrg: any = null;
+  try {
+    const raw = localStorage.getItem('active_org_seller_cache');
+    if (raw) cachedOrg = JSON.parse(raw);
+  } catch {}
+
+  const activeOrgName =
+    localStorage.getItem('active_organization_orgsuperadmin') ||
+    localStorage.getItem('active_organization') ||
+    '';
+
+  // If document belongs to a Sub-Org, return Sub-Org details!
+  if (cachedSubOrg && (apiItem?.subOrganizationId || apiItem?.createdScope === 'SUB_ORGANIZATION' || cachedSubOrg.id === apiItem?.subOrganizationId)) {
+    return {
+      name: cachedSubOrg.name || cachedSubOrg.legalName || '',
+      taxId: cachedSubOrg.gstNumber || cachedSubOrg.gstin || cachedSubOrg.taxId || cachedOrg?.gstNumber || '',
+      pan: cachedSubOrg.panNumber || cachedSubOrg.pan || cachedOrg?.panNumber || '',
+      address: cachedSubOrg.address || cachedSubOrg.location || cachedOrg?.address || '',
+      email: cachedSubOrg.email || cachedOrg?.email || '',
+      phone: cachedSubOrg.phone || cachedSubOrg.whatsapp || cachedOrg?.phone || '',
+    };
+  }
+
+  // Otherwise, return Organization details
+  return {
+    name: cachedOrg?.name || cachedOrg?.legalName || activeOrgName || '',
+    taxId: cachedOrg?.gstNumber || cachedOrg?.gstin || cachedOrg?.taxId || '',
+    pan: cachedOrg?.panNumber || cachedOrg?.pan || '',
+    address: cachedOrg?.address || cachedOrg?.location || '',
+    email: cachedOrg?.email || '',
+    phone: cachedOrg?.phone || cachedOrg?.whatsapp || '',
+  };
+};
+
 const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice => {
   const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
   const rawDueDate = api.dueDate || '';
+  const seller = (api as any).organization || (api as any).company || (api as any).seller || {};
+  const fallbackSeller = getFallbackSellerDetails(api);
+
+  const bankData = (api as any).bank || (api as any).bankDetails || seller.bank || undefined;
+
   return {
     id: api.id,
     invoiceNumber: api.proformaNumber || 'PI-0000',
@@ -97,26 +167,27 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
       name: api.customerName || 'Customer',
       email: api.customerEmail || '',
       phone: api.customerPhone || '',
-      gstin: api.gstin || '33AAAAA0000A1Z5',
-      location: api.billingAddress || 'Chennai, TN',
+      gstin: api.gstin || '',
+      pan: api.pan || '',
+      location: api.billingAddress || '',
       industry: 'Technology',
     },
     company: {
-      name: 'Yaa Creations',
-      taxId: '27AABCA1234F1Z8',
-      pan: 'ABCDE1234F',
-      address: 'Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081',
-      email: 'billing@yaacreations.com',
-      phone: '+91 98765 43210',
+      name: seller.name || seller.legalName || fallbackSeller.name,
+      taxId: seller.gstNumber || seller.gstin || seller.taxId || fallbackSeller.taxId,
+      pan: seller.panNumber || seller.pan || fallbackSeller.pan,
+      address: seller.address || seller.location || fallbackSeller.address,
+      email: seller.email || fallbackSeller.email,
+      phone: seller.phone || seller.whatsapp || fallbackSeller.phone,
     },
-    bank: (api as any).bank || {
-      bankName: 'HDFC Bank',
-      accountName: 'Yaa Creations Tech Pvt Ltd',
-      accountNumber: '50200012345678',
-      ifscCode: 'HDFC0001234',
-      branchName: 'Guindy Branch, Chennai',
-      upiId: 'yaacreations@hdfcbank',
-    },
+    bank: bankData ? {
+      bankName: bankData.bankName || bankData.bank || '',
+      accountName: bankData.accountName || bankData.name || seller.name || '',
+      accountNumber: bankData.accountNumber || bankData.accountNo || '',
+      ifscCode: bankData.ifscCode || bankData.ifsc || '',
+      branchName: bankData.branchName || bankData.branch || '',
+      upiId: bankData.upiId || bankData.vpa || '',
+    } : undefined,
     items: (api.items || []).map((it, idx) => {
       const qty = Number(it.quantity) || 1;
       const price = Number(it.unitPrice) || 0;
@@ -126,9 +197,9 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
       const total = Number(it.lineTotal) || sub + taxAmount;
       return {
         id: it.id || `pitem_${idx + 1}`,
-        name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+        name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
         description: it.itemDescription || '',
-        hsnCode: it.hsnCode || '998314',
+        hsnCode: it.hsnCode || '',
         qty,
         unitPrice: price,
         taxPercent: taxRate,
@@ -170,6 +241,10 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
 
   const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
   const rawDueDate = api.dueDate || '';
+  const seller = (api as any).organization || (api as any).company || (api as any).seller || {};
+  const fallbackSeller = getFallbackSellerDetails(api);
+
+  const bankData = (api as any).bank || (api as any).bankDetails || seller.bank || undefined;
 
   return {
     id: api.id,
@@ -185,27 +260,27 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
       name: api.customerName || 'Customer',
       email: api.customerEmail || '',
       phone: api.customerPhone || '',
-      gstin: api.gstin || '33AAAAA0000A1Z5',
-      pan: api.pan || 'AAAAA0000A',
-      location: api.billingAddress || 'Chennai, TN',
+      gstin: api.gstin || '',
+      pan: api.pan || '',
+      location: api.billingAddress || '',
       industry: 'Technology',
     },
     company: {
-      name: 'Yaa Creations',
-      taxId: '27AABCA1234F1Z8',
-      pan: 'ABCDE1234F',
-      address: 'Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081',
-      email: 'billing@yaacreations.com',
-      phone: '+91 98765 43210',
+      name: seller.name || seller.legalName || fallbackSeller.name,
+      taxId: seller.gstNumber || seller.gstin || seller.taxId || fallbackSeller.taxId,
+      pan: seller.panNumber || seller.pan || fallbackSeller.pan,
+      address: seller.address || seller.location || fallbackSeller.address,
+      email: seller.email || fallbackSeller.email,
+      phone: seller.phone || seller.whatsapp || fallbackSeller.phone,
     },
-    bank: (api as any).bank || {
-      bankName: 'HDFC Bank',
-      accountName: 'Yaa Creations Tech Pvt Ltd',
-      accountNumber: '50200012345678',
-      ifscCode: 'HDFC0001234',
-      branchName: 'Guindy Branch, Chennai',
-      upiId: 'yaacreations@hdfcbank',
-    },
+    bank: bankData ? {
+      bankName: bankData.bankName || bankData.bank || '',
+      accountName: bankData.accountName || bankData.name || seller.name || '',
+      accountNumber: bankData.accountNumber || bankData.accountNo || '',
+      ifscCode: bankData.ifscCode || bankData.ifsc || '',
+      branchName: bankData.branchName || bankData.branch || '',
+      upiId: bankData.upiId || bankData.vpa || '',
+    } : undefined,
     items: (api.items || []).map((it, idx) => {
       const qty = Number(it.quantity) || 1;
       const price = Number(it.unitPrice) || 0;
@@ -215,7 +290,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
       const total = Number(it.lineTotal) || sub + taxAmount;
       return {
         id: it.id || it.itemId || `item_${idx + 1}`,
-        name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+        name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
         description: it.itemDescription || '',
         hsnCode: it.hsnCode || '998314',
         qty,
@@ -283,10 +358,60 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           console.warn('Could not load organizations for Super Admin filter:', err);
         });
     }
+
+    // Load active organization details to populate Billing From seller info
+    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+    if (orgId) {
+      organizationApi
+        .getOrganizationById(orgId)
+        .then((res) => {
+          if (isMounted && res?.data) {
+            try {
+              localStorage.setItem('active_org_seller_cache', JSON.stringify(res.data));
+            } catch {}
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load active organization for invoice seller details:', err);
+        });
+
+      // Load sub-organizations list so invoices can resolve the exact creator's sub-organization
+      subOrganizationApi
+        .getSubOrganizations({ page_no: 1, page_size: 100, pagination_required: 'false' }, orgId)
+        .then((subRes) => {
+          if (isMounted && subRes?.data && Array.isArray(subRes.data)) {
+            try {
+              localStorage.setItem('active_sub_orgs_list_cache', JSON.stringify(subRes.data));
+            } catch {}
+
+            const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+            const activeSubOrgName =
+              localStorage.getItem('active_sub_organization') ||
+              localStorage.getItem('active_sub_organization_client') ||
+              localStorage.getItem('active_sub_organization_sales') ||
+              '';
+
+            const matched =
+              (activeSubOrgId ? subRes.data.find((s) => s.id === activeSubOrgId) : null) ||
+              (activeSubOrgName && activeSubOrgName !== 'All'
+                ? subRes.data.find((s) => s.name?.toLowerCase() === activeSubOrgName.toLowerCase())
+                : null);
+
+            if (matched) {
+              try {
+                localStorage.setItem('active_sub_org_seller_cache', JSON.stringify(matched));
+              } catch {}
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load sub-organizations for invoice seller details:', err);
+        });
+    }
     return () => {
       isMounted = false;
     };
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, currentUser?.organizationId]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -299,6 +424,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   } | null>(null);
   const [paymentModalInvoice, setPaymentModalInvoice] = useState<SavedInvoice | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentHistoryInvoice, setPaymentHistoryInvoice] = useState<SavedInvoice | null>(null);
+  const [isPaymentHistoryOpen, setIsPaymentHistoryOpen] = useState(false);
+  const [isLoadingHistoryPayments, setIsLoadingHistoryPayments] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<SavedInvoice | null>(null);
   const [isDuplicateMode, setIsDuplicateMode] = useState(false);
@@ -504,23 +632,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   };
 
   const handleDuplicateInvoice = (inv: SavedInvoice) => {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const duplicatedDraft: SavedInvoice = {
-      ...JSON.parse(JSON.stringify(inv)),
-      id: isProforma ? `prof_${Date.now()}` : `inv_${Date.now()}`,
-      invoiceNumber: isProforma ? `PI-2026-${randomSuffix}` : `INV-2026-${randomSuffix}`,
-      invoiceDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      status: 'Pending',
-      createdAt: new Date().toISOString(),
-      paymentDetails: undefined,
-    };
-    setIsDuplicateMode(true);
-    setEditingInvoice(duplicatedDraft);
-    setIsEditModalOpen(true);
+    // Same full-page screen as Create, prefilled from the source invoice
+    navigate(isProforma ? '/proforma/new' : '/sales/new', { state: { invoiceToDuplicate: JSON.parse(JSON.stringify(inv)) } });
   };
 
   const [openSendMenuId, setOpenSendMenuId] = useState<string | null>(null);
+  const [openStatusMenuId, setOpenStatusMenuId] = useState<string | null>(null);
   const [isPreviewSendMenuOpen, setIsPreviewSendMenuOpen] = useState(false);
 
   const handleSendViaGmail = (inv: SavedInvoice) => {
@@ -579,6 +696,22 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const handleOpenMarkAsPaid = (inv: SavedInvoice) => {
     setPaymentModalInvoice(inv);
     setIsPaymentModalOpen(true);
+  };
+
+  const handleOpenPaymentHistory = async (inv: SavedInvoice) => {
+    setPaymentHistoryInvoice(inv);
+    setIsPaymentHistoryOpen(true);
+    setIsLoadingHistoryPayments(true);
+    try {
+      const res = await invoiceApi.getInvoicePayments(inv.id);
+      if (res && res.data && Array.isArray(res.data)) {
+        setPaymentHistoryInvoice((prev) => (prev && prev.id === inv.id ? { ...prev, payments: res.data } : prev));
+      }
+    } catch (err) {
+      console.warn('Could not refresh payment history:', err);
+    } finally {
+      setIsLoadingHistoryPayments(false);
+    }
   };
 
   const handleConfirmPayment = async (paymentDetails: InvoicePaymentDetails) => {
@@ -751,7 +884,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           notes: updatedInvoice.description,
           items: updatedInvoice.items.map((it, idx) => ({
             itemId: it.id || `SKU-${idx + 1}`,
-            itemDescription: it.name,
+            title: it.name,
+            itemDescription: it.description || undefined,
             hsnCode: it.hsnCode || '998314',
             quantity: Number(it.qty) || 1,
             unitPrice: Number(it.unitPrice) || 0,
@@ -775,7 +909,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           billingAddress: updatedInvoice.client.location,
           items: updatedInvoice.items.map((it, idx) => ({
             itemId: it.id || `SKU-${idx + 1}`,
-            itemDescription: it.name,
+            title: it.name,
+            itemDescription: it.description || undefined,
             hsnCode: it.hsnCode || '998314',
             quantity: Number(it.qty) || 1,
             unitPrice: Number(it.unitPrice) || 0,
@@ -1062,42 +1197,42 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.name}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.name || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>GSTIN / Tax ID</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.taxId || '27AABCA1234F1Z8'}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.taxId || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>PAN Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.pan || 'ABCDE1234F'}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.pan || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.phone}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.phone || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.email}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.email || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Company Address</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.company.address}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.company.address || '-'}</span>
                 </div>
               </div>
             </div>
@@ -1113,48 +1248,42 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.company}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.company || activeInvoice.client.name || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>GSTIN / Tax ID</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.gstin || activeInvoice.client.taxId || '27AABCT8892K1Z5'}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.gstin || activeInvoice.client.taxId || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>PAN Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.pan || 'ABCDE9876G'}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.pan || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.phone || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.phone || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.client.email}</span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.email || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Company Address</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">
-                    {activeInvoice.client.location && (activeInvoice.client.location.includes('Suite') || activeInvoice.client.location.includes('Hub') || activeInvoice.client.location.includes('Building') || activeInvoice.client.location.includes('Floor'))
-                      ? activeInvoice.client.location
-                      : activeInvoice.client.location
-                        ? `Suite 750, Innovation Park, ${activeInvoice.client.location} 75201`
-                        : 'Suite 750, Innovation Park, Dallas, TX 75201'}
-                  </span>
+                  <span className="text-slate-700 flex-1">{activeInvoice.client.location || '-'}</span>
                 </div>
               </div>
             </div>
@@ -1340,43 +1469,53 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           {/* 7. Bottom Section: Payment Information & Terms and Conditions */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-10 pt-6 break-inside-avoid">
             {/* Left Column: Settlement Billing Information */}
-            <div className="space-y-2.5 text-xs sm:text-sm">
-              <h3 className="text-base font-bold text-[#33077C] pb-1 border-b border-slate-100">
-                Billing Information:
-              </h3>
-              <div className="space-y-1.5">
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>Account Name</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.accountName || activeInvoice.company.name}</span>
-                </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>Bank Account</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.accountNumber || '50200012345678'} ({activeInvoice.bank?.bankName || 'HDFC Bank'})</span>
-                </div>
-                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                    <span>IFSC Code</span>
-                    <span>:</span>
-                  </span>
-                  <span className="text-slate-700 flex-1">{activeInvoice.bank?.ifscCode || 'HDFC0001234'}</span>
-                </div>
-                {activeInvoice.bank?.upiId && (
+            {activeInvoice.bank?.accountNumber || activeInvoice.bank?.bankName ? (
+              <div className="space-y-2.5 text-xs sm:text-sm">
+                <h3 className="text-base font-bold text-[#33077C] pb-1 border-b border-slate-100">
+                  Billing Information:
+                </h3>
+                <div className="space-y-1.5">
+                  {activeInvoice.bank.accountName && (
+                    <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                      <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                        <span>Account Name</span>
+                        <span>:</span>
+                      </span>
+                      <span className="text-slate-700 flex-1">{activeInvoice.bank.accountName}</span>
+                    </div>
+                  )}
                   <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                     <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                      <span>Instant UPI VPA</span>
+                      <span>Bank Account</span>
                       <span>:</span>
                     </span>
-                    <span className="text-slate-700 flex-1">{activeInvoice.bank.upiId}</span>
+                    <span className="text-slate-700 flex-1">
+                      {activeInvoice.bank.accountNumber || '-'} {activeInvoice.bank.bankName ? `(${activeInvoice.bank.bankName})` : ''}
+                    </span>
                   </div>
-                )}
+                  {activeInvoice.bank.ifscCode && (
+                    <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                      <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                        <span>IFSC Code</span>
+                        <span>:</span>
+                      </span>
+                      <span className="text-slate-700 flex-1">{activeInvoice.bank.ifscCode}</span>
+                    </div>
+                  )}
+                  {activeInvoice.bank.upiId && (
+                    <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                      <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                        <span>Instant UPI VPA</span>
+                        <span>:</span>
+                      </span>
+                      <span className="text-slate-700 flex-1">{activeInvoice.bank.upiId}</span>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div />
+            )}
 
             {/* Right Column: Signature Block */}
             <div className="space-y-2.5 text-xs sm:text-sm flex flex-col justify-end items-end pb-2">
@@ -1487,16 +1626,16 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-5 py-4 rounded-xl border border-slate-200/90 shadow-xs">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             {isProforma ? 'Proforma Invoices' : 'Invoices'}
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             {isProforma
               ? 'Manage, view, convert, and print all saved proforma invoices'
               : 'Manage, view, and print all saved invoices'}
           </p>
         </div>
-        <div>
+        <div className="shrink-0">
           <Button
             variant="primary"
             size="md"
@@ -1574,6 +1713,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{isProforma ? 'PROFORMA #' : 'INVOICE #'}</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CLIENT / CUSTOMER</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">{isProforma ? 'PROFORMA DATE' : 'INVOICE DATE'}</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CREATED DATE</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DUE DATE</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">GRAND TOTAL</th>
                 {!isProforma && (
@@ -1586,7 +1726,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
-                  <td colSpan={isProforma ? 7 : 8} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isProforma ? 8 : 9} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Loader2 className="w-9 h-9 mx-auto mb-2 animate-spin text-[#33077C]" />
                     <p className="font-bold text-slate-700 text-sm">
                       {isProforma ? 'Loading proforma invoices...' : 'Loading invoices...'}
@@ -1596,7 +1736,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </tr>
               ) : pagedInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={isProforma ? 7 : 8} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isProforma ? 8 : 9} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Sparkles className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
                     <p className="font-bold text-slate-700 text-sm">No {isProforma ? 'proforma invoices' : 'invoices'} found.</p>
                     <p className="text-xs text-slate-400 mt-0.5">
@@ -1623,6 +1763,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                       </div>
                     </td>
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{formatDate(inv.invoiceDate)}</td>
+                    <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{formatDate(inv.createdAt || (inv as any).created_at)}</td>
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">{inv.dueDate ? formatDate(inv.dueDate) : '-'}</td>
                     <td className="py-4 px-4 border border-slate-200 align-middle text-center font-bold text-slate-900 font-sans">
                       ₹{inv.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1686,7 +1827,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                           }`}
                         >
                           {inv.status === ('Approved' as any) && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
-                          {inv.status === ('Converted' as any) && <Sparkles className="w-3 h-3 text-purple-600" />}
+                          {inv.status === ('Converted' as any) && <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0"></span>}
                           {inv.status === ('Sent' as any) && <Send className="w-3 h-3 text-blue-600" />}
                           {inv.status === ('Cancelled' as any) && <AlertCircle className="w-3 h-3 text-rose-600" />}
                           {inv.status === ('Draft' as any) && <FileText className="w-3 h-3 text-slate-500" />}
@@ -1795,9 +1936,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 ...(actionDropdownPos.bottom !== undefined
                   ? { bottom: `${actionDropdownPos.bottom}px` }
                   : { top: `${actionDropdownPos.top}px` }),
-                right: `${actionDropdownPos.right}px`,
+                right: `${Math.min(Math.max(8, actionDropdownPos.right), Math.max(8, window.innerWidth - 236))}px`,
               }}
-              className="w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
+              className="w-56 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
             >
               {/* 1. View */}
               <button
@@ -1815,100 +1956,234 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 <span className="font-semibold text-slate-800 text-[13px]">View</span>
               </button>
 
-              {/* 2. Convert to Invoice (Proforma only) */}
+              {/* 2. Edit (For Proforma: navigates to full create/edit screen prefilled) */}
               {isProforma && (
                 <button
                   type="button"
-                  disabled={inv.status === ('Converted' as any) || isConvertingId === inv.id}
                   onClick={() => {
                     setOpenActionMenuId(null);
                     setActionDropdownPos(null);
-                    handleConvertToInvoice(inv);
+                    navigate('/proforma/new', { state: { invoiceToEdit: JSON.parse(JSON.stringify(inv)) } });
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-colors cursor-pointer ${
-                    inv.status === ('Converted' as any)
-                      ? 'text-slate-400 cursor-not-allowed opacity-60'
-                      : 'text-[#33077C] hover:bg-purple-50'
-                  }`}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <div className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-xs">
-                    {isConvertingId === inv.id ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
-                    )}
+                  <div className="w-7 h-7 rounded-full bg-[#8B5CF6] text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Pencil className="w-3.5 h-3.5 stroke-[2.5]" />
                   </div>
-                  <span className="font-semibold text-[13px]">
-                    {inv.status === ('Converted' as any) ? 'Converted' : 'Convert to Invoice'}
-                  </span>
+                  <span className="font-semibold text-slate-800 text-[13px]">Edit</span>
                 </button>
               )}
 
-              {/* 3. Change Status (Proforma only) */}
-              {isProforma && inv.status !== ('Converted' as any) && (
-                <div className="px-3 py-1.5 border-t border-slate-100 my-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                    Set Status:
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {(['Draft', 'Sent', 'Approved', 'Cancelled'] as ProformaInvoiceStatus[]).map((st) => (
-                      <button
-                        key={st}
-                        type="button"
-                        onClick={() => {
-                          setOpenActionMenuId(null);
-                          setActionDropdownPos(null);
-                          handleProformaStatusChange(inv.id, st);
-                        }}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md cursor-pointer transition-colors ${
-                          inv.status === (st as any)
-                            ? 'bg-[#33077C] text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
-                      >
-                        {st}
-                      </button>
-                    ))}
+              {/* 3. Duplicate (For Proforma: position 3 as requested) */}
+              {isProforma && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenActionMenuId(null);
+                    setActionDropdownPos(null);
+                    handleDuplicateInvoice(inv);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-full bg-[#3B82F6] text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
                   </div>
-                </div>
+                  <span className="font-semibold text-slate-800 text-[13px]">Duplicate</span>
+                </button>
               )}
 
-              {/* 4. Edit */}
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenActionMenuId(null);
-                  setActionDropdownPos(null);
-                  setIsDuplicateMode(false);
-                  setEditingInvoice(JSON.parse(JSON.stringify(inv)));
-                  setIsEditModalOpen(true);
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                <div className="w-7 h-7 rounded-full bg-[#8B5CF6] text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Pencil className="w-3.5 h-3.5 stroke-[2.5]" />
-                </div>
-                <span className="font-semibold text-slate-800 text-[13px]">Edit</span>
-              </button>
+              {/* 4. Convert to Invoice (Proforma only) */}
+              {isProforma && (() => {
+                const convertedProformasStorage = (() => {
+                  try {
+                    return JSON.parse(localStorage.getItem('yaa_crm_converted_proformas') || '[]');
+                  } catch {
+                    return [];
+                  }
+                })();
+                const isAlreadyConverted =
+                  inv.status === ('Converted' as any) ||
+                  Boolean((inv as any).convertedToInvoiceId) ||
+                  convertedProformasStorage.includes(inv.id) ||
+                  convertedProformasStorage.includes(inv.invoiceNumber);
 
-              {/* 5. Duplicate */}
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenActionMenuId(null);
-                  setActionDropdownPos(null);
-                  handleDuplicateInvoice(inv);
-                }}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                <div className="w-7 h-7 rounded-full bg-[#3B82F6] text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
-                </div>
-                <span className="font-semibold text-slate-800 text-[13px]">Duplicate</span>
-              </button>
+                return (
+                  <button
+                    type="button"
+                    disabled={isAlreadyConverted || isConvertingId === inv.id}
+                    onClick={() => {
+                      if (isAlreadyConverted) return;
+                      setOpenActionMenuId(null);
+                      setActionDropdownPos(null);
 
-              {/* 6. Send with Channels (Super Admin only) */}
-              {isSuperAdmin && (
+                      // Prefilled invoice data from proforma invoice
+                      const convertedInvoice: SavedInvoice = {
+                        ...JSON.parse(JSON.stringify(inv)),
+                        id: '',
+                        invoiceNumber: '',
+                        invoiceDate: new Date().toISOString().split('T')[0],
+                        status: 'Unpaid',
+                        referenceNumbers: [inv.invoiceNumber, ...(inv.referenceNumbers || [])].filter(Boolean),
+                      };
+
+                      navigate('/sales/new', {
+                        state: {
+                          invoiceToDuplicate: convertedInvoice,
+                          convertedFromProformaNumber: inv.invoiceNumber,
+                          convertedFromProformaId: inv.id,
+                        },
+                      });
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-colors ${
+                      isAlreadyConverted
+                        ? 'text-slate-400 cursor-not-allowed opacity-50 bg-slate-50/50'
+                        : 'text-[#33077C] hover:bg-purple-50 cursor-pointer'
+                    }`}
+                  >
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-sm ${
+                      isAlreadyConverted ? 'bg-slate-300 text-white' : 'bg-[#6366F1] text-white'
+                    }`}>
+                      <FileText className="w-3.5 h-3.5 stroke-[2.2]" />
+                    </div>
+                    <span className={`font-semibold text-[13px] ${isAlreadyConverted ? 'text-slate-400 font-medium' : ''}`}>
+                      {isAlreadyConverted ? 'Converted' : 'Convert to Invoice'}
+                    </span>
+                  </button>
+                );
+              })()}
+
+              {/* 5. Set Status with 3 dots sub-menu (Proforma only) */}
+              {isProforma && inv.status !== ('Converted' as any) && (() => {
+                const convertedProformasStorage = (() => {
+                  try {
+                    return JSON.parse(localStorage.getItem('yaa_crm_converted_proformas') || '[]');
+                  } catch {
+                    return [];
+                  }
+                })();
+                const isAlreadyConverted =
+                  inv.status === ('Converted' as any) ||
+                  Boolean((inv as any).convertedToInvoiceId) ||
+                  convertedProformasStorage.includes(inv.id) ||
+                  convertedProformasStorage.includes(inv.invoiceNumber);
+
+                if (isAlreadyConverted) return null;
+
+                return (
+                  <div className="relative">
+                    <div className={`flex items-center justify-between rounded-xl px-2.5 py-2 transition-colors group ${
+                      openStatusMenuId === inv.id ? 'bg-[#33077C]/5 text-[#33077C]' : 'text-slate-800 hover:bg-slate-50'
+                    }`}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenStatusMenuId(openStatusMenuId === inv.id ? null : inv.id);
+                        }}
+                        className="flex-1 flex items-center gap-3 cursor-pointer text-left"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-sm">
+                          <CheckCircle2 className="w-4 h-4 stroke-[2.2]" />
+                        </div>
+                        <span className="font-bold text-[#33077C] text-[13px]">Set Status</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenStatusMenuId(openStatusMenuId === inv.id ? null : inv.id);
+                        }}
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-colors cursor-pointer"
+                        title="Set Status options"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                  {/* Status Options sub-menu matching reference 2nd image */}
+                  {openStatusMenuId === inv.id && (
+                    <div className="mt-1.5 mb-1.5 p-1.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl shadow-inner space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                      {(
+                        [
+                          { value: 'Draft', label: 'Draft', dotColor: '#94a3b8' },
+                          { value: 'Sent', label: 'Send', dotColor: '#33077C' },
+                          { value: 'Approved', label: 'Approved', dotColor: '#10b981' },
+                          { value: 'Cancelled', label: 'Cancelled', dotColor: '#f43f5e' },
+                        ] as const
+                      ).map((opt) => {
+                        const isActive = inv.status === (opt.value as any);
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionDropdownPos(null);
+                              setOpenStatusMenuId(null);
+                              handleProformaStatusChange(inv.id, opt.value as ProformaInvoiceStatus);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer text-left ${
+                              isActive
+                                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
+                                : 'text-slate-700 hover:bg-white/70 hover:text-slate-900'
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: opt.dotColor }}
+                            />
+                            <span className="flex-1 font-bold text-[13px]">{opt.label}</span>
+                            {isActive && (
+                              <Check className="w-4 h-4 shrink-0 text-[#33077C] stroke-[2.5]" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+              {/* Edit & Duplicate for Standard Invoices */}
+              {!isProforma && (
+                <>
+                  {/* Edit */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenActionMenuId(null);
+                      setActionDropdownPos(null);
+                      navigate('/sales/new', { state: { invoiceToEdit: JSON.parse(JSON.stringify(inv)) } });
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-full bg-[#8B5CF6] text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Pencil className="w-3.5 h-3.5 stroke-[2.5]" />
+                    </div>
+                    <span className="font-semibold text-slate-800 text-[13px]">Edit</span>
+                  </button>
+
+                  {/* Duplicate */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenActionMenuId(null);
+                      setActionDropdownPos(null);
+                      handleDuplicateInvoice(inv);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-full bg-[#3B82F6] text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
+                    </div>
+                    <span className="font-semibold text-slate-800 text-[13px]">Duplicate</span>
+                  </button>
+                </>
+              )}
+
+              {/* Send with Channels (Standard Invoices Super Admin only) */}
+              {!isProforma && isSuperAdmin && (
                 <div className="relative">
                   <div className="flex items-center justify-between rounded-xl hover:bg-slate-50 transition-colors group">
                     <button
@@ -2006,36 +2281,53 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 </div>
               )}
 
-              {/* 7. Payment Action (Standard Invoices only) */}
+              {/* 7. Payment Actions (Standard Invoices only) */}
               {!isProforma && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenActionMenuId(null);
-                    setActionDropdownPos(null);
-                    handleOpenMarkAsPaid(inv);
-                  }}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
-                >
-                  <div
-                    className={`w-7 h-7 rounded-full text-white flex items-center justify-center shrink-0 shadow-xs ${
-                      inv.status === 'Paid'
-                        ? 'bg-emerald-600/70'
-                        : inv.status === 'Partially Paid'
-                          ? 'bg-sky-500'
-                          : 'bg-[#10B981]'
-                    }`}
-                  >
-                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                  </div>
-                  <span className="font-semibold text-slate-800 text-[13px]">
-                    {inv.status === 'Paid'
-                      ? 'Payment Details'
-                      : inv.status === 'Partially Paid'
-                        ? 'Record Payment'
-                        : 'Mark as Paid'}
-                  </span>
-                </button>
+                <>
+                  {/* For Paid or Partially Paid: Show Payment History */}
+                  {(inv.status === 'Paid' || inv.status === 'Partially Paid') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenActionMenuId(null);
+                        setActionDropdownPos(null);
+                        handleOpenPaymentHistory(inv);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <div className="w-7 h-7 rounded-full text-white bg-[#33077C] flex items-center justify-center shrink-0 shadow-xs">
+                        <History className="w-3.5 h-3.5 stroke-[2.5]" />
+                      </div>
+                      <span className="font-semibold text-slate-800 text-[13px]">
+                        Payment History
+                      </span>
+                    </button>
+                  )}
+
+                  {/* For Non-Paid (Partially Paid or Pending): Show Record Payment / Mark as Paid */}
+                  {inv.status !== 'Paid' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenActionMenuId(null);
+                        setActionDropdownPos(null);
+                        handleOpenMarkAsPaid(inv);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <div
+                        className={`w-7 h-7 rounded-full text-white flex items-center justify-center shrink-0 shadow-xs ${
+                          inv.status === 'Partially Paid' ? 'bg-sky-500' : 'bg-[#10B981]'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                      </div>
+                      <span className="font-semibold text-slate-800 text-[13px]">
+                        {inv.status === 'Partially Paid' ? 'Record Payment' : 'Mark as Paid'}
+                      </span>
+                    </button>
+                  )}
+                </>
               )}
 
               <div className="my-1.5 border-t border-slate-100" />
@@ -2073,12 +2365,276 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
         onConfirmPayment={handleConfirmPayment}
       />
 
+      {/* Payment History Modal */}
+      <Modal
+        isOpen={isPaymentHistoryOpen}
+        onClose={() => {
+          setIsPaymentHistoryOpen(false);
+          setPaymentHistoryInvoice(null);
+        }}
+        title="Payment History"
+        subtitle={paymentHistoryInvoice ? `Settlement details & audit trail for Invoice #${paymentHistoryInvoice.invoiceNumber}` : undefined}
+        headerGradient={true}
+        maxWidth="2xl"
+      >
+        {paymentHistoryInvoice && (() => {
+          const formatCustomDate = (dateStr: string | null | undefined) => {
+            if (!dateStr) return '—';
+            try {
+              const cleaned = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+              const [y, m, d] = cleaned.split('-');
+              if (y && m && d) return `${d}/${m}/${y}`;
+              const dt = new Date(dateStr);
+              if (!isNaN(dt.getTime())) {
+                const day = String(dt.getDate()).padStart(2, '0');
+                const month = String(dt.getMonth() + 1).padStart(2, '0');
+                const year = dt.getFullYear();
+                return `${day}/${month}/${year}`;
+              }
+              return cleaned;
+            } catch {
+              return dateStr;
+            }
+          };
+
+          const rawInvDate = paymentHistoryInvoice.invoiceDate || '';
+          const displayInvDate = formatCustomDate(rawInvDate);
+          const grandTotalVal = Number(paymentHistoryInvoice.grandTotal) || 0;
+          const settledVal = Number(paymentHistoryInvoice.amountPaid ?? (paymentHistoryInvoice.paymentDetails?.amountPaid ?? (paymentHistoryInvoice.status === 'Paid' ? grandTotalVal : 0)));
+          const balanceDueVal = Math.max(0, Number(paymentHistoryInvoice.balanceDue ?? (grandTotalVal - settledVal)));
+          const isFullyPaid = balanceDueVal <= 0.001 || paymentHistoryInvoice.status === 'Paid';
+          const paidPercent = grandTotalVal > 0 ? Math.min(100, Math.round((settledVal / grandTotalVal) * 100)) : 100;
+
+          const paymentsList = (paymentHistoryInvoice.payments && paymentHistoryInvoice.payments.length > 0)
+            ? paymentHistoryInvoice.payments
+            : paymentHistoryInvoice.paymentDetails && (paymentHistoryInvoice.paymentDetails.amountPaid || settledVal > 0)
+              ? [{
+                  id: 'pd-1',
+                  invoiceId: paymentHistoryInvoice.id,
+                  amount: Number(paymentHistoryInvoice.paymentDetails.amountPaid || settledVal),
+                  paymentDate: paymentHistoryInvoice.paymentDetails.paymentDate || rawInvDate || new Date().toISOString().split('T')[0],
+                  paymentMode: paymentHistoryInvoice.paymentDetails.paymentMode || 'Cash',
+                  referenceNumber: paymentHistoryInvoice.paymentDetails.referenceId || null,
+                  notes: paymentHistoryInvoice.paymentDetails.notes || null,
+                  createdAt: paymentHistoryInvoice.paymentDetails.recordedAt || new Date().toISOString(),
+                }]
+              : isFullyPaid
+                ? [{
+                    id: 'pd-default',
+                    invoiceId: paymentHistoryInvoice.id,
+                    amount: grandTotalVal,
+                    paymentDate: rawInvDate || new Date().toISOString().split('T')[0],
+                    paymentMode: 'Cash',
+                    referenceNumber: null,
+                    notes: 'Direct settlement',
+                    createdAt: new Date().toISOString(),
+                  }]
+                : [];
+
+          return (
+            <div className="space-y-5 text-slate-800 -mt-1">
+              {/* Top Highlights Summary Banner - Single line labels */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-4 py-3.5 bg-slate-50/80 border border-slate-200/80 rounded-lg">
+                {/* Left: Customer Info */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                      Customer
+                    </span>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${
+                        isFullyPaid
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                      }`}
+                    >
+                      {isFullyPaid ? 'Fully Paid' : 'Partially Paid'}
+                    </span>
+                  </div>
+                  <p className="text-base font-bold text-slate-900 truncate mt-0.5">
+                    {paymentHistoryInvoice.client.company || paymentHistoryInvoice.client.name}
+                  </p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5 whitespace-nowrap">
+                    Invoice Date: <span className="text-slate-700 font-semibold">{displayInvDate}</span>
+                  </p>
+                </div>
+
+                {/* Right: Metrics row on single line with dots */}
+                <div className="flex flex-wrap items-center gap-4 sm:gap-6 border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-6 border-slate-200/70 shrink-0">
+                  {/* Grand Total */}
+                  <div className="whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                        Grand Total
+                      </span>
+                    </div>
+                    <span className="text-sm font-bold text-slate-800">
+                      ₹{grandTotalVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  {/* Paid Amount */}
+                  <div className="whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider">
+                        Paid
+                      </span>
+                    </div>
+                    <span className="text-sm font-bold text-emerald-600">
+                      ₹{settledVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  {/* Outstanding Balance */}
+                  <div className="whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isFullyPaid ? 'bg-slate-400' : 'bg-rose-500'}`}></span>
+                      <span className={`text-[11px] font-bold uppercase tracking-wider ${isFullyPaid ? 'text-slate-500' : 'text-rose-600'}`}>
+                        Outstanding
+                      </span>
+                    </div>
+                    <span className={`text-base font-extrabold ${isFullyPaid ? 'text-slate-700' : 'text-rose-600'}`}>
+                      ₹{balanceDueVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payments Timeline / History Section */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between px-0.5">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    Payment History
+                  </h4>
+                  {isLoadingHistoryPayments && (
+                    <span className="text-xs text-[#33077C] font-semibold flex items-center gap-1.5 bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-100">
+                      <Loader2 className="w-3 h-3 animate-spin text-[#33077C]" />
+                      Syncing...
+                    </span>
+                  )}
+                </div>
+
+                {/* Modern Table Format for Payment Entries */}
+                <div className="overflow-hidden rounded-lg border border-slate-200/90 bg-white">
+                  {paymentsList.length > 0 ? (
+                    <div className="overflow-x-auto max-h-[280px]">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="bg-[#33077C] text-white sticky top-0 z-10" style={{ background: '#33077C' }}>
+                          <tr className="bg-[#33077C] divide-x divide-white/20">
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                              Date
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                              Payment Mode
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                              Status
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90">
+                              Reference / Note
+                            </th>
+                            <th className="px-3.5 py-2.5 font-bold uppercase tracking-wider text-[10px] text-white/90 text-right">
+                              Amount Credited
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {paymentsList.map((payment, idx) => {
+                            const rawPayDate = formatCustomDate(payment.paymentDate);
+                            const mode = payment.paymentMode || 'Cash';
+
+                            return (
+                              <tr key={payment.id || idx} className="hover:bg-slate-50/70 transition-colors divide-x divide-slate-200/80">
+                                {/* Date */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-slate-700 font-medium">
+                                  {rawPayDate}
+                                </td>
+
+                                {/* Payment Mode */}
+                                <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-800">
+                                  {mode}
+                                </td>
+
+                                {/* Status */}
+                                <td className="px-3.5 py-3 whitespace-nowrap font-medium text-emerald-600">
+                                  Successful
+                                </td>
+
+                                {/* Reference / Note */}
+                                <td className="px-3.5 py-3 text-slate-600 max-w-xs truncate">
+                                  {payment.referenceNumber ? (
+                                    <span className="text-[11px] font-medium bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                                      Ref: {payment.referenceNumber}
+                                    </span>
+                                  ) : payment.notes ? (
+                                    <span className="text-[11px] text-slate-500 italic">"{payment.notes}"</span>
+                                  ) : null}
+                                </td>
+
+                                {/* Amount Credited */}
+                                <td className="px-3.5 py-3 whitespace-nowrap text-right font-bold text-emerald-600 text-sm">
+                                  ₹{Number(payment.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-6 text-center text-xs text-slate-500">
+                      No payment entries recorded yet for this invoice.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+
+
+              {/* Modal Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div>
+                  {!isFullyPaid && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetInv = paymentHistoryInvoice;
+                        setIsPaymentHistoryOpen(false);
+                        setPaymentHistoryInvoice(null);
+                        handleOpenMarkAsPaid(targetInv);
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl font-bold text-xs shadow-xs hover:shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                      <span>Record Payment</span>
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPaymentHistoryOpen(false);
+                    setPaymentHistoryInvoice(null);
+                  }}
+                  className="px-6 py-2.5 bg-[#33077C] hover:bg-[#25055b] active:scale-95 text-white rounded-xl font-bold text-xs tracking-wide shadow-sm hover:shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
       {/* ========================================================================= */}
       {/* EDIT INVOICE FORM MODAL (Opens right on page, no navigation) */}
       {/* ========================================================================= */}
       {isEditModalOpen && editingInvoice && (
         <div
-          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 print:hidden animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-6 print:hidden animate-in fade-in duration-200"
           onClick={() => {
             setIsEditModalOpen(false);
             setEditingInvoice(null);
@@ -2091,15 +2647,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
               e.preventDefault();
               handleSaveEditInvoice();
             }}
-            className="relative w-full max-w-6xl bg-white rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden my-auto animate-in zoom-in-95 duration-150"
+            className="relative w-full max-w-6xl bg-white rounded-xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[93dvh] overflow-hidden my-auto animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
             <div
-              className="px-6 py-4.5 border-b-0 flex items-center justify-between text-white sticky top-0 z-10 shadow-md"
+              className="px-4 sm:px-6 py-3.5 sm:py-4.5 border-b-0 flex items-center justify-between text-white shrink-0 z-10 shadow-md"
               style={{ background: '#33077C' }}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
                 <button
                   type="button"
                   onClick={() => {
@@ -2112,13 +2668,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 >
                   <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
                 </button>
-                <div>
-                  <h2 className="text-xl font-bold tracking-tight text-white">
+                <div className="min-w-0">
+                  <h2 className="text-lg sm:text-xl font-bold tracking-tight text-white truncate">
                     {isDuplicateMode
                       ? (isProforma ? 'Duplicate Proforma Invoice' : 'Duplicate Invoice')
                       : 'Edit'}
                   </h2>
-                  <p className="text-xs sm:text-[13px] text-white/90 font-medium mt-0.5">
+                  <p className="text-sm text-white/90 font-medium mt-0.5">
                     {isDuplicateMode
                       ? `Review and adjust line items and dates before adding this ${isProforma ? 'proforma invoice' : 'invoice'} to your list`
                       : `Modify ${isProforma ? 'proforma invoice' : 'invoice'} line items, dates, client information, and bank details`}
@@ -2128,7 +2684,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             </div>
 
             {/* Modal Body (Scrollable - Clean, Spacious UI matching Reference) */}
-            <div className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-8 bg-white">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 sm:space-y-8 bg-white">
               {/* Section 1: Invoice Information */}
               <div>
                 <h3 className="text-sm font-bold text-slate-800 pb-2.5 border-b border-slate-100 mb-4 flex items-center gap-2">
@@ -2711,7 +3267,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             </div>
 
             {/* Modal Sticky Footer */}
-            <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-end gap-3 sticky bottom-0 z-10">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 bg-white border-t border-slate-100 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 shrink-0 z-10">
               <button
                 type="button"
                 onClick={() => {
@@ -2719,7 +3275,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                   setEditingInvoice(null);
                   setIsDuplicateMode(false);
                 }}
-                className="h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center gap-2"
+                className="w-full sm:w-auto h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center justify-center gap-2"
               >
                 <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />
                 <span>Cancel</span>
@@ -2727,7 +3283,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
               <button
                 type="submit"
                 onClick={handleSaveEditInvoice}
-                className="h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
+                className="w-full sm:w-auto h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98]"
               >
                 <Check className="w-4 h-4 text-white stroke-[2.5]" />
                 <span>{isDuplicateMode ? 'Duplicate Invoice' : 'Save Changes'}</span>

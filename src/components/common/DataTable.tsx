@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   ColumnDef,
   flexRender,
@@ -71,7 +71,7 @@ export function DataTable<TData, TValue>({
           />
         </div>
 
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
 
       {/* Table Container */}
@@ -163,7 +163,7 @@ export function DataTable<TData, TValue>({
             </span>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-4">
             <div className="flex items-center gap-1.5">
               <span>Rows per page:</span>
               <select

@@ -138,30 +138,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   switchUser: async (userId: string) => {
-    set({ isLoading: true });
-    try {
-      const res = await api.switchUser(userId);
-      if (res.success && res.user) {
-        const roleFlags = getRoleFlags(res.user.role);
-
-        set({
-          currentUser: res.user,
-          role: res.user.role,
-          ...roleFlags,
-          token: res.token || get().token,
-          isLoading: false,
-        });
-        toast.info('Account Switched', {
-          description: `Active role: ${res.user.role} (${res.user.name})`,
-        });
-        await get().refreshReminders();
-      }
-    } catch (error: any) {
-      toast.error('Switch Failed', {
-        description: error.message,
-      });
-      set({ isLoading: false });
+    const user = get().users.find((u) => u.id === userId);
+    if (!user) {
+      toast.error('Switch Failed', { description: 'User not found' });
+      return;
     }
+    const roleFlags = getRoleFlags(user.role);
+    set({
+      currentUser: user,
+      role: user.role,
+      ...roleFlags,
+    });
+    toast.info('Account Switched', {
+      description: `Active role: ${user.role} (${user.name})`,
+    });
   },
 
   logout: async () => {
@@ -190,28 +180,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   markReminderCompleted: async (id: string) => {
-    try {
-      await api.updateReminder(id, { isCompleted: true, isRead: true });
-      const updated = get().reminders.map((r) =>
-        r.id === id ? { ...r, isCompleted: true, isRead: true } : r
-      );
-      const unreadCount = updated.filter((r) => !r.isCompleted && !r.isRead).length;
-      set({ reminders: updated, unreadRemindersCount: unreadCount });
-      toast.success('Reminder marked as completed');
-    } catch (e: any) {
-      toast.error('Failed to update reminder', { description: e.message });
-    }
+    const updated = get().reminders.map((r) =>
+      r.id === id ? { ...r, isCompleted: true, isRead: true } : r
+    );
+    const unreadCount = updated.filter((r) => !r.isCompleted && !r.isRead).length;
+    set({ reminders: updated, unreadRemindersCount: unreadCount });
+    toast.success('Reminder marked as completed');
   },
 
   markAllRemindersRead: async () => {
-    try {
-      await api.markAllRemindersRead();
-      const updated = get().reminders.map((r) => ({ ...r, isRead: true }));
-      set({ reminders: updated, unreadRemindersCount: 0 });
-      toast.success('All reminders marked as read');
-    } catch (e: any) {
-      toast.error('Failed to update reminders', { description: e.message });
-    }
+    const updated = get().reminders.map((r) => ({ ...r, isRead: true }));
+    set({ reminders: updated, unreadRemindersCount: 0 });
+    toast.success('All reminders marked as read');
   },
 
   setUsers: (users: User[]) => set({ users }),

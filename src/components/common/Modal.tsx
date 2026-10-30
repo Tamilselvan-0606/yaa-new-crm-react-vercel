@@ -1,5 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ArrowLeft } from 'lucide-react';
+
+let nextModalOrder = 0;
+const openModalStack: number[] = [];
 
 interface ModalProps {
   isOpen: boolean;
@@ -15,6 +19,7 @@ interface ModalProps {
   onBack?: () => void;
   closeOnOutsideClick?: boolean;
   closeOnEscape?: boolean;
+  zIndex?: string;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -31,22 +36,53 @@ export const Modal: React.FC<ModalProps> = ({
   onBack,
   closeOnOutsideClick = false,
   closeOnEscape = false,
+  zIndex = 'z-50',
 }) => {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && closeOnEscape) onClose();
-    };
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      window.addEventListener('keydown', handleKeyDown);
+  const orderRef = useRef<number | null>(null);
+  if (isOpen) {
+    if (orderRef.current === null) {
+      nextModalOrder += 1;
+      orderRef.current = nextModalOrder;
     }
+  } else {
+    orderRef.current = null;
+    if (openModalStack.length === 0) {
+      nextModalOrder = 0;
+    }
+  }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const myOrder = orderRef.current ?? ++nextModalOrder;
+    orderRef.current = myOrder;
+    openModalStack.push(myOrder);
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isTopmost = openModalStack[openModalStack.length - 1] === myOrder;
+      if (e.key === 'Escape' && closeOnEscape && isTopmost) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
     return () => {
-      document.body.style.overflow = 'unset';
+      const idx = openModalStack.lastIndexOf(myOrder);
+      if (idx !== -1) openModalStack.splice(idx, 1);
+      if (openModalStack.length === 0) {
+        document.body.style.overflow = 'unset';
+        nextModalOrder = 0;
+      }
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose, closeOnEscape]);
 
   if (!isOpen) return null;
+
+  const computedZIndexStyle =
+    zIndex === 'z-50' && orderRef.current !== null
+      ? { zIndex: 50 + orderRef.current }
+      : undefined;
 
   const maxWidthClass = {
     sm: 'max-w-md',
@@ -59,10 +95,11 @@ export const Modal: React.FC<ModalProps> = ({
     '5xl': 'max-w-7xl',
   }[maxWidth];
 
-  return (
+  return createPortal(
     <div
       id="modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in"
+      style={computedZIndexStyle}
+      className={`fixed inset-0 ${zIndex} flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in`}
       onClick={(e) => {
         if (closeOnOutsideClick && e.target === e.currentTarget) {
           onClose();
@@ -73,11 +110,11 @@ export const Modal: React.FC<ModalProps> = ({
         id="modal-container"
         className={`relative w-full ${maxWidthClass} bg-white rounded-xl sm:rounded-2xl shadow-2xl ${
           headerGradient ? 'border-none' : 'border border-slate-200/80'
-        } overflow-hidden transition-all duration-200 transform scale-100 flex flex-col max-h-[92vh] sm:max-h-[90vh]`}
+        } overflow-hidden transition-all duration-200 transform scale-100 flex flex-col max-h-[93dvh] sm:max-h-[90dvh]`}
       >
         {/* Modal Header */}
         <div
-          className={`flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4.5 ${
+          className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4.5 shrink-0 ${
             headerGradient ? 'text-white border-b-0' : 'bg-slate-50/50 border-b border-slate-100'
           }`}
           style={
@@ -86,7 +123,7 @@ export const Modal: React.FC<ModalProps> = ({
               : undefined
           }
         >
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             {showBackIcon && (
               <button
                 type="button"
@@ -101,9 +138,9 @@ export const Modal: React.FC<ModalProps> = ({
                 <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
               </button>
             )}
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h3
-                className={`text-base sm:text-xl font-bold tracking-tight truncate ${
+                className={`text-lg sm:text-xl font-bold tracking-tight truncate ${
                   headerGradient ? 'text-white' : 'text-[#33077C]'
                 }`}
               >
@@ -111,7 +148,7 @@ export const Modal: React.FC<ModalProps> = ({
               </h3>
               {subtitle && (
                 <p
-                  className={`text-xs sm:text-[13px] mt-0.5 truncate ${
+                  className={`text-sm mt-0.5 line-clamp-2 sm:truncate ${
                     headerGradient ? 'text-white/90 font-medium' : 'text-slate-500'
                   }`}
                 >
@@ -122,13 +159,13 @@ export const Modal: React.FC<ModalProps> = ({
           </div>
 
           {headerRightSlot ? (
-            <div className="shrink-0 flex items-center">{headerRightSlot}</div>
+            <div className="shrink-0 flex items-center ml-auto max-w-full">{headerRightSlot}</div>
           ) : (
             !hideCloseButton && (
               <button
                 id="modal-close-button"
                 onClick={onClose}
-                className={`p-2 rounded-xl transition-colors cursor-pointer shrink-0 ${
+                className={`p-2 rounded-xl transition-colors cursor-pointer shrink-0 ml-auto ${
                   headerGradient
                     ? 'text-white/80 hover:text-white hover:bg-white/15'
                     : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200/60'
@@ -142,8 +179,9 @@ export const Modal: React.FC<ModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto flex-1">{children}</div>
+        <div className="p-3.5 sm:p-6 overflow-y-auto flex-1 min-w-0">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

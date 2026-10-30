@@ -18,6 +18,7 @@ import {
   Branch,
 } from '../types';
 import {
+  API_BASE_URL,
   TOKEN_STORAGE_KEY,
   USER_ID_STORAGE_KEY,
   USER_CACHE_STORAGE_KEY,
@@ -37,9 +38,9 @@ import { retryWithRefreshedToken } from '../api/tokenRefresh';
 export { authApi };
 export type { ApiUser, ApiLoginResponse };
 
-// Create Axios Instance for CRM business operations
+// Create Axios Instance for CRM business operations targeting backend
 export const axiosClient: AxiosInstance = axios.create({
-  baseURL: '',
+  baseURL: API_BASE_URL,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
@@ -250,6 +251,9 @@ class ApiService {
       email: apiUser.email,
       role: roleCode,
       organizationId: membershipOrgId,
+      subOrganizationId:
+        apiUser.subOrganizationId || primaryMembership?.subOrganizationId || undefined,
+      accessibleBranchIds: apiUser.accessibleBranchIds || [],
       department: apiUser.isPlatformAdmin
         ? 'Platform Management'
         : roleCode === 'ORG_ADMIN'
@@ -387,116 +391,105 @@ class ApiService {
   }
 
   async getUsers(): Promise<User[]> {
-    try {
-      const res = await axiosClient.get<User[]>('/api/auth/users');
-      return res.data || [];
-    } catch {
-      return [];
-    }
+    const cached = this.getUser();
+    return cached ? [cached] : [];
   }
 
   async switchUser(userId: string): Promise<{ success: boolean; token: string; user: User }> {
     this.setUserId(userId);
-    const res = await axiosClient.post<{ success: boolean; token: string; user: User }>('/api/auth/switch-user', { userId });
-    if (res.data.token) {
-      this.setToken(res.data.token);
-    }
-    return res.data;
+    const user = this.getUser();
+    const token = this.getToken() || '';
+    return { success: true, token, user: user || ({} as User) };
   }
 
-  // Dashboard
-  async getDashboardStats(): Promise<any> {
-    const res = await axiosClient.get('/api/dashboard/stats');
-    return res.data;
-  }
-
-  // Products
+  // Products (targets remote backend https://api.dev.crm.yaacreations.com)
   async getProducts(): Promise<Product[]> {
-    const res = await axiosClient.get<Product[]>('/api/products');
-    return res.data;
+    const res = await baseClient.get<any>('/products', { params: { limit: 100 } });
+    return res.data?.data || [];
   }
 
   async getProduct(id: string): Promise<any> {
-    const res = await axiosClient.get(`/api/products/${id}`);
+    const res = await baseClient.get<any>(`/products/${id}`);
     return res.data;
   }
 
   async createProduct(data: Partial<Product>): Promise<Product> {
-    const res = await axiosClient.post<Product>('/api/products', data);
-    return res.data;
+    const res = await baseClient.post<any>('/products', data);
+    return res.data?.data || res.data;
   }
 
   async updateProduct(id: string, data: Partial<Product>): Promise<Product> {
-    const res = await axiosClient.put<Product>(`/api/products/${id}`, data);
-    return res.data;
+    const res = await baseClient.put<any>(`/products/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async deleteProduct(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/products/${id}`);
+    const res = await baseClient.delete(`/products/${id}`);
     return res.data;
   }
 
-  // Branches
+  // Branches (targets remote backend https://api.dev.crm.yaacreations.com)
   async getBranches(productId?: string): Promise<Branch[]> {
-    const url = productId ? `/api/branches?productId=${encodeURIComponent(productId)}` : '/api/branches';
-    const res = await axiosClient.get<Branch[]>(url);
-    return res.data;
+    const res = await baseClient.get<any>('/branches', {
+      params: { pagination_required: 'false', page_size: 100, ...(productId ? { productId } : {}) },
+    });
+    return res.data?.data || [];
   }
 
   async createBranch(data: Partial<Branch>): Promise<Branch> {
-    const res = await axiosClient.post<Branch>('/api/branches', data);
-    return res.data;
+    const res = await baseClient.post<any>('/branches', data);
+    return res.data?.data || res.data;
   }
 
   async updateBranch(id: string, data: Partial<Branch>): Promise<Branch> {
-    const res = await axiosClient.put<Branch>(`/api/branches/${id}`, data);
-    return res.data;
+    const res = await baseClient.put<any>(`/branches/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async deleteBranch(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/branches/${id}`);
+    const res = await baseClient.delete(`/branches/${id}`);
     return res.data;
   }
 
   async createProductPlan(productId: string, plan: Partial<ProductPlan>): Promise<{ product: Product; plan: ProductPlan }> {
-    const res = await axiosClient.post<{ product: Product; plan: ProductPlan }>(`/api/products/${productId}/plans`, plan);
+    const res = await baseClient.post<any>(`/products/${productId}/plans`, plan);
     return res.data;
   }
 
   async updateProductPlan(productId: string, planId: string, plan: Partial<ProductPlan>): Promise<{ product: Product; plan: ProductPlan }> {
-    const res = await axiosClient.put<{ product: Product; plan: ProductPlan }>(`/api/products/${productId}/plans/${planId}`, plan);
+    const res = await baseClient.put<any>(`/products/${productId}/plans/${planId}`, plan);
     return res.data;
   }
 
   async deleteProductPlan(productId: string, planId: string): Promise<{ product: Product; deletedPlan: ProductPlan }> {
-    const res = await axiosClient.delete<{ product: Product; deletedPlan: ProductPlan }>(`/api/products/${productId}/plans/${planId}`);
+    const res = await baseClient.delete<any>(`/products/${productId}/plans/${planId}`);
     return res.data;
   }
 
   async uploadProductDocument(id: string, doc: { title: string; fileType: string; fileSize?: string; category: string }): Promise<any> {
-    const res = await axiosClient.post(`/api/products/${id}/documents`, doc);
+    const res = await baseClient.post<any>(`/products/${id}/documents`, doc);
     return res.data;
   }
 
   // Digital Marketing
   async getMarketingOverview(): Promise<any> {
-    const res = await axiosClient.get('/api/marketing/overview');
-    return res.data;
+    const res = await baseClient.get<any>('/marketing/overview').catch(() => ({ data: {} }));
+    return res.data?.data || res.data;
   }
 
   async getMarketingPlans(): Promise<DigitalMarketingPlan[]> {
-    const res = await axiosClient.get<DigitalMarketingPlan[]>('/api/marketing/plans');
-    return res.data;
+    const res = await baseClient.get<any>('/marketing/plans').catch(() => ({ data: [] }));
+    return res.data?.data || [];
   }
 
   async updateMarketingPlan(id: string, data: Partial<DigitalMarketingPlan>): Promise<DigitalMarketingPlan> {
-    const res = await axiosClient.put<DigitalMarketingPlan>(`/api/marketing/plans/${id}`, data);
-    return res.data;
+    const res = await baseClient.put<any>(`/marketing/plans/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async onboardMarketingClient(data: any): Promise<any> {
-    const res = await axiosClient.post('/api/marketing/onboarding', data);
-    return res.data;
+    const res = await baseClient.post<any>('/marketing/onboarding', data);
+    return res.data?.data || res.data;
   }
 
   // Leads
@@ -584,188 +577,253 @@ class ApiService {
   }
 
   // Customers
+  // Customers (targets remote backend https://api.dev.crm.yaacreations.com)
   async getCustomers(): Promise<Customer[]> {
-    const res = await axiosClient.get<Customer[]>('/api/customers');
-    return res.data;
+    const res = await baseClient.get<any>('/platform/clients', { params: { limit: 100 } });
+    return res.data?.data || [];
   }
 
   async getCustomer(id: string): Promise<any> {
-    const res = await axiosClient.get(`/api/customers/${id}`);
-    return res.data;
+    const res = await baseClient.get<any>(`/platform/clients/${id}`);
+    return res.data?.data || res.data;
   }
 
   async createCustomer(data: Partial<Customer>): Promise<Customer> {
-    const res = await axiosClient.post<Customer>('/api/customers', data);
-    return res.data;
+    const res = await baseClient.post<any>('/platform/clients', data);
+    return res.data?.data || res.data;
   }
 
   async updateCustomer(id: string, data: Partial<Customer>): Promise<Customer> {
-    const res = await axiosClient.put<Customer>(`/api/customers/${id}`, data);
-    return res.data;
+    const res = await baseClient.patch<any>(`/platform/clients/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async linkProductToCustomer(id: string, data: { productId: string; planName?: string; amount?: number }): Promise<Customer> {
-    const res = await axiosClient.post<Customer>(`/api/customers/${id}/link-product`, data);
-    return res.data;
+    const res = await baseClient.post<any>(`/platform/clients/${id}/link-product`, data);
+    return res.data?.data || res.data;
   }
 
   async deleteCustomer(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/customers/${id}`);
+    const res = await baseClient.delete(`/platform/clients/${id}`);
     return res.data;
   }
 
-  // Content
+  // Content (Local storage backed, since remote backend does not host /platform/content)
   async getContent(): Promise<ContentItem[]> {
-    const res = await axiosClient.get<ContentItem[]>('/api/content');
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_content');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
   }
 
   async createContent(data: Partial<ContentItem>): Promise<ContentItem> {
-    const res = await axiosClient.post<ContentItem>('/api/content', data);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_content');
+      const items: ContentItem[] = raw ? JSON.parse(raw) : [];
+      const newItem: ContentItem = {
+        id: `cnt_${Date.now()}`,
+        title: data.title || '',
+        clientName: data.clientName || '',
+        contentType: data.contentType || 'Reel',
+        platform: data.platform || 'Instagram',
+        status: data.status || 'Draft',
+        approvalStatus: data.approvalStatus || 'Pending Upload',
+        scheduledDate: data.scheduledDate || new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+        ...data,
+      } as ContentItem;
+      items.unshift(newItem);
+      localStorage.setItem('crm_platform_content', JSON.stringify(items));
+      return newItem;
+    } catch {
+      return data as ContentItem;
+    }
   }
 
   async updateContent(id: string, data: Partial<ContentItem>): Promise<ContentItem> {
-    const res = await axiosClient.put<ContentItem>(`/api/content/${id}`, data);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_content');
+      const items: ContentItem[] = raw ? JSON.parse(raw) : [];
+      const idx = items.findIndex((it) => it.id === id);
+      if (idx !== -1) {
+        items[idx] = { ...items[idx], ...data };
+        localStorage.setItem('crm_platform_content', JSON.stringify(items));
+        return items[idx];
+      }
+    } catch {}
+    return { id, ...data } as ContentItem;
   }
 
   async deleteContent(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/content/${id}`);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_content');
+      const items: ContentItem[] = raw ? JSON.parse(raw) : [];
+      const filtered = items.filter((it) => it.id !== id);
+      localStorage.setItem('crm_platform_content', JSON.stringify(filtered));
+    } catch {}
+    return { success: true };
   }
 
-  // Tasks
+  // Tasks (Local storage backed, since remote backend does not host /platform/tasks)
   async getTasks(): Promise<TaskItem[]> {
-    const res = await axiosClient.get<TaskItem[]>('/api/tasks');
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_tasks');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
   }
 
   async getTodayWork(): Promise<{ today: string; tasks: TaskItem[]; followUps: Lead[] }> {
-    const res = await axiosClient.get('/api/tasks/today');
-    return res.data;
+    const today = new Date().toISOString().split('T')[0];
+    try {
+      const raw = localStorage.getItem('crm_platform_tasks');
+      const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+      const todayTasks = tasks.filter((t) => t.dueDate === today);
+      return { today, tasks: todayTasks, followUps: [] };
+    } catch {
+      return { today, tasks: [], followUps: [] };
+    }
   }
 
   async createTask(data: Partial<TaskItem>): Promise<TaskItem> {
-    const res = await axiosClient.post<TaskItem>('/api/tasks', data);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_tasks');
+      const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+      const newTask: TaskItem = {
+        id: `task_${Date.now()}`,
+        title: data.title || '',
+        description: data.description || '',
+        targetType: data.targetType || 'Product',
+        targetId: data.targetId || '',
+        targetName: data.targetName || '',
+        clientId: data.clientId || '',
+        clientName: data.clientName || '',
+        assignedStaffId: data.assignedStaffId || '',
+        dueDate: data.dueDate || new Date().toISOString().split('T')[0],
+        priority: data.priority || 'Medium',
+        status: data.status || 'Pending',
+        notes: data.notes || '',
+        createdAt: new Date().toISOString(),
+      } as TaskItem;
+      tasks.unshift(newTask);
+      localStorage.setItem('crm_platform_tasks', JSON.stringify(tasks));
+      return newTask;
+    } catch {
+      return data as TaskItem;
+    }
   }
 
   async updateTask(id: string, data: Partial<TaskItem>): Promise<TaskItem> {
-    const res = await axiosClient.put<TaskItem>(`/api/tasks/${id}`, data);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_tasks');
+      const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+      const idx = tasks.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        tasks[idx] = { ...tasks[idx], ...data };
+        localStorage.setItem('crm_platform_tasks', JSON.stringify(tasks));
+        return tasks[idx];
+      }
+    } catch {}
+    return { id, ...data } as TaskItem;
   }
 
   async deleteTask(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/tasks/${id}`);
-    return res.data;
+    try {
+      const raw = localStorage.getItem('crm_platform_tasks');
+      const tasks: TaskItem[] = raw ? JSON.parse(raw) : [];
+      const filtered = tasks.filter((t) => t.id !== id);
+      localStorage.setItem('crm_platform_tasks', JSON.stringify(filtered));
+    } catch {}
+    return { success: true };
   }
 
-  // Payments
+  // Payments (targets remote backend https://api.dev.crm.yaacreations.com)
   async getPayments(): Promise<PaymentItem[]> {
-    const res = await axiosClient.get<PaymentItem[]>('/api/payments');
-    return res.data;
+    const res = await baseClient.get<any>('/platform/payments', { params: { limit: 100 } });
+    return res.data?.data || [];
   }
 
   async createPayment(data: Partial<PaymentItem>): Promise<PaymentItem> {
-    const res = await axiosClient.post<PaymentItem>('/api/payments', data);
-    return res.data;
+    const res = await baseClient.post<any>('/platform/payments', data);
+    return res.data?.data || res.data;
   }
 
   async updatePayment(id: string, data: Partial<PaymentItem>): Promise<PaymentItem> {
-    const res = await axiosClient.put<PaymentItem>(`/api/payments/${id}`, data);
-    return res.data;
+    const res = await baseClient.patch<any>(`/platform/payments/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async deletePayment(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/payments/${id}`);
+    const res = await baseClient.delete(`/platform/payments/${id}`);
     return res.data;
   }
 
-  // Subscriptions
+  // Subscriptions (targets remote backend https://api.dev.crm.yaacreations.com)
   async getSubscriptions(): Promise<SubscriptionItem[]> {
-    const res = await axiosClient.get<SubscriptionItem[]>('/api/subscriptions');
-    return res.data;
+    const res = await baseClient.get<any>('/subscriptions', { params: { limit: 100 } });
+    return res.data?.data || [];
   }
 
   async createSubscription(data: Partial<SubscriptionItem>): Promise<SubscriptionItem> {
-    const res = await axiosClient.post<SubscriptionItem>('/api/subscriptions', data);
-    return res.data;
+    const res = await baseClient.post<any>('/subscriptions', data);
+    return res.data?.data || res.data;
   }
 
   async updateSubscription(id: string, data: Partial<SubscriptionItem>): Promise<SubscriptionItem> {
-    const res = await axiosClient.put<SubscriptionItem>(`/api/subscriptions/${id}`, data);
-    return res.data;
+    const res = await baseClient.patch<any>(`/subscriptions/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async deleteSubscription(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/subscriptions/${id}`);
+    const res = await baseClient.delete(`/subscriptions/${id}`);
     return res.data;
   }
 
-  // Reminders
-  async getReminders(): Promise<ReminderItem[]> {
-    const res = await axiosClient.get<ReminderItem[]>('/api/reminders');
-    return res.data;
-  }
-
-  async createReminder(data: Partial<ReminderItem>): Promise<ReminderItem> {
-    const res = await axiosClient.post<ReminderItem>('/api/reminders', data);
-    return res.data;
-  }
-
-  async updateReminder(id: string, data: Partial<ReminderItem>): Promise<ReminderItem> {
-    const res = await axiosClient.put<ReminderItem>(`/api/reminders/${id}`, data);
-    return res.data;
-  }
-
-  async markAllRemindersRead(): Promise<any> {
-    const res = await axiosClient.post('/api/reminders/mark-all-read');
-    return res.data;
-  }
-
-  // Employees (Admin)
+  // Employees (targets remote backend https://api.dev.crm.yaacreations.com)
   async getEmployees(): Promise<any[]> {
-    const res = await axiosClient.get<any[]>('/api/employees');
-    return res.data;
+    const res = await baseClient.get<any>('/auth/users', { params: { limit: 100 } }).catch(() => ({ data: { data: [] } }));
+    return res.data?.data || [];
   }
 
   async createEmployee(data: Partial<User>): Promise<User> {
-    const res = await axiosClient.post<User>('/api/employees', data);
-    return res.data;
+    const res = await baseClient.post<any>('/auth/users', data);
+    return res.data?.data || res.data;
   }
 
   async updateEmployee(id: string, data: Partial<User>): Promise<User> {
-    const res = await axiosClient.put<User>(`/api/employees/${id}`, data);
-    return res.data;
+    const res = await baseClient.patch<any>(`/auth/users/${id}`, data);
+    return res.data?.data || res.data;
   }
 
   async deleteEmployee(id: string): Promise<any> {
-    const res = await axiosClient.delete(`/api/employees/${id}`);
+    const res = await baseClient.delete(`/auth/users/${id}`);
     return res.data;
   }
 
-  // Activities
+  // Activities (targets remote backend https://api.dev.crm.yaacreations.com)
   async getActivities(): Promise<ActivityLog[]> {
-    const res = await axiosClient.get<ActivityLog[]>('/api/activities');
-    return res.data;
+    const res = await baseClient.get<any>('/platform/activities').catch(() => ({ data: { data: [] } }));
+    return res.data?.data || [];
   }
 
-  // Reports
+  // Reports (targets remote backend https://api.dev.crm.yaacreations.com)
   async getReports(): Promise<any> {
-    const res = await axiosClient.get('/api/reports');
-    return res.data;
+    const res = await baseClient.get<any>('/commerce/sales/dashboard/modules').catch(() => ({ data: {} }));
+    return res.data?.data || res.data;
   }
 
-  // Settings
+  // Settings (targets remote backend https://api.dev.crm.yaacreations.com)
   async getSettings(): Promise<CompanySettings> {
-    const res = await axiosClient.get<CompanySettings>('/api/settings');
-    return res.data;
+    const res = await baseClient.get<any>('/settings').catch(() => ({ data: {} }));
+    return res.data?.data || ({} as CompanySettings);
   }
 
   async updateSettings(data: Partial<CompanySettings>): Promise<CompanySettings> {
-    const res = await axiosClient.put<CompanySettings>('/api/settings', data);
-    return res.data;
+    const res = await baseClient.put<any>('/settings', data);
+    return res.data?.data || res.data;
   }
 }
 

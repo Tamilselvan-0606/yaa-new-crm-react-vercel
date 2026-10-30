@@ -1,3 +1,6 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -23,6 +26,7 @@ import {
   Loader2,
   History,
   FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -41,8 +45,7 @@ import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { UniversalShareDropdown, formatPurchaseRequestShare } from '../../../utils/shareUtils';
-import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
+import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -53,6 +56,7 @@ import {
   ensureValidUuid,
 } from '../../../api/commerce/purchaseRequestApi';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
+import { supplierApi, ApiSupplier } from '../../../api/commerce/supplierApi';
 import {
   workPurchaseOrderApi,
   mapApiPurchaseOrderToUi,
@@ -60,9 +64,10 @@ import {
   UUID_REGEX,
   getStoredOrganizationId,
 } from '../../../api';
-import { FormLabel, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import { FormLabel, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
 
+import { formatDate } from '../utils/dateUtils';
 const getLoggedInUserName = (): string => {
   try {
     const raw = localStorage.getItem('nexus_crm_fallback_user');
@@ -109,6 +114,8 @@ export const PurchaseRequestView: React.FC = () => {
   const [isApproving, setIsApproving] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  const [apiSuppliers, setApiSuppliers] = useState<ApiSupplier[]>([]);
+  const [isLoadingSuppliers, setIsLoadingSuppliers] = useState(false);
 
   // Deduplication refs for fetch
   const isFetchingRef = useRef(false);
@@ -117,18 +124,26 @@ export const PurchaseRequestView: React.FC = () => {
   // Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingPriority, setPendingPriority] = useState('All');
   const [appliedPriority, setAppliedPriority] = useState('All');
   const [pendingStatus, setPendingStatus] = useState('All');
   const [appliedStatus, setAppliedStatus] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // 3-Dots Action dropdown & Share Popover State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [activeShareId, setActiveShareId] = useState<string | null>(null);
-  const [sharePos, setSharePos] = useState<{ top?: number; bottom?: number; right?: number } | null>(null);
 
   // Close action dropdown & share popover on click outside or scroll
   useEffect(() => {
@@ -139,18 +154,12 @@ export const PurchaseRequestView: React.FC = () => {
         setDropdownPos(null);
       }
       if (!target.closest('.share-popover-container') && !target.closest('.share-popover-menu')) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     const handleScroll = () => {
       if (activeDropdownId) {
         setActiveDropdownId(null);
         setDropdownPos(null);
-      }
-      if (activeShareId) {
-        setActiveShareId(null);
-        setSharePos(null);
       }
     };
     window.addEventListener('click', handleOutside);
@@ -159,7 +168,7 @@ export const PurchaseRequestView: React.FC = () => {
       window.removeEventListener('click', handleOutside);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [activeDropdownId, activeShareId]);
+  }, [activeDropdownId]);
 
 
   // On-demand product loader: calls products API when user opens product selector or searches products
@@ -276,13 +285,38 @@ export const PurchaseRequestView: React.FC = () => {
   const [deleteTargetRequest, setDeleteTargetRequest] = useState<PurchaseRequest | null>(null);
   const [isDeletingRequest, setIsDeletingRequest] = useState(false);
   const [deleteRequestError, setDeleteRequestError] = useState<string | null>(null);
+  const [isDownloadingRequest, setIsDownloadingRequest] = useState(false);
 
-  // Automatically load initial products list when requisition form modal opens
+  // Fetch suppliers from /work/suppliers API
+  const loadSuppliers = useCallback(async () => {
+    setIsLoadingSuppliers(true);
+    try {
+      const res = await supplierApi.getSuppliers({
+        page_size: 100,
+        pagination_required: false,
+      });
+      if (res && res.data && Array.isArray(res.data)) {
+        setApiSuppliers(res.data);
+      }
+    } catch (err) {
+      console.warn('Failed to load suppliers in PurchaseRequestView:', err);
+    } finally {
+      setIsLoadingSuppliers(false);
+    }
+  }, []);
+
+  // Prefetch suppliers on initial component mount
+  useEffect(() => {
+    loadSuppliers();
+  }, [loadSuppliers]);
+
+  // Automatically load initial products list and suppliers when requisition form modal opens
   useEffect(() => {
     if (isCreateModalOpen) {
       handleProductSearch('');
+      loadSuppliers();
     }
-  }, [isCreateModalOpen, handleProductSearch]);
+  }, [isCreateModalOpen, handleProductSearch, loadSuppliers]);
 
   const handleOpenHistory = async (req: PurchaseRequest) => {
     setActiveDropdownId(null);
@@ -313,14 +347,66 @@ export const PurchaseRequestView: React.FC = () => {
   const [requestDate, setRequestDate] = useState(new Date().toISOString().split('T')[0]);
   const [requiredDate, setRequiredDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
 
-  // Suppliers list from local store
+  // React Hook Form for Requisition Modal
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    formState: { errors },
+  } = useForm<PurchaseRequestFormData>({
+    resolver: zodResolver(PurchaseRequestSchema),
+    defaultValues: {
+      requestNo: '',
+      requestedBy: getLoggedInUserName(),
+      department: '',
+      priority: 'Medium',
+      supplierId: '',
+      supplierName: '',
+      notes: '',
+    },
+  });
+
+  const selectedFormSupplierId = watch('supplierId');
+  const selectedFormSupplierName = watch('supplierName');
+
+  // Suppliers list from API + local store fallback + currently selected supplier
   const mergedSuppliers = useMemo(() => {
-    return (suppliers || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      supplierCode: s.supplierCode,
-    }));
-  }, [suppliers]);
+    const map = new Map<string, { id: string; name: string; supplierCode?: string }>();
+
+    // 1. API Suppliers (Primary Source of Truth from GET /work/suppliers)
+    (apiSuppliers || []).forEach((s) => {
+      if (s.id) {
+        map.set(s.id, {
+          id: s.id,
+          name: s.name || s.company || 'Supplier',
+          supplierCode: s.supplierCode,
+        });
+      }
+    });
+
+    // 2. Local store fallback
+    (suppliers || []).forEach((s) => {
+      if (s.id && !map.has(s.id)) {
+        map.set(s.id, {
+          id: s.id,
+          name: s.name || (s as any).company || 'Supplier',
+          supplierCode: s.supplierCode,
+        });
+      }
+    });
+
+    // 3. Keep selected supplier if editing an existing request
+    if (selectedFormSupplierId && selectedFormSupplierName && !map.has(selectedFormSupplierId)) {
+      map.set(selectedFormSupplierId, {
+        id: selectedFormSupplierId,
+        name: selectedFormSupplierName,
+      });
+    }
+
+    return Array.from(map.values());
+  }, [apiSuppliers, suppliers, selectedFormSupplierId, selectedFormSupplierName]);
   // Combined Product Options (API products + Inventory stocks)
   const productOptions = useMemo(() => {
     const map = new Map<
@@ -378,25 +464,6 @@ export const PurchaseRequestView: React.FC = () => {
     return Array.from(map.values());
   }, [availableProducts, requestItems, stocks]);
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setValue,
-    watch,
-    formState: { errors },
-  } = useForm<PurchaseRequestFormData>({
-    resolver: zodResolver(PurchaseRequestSchema),
-    defaultValues: {
-      requestNo: '',
-      requestedBy: getLoggedInUserName(),
-      department: '',
-      priority: 'Medium',
-      supplierId: '',
-      supplierName: '',
-      notes: '',
-    },
-  });
 
   // Local fallback filter if API is offline
   const filteredLocalRequests = useMemo(() => {
@@ -938,11 +1005,12 @@ export const PurchaseRequestView: React.FC = () => {
     isApiConnected && totalApiRecords !== null ? totalApiRecords : filteredLocalRequests.length;
 
   const paginatedRequests = useMemo(() => {
-    if (isApiConnected) {
-      return liveRequests;
+    const list = isApiConnected ? liveRequests : filteredLocalRequests;
+    if (list.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return list.slice(start, start + pageSize);
     }
-    const start = (currentPage - 1) * pageSize;
-    return filteredLocalRequests.slice(start, start + pageSize);
+    return list;
   }, [isApiConnected, liveRequests, filteredLocalRequests, currentPage, pageSize]);
 
   // Export Purchase Requests to Excel
@@ -1007,14 +1075,14 @@ export const PurchaseRequestView: React.FC = () => {
     toast.success(`Purchase Requests Excel report downloaded (${listToExport.length} records)!`);
   };
 
-  // Print Purchase Request via universal printUtils
-  const handlePrintPurchaseRequest = (req: PurchaseRequest) => {
+  // Print & Download Purchase Request via universal printUtils
+  const buildPurchaseRequestPrintOptions = (req: PurchaseRequest): DocumentPrintOptions => {
     const totalEst = req.items.reduce(
       (acc, it) => acc + (it.estimatedUnitPrice || 0) * (it.requestedQuantity || (it as any).quantity || 0),
       0
     );
 
-    printBusinessDocument({
+    return {
       docTypeTitle: 'PURCHASE REQUISITION',
       docNo: req.requestNo,
       docDate: req.requestDate,
@@ -1051,7 +1119,26 @@ export const PurchaseRequestView: React.FC = () => {
       subtotal: totalEst,
       grandTotal: totalEst,
       notes: req.notes,
-    });
+    };
+  };
+
+  const handlePrintPurchaseRequest = (req: PurchaseRequest) => {
+    printBusinessDocument(buildPurchaseRequestPrintOptions(req));
+  };
+
+  const handleDownloadPurchaseRequest = async (req: PurchaseRequest) => {
+    if (isDownloadingRequest) return;
+    setIsDownloadingRequest(true);
+    const filename = `PurchaseRequest_${(req.requestNo || 'PR').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildPurchaseRequestPrintOptions(req), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download purchase request PDF:', err);
+      toast.error('Failed to download purchase request PDF. Please try again.');
+    } finally {
+      setIsDownloadingRequest(false);
+    }
   };
 
   // Print Table Report for Purchase Requests
@@ -1108,8 +1195,8 @@ export const PurchaseRequestView: React.FC = () => {
   return (
     <div className="space-y-6 pb-12 font-sans">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <FilePlus className="w-4.5 h-4.5" />
@@ -1123,11 +1210,11 @@ export const PurchaseRequestView: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-[#33077C]" />}
           >
@@ -1137,7 +1224,7 @@ export const PurchaseRequestView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -1149,7 +1236,7 @@ export const PurchaseRequestView: React.FC = () => {
             size="md"
             onClick={handleOpenCreateModal}
             icon={<Plus className="w-4 h-4 text-white" />}
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
           >
             Create Purchase Request
           </Button>
@@ -1348,18 +1435,18 @@ export const PurchaseRequestView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REQUEST NO.</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">DATE</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REQUESTED BY</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">DEPARTMENT</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">ITEMS REQUESTED</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PRIORITY</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "REQUEST NO.", align: "left", minWidth: "140px" },
+                { label: "DATE", align: "left", minWidth: "120px" },
+                { label: "REQUESTED BY", align: "left", minWidth: "160px" },
+                { label: "DEPARTMENT", align: "left", minWidth: "140px" },
+                { label: "ITEMS REQUESTED", align: "left", minWidth: "150px" },
+                { label: "PRIORITY", align: "center", minWidth: "110px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTIONS", align: "center", minWidth: "130px" },
+              ]}
+            />
             <tbody className="text-sm">
               {isApiLoading && paginatedRequests.length === 0 ? (
                 <tr>
@@ -1471,7 +1558,7 @@ export const PurchaseRequestView: React.FC = () => {
 
                     {/* 6. Status */}
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
-                      {req.status === 'Approved' || req.status === 'Purchase Created' ? (
+                      {req.status === 'Approved' || req.status === 'Purchase Created' || (req.status as string) === 'Converted' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                           <span>{req.status}</span>
@@ -1493,16 +1580,7 @@ export const PurchaseRequestView: React.FC = () => {
                     <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
 
-                        {/* Share / Forward Button with Popover */}
-                        <UniversalShareDropdown
-                          id={req.id}
-                          activeShareId={activeShareId}
-                          setActiveShareId={setActiveShareId}
-                          sharePos={sharePos}
-                          setSharePos={setSharePos}
-                          getShareData={() => formatPurchaseRequestShare(req)}
-                          title="Share Purchase Request"
-                        />
+                        
 
                         {/* 3-dots Actions Dropdown */}
                         <SaleActionDropdown
@@ -1516,6 +1594,11 @@ export const PurchaseRequestView: React.FC = () => {
                               label: 'Print Request',
                               variant: 'print',
                               onClick: () => handlePrintPurchaseRequest(req),
+                            },
+                            {
+                              label: 'Download Request',
+                              variant: 'download',
+                              onClick: () => handleDownloadPurchaseRequest(req),
                             },
                             {
                               label: 'Duplicate',
@@ -1535,7 +1618,14 @@ export const PurchaseRequestView: React.FC = () => {
                               variant: 'view',
                               onClick: () => handleOpenHistory(req),
                             },
-                            req.status !== 'Purchase Created' && req.status?.toLowerCase() !== 'purchase created' && {
+                            !(
+                              req.status === 'Purchase Created' ||
+                              (req.status as string) === 'Converted' ||
+                              (req.status as string)?.toLowerCase() === 'purchase created' ||
+                              (req.status as string)?.toLowerCase() === 'converted' ||
+                              (req.status as string)?.toLowerCase() === 'completed' ||
+                              Boolean(req.createdPurchaseId)
+                            ) && {
                               label: 'Convert to Purchase',
                               variant: 'order',
                               onClick: () => handleConvertToPurchase(req),
@@ -1699,22 +1789,32 @@ export const PurchaseRequestView: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Select Supplier
-              </label>
-              <CustomSelect
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500">
+                  Select Supplier
+                </label>
+                {isLoadingSuppliers && (
+                  <span className="text-[11px] text-purple-600 font-semibold animate-pulse">
+                    Loading suppliers...
+                  </span>
+                )}
+              </div>
+              <SupplierSearchableSelect
                 value={watch('supplierId') || ''}
-                onChange={(selId) => {
-                  const found = mergedSuppliers.find((s) => s.id === selId);
+                onChange={(selId, sup) => {
                   setValue('supplierId', selId);
-                  setValue('supplierName', found ? found.name : '');
+                  setValue('supplierName', sup ? sup.name : '');
                 }}
-                options={mergedSuppliers.map((s) => ({
-                  value: s.id,
-                  label: `${s.name}${s.supplierCode ? ` (${s.supplierCode})` : ''}`,
-                }))}
-                placeholder="Select Supplier"
-                allowClear={true}
+                selectedSupplier={
+                  watch('supplierId')
+                    ? {
+                        id: watch('supplierId'),
+                        name: watch('supplierName') || '',
+                      }
+                    : null
+                }
+                allowNone
+                placeholder="Select or search supplier..."
               />
               <FormError message={errors.supplierId?.message} />
             </div>
@@ -1785,23 +1885,25 @@ export const PurchaseRequestView: React.FC = () => {
 
                           {/* 2. Product */}
                           <td className="py-2.5 px-2 border-r border-slate-200 align-middle min-w-[200px]">
-                            <SearchableSelect
+                            <ProductSearchableSelect
                               value={it.productId}
-                              onChange={(val) => handleProductChange(idx, val)}
-                              onOpen={() => {
-                                if (availableProducts.length === 0) {
-                                  handleProductSearch('');
-                                }
+                              onChange={(val) => {
+                                handleProductChange(idx, val);
                               }}
-                              onSearch={handleProductSearch}
-                              isLoading={isSearchingProducts}
-                              options={productOptions}
+                              selectedProduct={
+                                it.productId
+                                  ? {
+                                      id: it.productId,
+                                      productName: it.productName,
+                                      purchasePrice: it.estimatedUnitPrice,
+                                      currentStock: it.currentStock,
+                                    }
+                                  : null
+                              }
+                              priceType="purchase"
                               placeholder="Select Product..."
-                              searchPlaceholder="Search product..."
-                              emptyText={isSearchingProducts ? "Searching products..." : "No products found"}
-                              allowClear
-                              triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                               size="sm"
+                              triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                             />
                           </td>
 
@@ -1818,6 +1920,7 @@ export const PurchaseRequestView: React.FC = () => {
                               type="number"
                               min="1"
                               value={it.requestedQuantity}
+                              onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) =>
                                 handleItemFieldChange(idx, 'requestedQuantity', Number(e.target.value))
                               }
@@ -1913,7 +2016,7 @@ export const PurchaseRequestView: React.FC = () => {
                   {selectedRequest.requestedBy} ({selectedRequest.department})
                 </div>
                 <div className="text-slate-500 mt-0.5 font-medium">
-                  Required By: {selectedRequest.requiredDate || 'N/A'} • Req Date: {selectedRequest.requestDate}
+                  Required By: {formatDate(selectedRequest.requiredDate, 'N/A')} • Req Date: {formatDate(selectedRequest.requestDate)}
                 </div>
               </div>
               <div className="text-right">
@@ -2022,7 +2125,10 @@ export const PurchaseRequestView: React.FC = () => {
                 </>
               )}
 
-              {(selectedRequest.status === 'Approved' || selectedRequest.status?.toLowerCase() === 'approved') && (
+              {(selectedRequest.status === 'Approved' || selectedRequest.status?.toLowerCase() === 'approved') &&
+                selectedRequest.status?.toLowerCase() !== 'converted' &&
+                selectedRequest.status?.toLowerCase() !== 'purchase created' &&
+                !selectedRequest.createdPurchaseId && (
                 <button
                   type="button"
                   onClick={() => handleConvertToPurchase(selectedRequest)}
@@ -2048,6 +2154,15 @@ export const PurchaseRequestView: React.FC = () => {
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Request</span>
+              </button>
+              <button
+                type="button"
+                disabled={isDownloadingRequest}
+                onClick={() => handleDownloadPurchaseRequest(selectedRequest)}
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDownloadingRequest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>{isDownloadingRequest ? 'Generating...' : 'Download Request'}</span>
               </button>
             </div>
           </div>
@@ -2201,7 +2316,7 @@ export const PurchaseRequestView: React.FC = () => {
                       Purchase Requisition Raised
                     </div>
                     <div className="text-slate-500 text-[11px] mt-0.5">
-                      Request Date: <span className="font-medium text-slate-700">{historyRequest.requestDate}</span> • Required By: <span className="font-medium text-slate-700">{historyRequest.requiredDate || 'N/A'}</span>
+                      Request Date: <span className="font-medium text-slate-700">{formatDate(historyRequest.requestDate)}</span> • Required By: <span className="font-medium text-slate-700">{formatDate(historyRequest.requiredDate, 'N/A')}</span>
                     </div>
                     <div className="text-slate-400 text-[10px] mt-0.5">
                       Items: {historyRequest.items.length} material(s) requested for {historyRequest.department}

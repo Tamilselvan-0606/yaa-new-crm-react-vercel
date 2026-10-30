@@ -128,7 +128,8 @@ export const subOrganizationApi = {
     params?: SubOrganizationListParams,
     parentOrgId?: string
   ): Promise<SubOrganizationListResponse> => {
-    const orgId = params?.organization_id || parentOrgId || getStoredOrganizationId();
+    const rawOrgId = params?.organization_id || parentOrgId || getStoredOrganizationId();
+    const orgId = rawOrgId && rawOrgId !== '11111111-1111-4111-8111-111111111111' ? rawOrgId : undefined;
     const queryParams: Record<string, any> = {
       ...(orgId ? { organization_id: orgId } : {}),
       page_no: params?.page_no ?? 1,

@@ -29,7 +29,9 @@ import {
   Users,
   UsersRound,
   RefreshCw,
-  FileSpreadsheet,
+  Copy,
+  ChevronRight,
+  Sparkles,
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { useAuth } from '../../context/AuthContext';
@@ -60,17 +62,25 @@ export interface Quotation {
   referenceNumber: string;
   date: string;
   expiryDate: string;
+  organizationId?: string;
+  subOrganizationId?: string | null;
+  branchId?: string | null;
+  createdScope?: string;
   customerId?: string;
   customerName: string;
   customerCompany: string;
   customerEmail: string;
   customerPhone: string;
   customerLocation?: string;
+  customerGstin?: string;
+  customerPan?: string;
   productName: string;
-  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED';
+  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'EXPIRED' | 'DECLINED' | 'CONVERTED';
   amount: number;
   hasAttachment: boolean;
   notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
   items: {
     id: string;
     description: string;
@@ -162,24 +172,121 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         return;
       }
 
-      // 1. Fetch active organization details for Seller info (Org Admin / Tenant only)
+      // 1. Fetch Seller Info: Check if logged in / active as Sub-Organization first, else Parent Organization
+      let sellerConfigResolved = false;
+
+      const userRole = (currentUser?.role || '').toString().toUpperCase();
+      const isSubOrgUser =
+        userRole === 'SUB_ORG_ADMIN' ||
+        userRole === 'SUBORGADMIN' ||
+        currentUser?.email?.toLowerCase().includes('suborg') ||
+        (currentUser as any)?.subOrganizationId ||
+        (currentUser as any)?.subOrganization?.id ||
+        (currentUser as any)?.memberships?.some((m: any) => m.subOrganizationId);
+
+      const activeSubOrgId =
+        localStorage.getItem('active_sub_organization_id_sales') ||
+        localStorage.getItem('active_sub_organization_id') ||
+        (currentUser as any)?.subOrganizationId ||
+        (currentUser as any)?.subOrganization?.id ||
+        (currentUser as any)?.memberships?.[0]?.subOrganizationId;
+
+      const activeSubOrgName =
+        localStorage.getItem('active_sub_organization_sales') ||
+        localStorage.getItem('active_sub_organization') ||
+        (currentUser as any)?.subOrganization?.name ||
+        (currentUser as any)?.subOrganizationName ||
+        '';
+
+      // Pre-fetch active parent organization details so we can fall back if sub-org lacks specific fields
+      let parentOrg: any = null;
       if (orgId) {
         try {
           const orgRes = await organizationApi.getOrganizationById(orgId);
           if (isMounted && orgRes?.data) {
+            parentOrg = orgRes.data;
             setActiveOrgDetails(orgRes.data);
-            if (orgRes.data.name) setQuotationFromCompany(orgRes.data.name);
-            if (orgRes.data.email) setQuotationFromEmail(orgRes.data.email);
-            if (orgRes.data.phone) setQuotationFromPhone(orgRes.data.phone);
-            if (orgRes.data.address) setQuotationFromAddress(orgRes.data.address);
-            if (orgRes.data.gstNumber) setQuotationFromGst(orgRes.data.gstNumber);
-            if (orgRes.data.panNumber) setQuotationFromPan(orgRes.data.panNumber);
-            const orgLogo = orgRes.data.logo || (orgRes.data as any)?.logoUrl;
-            if (orgLogo) setQuotationFromLogo(orgLogo);
           }
         } catch (e) {
-          console.warn('Notice: Could not load organization details:', e);
+          console.warn('Notice: Could not load parent organization details:', e);
         }
+      }
+
+      if (orgId) {
+        try {
+          const subRes = await subOrganizationApi.getSubOrganizations(
+            { page_no: 1, page_size: 100, pagination_required: 'false' },
+            orgId
+          );
+          if (isMounted && subRes?.data && Array.isArray(subRes.data)) {
+            try {
+              localStorage.setItem('active_sub_orgs_list_cache', JSON.stringify(subRes.data));
+            } catch {}
+
+            const matchedSub =
+              (activeSubOrgId ? subRes.data.find((s) => s.id === activeSubOrgId) : null) ||
+              (activeSubOrgName && activeSubOrgName !== 'All'
+                ? subRes.data.find((s) => s.name?.toLowerCase() === activeSubOrgName.toLowerCase())
+                : null) ||
+              (isSubOrgUser ? subRes.data[0] : null);
+
+            if (matchedSub && (isSubOrgUser || (activeSubOrgName && activeSubOrgName !== 'All') || activeSubOrgId)) {
+              sellerConfigResolved = true;
+              setQuotationFromCompany(matchedSub.name || parentOrg?.name || 'Company');
+              setQuotationFromEmail(matchedSub.email || parentOrg?.email || '');
+              setQuotationFromPhone(matchedSub.phone || matchedSub.whatsapp || parentOrg?.phone || '');
+              setQuotationFromAddress(matchedSub.address || matchedSub.location || parentOrg?.address || '');
+
+              const subGst =
+                matchedSub.gstNumber ||
+                (matchedSub as any).gstin ||
+                (matchedSub as any).taxId ||
+                parentOrg?.gstNumber ||
+                '';
+              const subPan =
+                matchedSub.panNumber ||
+                (matchedSub as any).pan ||
+                parentOrg?.panNumber ||
+                '';
+
+              setQuotationFromGst(subGst);
+              setQuotationFromPan(subPan);
+
+              const subLogo = matchedSub.logo || (matchedSub as any)?.logoUrl || parentOrg?.logo || (parentOrg as any)?.logoUrl;
+              if (subLogo) setQuotationFromLogo(subLogo);
+
+              try {
+                localStorage.setItem(
+                  'active_sub_org_seller_cache',
+                  JSON.stringify({
+                    id: matchedSub.id,
+                    name: matchedSub.name,
+                    gstNumber: subGst,
+                    panNumber: subPan,
+                    address: matchedSub.address || matchedSub.location,
+                    email: matchedSub.email,
+                    phone: matchedSub.phone || matchedSub.whatsapp,
+                    logo: subLogo,
+                  })
+                );
+              } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn('Notice: Could not load sub-organization seller details:', e);
+        }
+      }
+
+      // If not resolved from sub-org, use active parent organization details
+      if (!sellerConfigResolved && parentOrg) {
+        if (parentOrg.name) setQuotationFromCompany(parentOrg.name);
+        if (parentOrg.email) setQuotationFromEmail(parentOrg.email);
+        if (parentOrg.phone) setQuotationFromPhone(parentOrg.phone);
+        if (parentOrg.address) setQuotationFromAddress(parentOrg.address);
+        setQuotationFromGst(parentOrg.gstNumber || '');
+        setQuotationFromPan(parentOrg.panNumber || '');
+        const orgLogo = parentOrg.logo || (parentOrg as any)?.logoUrl;
+        if (orgLogo) setQuotationFromLogo(orgLogo);
       }
 
       // 2. Fetch real clients from Client API for Org Admin
@@ -236,10 +343,21 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
     loadClientsAndProducts();
 
+    const handleOrgOrSubOrgChanged = () => {
+      loadClientsAndProducts();
+    };
+
+    window.addEventListener('subOrgChanged', handleOrgOrSubOrgChanged);
+    window.addEventListener('orgChanged', handleOrgOrSubOrgChanged);
+    window.addEventListener('storage', handleOrgOrSubOrgChanged);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('subOrgChanged', handleOrgOrSubOrgChanged);
+      window.removeEventListener('orgChanged', handleOrgOrSubOrgChanged);
+      window.removeEventListener('storage', handleOrgOrSubOrgChanged);
     };
-  }, [isSuperAdmin, isOrgSuperAdmin]);
+  }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
 
   // Real backend quotes state
   const [quotes, setQuotes] = useState<Quotation[]>([]);
@@ -267,20 +385,28 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       referenceNumber: item.referenceNumber || '',
       date: formatIsoDate(item.date),
       expiryDate: formatIsoDate(item.expiryDate),
+      organizationId: item.organizationId,
+      subOrganizationId: item.subOrganizationId,
+      branchId: item.branchId,
+      createdScope: item.createdScope,
       customerId: item.customerId || item.organizationId,
       customerName: item.customerName || item.customerCompany || 'Client',
       customerCompany: item.customerCompany || item.customerName || 'Company',
       customerEmail: item.customerEmail || '',
       customerPhone: item.customerPhone || '',
       customerLocation: item.customerLocation || '',
+      customerGstin: (item as any).customerGstin || (item as any).gstin || '',
+      customerPan: (item as any).customerPan || (item as any).pan || '',
       productName: item.productName || 'Quotation',
       status: item.status,
       amount: Number(item.amount) || 0,
       hasAttachment: false,
       notes: item.notes || '',
+      createdAt: formatIsoDate(item.createdAt) || formatIsoDate(item.date),
+      updatedAt: formatIsoDate(item.updatedAt),
       items: (item.items || []).map((it, idx) => ({
         id: it.id || `item_${idx}`,
-        description: it.description || '',
+        description: it.title || it.description || '',
         quantity: Number(it.quantity) || 1,
         unitPrice: Number(it.unitPrice) || 0,
         total: Number(it.amount) || (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0),
@@ -293,7 +419,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const handleStatusChange = async (quoteId: string, newStatus: Quotation['status']) => {
     try {
-      await quoteApi.updateQuote(quoteId, { status: newStatus });
+      await quoteApi.updateQuote(quoteId, { status: newStatus as any });
       setQuotes((prev) =>
         prev.map((q) => (q.id === quoteId ? { ...q, status: newStatus } : q))
       );
@@ -333,6 +459,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   );
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionDropdownPos, setActionDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [isActionStatusSubmenuOpen, setIsActionStatusSubmenuOpen] = useState(false);
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
+  const [duplicatedFromEstimateNo, setDuplicatedFromEstimateNo] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -357,6 +486,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (!target.closest('.action-dropdown-btn') && !target.closest('.action-dropdown-popup')) {
         setOpenActionMenuId(null);
         setActionDropdownPos(null);
+        setIsActionStatusSubmenuOpen(false);
       }
       if (!target.closest('.status-dropdown-btn') && !target.closest('.status-dropdown-popup')) {
         setActiveStatusDropdownId(null);
@@ -371,6 +501,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (openActionMenuId) {
         setOpenActionMenuId(null);
         setActionDropdownPos(null);
+        setIsActionStatusSubmenuOpen(false);
       }
       if (activeStatusDropdownId) {
         setActiveStatusDropdownId(null);
@@ -397,16 +528,21 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setIsCreateModalOpen(true);
     } else if (location.pathname === '/quotes' && !initialCreateOpen) {
       setIsCreateModalOpen(false);
+      setEditingQuoteId(null);
     }
   }, [location.pathname, initialCreateOpen]);
 
   const handleOpenCreate = () => {
+    setEditingQuoteId(null);
+    setDuplicatedFromEstimateNo(null);
     setFormErrors({});
     setIsCreateModalOpen(true);
     navigate('/quotes/new');
   };
 
   const handleCloseCreate = () => {
+    setEditingQuoteId(null);
+    setDuplicatedFromEstimateNo(null);
     setFormErrors({});
     setIsCreateModalOpen(false);
     navigate('/quotes');
@@ -520,7 +656,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         <EstimatePDFDocument
           quotation={quoteToPrint}
           documentTitle={docTitle}
-          sellerDetails={getSellerDetails()}
+          sellerDetails={getSellerDetails(quoteToPrint)}
         />
       ).toBlob();
       const url = URL.createObjectURL(blob);
@@ -585,24 +721,61 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [isDeletingQuote, setIsDeletingQuote] = useState(false);
 
   // Quotation From (seller) details
-  const [quotationFromCompany, setQuotationFromCompany] = useState('Yaa Creations');
-  const [quotationFromLogo, setQuotationFromLogo] = useState('/yaa-creations-logo.png');
+  const [quotationFromCompany, setQuotationFromCompany] = useState('');
+  const [quotationFromLogo, setQuotationFromLogo] = useState('');
   const companyLogoInputRef = useRef<HTMLInputElement>(null);
-  const [quotationFromGst, setQuotationFromGst] = useState('27AABCA1234F1Z8');
-  const [quotationFromPhone, setQuotationFromPhone] = useState('+91 98765 43210');
-  const [quotationFromEmail, setQuotationFromEmail] = useState('billing@yaacreations.com');
-  const [quotationFromAddress, setQuotationFromAddress] = useState('Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081');
+  const [quotationFromGst, setQuotationFromGst] = useState('');
+  const [quotationFromPhone, setQuotationFromPhone] = useState('');
+  const [quotationFromEmail, setQuotationFromEmail] = useState('');
+  const [quotationFromAddress, setQuotationFromAddress] = useState('');
   const [isEditingFrom, setIsEditingFrom] = useState(false);
-  const [quotationFromPan, setQuotationFromPan] = useState('ABCDE1234F');
+  const [quotationFromPan, setQuotationFromPan] = useState('');
 
-  const getSellerDetails = (): SellerInfo => ({
-    name: quotationFromCompany || activeOrgDetails?.name || 'Yaa Creations',
-    taxId: quotationFromGst || activeOrgDetails?.gstNumber || undefined,
-    pan: quotationFromPan || activeOrgDetails?.panNumber || undefined,
-    phone: quotationFromPhone || activeOrgDetails?.phone || undefined,
-    email: quotationFromEmail || activeOrgDetails?.email || undefined,
-    address: quotationFromAddress || activeOrgDetails?.address || undefined,
-  });
+  const getSellerDetails = (quote?: Quotation): SellerInfo => {
+    let cachedSubOrgList: any[] = [];
+    try {
+      const rawList = localStorage.getItem('active_sub_orgs_list_cache');
+      if (rawList) cachedSubOrgList = JSON.parse(rawList);
+    } catch {}
+
+    let matchedSubOrg: any = null;
+    if (quote?.subOrganizationId && Array.isArray(cachedSubOrgList)) {
+      matchedSubOrg = cachedSubOrgList.find((s) => s.id === quote.subOrganizationId);
+    }
+
+    if (!matchedSubOrg && (quote?.createdScope === 'SUB_ORGANIZATION' || !quote)) {
+      try {
+        const rawSub = localStorage.getItem('active_sub_org_seller_cache');
+        if (rawSub) matchedSubOrg = JSON.parse(rawSub);
+      } catch {}
+    }
+
+    let cachedOrg: any = null;
+    try {
+      const rawOrg = localStorage.getItem('active_org_seller_cache');
+      if (rawOrg) cachedOrg = JSON.parse(rawOrg);
+    } catch {}
+
+    if (matchedSubOrg && (quote?.subOrganizationId || quote?.createdScope === 'SUB_ORGANIZATION' || !quote)) {
+      return {
+        name: matchedSubOrg.name || matchedSubOrg.legalName || quotationFromCompany || activeOrgDetails?.name || '',
+        taxId: matchedSubOrg.gstNumber || matchedSubOrg.gstin || matchedSubOrg.taxId || quotationFromGst || activeOrgDetails?.gstNumber || undefined,
+        pan: matchedSubOrg.panNumber || matchedSubOrg.pan || quotationFromPan || activeOrgDetails?.panNumber || undefined,
+        phone: matchedSubOrg.phone || matchedSubOrg.whatsapp || quotationFromPhone || activeOrgDetails?.phone || undefined,
+        email: matchedSubOrg.email || quotationFromEmail || activeOrgDetails?.email || undefined,
+        address: matchedSubOrg.address || matchedSubOrg.location || quotationFromAddress || activeOrgDetails?.address || undefined,
+      };
+    }
+
+    return {
+      name: cachedOrg?.name || cachedOrg?.legalName || quotationFromCompany || activeOrgDetails?.name || 'Company Name',
+      taxId: cachedOrg?.gstNumber || cachedOrg?.gstin || cachedOrg?.taxId || quotationFromGst || activeOrgDetails?.gstNumber || undefined,
+      pan: cachedOrg?.panNumber || cachedOrg?.pan || quotationFromPan || activeOrgDetails?.panNumber || undefined,
+      phone: cachedOrg?.phone || cachedOrg?.whatsapp || quotationFromPhone || activeOrgDetails?.phone || undefined,
+      email: cachedOrg?.email || quotationFromEmail || activeOrgDetails?.email || undefined,
+      address: cachedOrg?.address || cachedOrg?.location || quotationFromAddress || activeOrgDetails?.address || undefined,
+    };
+  };
   const [selectedProductSuiteName, setSelectedProductSuiteName] = useState('Yaa connect');
   const [isProductSuiteDropdownOpen, setIsProductSuiteDropdownOpen] = useState(false);
   const productSuiteDropdownRef = useRef<HTMLDivElement>(null);
@@ -669,6 +842,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     d.setDate(d.getDate() + 30);
     return formatDateToDDMMYYYY(d);
   });
+  const [createdDate, setCreatedDate] = useState(() => (isSuperAdmin ? '' : formatDateToDDMMYYYY(new Date())));
   const [projectName, setProjectName] = useState(() => (isSuperAdmin ? '' : 'Yaa connect'));
 
   // File upload state
@@ -682,7 +856,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     hsnCode?: string;
     quantity: number;
     unitPrice: number;
-    discount: number;
+    discountPercent?: number;
+    discount: number; // discount amount in ₹
+    discountType?: 'percent' | 'amount';
     taxPercent?: number;
     total: number;
   }
@@ -731,7 +907,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       hsnCode: '',
       quantity: 1,
       unitPrice: 0,
+      discountPercent: 0,
       discount: 0,
+      discountType: 'amount',
       taxPercent: 18,
       total: 0,
     };
@@ -751,11 +929,37 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       prev.map((item) => {
         if (item.id !== id) return item;
         const updated = { ...item, [field]: value };
-        const qty = Number(updated.quantity) || 0;
-        const rate = Number(updated.unitPrice) || 0;
-        const disc = Number(updated.discount) || 0;
+        const qty = Math.max(0, Number(updated.quantity) || 0);
+        const rate = Math.max(0, Number(updated.unitPrice) || 0);
+        const gross = qty * rate;
+
+        let activeMode: 'percent' | 'amount' = updated.discountType || 'amount';
+
+        if (field === 'discountPercent') {
+          activeMode = 'percent';
+          updated.discountType = 'percent';
+          const p = Math.max(0, Math.min(100, Number(value) || 0));
+          updated.discountPercent = p;
+          updated.discount = 0; // Clear direct amount when percentage is entered
+        } else if (field === 'discount') {
+          activeMode = 'amount';
+          updated.discountType = 'amount';
+          const a = Math.max(0, Math.min(gross, Number(value) || 0));
+          updated.discount = a;
+          updated.discountPercent = 0; // Clear percentage when direct amount is entered
+        }
+
+        // Calculate actual discount applied
+        let effectiveDiscAmt = 0;
+        if (activeMode === 'percent') {
+          const p = Number(updated.discountPercent) || 0;
+          effectiveDiscAmt = gross > 0 && p > 0 ? parseFloat(((gross * p) / 100).toFixed(2)) : 0;
+        } else {
+          effectiveDiscAmt = Math.min(gross, Number(updated.discount) || 0);
+        }
+
         const taxRate = Number(updated.taxPercent) || 0;
-        const taxable = Math.max(0, qty * rate - disc);
+        const taxable = Math.max(0, gross - effectiveDiscAmt);
         const taxAmount = (taxable * taxRate) / 100;
         const lineTotal = taxable + taxAmount;
         return {
@@ -766,12 +970,23 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     );
   };
 
+  // Helper to get effective discount amount of a line item
+  const getItemDiscountAmount = (it: FormItem): number => {
+    const gross = (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+    if (it.discountType === 'percent') {
+      const p = Number(it.discountPercent) || 0;
+      return gross > 0 && p > 0 ? parseFloat(((gross * p) / 100).toFixed(2)) : 0;
+    }
+    return Math.min(gross, Number(it.discount) || 0);
+  };
+
   // Real item calculations
   const subTotal = itemsList.reduce((sum, it) => sum + (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0), 0);
-  const totalDiscount = itemsList.reduce((sum, it) => sum + (Number(it.discount) || 0), 0);
+  const totalDiscount = itemsList.reduce((sum, it) => sum + getItemDiscountAmount(it), 0);
   const taxableSubtotal = Math.max(0, subTotal - totalDiscount);
   const totalTax = itemsList.reduce((sum, it) => {
-    const lineTaxable = Math.max(0, (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0) - (Number(it.discount) || 0));
+    const gross = (Number(it.quantity) || 1) * (Number(it.unitPrice) || 0);
+    const lineTaxable = Math.max(0, gross - getItemDiscountAmount(it));
     return sum + (lineTaxable * (Number(it.taxPercent) || 0)) / 100;
   }, 0);
   const grandTotal = taxableSubtotal + totalTax;
@@ -790,6 +1005,120 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
     );
+  };
+
+  const populateQuoteForm = (quote: Quotation, isEditMode: boolean) => {
+    setFormErrors({});
+    if (isEditMode) {
+      setEditingQuoteId(quote.id);
+      setDuplicatedFromEstimateNo(null);
+      setNewEstimateNumber(quote.estimateNumber);
+      setNewReferenceNumber(quote.referenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`);
+    } else {
+      setEditingQuoteId(null);
+      setDuplicatedFromEstimateNo(quote.estimateNumber || null);
+      setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
+      setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+    }
+
+    if (quote.customerId) {
+      setSelectedClientId(quote.customerId);
+    } else {
+      const matched = availableClients.find(
+        (c) =>
+          (quote.customerCompany && c.company.toLowerCase() === quote.customerCompany.toLowerCase()) ||
+          (quote.customerName && c.name.toLowerCase() === quote.customerName.toLowerCase())
+      );
+      setSelectedClientId(matched ? matched.id : '');
+    }
+
+    setCustomerName(quote.customerName || '');
+    setCustomerCompany(quote.customerCompany || '');
+    setCustomerLocation(quote.customerLocation || '');
+    setCustomerEmail(quote.customerEmail || '');
+    setCustomerPhone(quote.customerPhone || '');
+    setCustomerGstId(quote.customerGstin || '');
+    setCustomerPan(quote.customerPan || '');
+    setClientSearchQuery(quote.customerCompany || quote.customerName || '');
+
+    if (quote.date) {
+      try {
+        const d = new Date(quote.date);
+        setEstimateDate(isNaN(d.getTime()) ? (quote.date.includes('/') ? quote.date : formatDateToDDMMYYYY(new Date())) : formatDateToDDMMYYYY(d));
+      } catch {
+        setEstimateDate(formatDateToDDMMYYYY(new Date()));
+      }
+    } else {
+      setEstimateDate(formatDateToDDMMYYYY(new Date()));
+    }
+
+    if (quote.createdAt || quote.date) {
+      try {
+        const d = new Date(quote.createdAt || quote.date);
+        setCreatedDate(isNaN(d.getTime()) ? formatDateToDDMMYYYY(new Date()) : formatDateToDDMMYYYY(d));
+      } catch {
+        setCreatedDate(formatDateToDDMMYYYY(new Date()));
+      }
+    } else {
+      setCreatedDate(formatDateToDDMMYYYY(new Date()));
+    }
+
+    if (quote.expiryDate) {
+      try {
+        const d = new Date(quote.expiryDate);
+        setExpiryDate(isNaN(d.getTime()) ? (quote.expiryDate.includes('/') ? quote.expiryDate : formatDateToDDMMYYYY(new Date())) : formatDateToDDMMYYYY(d));
+      } catch {
+        const nextMonth = new Date();
+        nextMonth.setDate(nextMonth.getDate() + 30);
+        setExpiryDate(formatDateToDDMMYYYY(nextMonth));
+      }
+    } else {
+      const nextMonth = new Date();
+      nextMonth.setDate(nextMonth.getDate() + 30);
+      setExpiryDate(formatDateToDDMMYYYY(nextMonth));
+    }
+
+    setProjectName(quote.productName || 'Yaa connect');
+    setSelectedProductSuiteName(quote.productName || 'Yaa connect');
+    setNewNotes(quote.notes || '');
+
+    if (quote.items && quote.items.length > 0) {
+      setItemsList(
+        quote.items.map((it, idx) => {
+          const qty = Number(it.quantity) || 1;
+          const price = Number(it.unitPrice) || 0;
+          const gross = qty * price;
+          const disc = Number(it.discount) || 0;
+          const discPct = gross > 0 && disc > 0 ? parseFloat(((disc / gross) * 100).toFixed(2)) : 0;
+          return {
+            id: it.id || `item_${Date.now()}_${idx}`,
+            description: it.description || '',
+            subDescription: '',
+            hsnCode: '',
+            quantity: qty,
+            unitPrice: price,
+            discountPercent: discPct,
+            discount: disc,
+            taxPercent: 18,
+            total: Number(it.total) || (qty * price - disc),
+          };
+        })
+      );
+    } else {
+      setItemsList([]);
+    }
+
+    setIsCreateModalOpen(true);
+    navigate('/quotes/new');
+  };
+
+  const handleEditQuote = (quote: Quotation) => {
+    populateQuoteForm(quote, true);
+  };
+
+  const handleDuplicateQuote = (quote: Quotation) => {
+    populateQuoteForm(quote, false);
+    showToast('info', 'Quotation Duplicated', `Created a copy of #${quote.estimateNumber}. Ready for editing and saving.`);
   };
 
   const handleCreateQuote = async (e: React.FormEvent) => {
@@ -812,6 +1141,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       }
       if (!estimateDate.trim()) {
         errors.estimateDate = 'Date is required';
+      }
+      if (!createdDate.trim()) {
+        errors.createdDate = 'Created Date is required';
       }
       if (!expiryDate.trim()) {
         errors.expiryDate = 'Expiry Date is required';
@@ -837,10 +1169,26 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         showToast('error', 'Select Client / Customer', 'Please select or enter a client company name.');
         return;
       }
+      if (!createdDate.trim()) {
+        showToast('error', 'Created Date Required', 'Please provide a created date.');
+        return;
+      }
+      if (!estimateDate.trim()) {
+        showToast('error', 'Quotation Date Required', 'Please provide a quotation date.');
+        return;
+      }
+      if (!expiryDate.trim()) {
+        showToast('error', 'Due Date Required', 'Please provide a due date.');
+        return;
+      }
     }
 
     if (itemsList.length === 0) {
       showToast('error', 'Add Items', 'Please add at least one line item.');
+      return;
+    }
+    if (itemsList.some((it) => !it.description.trim())) {
+      showToast('error', 'Missing Item Title', 'Please enter a title for every line item.');
       return;
     }
 
@@ -868,56 +1216,112 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       return;
     }
 
-    const payload: CreateQuoteRequest = {
-      referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
-      date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
-      expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      customerId: targetCustomerId,
-      productName: (projectName || selectedProductSuiteName || 'Quotation').trim(),
-      discountAmount: totalDiscount > 0 ? totalDiscount : undefined,
-      notes: newNotes.trim() || undefined,
-      termsAndConditions: 'Valid for 30 days',
-      items: itemsList.map((it) => ({
-        description: it.description.trim() || 'Service Line',
-        quantity: Math.max(1, Number(it.quantity) || 1),
-        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
-        taxRate: Number(it.taxPercent) || 18,
-      })),
-    };
+    const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+    const activeSubOrgName = localStorage.getItem('active_sub_organization');
+    const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+    const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
+
+    const formattedItems = itemsList.map((it) => ({
+      title: it.description.trim(),
+      description: it.subDescription?.trim() || undefined,
+      quantity: Math.max(1, Number(it.quantity) || 1),
+      unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+      taxRate: Number(it.taxPercent) || 18,
+    }));
 
     try {
       setIsSubmitting(true);
-      const res = await quoteApi.createQuote(payload);
-      if (res && res.data) {
-        showToast('success', `${singularTerm} Created`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} created successfully.`);
-        handleCloseCreate();
 
-        // Reset Form
-        setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-        setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
-        setSelectedClientId('');
-        setCustomerName('');
-        setCustomerCompany('');
-        setCustomerLocation('');
-        setCustomerEmail('');
-        setCustomerPhone('');
-        setCustomerGstId('');
-        setCustomerPan('');
-        setClientSearchQuery('');
-        setUploadedFile(null);
-        setEstimateDate(formatDateToDDMMYYYY(new Date()));
-        const nextMonth = new Date();
-        nextMonth.setDate(nextMonth.getDate() + 30);
-        setExpiryDate(formatDateToDDMMYYYY(nextMonth));
-        setNewNotes('');
-        setItemsList([]);
+      if (editingQuoteId) {
+        // Edit existing quote
+        const updatePayload = {
+          referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+          date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
+          expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+          productName: (projectName || selectedProductSuiteName || 'Quotation').trim(),
+          discountAmount: totalDiscount > 0 ? totalDiscount : undefined,
+          notes: newNotes.trim() || undefined,
+          termsAndConditions: 'Valid for 30 days',
+          items: formattedItems,
+        };
 
-        // Refresh quote list from backend
-        fetchQuotes();
+        const res = await quoteApi.updateQuote(editingQuoteId, updatePayload);
+        if (res && res.data) {
+          showToast('success', `${singularTerm} Updated`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} updated successfully.`);
+          handleCloseCreate();
+
+          // Reset Form
+          setEditingQuoteId(null);
+          setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
+          setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+          setSelectedClientId('');
+          setCustomerName('');
+          setCustomerCompany('');
+          setCustomerLocation('');
+          setCustomerEmail('');
+          setCustomerPhone('');
+          setCustomerGstId('');
+          setCustomerPan('');
+          setClientSearchQuery('');
+          setUploadedFile(null);
+          setEstimateDate(formatDateToDDMMYYYY(new Date()));
+          const nextMonth = new Date();
+          nextMonth.setDate(nextMonth.getDate() + 30);
+          setExpiryDate(formatDateToDDMMYYYY(nextMonth));
+          setNewNotes('');
+          setItemsList([]);
+
+          fetchQuotes();
+        }
+      } else {
+        // Create new quote (or duplicate)
+        const payload: CreateQuoteRequest = {
+          referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+          date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
+          expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+          organizationId: orgId || undefined,
+          subOrganizationId: (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') ? activeSubOrgId : undefined,
+          branchId: (activeBranchId && activeBranchName && activeBranchName !== 'All') ? activeBranchId : undefined,
+          customerId: targetCustomerId,
+          productName: (projectName || selectedProductSuiteName || 'Quotation').trim(),
+          discountAmount: totalDiscount > 0 ? totalDiscount : undefined,
+          notes: newNotes.trim() || undefined,
+          termsAndConditions: 'Valid for 30 days',
+          items: formattedItems,
+        };
+
+        const res = await quoteApi.createQuote(payload);
+        if (res && res.data) {
+          showToast('success', `${singularTerm} Created`, `${singularTerm} #${res.data.estimateNumber || newEstimateNumber} created successfully.`);
+          handleCloseCreate();
+
+          // Reset Form
+          setEditingQuoteId(null);
+          setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
+          setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+          setSelectedClientId('');
+          setCustomerName('');
+          setCustomerCompany('');
+          setCustomerLocation('');
+          setCustomerEmail('');
+          setCustomerPhone('');
+          setCustomerGstId('');
+          setCustomerPan('');
+          setClientSearchQuery('');
+          setUploadedFile(null);
+          setEstimateDate(formatDateToDDMMYYYY(new Date()));
+          const nextMonth = new Date();
+          nextMonth.setDate(nextMonth.getDate() + 30);
+          setExpiryDate(formatDateToDDMMYYYY(nextMonth));
+          setNewNotes('');
+          setItemsList([]);
+
+          fetchQuotes();
+        }
       }
     } catch (err: any) {
-      console.error('Failed to create quote:', err);
-      showToast('error', 'Creation Failed', err?.response?.data?.error?.message || 'Could not create quote.');
+      console.error('Failed to save quote:', err);
+      showToast('error', editingQuoteId ? 'Update Failed' : 'Creation Failed', err?.response?.data?.error?.message || 'Could not save quote.');
     } finally {
       setIsSubmitting(false);
     }
@@ -938,6 +1342,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const getStatusBadge = (status: Quotation['status']) => {
     switch (status) {
+      case 'CONVERTED':
+        return (
+          <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-700 border border-purple-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0"></span>
+            <span>CONVERTED</span>
+          </span>
+        );
       case 'ACCEPTED':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -992,6 +1403,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     const halfTax = taxTotal / 2;
     const computedGrandTotal = taxableSubtotal + taxTotal;
 
+    const previewSellerDetails = getSellerDetails(activeQuote);
+
     const handlePrintQuotePdf = async () => {
       try {
         setIsGeneratingPdf(true);
@@ -999,7 +1412,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           <EstimatePDFDocument
             quotation={activeQuote}
             documentTitle={singularTerm}
-            sellerDetails={getSellerDetails()}
+            sellerDetails={previewSellerDetails}
           />
         ).toBlob();
         const url = URL.createObjectURL(blob);
@@ -1096,7 +1509,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             <div className="flex items-center sm:justify-end print:justify-end gap-4 min-w-0 flex-1">
               <img
                 src={quotationFromLogo || activeOrgDetails?.logo || "/yaa-creations-logo.png"}
-                alt={quotationFromCompany || activeOrgDetails?.name || "Company Logo"}
+                alt={previewSellerDetails.name || quotationFromCompany || activeOrgDetails?.name || "Company Logo"}
                 className="h-16 sm:h-20 object-contain max-w-[280px]"
               />
             </div>
@@ -1118,42 +1531,42 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromCompany || activeOrgDetails?.name || 'Company Name'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.name || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>GSTIN / Tax ID</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromGst || activeOrgDetails?.gstNumber || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.taxId || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>PAN Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromPan || activeOrgDetails?.panNumber || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.pan || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromPhone || activeOrgDetails?.phone || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.phone || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromEmail || activeOrgDetails?.email || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.email || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Company Address</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{quotationFromAddress || activeOrgDetails?.address || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{previewSellerDetails.address || '-'}</span>
                 </div>
               </div>
             </div>
@@ -1169,7 +1582,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     <span>Company Name</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeQuote.customerCompany || activeQuote.customerName || 'Client'}</span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerCompany || activeQuote.customerName || '-'}</span>
                 </div>
                 {activeQuote.customerName && activeQuote.customerCompany && activeQuote.customerName !== activeQuote.customerCompany && (
                   <div className="flex items-start text-xs sm:text-sm leading-relaxed">
@@ -1182,27 +1595,39 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 )}
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                    <span>GSTIN / Tax ID</span>
+                    <span>:</span>
+                  </span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerGstin || '-'}</span>
+                </div>
+                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                    <span>PAN Number</span>
+                    <span>:</span>
+                  </span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerPan || '-'}</span>
+                </div>
+                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Phone Number</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeQuote.customerPhone || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerPhone || '-'}</span>
                 </div>
                 <div className="flex items-start text-xs sm:text-sm leading-relaxed">
                   <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
                     <span>Email</span>
                     <span>:</span>
                   </span>
-                  <span className="text-slate-700 flex-1">{activeQuote.customerEmail || 'N/A'}</span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerEmail || '-'}</span>
                 </div>
-                {activeQuote.customerLocation && (
-                  <div className="flex items-start text-xs sm:text-sm leading-relaxed">
-                    <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
-                      <span>Address / Location</span>
-                      <span>:</span>
-                    </span>
-                    <span className="text-slate-700 flex-1">{activeQuote.customerLocation}</span>
-                  </div>
-                )}
+                <div className="flex items-start text-xs sm:text-sm leading-relaxed">
+                  <span className="font-bold text-slate-900 w-36 shrink-0 flex justify-between pr-2">
+                    <span>Address / Location</span>
+                    <span>:</span>
+                  </span>
+                  <span className="text-slate-700 flex-1">{activeQuote.customerLocation || '-'}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1396,10 +1821,18 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             <span className="text-white/30 text-lg">|</span>
             <div>
               <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                New {singularTerm}
+                {editingQuoteId
+                  ? `Edit ${singularTerm}`
+                  : duplicatedFromEstimateNo
+                    ? `Duplicate ${singularTerm}`
+                    : `New ${singularTerm}`}
               </h1>
               <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5">
-                Create, configure, and issue a formal project {lowerSingularTerm} and proposal.
+                {editingQuoteId
+                  ? `Update and reconfigure formal project ${lowerSingularTerm} #${newEstimateNumber}.`
+                  : duplicatedFromEstimateNo
+                    ? `Copied from #${duplicatedFromEstimateNo}. Review the details and save to create a new one.`
+                    : `Create, configure, and issue a formal project ${lowerSingularTerm} and proposal.`}
               </p>
             </div>
           </div>
@@ -1769,12 +2202,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
                               <span className="text-slate-700">: {quotationFromGst}</span>
                             </div>
-                            {quotationFromPan && (
-                              <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                                <span className="font-bold text-slate-800">PAN Number</span>
-                                <span className="text-slate-700">: {quotationFromPan}</span>
-                              </div>
-                            )}
+                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                              <span className="font-bold text-slate-800">PAN Number</span>
+                              <span className="text-slate-700">: {quotationFromPan || '—'}</span>
+                            </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">Phone Number</span>
                               <span className="text-slate-700">: {quotationFromPhone}</span>
@@ -1879,44 +2310,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
                             />
                           </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quotation Number</label>
-                            <input
-                              type="text"
-                              value={newEstimateNumber}
-                              onChange={(e) => setNewEstimateNumber(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quotation Date</label>
-                            <input
-                              type="text"
-                              placeholder="dd/mm/yyyy"
-                              value={estimateDate}
-                              onChange={(e) => setEstimateDate(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Expiry Date</label>
-                            <input
-                              type="text"
-                              placeholder="dd/mm/yyyy"
-                              value={expiryDate}
-                              onChange={(e) => setExpiryDate(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Reference Number</label>
-                            <input
-                              type="text"
-                              value={newReferenceNumber}
-                              onChange={(e) => setNewReferenceNumber(e.target.value)}
-                              className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                            />
-                          </div>
+
                         </div>
                       )}
                     </div>
@@ -1927,47 +2321,73 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                           Quotation Metadata &amp; Fields
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (isAddFieldModalOpen) {
-                              if (newFieldLabel.trim()) {
-                                setCustomQuoteFields([
-                                  ...customQuoteFields,
-                                  { id: `custom_${Date.now()}`, label: newFieldLabel.trim(), value: newFieldValue, type: 'text' }
-                                ]);
-                                setNewFieldLabel('');
-                                setNewFieldValue('');
-                                setIsAddFieldModalOpen(false);
-                              }
-                            } else {
-                              setIsAddFieldModalOpen(true);
-                            }
-                          }}
-                          className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold shadow-md hover:shadow-lg active:scale-[0.98] transition-all duration-200 cursor-pointer select-none"
-                        >
-                          <Plus className="w-4 h-4" strokeWidth={2.5} />
-                          <span>{isAddFieldModalOpen ? 'Add Item' : 'Add Field'}</span>
-                        </button>
+                        
                       </div>
 
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">
+                            Quotation Number <span className="text-rose-500 font-bold">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newEstimateNumber}
+                            onChange={(e) => setNewEstimateNumber(e.target.value)}
+                            placeholder="e.g. EST-19087"
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">
+                            Quotation Date <span className="text-rose-500 font-bold">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={ddmmyyyyToIso(estimateDate)}
+                            onChange={(e) => setEstimateDate(isoToDdmmyyyy(e.target.value))}
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">
+                            Created Date <span className="text-rose-500 font-bold">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={ddmmyyyyToIso(createdDate)}
+                            onChange={(e) => setCreatedDate(isoToDdmmyyyy(e.target.value))}
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">
+                            Due Date <span className="text-rose-500 font-bold">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={ddmmyyyyToIso(expiryDate)}
+                            onChange={(e) => setExpiryDate(isoToDdmmyyyy(e.target.value))}
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                          <label className="text-[12px] font-bold text-slate-800">
+                            Reference Number <span className="text-rose-500 font-bold">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={newReferenceNumber}
+                            onChange={(e) => setNewReferenceNumber(e.target.value)}
+                            placeholder="e.g. REF-7121"
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                          />
+                        </div>
+                      </div>
                       <div className="space-y-3.5 text-[13px]">
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">Quotation Number</span>
-                          <span className="text-slate-700">: {newEstimateNumber}</span>
-                        </div>
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">Quotation Date</span>
-                          <span className="text-slate-700">: {estimateDate}</span>
-                        </div>
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">Expiry Date</span>
-                          <span className="text-slate-700">: {expiryDate}</span>
-                        </div>
-                        <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                          <span className="font-bold text-slate-800">Reference Number</span>
-                          <span className="text-slate-700">: {newReferenceNumber || 'REF-QUOTATION-1'}</span>
-                        </div>
                         {newNotes && (
                           <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                             <span className="font-bold text-slate-800">Note</span>
@@ -1997,7 +2417,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
                       {isAddFieldModalOpen && (
                         <div className="flex items-start gap-3 mt-2">
-                          <div className="flex-1 grid grid-cols-2 gap-3">
+                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <input
                               type="text"
                               value={newFieldLabel}
@@ -2036,7 +2456,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 {/* ===================================================================== */}
                 <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
                   {/* Card Header */}
-                  <div className="px-7 py-4.5 bg-[#33077C] text-white flex items-center justify-between">
+                  <div className="px-4 sm:px-7 py-4 sm:py-4.5 bg-[#33077C] text-white flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3.5">
                       <h2 className="text-base font-bold text-white tracking-tight">
                         Client &amp; Billing Party
@@ -2064,7 +2484,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   </div>
 
                   {/* Card Body */}
-                  <div className="p-8 space-y-8 flex-1 flex flex-col">
+                  <div className="p-4 sm:p-8 space-y-6 sm:space-y-8 flex-1 flex flex-col">
                     {/* Client Searchable Dropdown */}
                     <div>
                       <div className="flex items-center justify-between mb-2">
@@ -2144,7 +2564,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
                         {/* Dropdown Menu Popup: Direct List of Clients with filtered search */}
                         {isCompanyProductDropdownOpen && (
-                          <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-[320px] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
+                          <div className="dropdown-menu absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full min-w-0 sm:min-w-[320px] max-w-[calc(100vw-2rem)] space-y-1.5 animate-in fade-in zoom-in-95 duration-100">
                             <div className="max-h-60 overflow-y-auto space-y-1 pt-0.5">
                               {(() => {
                                 const q = clientSearchQuery.trim().toLowerCase();
@@ -2202,31 +2622,27 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           <div className="space-y-3.5 text-[13px]">
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">Company Name</span>
-                              <span className="text-slate-700">: {customerCompany || 'YaaCreations'}</span>
+                              <span className="text-slate-700">: {customerCompany || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
-                              <span className="text-slate-700">: {customerGstId || '27AABCT8892K1Z5'}</span>
+                              <span className="text-slate-700">: {customerGstId || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">PAN Number</span>
-                              <span className="text-slate-700">: {customerPan || 'ABCDE1234F'}</span>
+                              <span className="text-slate-700">: {customerPan || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">Phone Number</span>
-                              <span className="text-slate-700">: {customerPhone || '+91 98765 43210'}</span>
+                              <span className="text-slate-700">: {customerPhone || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">Email</span>
-                              <span className="text-slate-700">: {customerEmail || 'yaaadmin@gmail.com'}</span>
-                            </div>
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Industry</span>
-                              <span className="text-slate-700">: Media, Branding &amp; Digital Creative Tech</span>
+                              <span className="text-slate-700">: {customerEmail || '-'}</span>
                             </div>
                             <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                               <span className="font-bold text-slate-800">Location / Region</span>
-                              <span className="text-slate-700">: {customerLocation || 'Hyderabad, TG'}</span>
+                              <span className="text-slate-700">: {customerLocation || '-'}</span>
                             </div>
                           </div>
                         </div>
@@ -2264,25 +2680,32 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                       <col className="w-[85px]" />
                       <col className="w-[95px]" />
                       <col className="w-[120px]" />
-                      <col className="w-[120px]" />
+                      <col className="w-[85px]" />
+                      <col className="w-[115px]" />
                       <col className="w-[130px]" />
                       <col className="w-[75px]" />
                     </colgroup>
                     <thead>
                       <tr className="bg-[#33077C] text-[11px] font-bold text-white tracking-wider uppercase">
-                        <th className="py-4 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white">PROJECTS</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">QTY</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">GST (%)</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">PRICE</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">DISCOUNT (₹)</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">TOTAL</th>
-                        <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">ACTION</th>
+                        <th rowSpan={2} className="py-3 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white align-middle">PROJECTS</th>
+                        <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">QTY</th>
+                        <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">GST (%)</th>
+                        <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">PRICE</th>
+                        <th colSpan={2} className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <span className="text-[11px] font-bold">DISCOUNT</span>
+                        </th>
+                        <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">TOTAL</th>
+                        <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">ACTION</th>
+                      </tr>
+                      <tr className="bg-[#33077C] text-[10px] font-bold text-purple-200 tracking-wider uppercase">
+                        <th className="py-1.5 px-1 text-center border border-[#33077C]/40 bg-[#33077C]">%</th>
+                        <th className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C]">AMOUNT</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 text-sm">
                       {itemsList.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="py-12 text-center bg-slate-50/40 border border-slate-200">
+                          <td colSpan={8} className="py-12 text-center bg-slate-50/40 border border-slate-200">
                             <p className="text-xs sm:text-[13px] text-slate-400 font-medium">
                               No items added yet. Click &quot;+ Add Item&quot; below to add line items.
                             </p>
@@ -2294,94 +2717,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             key={item.id}
                             className={`hover:bg-slate-50/70 transition-colors ${idx % 2 === 1 ? 'bg-slate-50/40' : 'bg-white'}`}
                           >
-                            {/* 1. Projects / Item Name & Description (Organization Dropdown) */}
+                            {/* 1. Item Title (free text) & optional Description */}
                             <td className="px-5 py-4 align-top border border-slate-200">
                               <div className="space-y-1.5">
-                                <div
-                                  ref={(el) => {
-                                    itemOrgTriggerRefs.current[item.id] = el;
-                                  }}
-                                  className="relative"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (openItemOrgDropdownId === item.id) {
-                                        setOpenItemOrgDropdownId(null);
-                                        setItemOrgDropdownRect(null);
-                                      } else {
-                                        const rect = itemOrgTriggerRefs.current[item.id]?.getBoundingClientRect();
-                                        if (rect) {
-                                          setItemOrgDropdownRect({
-                                            top: rect.bottom + window.scrollY,
-                                            left: rect.left + window.scrollX,
-                                            width: rect.width,
-                                          });
-                                        }
-                                        setOpenItemOrgDropdownId(item.id);
-                                      }
-                                    }}
-                                    style={{ borderRadius: '4px' }}
-                                    className={`item-org-dropdown-trigger w-full h-10 px-3.5 bg-white border rounded-xl text-xs font-semibold text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs ${
-                                      openItemOrgDropdownId === item.id
-                                        ? 'border-[#4309A2] ring-3 ring-[#4309A2]/10 text-slate-900'
-                                        : 'border-slate-200 hover:border-slate-300 text-slate-800'
-                                    }`}
-                                  >
-                                    <span className="truncate block font-semibold text-slate-800">
-                                      {item.description || <span className="text-slate-400 font-normal">Select Organization...</span>}
-                                    </span>
-                                    <ChevronDown
-                                      className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-1.5 ${
-                                        openItemOrgDropdownId === item.id ? 'rotate-180 text-[#4309A2]' : ''
-                                      }`}
-                                    />
-                                  </button>
-
-                                  {/* Custom Floating Dropdown Menu */}
-                                  {openItemOrgDropdownId === item.id && itemOrgDropdownRect && (
-                                    <div
-                                      style={{
-                                        top: `${itemOrgDropdownRect.top + 6}px`,
-                                        left: `${itemOrgDropdownRect.left}px`,
-                                        width: `${Math.max(280, itemOrgDropdownRect.width)}px`,
-                                      }}
-                                      className="item-org-dropdown-popup fixed z-[999] bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100"
-                                    >
-                                      <div className="max-h-60 overflow-y-auto space-y-0.5">
-                                        {availableClients.length === 0 ? (
-                                          <div className="py-3 text-center text-xs text-slate-400 font-medium">
-                                            No organizations found
-                                          </div>
-                                        ) : (
-                                          availableClients.map((org) => {
-                                            const orgName = org.company || org.name;
-                                            const isSelected = item.description === orgName;
-                                            return (
-                                              <button
-                                                key={org.id}
-                                                type="button"
-                                                onClick={() => {
-                                                  handleItemChange(item.id, 'description', orgName);
-                                                  setOpenItemOrgDropdownId(null);
-                                                  setItemOrgDropdownRect(null);
-                                                }}
-                                                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                                                  isSelected
-                                                    ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                                    : 'hover:bg-slate-50 text-slate-700 font-medium'
-                                                }`}
-                                              >
-                                                <span className="truncate">{orgName}</span>
-                                                {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
-                                              </button>
-                                            );
-                                          })
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
+                                <input
+                                  type="text"
+                                  placeholder="Enter item / service title"
+                                  maxLength={200}
+                                  value={item.description}
+                                  onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
+                                  className="w-full h-10 px-3.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 rounded text-xs font-semibold text-slate-800 placeholder:font-normal placeholder:text-slate-400 outline-none transition-all shadow-2xs"
+                                />
                                 <input
                                   type="text"
                                   placeholder="+ Add Description (optional)..."
@@ -2430,19 +2776,34 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               />
                             </td>
 
-                            {/* 5. DISCOUNT (₹) */}
-                            <td className="px-2 py-4 align-top border border-slate-200">
+                            {/* 5. DISCOUNT (%) */}
+                            <td className="px-1.5 py-4 align-top border border-slate-200">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="any"
+                                placeholder="0"
+                                value={item.discountPercent === 0 ? '' : (item.discountPercent ?? '')}
+                                onChange={(e) => handleItemChange(item.id, 'discountPercent', Number(e.target.value))}
+                                className="w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                              />
+                            </td>
+
+                            {/* 6. DISCOUNT (AMOUNT) */}
+                            <td className="px-1.5 py-4 align-top border border-slate-200">
                               <input
                                 type="number"
                                 min="0"
                                 step="any"
-                                value={item.discount}
+                                placeholder="0.00"
+                                value={item.discount === 0 ? '' : (item.discount ?? '')}
                                 onChange={(e) => handleItemChange(item.id, 'discount', Number(e.target.value))}
                                 className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                               />
                             </td>
 
-                            {/* 6. TOTAL */}
+                            {/* 7. TOTAL */}
                             <td className="px-2 py-4 align-top border border-slate-200">
                               <div className="h-10 flex items-center justify-center">
                                 <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100/90 font-bold text-xs shadow-2xs font-sans min-w-[90px] text-center">
@@ -2451,7 +2812,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               </div>
                             </td>
 
-                            {/* 7. ACTION */}
+                            {/* 8. ACTION */}
                             <td className="px-2 py-4 align-top border border-slate-200">
                               <div className="h-10 flex items-center justify-center">
                                 <button
@@ -2551,7 +2912,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 ) : (
                   <>
                     <Check className="w-4 h-4 text-white stroke-[2.5]" />
-                    <span>Save {singularTerm}</span>
+                    <span>{editingQuoteId ? `Update ${singularTerm}` : `Save ${singularTerm}`}</span>
                   </>
                 )}
               </button>
@@ -2571,7 +2932,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             All {pluralTerm}
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             Create, manage, and dispatch formal project {lowerPluralTerm} and proposals.
           </p>
         </div>
@@ -2663,8 +3024,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   <>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">{singularTerm.toUpperCase()}</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CLIENT & REFERENCE</th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SOURCE & OFFERINGS</th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">STATUS & VALIDITY</th>
+                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CREATED DATE</th>
+                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">EXPIRY DATE</th>
+                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">AMOUNT</th>
                     <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
                   </>
@@ -2674,27 +3036,42 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             <tbody className="text-sm">
               {isLoadingQuotes ? (
                 <tr>
-                  <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isSuperAdmin ? 6 : 7} className="py-16 text-center text-slate-400 border border-slate-200">
                     <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-[#33077C]" />
                     <p className="font-bold text-slate-700 text-sm">Loading {lowerPluralTerm}...</p>
                   </td>
                 </tr>
               ) : quotes.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-16 text-center text-slate-400 border border-slate-200">
+                  <td colSpan={isSuperAdmin ? 6 : 7} className="py-16 text-center text-slate-400 border border-slate-200">
                     <FileText className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
                     <p className="font-bold text-slate-700 text-sm">No {lowerPluralTerm} found</p>
                     <p className="text-xs text-slate-400 mt-0.5">Generate a new {lowerSingularTerm} or adjust your search parameters.</p>
                   </td>
                 </tr>
               ) : (
-                pagedQuotes.map((quote) => (
-                  <tr
-                    key={quote.id}
-                    className="hover:bg-slate-50/70 transition-colors"
-                  >
-                    {isSuperAdmin ? (
-                      <>
+                pagedQuotes.map((quote) => {
+                  const convertedQuotesStorage = (() => {
+                    try {
+                      return JSON.parse(localStorage.getItem('yaa_crm_converted_quotes') || '[]');
+                    } catch {
+                      return [];
+                    }
+                  })();
+                  const isQuoteConverted =
+                    quote.status === ('CONVERTED' as any) ||
+                    (quote as any).convertedToType === 'PROFORMA' ||
+                    Boolean((quote as any).convertedToId) ||
+                    convertedQuotesStorage.includes(quote.id) ||
+                    convertedQuotesStorage.includes(quote.estimateNumber);
+
+                  return (
+                    <tr
+                      key={quote.id}
+                      className="hover:bg-slate-50/70 transition-colors"
+                    >
+                      {isSuperAdmin ? (
+                        <>
                         {/* 1. Organization & Code (as per reference design) */}
                         <td className="py-4 px-5 border border-slate-200">
                           {(() => {
@@ -2799,61 +3176,68 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
                         {/* 4. Status Dropdown (matching reference 2nd image design & typography) */}
                         <td className="py-4 px-5 border border-slate-200">
-                          <div className="inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeStatusDropdownId === quote.id) {
-                                  setActiveStatusDropdownId(null);
-                                  setStatusDropdownPos(null);
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 220;
-
-                                  if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                    setStatusDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 6,
-                                      left: rect.left,
-                                    });
+                          {isQuoteConverted ? (
+                            <span className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-700 border border-purple-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0"></span>
+                              <span>CONVERTED</span>
+                            </span>
+                          ) : (
+                            <div className="inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (activeStatusDropdownId === quote.id) {
+                                    setActiveStatusDropdownId(null);
+                                    setStatusDropdownPos(null);
                                   } else {
-                                    setStatusDropdownPos({
-                                      top: rect.bottom + 6,
-                                      left: rect.left,
-                                    });
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const dropdownHeight = 220;
+
+                                    if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
+                                      setStatusDropdownPos({
+                                        bottom: window.innerHeight - rect.top + 6,
+                                        left: rect.left,
+                                      });
+                                    } else {
+                                      setStatusDropdownPos({
+                                        top: rect.bottom + 6,
+                                        left: rect.left,
+                                      });
+                                    }
+                                    setActiveStatusDropdownId(quote.id);
                                   }
-                                  setActiveStatusDropdownId(quote.id);
-                                }
-                              }}
-                              className="status-dropdown-btn inline-flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer select-none"
-                            >
-                              <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${quote.status === 'ACCEPTED'
-                                  ? 'bg-[#10b981]'
-                                  : quote.status === 'SENT'
-                                    ? 'bg-[#33077C]'
+                                }}
+                                className="status-dropdown-btn inline-flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors cursor-pointer select-none"
+                              >
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${quote.status === 'ACCEPTED'
+                                    ? 'bg-[#10b981]'
+                                    : quote.status === 'SENT'
+                                      ? 'bg-[#33077C]'
+                                      : quote.status === 'DECLINED'
+                                        ? 'bg-[#f43f5e]'
+                                        : quote.status === 'EXPIRED'
+                                          ? 'bg-[#f59e0b]'
+                                          : 'bg-[#94a3b8]'
+                                    }`}
+                                />
+                                <span className="text-xs font-semibold text-slate-800 tracking-tight">
+                                  {quote.status === 'SENT'
+                                    ? 'Sent'
                                     : quote.status === 'DECLINED'
-                                      ? 'bg-[#f43f5e]'
-                                      : quote.status === 'EXPIRED'
-                                        ? 'bg-[#f59e0b]'
-                                        : 'bg-[#94a3b8]'
-                                  }`}
-                              />
-                              <span className="text-xs font-semibold text-slate-800 tracking-tight">
-                                {quote.status === 'SENT'
-                                  ? 'Sent'
-                                  : quote.status === 'DECLINED'
-                                    ? 'Declined'
-                                    : quote.status === 'ACCEPTED'
-                                      ? 'Accepted'
-                                      : quote.status === 'EXPIRED'
-                                        ? 'Expired'
-                                        : 'Draft'}
-                              </span>
-                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 stroke-[2.2]" />
-                            </button>
-                          </div>
+                                      ? 'Declined'
+                                      : quote.status === 'ACCEPTED'
+                                        ? 'Accepted'
+                                        : quote.status === 'EXPIRED'
+                                          ? 'Expired'
+                                          : 'Draft'}
+                                </span>
+                                <ChevronDown className="w-3.5 h-3.5 text-slate-400 stroke-[2.2]" />
+                              </button>
+                            </div>
+                          )}
                         </td>
 
                         {/* 5. Amount */}
@@ -2877,9 +3261,11 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             >
                               {quote.estimateNumber}
                             </button>
-                            <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                              {quote.productName || quote.customerCompany || 'Direct Client'}
-                            </div>
+                            {quote.productName && quote.productName !== 'Yaa connect' ? (
+                              <div className="text-[11px] text-slate-400 font-medium mt-0.5">
+                                {quote.productName}
+                              </div>
+                            ) : null}
                           </div>
                         </td>
 
@@ -2895,28 +3281,20 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           </div>
                         </td>
 
-                        {/* Source & Offerings */}
-                        <td className="py-4 px-5 border border-slate-200">
-                          <div className="text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                            <Tag className="w-3.5 h-3.5 text-slate-400" />
-                            <span>Direct Quotation</span>
-                          </div>
-                          {quote.productName && (
-                            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-[#33077C]"></span>
-                              <span>{quote.productName}</span>
-                            </div>
-                          )}
+                        {/* Created Date */}
+                        <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">
+                          {quote.createdAt || quote.date || '-'}
                         </td>
 
-                        {/* Status & Validity */}
-                        <td className="py-4 px-5 border border-slate-200">
-                          <div className="flex items-center gap-2">
-                            {getStatusBadge(quote.status)}
-                          </div>
-                          <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium mt-1">
-                            <Calendar className="w-3 h-3 text-slate-400" />
-                            <span>Expires: {quote.expiryDate}</span>
+                        {/* Expiry Date */}
+                        <td className="py-4 px-4 border border-slate-200 align-middle text-center text-slate-600 font-medium">
+                          {quote.expiryDate || '-'}
+                        </td>
+
+                        {/* Status */}
+                        <td className="py-4 px-4 border border-slate-200 align-middle text-center">
+                          <div className="flex items-center justify-center">
+                            {getStatusBadge(isQuoteConverted ? 'CONVERTED' : quote.status)}
                           </div>
                         </td>
 
@@ -2924,9 +3302,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         <td className="py-4 px-5 border border-slate-200 text-right">
                           <div className="font-bold text-slate-900 text-sm font-sans">
                             &#8377;{quote.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                            Dated: {quote.date}
                           </div>
                         </td>
                       </>
@@ -2971,8 +3346,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
+                );
+              })
+            )}
             </tbody>
           </table>
         </div>
@@ -2997,6 +3373,20 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         const targetQuote = quotes.find((q) => q.id === openActionMenuId);
         if (!targetQuote) return null;
 
+        const convertedQuotesStorage = (() => {
+          try {
+            return JSON.parse(localStorage.getItem('yaa_crm_converted_quotes') || '[]');
+          } catch {
+            return [];
+          }
+        })();
+        const isAlreadyConverted =
+          targetQuote.status === ('CONVERTED' as any) ||
+          (targetQuote as any).convertedToType === 'PROFORMA' ||
+          Boolean((targetQuote as any).convertedToId) ||
+          convertedQuotesStorage.includes(targetQuote.id) ||
+          convertedQuotesStorage.includes(targetQuote.estimateNumber);
+
         return (
           <div
             style={{
@@ -3004,9 +3394,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               ...(actionDropdownPos.bottom !== undefined
                 ? { bottom: `${actionDropdownPos.bottom}px` }
                 : { top: `${actionDropdownPos.top}px` }),
-              right: `${actionDropdownPos.right}px`,
+              right: `${Math.min(Math.max(8, actionDropdownPos.right), Math.max(8, window.innerWidth - 236))}px`,
             }}
-            className="w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] action-dropdown-popup animate-in fade-in zoom-in-95 duration-100 text-left"
+            className="w-56 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] action-dropdown-popup animate-in fade-in zoom-in-95 duration-100 text-left"
           >
             {/* 1. View */}
             <button
@@ -3014,112 +3404,199 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               onClick={() => {
                 setOpenActionMenuId(null);
                 setActionDropdownPos(null);
+                setIsActionStatusSubmenuOpen(false);
                 setSelectedQuote(targetQuote);
               }}
-              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
+              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group whitespace-nowrap"
             >
               <span className="w-7 h-7 rounded-full bg-orange-500 text-white flex items-center justify-center shrink-0 shadow-sm">
                 <Eye className="w-3.5 h-3.5 stroke-[2.2]" />
               </span>
-              <span className="group-hover:text-slate-900 transition-colors text-[13px]">View</span>
+              <span className="group-hover:text-slate-900 transition-colors text-[13px] whitespace-nowrap">View</span>
             </button>
 
-            {/* 2. Send as an mail */}
-            <button
-              type="button"
-              onClick={() => {
-                showToast('success', 'Email Sent', `Quotation dispatched to ${targetQuote.customerEmail}`);
-                setOpenActionMenuId(null);
-                setActionDropdownPos(null);
-              }}
-              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
-            >
-              <span className="w-7 h-7 rounded-full bg-[#8B5CF6] text-white flex items-center justify-center shrink-0 shadow-sm">
-                <Mail className="w-3.5 h-3.5 stroke-[2.2]" />
-              </span>
-              <span className="group-hover:text-slate-900 transition-colors text-[13px]">Send</span>
-            </button>
-
-            {/* 3. Print */}
+            {/* 2. Edit */}
             <button
               type="button"
               onClick={() => {
                 setOpenActionMenuId(null);
                 setActionDropdownPos(null);
-                handlePrintEstimatePdf(targetQuote);
+                setIsActionStatusSubmenuOpen(false);
+                handleEditQuote(targetQuote);
               }}
-              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
+              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group whitespace-nowrap"
             >
-              <span className="w-7 h-7 rounded-full bg-[#10B981] text-white flex items-center justify-center shrink-0 shadow-sm">
-                <Printer className="w-3.5 h-3.5 stroke-[2.2]" />
+              <span className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Pencil className="w-3.5 h-3.5 stroke-[2.2]" />
               </span>
-              <span className="group-hover:text-slate-900 transition-colors text-[13px]">Print</span>
+              <span className="group-hover:text-slate-900 transition-colors text-[13px] whitespace-nowrap">Edit</span>
             </button>
 
-            {/* 4a. Convert to Proforma Invoice */}
+            {/* 3. Duplicate */}
+            <button
+              type="button"
+              onClick={() => {
+                setOpenActionMenuId(null);
+                setActionDropdownPos(null);
+                setIsActionStatusSubmenuOpen(false);
+                handleDuplicateQuote(targetQuote);
+              }}
+              className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group whitespace-nowrap"
+            >
+              <span className="w-7 h-7 rounded-full bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Copy className="w-3.5 h-3.5 stroke-[2.2]" />
+              </span>
+              <span className="group-hover:text-slate-900 transition-colors text-[13px] whitespace-nowrap">Duplicate</span>
+            </button>
+
+            {/* 4. Convert to Proforma */}
             {targetQuote.status !== 'DECLINED' && targetQuote.status !== 'EXPIRED' && (
               <button
                 type="button"
-                onClick={async () => {
-                  try {
-                    setOpenActionMenuId(null);
-                    setActionDropdownPos(null);
-                    showToast('info', 'Converting Quotation', `Converting #${targetQuote.estimateNumber} to proforma invoice...`);
-                    const res = await quoteApi.convertToProformaInvoice(targetQuote.id);
-                    if (res) {
-                      showToast('success', 'Quotation Converted', `Successfully converted #${targetQuote.estimateNumber} to Proforma Invoice.`);
-                      fetchQuotes();
-                    }
-                  } catch (err: any) {
-                    console.error('Failed to convert quotation:', err);
-                    showToast('error', 'Conversion Failed', err?.response?.data?.error?.message || 'Could not convert quote.');
-                  }
+                disabled={isAlreadyConverted}
+                onClick={() => {
+                  if (isAlreadyConverted) return;
+                  setOpenActionMenuId(null);
+                  setActionDropdownPos(null);
+                  setIsActionStatusSubmenuOpen(false);
+
+                  // Construct prefilled proforma data from quotation
+                  const convertedProforma: any = {
+                    id: '',
+                    invoiceNumber: '',
+                    invoiceDate: new Date().toISOString().split('T')[0],
+                    dueDate: targetQuote.expiryDate ? targetQuote.expiryDate.split('T')[0] : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    status: 'Draft',
+                    referenceNumbers: [targetQuote.estimateNumber],
+                    description: targetQuote.notes || '',
+                    client: {
+                      id: targetQuote.customerId || '',
+                      name: targetQuote.customerName || '',
+                      company: targetQuote.customerCompany || '',
+                      email: targetQuote.customerEmail || '',
+                      phone: targetQuote.customerPhone || '',
+                      address: targetQuote.customerLocation || '',
+                      location: targetQuote.customerLocation || '',
+                      gstin: targetQuote.customerGstin || '',
+                      taxId: targetQuote.customerGstin || '',
+                      pan: targetQuote.customerPan || '',
+                      status: 'Active',
+                    },
+                    items: (targetQuote.items || []).map((it, idx) => ({
+                      id: it.id || `item-${idx + 1}`,
+                      name: it.description || '',
+                      description: '',
+                      hsnCode: '998314',
+                      qty: Number(it.quantity) || 1,
+                      unitPrice: Number(it.unitPrice) || 0,
+                      discount: Number(it.discount) || 0,
+                      taxPercent: 18,
+                    })),
+                  };
+
+                  navigate('/proforma/new', {
+                    state: {
+                      invoiceToDuplicate: convertedProforma,
+                      convertedFromQuoteNumber: targetQuote.estimateNumber,
+                      convertedFromQuoteId: targetQuote.id,
+                    },
+                  });
                 }}
-                className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
+                className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold transition-colors group whitespace-nowrap ${
+                  isAlreadyConverted
+                    ? 'text-slate-400 cursor-not-allowed opacity-50 bg-slate-50/50'
+                    : 'text-slate-700 hover:bg-slate-50 cursor-pointer'
+                }`}
               >
-                <span className="w-7 h-7 rounded-full bg-[#6366F1] text-white flex items-center justify-center shrink-0 shadow-sm">
+                <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-sm ${
+                  isAlreadyConverted ? 'bg-slate-300 text-white' : 'bg-[#6366F1] text-white'
+                }`}>
                   <FileText className="w-3.5 h-3.5 stroke-[2.2]" />
                 </span>
-                <span className="group-hover:text-slate-900 transition-colors text-[13px]">Convert to Proforma</span>
-              </button>
-            )}
-
-            {/* 4b. Convert to Invoice */}
-            {targetQuote.status !== 'DECLINED' && targetQuote.status !== 'EXPIRED' && (
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    setOpenActionMenuId(null);
-                    setActionDropdownPos(null);
-                    showToast('info', 'Converting Quotation', `Converting #${targetQuote.estimateNumber} to invoice...`);
-                    const res = await quoteApi.convertQuote(targetQuote.id, { target: 'INVOICE' });
-                    if (res) {
-                      showToast('success', 'Quotation Converted', `Successfully converted #${targetQuote.estimateNumber} to Invoice.`);
-                      fetchQuotes();
-                    }
-                  } catch (err: any) {
-                    console.error('Failed to convert quotation:', err);
-                    showToast('error', 'Conversion Failed', err?.response?.data?.error?.message || 'Could not convert quote.');
-                  }
-                }}
-                className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer group"
-              >
-                <span className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <FileSpreadsheet className="w-3.5 h-3.5 stroke-[2.2]" />
+                <span className={`text-[13px] whitespace-nowrap ${isAlreadyConverted ? 'text-slate-400 font-medium' : 'group-hover:text-slate-900'}`}>
+                  {isAlreadyConverted ? 'Converted' : 'Convert to Proforma'}
                 </span>
-                <span className="group-hover:text-slate-900 transition-colors text-[13px]">Convert to Invoice</span>
               </button>
             )}
 
-            <div className="h-px bg-slate-100 my-1" />
+            {/* 5. Set Status (with three dots and submenu) - hidden once converted */}
+            {!isAlreadyConverted && (
+              <>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsActionStatusSubmenuOpen(!isActionStatusSubmenuOpen)}
+                    className={`w-full flex items-center justify-between px-2.5 py-2.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer group whitespace-nowrap ${
+                      isActionStatusSubmenuOpen ? 'bg-indigo-50/70 text-[#33077C]' : 'text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 whitespace-nowrap">
+                      <span className="w-7 h-7 rounded-full bg-[#33077C] text-white flex items-center justify-center shrink-0 shadow-sm">
+                        <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.2]" />
+                      </span>
+                      <span className="group-hover:text-slate-900 transition-colors text-[13px] whitespace-nowrap">Set Status</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="w-5 h-5 rounded-md hover:bg-slate-200/60 flex items-center justify-center text-slate-400 group-hover:text-slate-600 transition-colors">
+                        <MoreVertical className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
+                  </button>
 
-            {/* 5. Delete */}
+                  {/* Status Submenu (Draft, Send, Approved, Cancelled) */}
+                  {isActionStatusSubmenuOpen && (
+                    <div className="mt-1.5 mb-1.5 p-1.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl shadow-inner space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                      {(
+                        [
+                          { value: 'DRAFT', label: 'Draft', color: '#94a3b8' },
+                          { value: 'SENT', label: 'Send', color: '#33077C' },
+                          { value: 'ACCEPTED', label: 'Approved', color: '#10b981' },
+                          { value: 'DECLINED', label: 'Cancelled', color: '#f43f5e' },
+                        ] as const
+                      ).map((opt) => {
+                        const isActive = targetQuote.status === opt.value;
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => {
+                              setOpenActionMenuId(null);
+                              setActionDropdownPos(null);
+                              setIsActionStatusSubmenuOpen(false);
+                              handleStatusChange(targetQuote.id, opt.value);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer text-left ${
+                              isActive
+                                ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
+                                : 'text-slate-700 hover:bg-white/70 hover:text-slate-900'
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: opt.color }}
+                            />
+                            <span className="flex-1 font-bold text-[13px]">{opt.label}</span>
+                            {isActive && (
+                              <Check className="w-4 h-4 shrink-0 text-[#33077C] stroke-[2.5]" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="h-px bg-slate-100 my-1" />
+              </>
+            )}
+
+            {/* 6. Delete */}
             <button
               type="button"
               onClick={() => {
                 setOpenActionMenuId(null);
                 setActionDropdownPos(null);
+                setIsActionStatusSubmenuOpen(false);
                 setDeleteQuoteConfirm({
                   id: targetQuote.id,
                   estimateNumber: targetQuote.estimateNumber,
@@ -3148,9 +3625,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               ...(statusDropdownPos.bottom !== undefined
                 ? { bottom: `${statusDropdownPos.bottom}px` }
                 : { top: `${statusDropdownPos.top}px` }),
-              left: `${statusDropdownPos.left}px`,
+              left: `${Math.max(8, Math.min(statusDropdownPos.left, window.innerWidth - 170))}px`,
             }}
-            className="min-w-[155px] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[9999] status-dropdown-popup animate-in fade-in zoom-in-95 duration-100 text-left"
+            className="min-w-[155px] max-w-[calc(100vw-1rem)] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[9999] status-dropdown-popup animate-in fade-in zoom-in-95 duration-100 text-left"
           >
             {(
               [

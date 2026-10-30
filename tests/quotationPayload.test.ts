@@ -11,7 +11,7 @@ describe('Quotation Payload Sanitization', () => {
       partyName: 'Acme Corp',
       items: [
         {
-          productId: 'prod-123',
+          productId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
           productName: 'Widget A',
           unit: 'PCS',
           quantity: 5,
@@ -30,7 +30,7 @@ describe('Quotation Payload Sanitization', () => {
     assert.equal(payload.partyName, 'Acme Corp');
     assert.equal(payload.items.length, 1);
     const item = payload.items[0];
-    assert.equal(item.productId, 'prod-123');
+    assert.equal(item.productId, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
     assert.equal(item.productName, 'Widget A');
     assert.equal(item.quantity, 5);
     assert.equal(item.unitPrice, 100);

@@ -17,6 +17,7 @@ export interface ApiStockItem {
   isLowStock?: boolean;
   location?: string | null;
   lastUpdated?: string;
+  createdAt?: string;
   batches?: ApiStockBatch[];
   shortage?: number;
   outOfStock?: boolean;

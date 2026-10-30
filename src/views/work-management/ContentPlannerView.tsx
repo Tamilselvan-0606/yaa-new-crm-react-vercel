@@ -401,7 +401,7 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
               setBatchClientName(customers[0]?.company || 'Veritas Logistics Corp');
               setIsBatchScheduleOpen(true);
             }}
-            className="flex items-center justify-center gap-2 h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+            className="flex items-center justify-center gap-2 h-10 sm:h-11 px-5 sm:px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0"
           >
             <CalendarDays className="w-4 h-4 text-[#4309A2]" />
             <span>+ Monthly Plan Schedule</span>
@@ -413,7 +413,7 @@ export const ContentPlannerView: React.FC<ContentPlannerViewProps> = ({
               setEditingContent(null);
               setIsCreateModalOpen(true);
             }}
-            className="flex items-center justify-center gap-2 h-11 px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+            className="flex items-center justify-center gap-2 h-10 sm:h-11 px-5 sm:px-6 bg-[#4309A2] hover:bg-[#e67e00] text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4" />
             <span>Create Content</span>

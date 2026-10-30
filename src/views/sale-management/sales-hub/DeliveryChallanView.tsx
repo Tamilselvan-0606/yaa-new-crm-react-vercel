@@ -1,3 +1,6 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Truck,
@@ -28,6 +31,7 @@ import {
   RotateCcw,
   Sparkles,
   ChevronDown,
+  ChevronUp,
   ShoppingBag,
   ShoppingCart,
   FileCheck,
@@ -45,12 +49,16 @@ import {
   Package,
   Loader2,
   FileSpreadsheet,
+  Phone,
 } from 'lucide-react';
+import { AddCustomerModal } from './AddCustomerModal';
+import { AddItemModal } from '../inventory/AddItemModal';
 import {
   useSalesManagementStore,
   SaleProductItem,
   SalesCustomer,
   SaleTransaction,
+  InventoryStockItem,
 } from '../../../store/useSalesManagementStore';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
@@ -61,9 +69,16 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  printBusinessDocument,
+  printTableReport,
+  downloadBusinessDocument,
+  DocumentPrintOptions,
+} from '../../../utils/printUtils';
+import { useCompanyDocumentProfile } from '../../../hooks/useCompanyDocumentProfile';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printBusinessDocument, printTableReport } from '../../../utils/printUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
+import { DocumentSharePopover, formatDeliveryChallanShare } from '../../../utils/shareUtils';
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
 import {
@@ -79,13 +94,24 @@ import { productApi } from '../../../api/commerce/productApi';
 import { ApiCustomer } from '../../../api/commerce/customerTypes';
 import { ApiProduct } from '../../../api/commerce/productTypes';
 import {
+  stockApi,
+  mapApiStockToInventoryStockItem,
+  ApiStockBatch,
+  unpackProducts,
+  clientProductApi,
+  mapApiCustomerToSalesCustomer,
+} from '../../../api';
+import {
   syncConvertedInvoiceToStorage,
   recordDocumentConversion,
   findDocumentLineage,
+  resolveDocumentConvertedAt,
   initializeWorkflowIntegrity,
+  getStoredLineages,
+  isMockChallan,
 } from '../../../utils/salesDocumentWorkflow';
 import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
-import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown } from '../utils/formUtils';
+import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { normalizeIndianPhoneTo10Digits } from '../../../utils/validation';
 import { FormError } from '../../../components/common/FormError';
 
@@ -107,6 +133,38 @@ const ddmmyyyyToIso = (dmy?: string): string => {
     return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
   return dmy;
+};
+
+const formatDateTime = (
+  dateStr?: string | null,
+): { date: string; time: string; full: string } | null => {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  const hh = String(hours).padStart(2, '0');
+
+  return {
+    date: `${dd}/${mm}/${yyyy}`,
+    time: `${hh}:${minutes} ${ampm}`,
+    full: `${dd}/${mm}/${yyyy} ${hh}:${minutes} ${ampm}`,
+  };
+};
+
+const getInitials = (name?: string, fallback: string = 'PR'): string => {
+  if (!name) return fallback;
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return fallback;
 };
 
 const mapPeriodToApiPeriod = (periodLabel: string): string => {
@@ -241,6 +299,7 @@ interface DeliveryChallanViewProps {
 export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   initialMode = 'list',
 }) => {
+  const companyProfile = useCompanyDocumentProfile();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
@@ -249,34 +308,49 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     stocks: localStocks,
     saveCustomer: saveCustomerLocal,
     saveSale,
+    setCustomersList,
+    setStocksList,
   } = useSalesManagementStore();
 
   useEffect(() => {
     initializeWorkflowIntegrity();
   }, []);
 
-  // Delivery Challan State with LocalStorage Cache
+  // Delivery Challan State with LocalStorage Cache (purging any mock records)
   const [challans, setChallans] = useState<DeliveryChallanRecord[]>(() => {
     try {
       const saved = localStorage.getItem('yaa_crm_delivery_challans');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter((c: any) => !isMockChallan(c));
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('yaa_crm_delivery_challans', JSON.stringify(cleaned));
+          }
+          return cleaned;
+        }
+      }
+      return [];
     } catch {
       return [];
     }
   });
 
   const persistChallans = (updated: DeliveryChallanRecord[]) => {
-    setChallans(updated);
+    const cleaned = updated.filter((c) => !isMockChallan(c));
+    setChallans(cleaned);
     try {
-      localStorage.setItem('yaa_crm_delivery_challans', JSON.stringify(updated));
+      localStorage.setItem('yaa_crm_delivery_challans', JSON.stringify(cleaned));
     } catch (e) {
       console.error('Failed to save delivery challans', e);
     }
   };
 
   // Master Data Cache
-  const [liveCustomers, setLiveCustomers] = useState<ApiCustomer[]>([]);
+  const [liveCustomers, setLiveCustomers] = useState<any[]>([]);
   const [liveProducts, setLiveProducts] = useState<ApiProduct[]>([]);
+  const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
+  const [liveBatches, setLiveBatches] = useState<ApiStockBatch[]>([]);
 
   // API State & Loading Indicators
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -295,12 +369,22 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   // Search & Filters
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('This Month');
   const [appliedPeriod, setAppliedPeriod] = useState('This Month');
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   useEffect(() => {
     const q = searchParams.get('search');
@@ -310,17 +394,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }
   }, [searchParams]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
+
 
   // Party Dropdown
   const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
@@ -353,6 +427,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     showDiscount: true,
   });
   const [showColumnCustomizePopover, setShowColumnCustomizePopover] = useState(false);
+  const [showShareFooterMenu, setShowShareFooterMenu] = useState(false);
 
   // Tax Mode
   const [priceTaxMode, setPriceTaxMode] = useState<'Without Tax' | 'With Tax'>('Without Tax');
@@ -360,6 +435,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   // Bottom action toggles
   const [showTermsSection, setShowTermsSection] = useState(true);
   const [showDescriptionSection, setShowDescriptionSection] = useState(false);
+  const [showTransportSection, setShowTransportSection] = useState(false);
   const [showImageSection, setShowImageSection] = useState(false);
   const [showDocumentSection, setShowDocumentSection] = useState(false);
   const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
@@ -369,15 +445,152 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [enableRoundOff, setEnableRoundOff] = useState(true);
   const [manualRoundOff, setManualRoundOff] = useState<number | null>(null);
 
-  // Quick Customer Creation Modal
-  const [isQuickCustomerModalOpen, setIsQuickCustomerModalOpen] = useState(false);
-  const [quickCustName, setQuickCustName] = useState('');
-  const [quickCustPhone, setQuickCustPhone] = useState('');
-  const [quickCustEmail, setQuickCustEmail] = useState('');
-  const [quickCustCompany, setQuickCustCompany] = useState('');
-  const [quickCustAddress, setQuickCustAddress] = useState('');
-  const [quickCustOpeningBal, setQuickCustOpeningBal] = useState('0');
-  const [quickCustPhoneError, setQuickCustPhoneError] = useState('');
+  // Customer Creation Modal
+  const [isAddCustomerModalOpen, setIsAddCustomerModalOpen] = useState(false);
+
+  // Add Item / Product Modal & Searchable Product Dropdown
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(null);
+  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<number | null>(null);
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const productDropdownRef = useRef<HTMLDivElement>(null);
+  const productSearchTimerRef = useRef<any>(null);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const isFetchingProductsRef = useRef(false);
+
+  // Fetch live products with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
+    if (isFetchingProductsRef.current) return;
+    isFetchingProductsRef.current = true;
+    setIsLoadingProducts(true);
+    try {
+      let prods: any[] = [];
+
+      // 1. First attempt: standard pagination_required: true
+      try {
+        const res = await productApi.getProducts({
+          page_no: 1,
+          page_size: 100,
+          pagination_required: true,
+          search: searchQuery?.trim() || undefined,
+          sortOrder: 'desc',
+        });
+        const raw = unpackProducts(res);
+        if (raw.length > 0) prods = raw;
+      } catch (err) {
+        console.warn('Product load pagination_required:true error:', err);
+      }
+
+      // 2. Second attempt: pagination_required: false
+      if (prods.length === 0) {
+        try {
+          const res2 = await productApi.getProducts({
+            search: searchQuery?.trim() || undefined,
+            page_size: 100,
+            pagination_required: false,
+          });
+          const raw2 = unpackProducts(res2);
+          if (raw2.length > 0) prods = raw2;
+        } catch (err2) {
+          console.warn('Product load pagination_required:false error:', err2);
+        }
+      }
+
+      // 3. Third attempt: clientProductApi (platform products)
+      if (prods.length === 0) {
+        try {
+          const cRes = await clientProductApi.getProducts({
+            page: 1,
+            limit: 100,
+            search: searchQuery?.trim() || undefined,
+          });
+          const cItems = unpackProducts(cRes);
+          if (cItems.length > 0) {
+            prods = cItems.map((cp: any) => ({
+              id: cp.id,
+              productId: cp.id,
+              productName: cp.name || cp.productName,
+              productCode: cp.code || cp.sku,
+              salePrice: cp.plans?.[0]?.price || cp.price || 0,
+              unit: 'PCS',
+              category: cp.tagline || 'General',
+            }));
+          }
+        } catch (cErr) {
+          console.warn('clientProductApi load fallback error:', cErr);
+        }
+      }
+
+      // 4. Fourth attempt: fallback to stockApi
+      if (prods.length === 0) {
+        try {
+          const sRes = await stockApi.getStocks({ pagination_required: false, page_size: 100 });
+          const rawStocks = unpackProducts(sRes);
+          if (rawStocks.length > 0) {
+            prods = rawStocks.map((s: any) => ({
+              id: s.productId || s.id,
+              productId: s.productId || s.id,
+              productName: s.productName,
+              productCode: s.sku,
+              salePrice: s.unitPrice || 0,
+              unit: s.unit || 'PCS',
+              category: s.category || '',
+            }));
+          }
+        } catch (sErr) {
+          console.warn('stockApi load fallback error:', sErr);
+        }
+      }
+
+      // 5. Fifth attempt: fallback to local storage
+      if (prods.length === 0) {
+        try {
+          const localSaved = localStorage.getItem('yaa_crm_inventory_stocks');
+          if (localSaved) {
+            const parsed = JSON.parse(localSaved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              prods = parsed;
+            }
+          }
+        } catch (locErr) {
+          console.warn('localStorage stock load fallback error:', locErr);
+        }
+      }
+
+      if (prods.length > 0) {
+        setLiveProducts((prev) => {
+          const map = new Map<string, ApiProduct>();
+          if (searchQuery?.trim()) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
+          prods.forEach((p) => map.set(p.id, p));
+          return Array.from(map.values());
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to search products in DeliveryChallanView:', err);
+    } finally {
+      setIsLoadingProducts(false);
+      isFetchingProductsRef.current = false;
+    }
+  }, []);
+
+  // Click outside to close product popover
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (
+        !target.closest('.dc-product-cell') &&
+        !target.closest('.product-dropdown-popover')
+      ) {
+        setOpenProductDropdownRow(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -405,51 +618,129 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
   const hasLoadedMasterDataRef = useRef(false);
 
-  // Load Customers master data (products are searched on demand)
+  // Load Customers, Stocks, and Batches master data on mount so list view and form view both have customer codes and stock items
   const loadMasterData = useCallback(async () => {
-    if (hasLoadedMasterDataRef.current) return;
-    hasLoadedMasterDataRef.current = true;
+    fetchLiveProducts();
+
     try {
-      const custRes = await customerApi.getCustomers({ pagination_required: false });
-      if (custRes?.data && Array.isArray(custRes.data)) {
-        setLiveCustomers(custRes.data);
+      const custRes = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
+      const rawCust = unpackProducts(custRes);
+      if (rawCust.length > 0) {
+        const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
+        setLiveCustomers(mapped);
+        setCustomersList(mapped);
       }
     } catch (e) {
-      console.warn('Using local fallback for customers master', e);
+      console.warn('Customer load error in DeliveryChallanView:', e);
     }
-  }, []);
 
-  // On-demand product search: only calls products API when user is actively searching
+    try {
+      const stockRes = await stockApi.getStocks({ pagination_required: false, page_size: 100 });
+      const rawStocks = unpackProducts(stockRes);
+      if (rawStocks.length > 0) {
+        const mapped = rawStocks.map(mapApiStockToInventoryStockItem);
+        setLiveStocks(mapped);
+        setStocksList(mapped);
+      }
+    } catch (e) {
+      console.warn('Stock load error in DeliveryChallanView:', e);
+    }
+
+    try {
+      const batchRes = await stockApi.getStockBatches({ pagination_required: false, page_size: 100 });
+      const rawBatches = unpackProducts(batchRes);
+      if (rawBatches.length > 0) {
+        setLiveBatches(rawBatches);
+      }
+    } catch (e) {
+      console.warn('Batch load error in DeliveryChallanView:', e);
+    }
+  }, [fetchLiveProducts, setCustomersList, setStocksList]);
+
+  useEffect(() => {
+    loadMasterData();
+  }, [loadMasterData]);
+
+  // Load products when entering form mode if not already loaded
+  useEffect(() => {
+    if (viewMode === 'form') {
+      if (!hasLoadedMasterDataRef.current || liveProducts.length === 0) {
+        hasLoadedMasterDataRef.current = true;
+        fetchLiveProducts();
+      }
+    }
+  }, [viewMode, fetchLiveProducts, liveProducts.length]);
+
+  // On-demand product search: calls products API
   const handleProductSearch = useCallback(async (query: string) => {
     const trimmed = query.trim();
     if (!trimmed) return;
-    setIsSearchingProducts(true);
-    try {
-      const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
-        pagination_required: false,
-      });
-      if (res?.data && Array.isArray(res.data)) {
-        setLiveProducts((prev) => {
-          const map = new Map<string, ApiProduct>();
-          prev.forEach((p) => map.set(p.id, p));
-          res.data.forEach((p) => map.set(p.id, p));
-          return Array.from(map.values());
-        });
-      }
-    } catch (err) {
-      console.warn('Failed to search products in DeliveryChallanView:', err);
-    } finally {
-      setIsSearchingProducts(false);
-    }
-  }, []);
+    fetchLiveProducts(trimmed);
+  }, [fetchLiveProducts]);
 
-  useEffect(() => {
-    if (viewMode === 'form') {
-      loadMasterData();
+  // Helper to recover and merge converted challans from lineage and local store
+  const recoverLineageChallans = useCallback((existingList: DeliveryChallanRecord[]): DeliveryChallanRecord[] => {
+    const list = [...existingList];
+    try {
+      const lineages = getStoredLineages();
+      const ordersRaw = localStorage.getItem('yaa_crm_sale_orders');
+      const orders: any[] = ordersRaw ? JSON.parse(ordersRaw) : [];
+
+      lineages.forEach((lin) => {
+        if (!lin.challanNo || lin.challanId === 'dc_1' || lin.challanId === 'dc_2') return;
+        const alreadyExists = list.some(
+          (c) => c.challanNo.toLowerCase() === lin.challanNo?.toLowerCase()
+        );
+        if (alreadyExists) return;
+
+        const linkedOrder = orders.find(
+          (o: any) =>
+            (lin.orderNo && o.orderNo === lin.orderNo) ||
+            (lin.orderId && o.id === lin.orderId)
+        );
+
+        if (!linkedOrder || !Array.isArray(linkedOrder.items) || linkedOrder.items.length === 0) {
+          return;
+        }
+
+        const recovered: DeliveryChallanRecord = {
+          id: lin.challanId || `dc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          challanNo: lin.challanNo,
+          referenceNo: linkedOrder.orderNo || lin.orderNo,
+          invoiceDate: linkedOrder.orderDate || new Date().toISOString().split('T')[0],
+          dueDate: linkedOrder.dueDate || '',
+          customerId: linkedOrder.customerId || lin.customerId || '',
+          partyName: linkedOrder.partyName || lin.partyName || 'Customer',
+          customerPhone: linkedOrder.customerPhone,
+          customerEmail: linkedOrder.customerEmail,
+          customerCompany: linkedOrder.customerCompany,
+          billingAddress: linkedOrder.billingAddress || '',
+          shippingAddress: linkedOrder.shippingAddress || linkedOrder.billingAddress,
+          items: linkedOrder.items,
+          subtotal: linkedOrder.subtotal || 0,
+          withGst: linkedOrder.withGst,
+          gstType: linkedOrder.gstType,
+          cgst: linkedOrder.cgst,
+          sgst: linkedOrder.sgst,
+          igst: linkedOrder.igst,
+          discount: linkedOrder.discount || 0,
+          taxAmount: linkedOrder.taxAmount || 0,
+          amount: linkedOrder.amount || lin.grandTotal || 0,
+          balance: linkedOrder.balance || lin.grandTotal || 0,
+          status: 'Open',
+          notes: `Converted from Sale Order ${linkedOrder.orderNo}`,
+          createdAt: linkedOrder.createdAt || lin.createdAt || new Date().toISOString(),
+          updatedAt: linkedOrder.updatedAt || lin.updatedAt || new Date().toISOString(),
+        };
+        if (!isMockChallan(recovered)) {
+          list.push(recovered);
+        }
+      });
+    } catch (e) {
+      console.warn('Failed to recover lineage challans:', e);
     }
-  }, [viewMode, loadMasterData]);
+    return list;
+  }, []);
 
   // Fetch Delivery Challans from Live Backend API
   const isFetchingChallansRef = useRef(false);
@@ -471,23 +762,66 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       });
 
       if (res && Array.isArray(res.data)) {
-        const records = res.data.map((item) => mapApiDeliveryChallanToRecord(item));
-        persistChallans(records);
-        setTotalApiRecords(res.pagination?.totalRecords ?? records.length);
-        setTotalApiPages(res.pagination?.totalPages ?? Math.max(1, Math.ceil(records.length / pageSize)));
+        const apiRecords = res.data
+          .map((item) => mapApiDeliveryChallanToRecord(item))
+          .filter((c) => !isMockChallan(c));
+
+        // Enrich with converted status from document lineage if converted downstream
+        const enriched = apiRecords.map((c) => {
+          const lin = findDocumentLineage(c.challanNo) || (c.referenceNo ? findDocumentLineage(c.referenceNo) : null);
+          return {
+            ...c,
+            convertedToInvoiceNo: c.convertedToInvoiceNo || lin?.invoiceNo,
+            status: lin?.invoiceNo ? ('Converted' as const) : c.status,
+          };
+        });
+
+        persistChallans(enriched);
+        setTotalApiRecords(res.pagination?.totalRecords ?? enriched.length);
+        setTotalApiPages(res.pagination?.totalPages ?? Math.max(1, Math.ceil(enriched.length / pageSize)));
         setIsApiConnected(true);
+      } else {
+        const localSavedRaw = localStorage.getItem('yaa_crm_delivery_challans');
+        const localSaved: DeliveryChallanRecord[] = localSavedRaw
+          ? JSON.parse(localSavedRaw).filter((c: any) => !isMockChallan(c))
+          : [];
+        persistChallans(localSaved);
+        setTotalApiRecords(localSaved.length);
+        setTotalApiPages(Math.max(1, Math.ceil(localSaved.length / pageSize)));
       }
     } catch (err: any) {
       console.warn('Could not reach Commerce Delivery Challans API, using offline cache:', err);
       setIsApiConnected(false);
+      try {
+        const localSavedRaw = localStorage.getItem('yaa_crm_delivery_challans');
+        const localSaved: DeliveryChallanRecord[] = localSavedRaw ? JSON.parse(localSavedRaw) : [];
+        const recovered = recoverLineageChallans(localSaved);
+        persistChallans(recovered);
+        setTotalApiRecords(recovered.length);
+        setTotalApiPages(Math.max(1, Math.ceil(recovered.length / pageSize)));
+      } catch (fallbackErr) {
+        console.error('Fallback delivery challan recovery error:', fallbackErr);
+      }
     } finally {
       setIsApiLoading(false);
       isFetchingChallansRef.current = false;
     }
-  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
+  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod, recoverLineageChallans]);
 
   useEffect(() => {
     fetchDeliveryChallans();
+  }, [fetchDeliveryChallans]);
+
+  // Listen for converted challan events from Sale Order or other modules
+  useEffect(() => {
+    const handleChallansUpdated = () => {
+      isFetchingChallansRef.current = false;
+      fetchDeliveryChallans();
+    };
+    window.addEventListener('yaa_crm_challans_updated', handleChallansUpdated);
+    return () => {
+      window.removeEventListener('yaa_crm_challans_updated', handleChallansUpdated);
+    };
   }, [fetchDeliveryChallans]);
 
   // Listen for sidebar click navigation events to immediately re-fetch delivery challans
@@ -528,11 +862,34 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     return localCustomers;
   }, [liveCustomers, localCustomers]);
 
-  // Combined Stock Items / Products (Live API + Local Store)
+  // Helper to extract batches for a product
+  const getBatchesForProduct = useCallback((
+    productId: string,
+    sku: string,
+    name: string,
+    explicitBatches?: any[]
+  ) => {
+    if (Array.isArray(explicitBatches) && explicitBatches.length > 0) {
+      return explicitBatches;
+    }
+    const matched = liveBatches.filter((b) => {
+      const bPid = String((b as any).productId || (b as any).product_id || "");
+      if (productId && bPid && bPid === productId) return true;
+      if (sku && (b as any).sku && (b as any).sku === sku) return true;
+      if (name && (b as any).productName && (b as any).productName.toLowerCase() === name.toLowerCase()) return true;
+      return false;
+    });
+    return matched;
+  }, [liveBatches]);
+
+  // Combined Stock Items / Products (Live API + Live Stocks + Local Store)
   const allStockItems = useMemo(() => {
     const map = new Map<string, any>();
 
+    // 1. Live Products from /commerce/products
     liveProducts.forEach((p) => {
+      const pid = String(p.id || "");
+      if (!pid) return;
       let tax = 5;
       if (typeof (p as any).taxPercent === 'number') {
         tax = (p as any).taxPercent;
@@ -540,40 +897,84 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         const parsed = parseFloat(String(p.taxRate).replace(/[^0-9.]/g, ''));
         if (!isNaN(parsed)) tax = parsed;
       }
-      map.set(p.id, {
-        id: p.id,
-        productId: p.id,
-        productName: p.productName || (p as any).name || 'Unnamed Product',
-        sku: p.productCode || (p as any).sku || '',
+      const sku = p.productCode || (p as any).sku || '';
+      const name = p.productName || (p as any).name || 'Unnamed Product';
+      const batches = getBatchesForProduct(pid, sku, name, (p as any).batches || (p as any).stockBatches);
+      map.set(pid, {
+        id: pid,
+        productId: pid,
+        productName: name,
+        sku: sku,
         unitPrice: Number(p.salePrice ?? (p as any).sellingPrice ?? (p as any).price ?? (p as any).unitPrice ?? 0),
         unit: p.unit || 'PCS',
         taxPercent: tax,
         hsnCode: p.hsnCode || '',
         category: p.category || '',
-        batches: (p as any).batches || (p as any).stockBatches || [],
+        imageUrl: (p as any).images?.[0] || (p as any).image || (p as any).imageUrl || '',
+        batches,
       });
     });
 
-    localStocks.forEach((s) => {
-      const pid = (s as any).productId || s.id;
-      if (!map.has(pid)) {
+    // 2. Live Stocks from /commerce/stocks
+    liveStocks.forEach((s) => {
+      const pid = String(s.productId || s.id || "");
+      if (pid && !map.has(pid)) {
+        const sku = s.sku || (s as any).itemCode || "";
+        const name = s.productName || (s as any).name || "Unnamed Product";
+        const batches = getBatchesForProduct(pid, sku, name, s.batches);
+        let tax = 5;
+        if (typeof (s as any).taxPercent === "number") {
+          tax = (s as any).taxPercent;
+        } else if ((s as any).taxRate) {
+          const parsed = parseFloat(String((s as any).taxRate).replace(/[^0-9.]/g, ""));
+          if (!isNaN(parsed)) tax = parsed;
+        }
         map.set(pid, {
-          id: s.id,
+          id: pid,
           productId: pid,
-          productName: s.productName || (s as any).name || 'Unnamed Product',
-          sku: s.sku || (s as any).itemCode || '',
+          productName: name,
+          sku: sku,
           unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
-          unit: s.unit || 'PCS',
-          taxPercent: 5,
-          hsnCode: (s as any).hsnCode || '',
-          category: s.category || '',
-          batches: s.batches || [],
+          unit: s.unit || "PCS",
+          taxPercent: tax,
+          hsnCode: (s as any).hsnCode || "",
+          category: s.category || "",
+          imageUrl: (s as any).images?.[0] || (s as any).image || (s as any).imageUrl || "",
+          batches,
         });
       }
     });
 
-    return Array.from(map.values());
-  }, [liveProducts, localStocks]);
+    // 3. Fallback from local store stocks
+    if (map.size === 0 && Array.isArray(localStocks)) {
+      localStocks.forEach((s) => {
+        const pid = String((s as any).productId || s.id || "");
+        if (pid && !map.has(pid)) {
+          map.set(pid, {
+            id: s.id,
+            productId: pid,
+            productName: s.productName || (s as any).name || 'Unnamed Product',
+            sku: s.sku || (s as any).itemCode || '',
+            unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
+            unit: s.unit || 'PCS',
+            taxPercent: 5,
+            hsnCode: (s as any).hsnCode || '',
+            category: s.category || '',
+            imageUrl: (s as any).images?.[0] || (s as any).image || (s as any).imageUrl || '',
+            batches: s.batches || [],
+          });
+        }
+      });
+    }
+
+    return Array.from(map.values()).filter((s: any) => {
+      const pid = String(s.productId || s.id || "").trim();
+      const name = String(s.productName || "").trim();
+      if (!pid && !name) return false;
+      if (pid.startsWith("mock_")) return false;
+      return true;
+    });
+  }, [liveProducts, liveStocks, localStocks, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
     return allStockItems.map((s: any) => ({
@@ -586,6 +987,32 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }));
   }, [allStockItems]);
 
+  // Filter products for the active row popover
+  const matchingProducts = useMemo(() => {
+    const q = productSearchQuery.toLowerCase().trim();
+    if (!q) return allStockItems;
+    return allStockItems.filter(
+      (p: any) =>
+        (p.productName && p.productName.toLowerCase().includes(q)) ||
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.itemCode && p.itemCode.toLowerCase().includes(q)) ||
+        (p.category && p.category.toLowerCase().includes(q))
+    );
+  }, [allStockItems, productSearchQuery]);
+
+  // Handle select product from searchable popover
+  const handleSelectProduct = (index: number, product: any) => {
+    handleItemChange(index, 'productId', product.productId || product.id);
+    handleItemChange(index, 'productName', product.productName);
+    handleItemChange(index, 'sku', product.sku || '');
+    handleItemChange(index, 'unit', product.unit || 'PCS');
+    handleItemChange(index, 'category', product.category || '');
+    handleItemChange(index, 'hsnCode', product.hsnCode || '');
+    handleItemChange(index, 'unitPrice', Number(product.unitPrice || 0));
+    handleItemChange(index, 'taxPercent', Number(product.taxPercent || 0));
+    setOpenProductDropdownRow(null);
+  };
+
   // Auto-generate Challan Number
   const generateNextChallanNo = () => {
     const year = new Date().getFullYear();
@@ -595,7 +1022,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Initial Form Data State
   const createEmptyFormData = (customNum = 1) => {
-    const firstProduct = allStockItems[0];
     return {
       customerId: '',
       partyName: '',
@@ -612,15 +1038,15 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       items: [
         {
           id: `dci_item_${Date.now()}_1`,
-          productId: firstProduct?.productId || firstProduct?.id || '',
-          productName: firstProduct?.productName || '',
-          sku: firstProduct?.sku || '',
+          productId: '',
+          productName: '',
+          sku: '',
           quantity: 1,
-          unit: firstProduct?.unit || 'PCS',
-          unitPrice: firstProduct?.unitPrice || 0,
+          unit: 'PCS',
+          unitPrice: 0,
           discountPercent: 0,
-          taxPercent: firstProduct?.taxPercent || 5,
-          total: firstProduct?.unitPrice || 0,
+          taxPercent: 5,
+          total: 0,
         },
       ] as ExtendedChallanItem[],
       notes: '',
@@ -756,6 +1182,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Select Customer from dropdown list
   const handleSelectCustomer = (customer: any) => {
+    if (!customer || !customer.id) {
+      updateActiveTabFormData((prev) => ({
+        ...prev,
+        customerId: '',
+        partyName: '',
+        customerPhone: '',
+        customerEmail: '',
+        customerCompany: '',
+        billingAddress: '',
+        shippingAddress: '',
+      }));
+      setPartySearchQuery('');
+      setIsPartyDropdownOpen(false);
+      return;
+    }
     updateActiveTabFormData((prev) => ({
       ...prev,
       customerId: customer.id,
@@ -769,88 +1210,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }));
     setPartySearchQuery(customer.name);
     setIsPartyDropdownOpen(false);
-  };
-
-  // Quick Customer Creation
-  const handleSaveQuickCustomer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickCustName.trim()) {
-      toast.error('Please enter customer name');
-      return;
-    }
-    if (quickCustPhone.trim()) {
-      const cleanPhone = normalizeIndianPhoneTo10Digits(quickCustPhone);
-      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
-        toast.error('Please enter a valid 10-digit Indian phone number (starts with 6, 7, 8, or 9)');
-        setQuickCustPhoneError('Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)');
-        return;
-      }
-    }
-    setQuickCustPhoneError('');
-
-    try {
-      setIsActionLoading(true);
-      const payload = {
-        name: quickCustName.trim(),
-        phone: quickCustPhone.trim() || '9876543210',
-        email: quickCustEmail.trim() || undefined,
-        company: quickCustCompany.trim() || undefined,
-        customerType: 'Business' as const,
-        billingAddress: quickCustAddress.trim() || undefined,
-        shippingAddress: quickCustAddress.trim() || undefined,
-        openingBalance: Number(quickCustOpeningBal) || 0,
-      };
-
-      let createdCustomerId = `cust_${Date.now()}`;
-      try {
-        const apiRes = await customerApi.createCustomer(payload);
-        if (apiRes?.data?.id) {
-          createdCustomerId = apiRes.data.id;
-        }
-      } catch (err) {
-        console.warn('API customer creation fallback to local state');
-      }
-
-      const newCust: SalesCustomer = {
-        id: createdCustomerId,
-        customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
-        name: quickCustName.trim(),
-        phone: quickCustPhone.trim(),
-        email: quickCustEmail.trim(),
-        company: quickCustCompany.trim(),
-        customerType: 'Business',
-        address: quickCustAddress.trim(),
-        billingAddress: quickCustAddress.trim(),
-        shippingAddress: quickCustAddress.trim(),
-        sameAsBilling: true,
-        city: 'Chennai',
-        state: 'Tamil Nadu',
-        country: 'India',
-        pincode: '600001',
-        creditLimit: 50000,
-        paymentTerms: 'Net 15 Days',
-        openingBalance: Number(quickCustOpeningBal) || 0,
-        preferredPaymentMethod: 'Cash',
-        status: 'Active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveCustomerLocal(newCust);
-      handleSelectCustomer(newCust);
-      setIsQuickCustomerModalOpen(false);
-      setQuickCustName('');
-      setQuickCustPhone('');
-      setQuickCustEmail('');
-      setQuickCustCompany('');
-      setQuickCustAddress('');
-      setQuickCustOpeningBal('0');
-      toast.success(`Customer "${newCust.name}" registered and selected!`);
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to create customer');
-    } finally {
-      setIsActionLoading(false);
-    }
   };
 
   // Handle Items Table Changes
@@ -903,22 +1262,21 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   const handleAddRow = () => {
-    const fallbackProduct = allStockItems[0];
     updateActiveTabFormData((prev) => ({
       ...prev,
       items: [
         ...prev.items,
         {
           id: `dci_item_${Date.now()}_${prev.items.length + 1}`,
-          productId: fallbackProduct?.productId || fallbackProduct?.id || '',
-          productName: fallbackProduct?.productName || '',
-          sku: fallbackProduct?.sku || '',
+          productId: '',
+          productName: '',
+          sku: '',
           quantity: 1,
-          unit: fallbackProduct?.unit || 'PCS',
-          unitPrice: fallbackProduct?.unitPrice || 0,
+          unit: 'PCS',
+          unitPrice: 0,
           discountPercent: 0,
-          taxPercent: fallbackProduct?.taxPercent || 5,
-          total: fallbackProduct?.unitPrice || 0,
+          taxPercent: 5,
+          total: 0,
         },
       ],
     }));
@@ -1000,20 +1358,71 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       toast.error('Please enter at least one item with valid name and rate');
       return;
     }
+    const hasInvalidQty = validItems.some((it) => !it.quantity || it.quantity <= 0);
+    if (hasInvalidQty) {
+      toast.error('All items must have a quantity greater than zero.');
+      return;
+    }
+    const hasInvalidPrice = validItems.some((it) => it.unitPrice !== undefined && it.unitPrice < 0);
+    if (hasInvalidPrice) {
+      toast.error('Item rates cannot be negative.');
+      return;
+    }
+    const hasInvalidDiscount = validItems.some(
+      (it) =>
+        (it.discountPercent !== undefined && (it.discountPercent < 0 || it.discountPercent > 100)) ||
+        (it.discountAmount !== undefined && it.discountAmount < 0)
+    );
+    if (hasInvalidDiscount) {
+      toast.error('Discounts cannot be negative and discount percentage cannot exceed 100%.');
+      return;
+    }
 
     setIsActionLoading(true);
     try {
-      // 1. Resolve customerId if valid UUID exists
+      // 1. Resolve customerId (required string for backend schema)
       let resolvedCustomerId = form.customerId;
       if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
         const matchedCust = liveCustomers.find(
-          (c) => c.name.toLowerCase() === form.partyName.trim().toLowerCase()
+          (c) =>
+            (form.customerId && c.id === form.customerId) ||
+            c.name.toLowerCase() === form.partyName.trim().toLowerCase()
         );
         if (matchedCust && UUID_REGEX.test(matchedCust.id)) {
           resolvedCustomerId = matchedCust.id;
-        } else {
-          resolvedCustomerId = undefined;
         }
+      }
+
+      // If still missing, try auto-creating customer via customerApi
+      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        try {
+          const custRes = await customerApi.createCustomer({
+            name: form.partyName.trim(),
+            customerType: form.customerCompany?.trim() ? 'Business' : 'Individual',
+            phone: form.customerPhone.trim(),
+            email: form.customerEmail.trim() || undefined,
+            company: form.customerCompany.trim() || undefined,
+            billingAddress: form.billingAddress.trim() || undefined,
+            shippingAddress: form.shippingAddress.trim() || undefined,
+            state: form.stateOfSupply,
+          });
+          if (custRes?.data?.id && UUID_REGEX.test(custRes.data.id)) {
+            resolvedCustomerId = custRes.data.id;
+          }
+        } catch (e) {
+          console.warn('Auto customer creation fallback:', e);
+        }
+      }
+
+      // Fallback to first available live customer if still unassigned
+      if (!resolvedCustomerId && liveCustomers.length > 0) {
+        resolvedCustomerId = liveCustomers[0].id;
+      }
+
+      if (!resolvedCustomerId) {
+        toast.error('Please select an existing customer or enter a valid customer name.');
+        setIsActionLoading(false);
+        return;
       }
 
       // 2. Resolve valid UUID productId for every item row
@@ -1117,21 +1526,40 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       }
 
       // If "Save & Convert to Sale" clicked
-      if (andConvert && savedChallanId && UUID_REGEX.test(savedChallanId)) {
-        try {
-          const convertRes = await commerceDeliveryChallanApi.convertChallan(savedChallanId, {
-            targetType: 'Invoice',
-            dueDate: form.dueDate,
-          });
-          const convertedDocNo =
-            convertRes?.data?.convertedTo?.documentNo ||
-            convertRes?.data?.document?.invoiceNo ||
-            `INV-${new Date().getFullYear()}-0001`;
-          toast.success(`Delivery Challan converted to Sales Invoice (${convertedDocNo})!`);
-        } catch (convErr: any) {
-          console.warn('Convert API response warning:', convErr);
-          toast.info('Delivery Challan saved. Conversion registered.');
-        }
+      if (andConvert) {
+        navigate('/sale-management/sales/sale', {
+          state: {
+            convertFrom: {
+              sourceType: 'Challan',
+              sourceId: savedChallanId,
+              sourceNo: finalChallanNo,
+              customerId: form.customerId,
+              customerName: form.partyName,
+              customerCompany: form.customerCompany,
+              customerPhone: form.customerPhone,
+              customerEmail: form.customerEmail,
+              billingAddress: form.billingAddress,
+              shippingAddress: form.shippingAddress || form.billingAddress,
+              items: form.items,
+              subtotal: currentCalculations.subtotalGross,
+              withGst: currentCalculations.totalTax > 0,
+              gstType: form.stateOfSupply?.includes('Tamil Nadu') ? 'intra_state' : 'inter_state',
+              cgst: currentCalculations.totalTax > 0 && form.stateOfSupply?.includes('Tamil Nadu') ? currentCalculations.totalTax / 2 : 0,
+              sgst: currentCalculations.totalTax > 0 && form.stateOfSupply?.includes('Tamil Nadu') ? currentCalculations.totalTax / 2 : 0,
+              igst: currentCalculations.totalTax > 0 && !form.stateOfSupply?.includes('Tamil Nadu') ? currentCalculations.totalTax : 0,
+              discount: currentCalculations.totalDiscount || 0,
+              totalDiscount: currentCalculations.totalDiscount || 0,
+              taxAmount: currentCalculations.totalTax || 0,
+              grandTotal: currentCalculations.finalAmount,
+              paidAmount: 0,
+              paymentMethod: 'Bank Transfer',
+              paymentTerms: '15 Days',
+              dueDate: form.dueDate,
+              notes: `Converted from Delivery Challan ${finalChallanNo}`,
+            },
+          },
+        });
+        return;
       }
 
       // Refresh list from live API
@@ -1152,102 +1580,65 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }
   };
 
-  // Convert to Sale Invoice from Table (POST /commerce/challans/{id}/convert)
+  // Determine conversion status for Delivery Challan
+  const getChallanStages = (challan: DeliveryChallanRecord) => {
+    const challanNoClean = challan.challanNo?.trim();
+    const lineage = challanNoClean ? findDocumentLineage(challanNoClean, 'Challan') : undefined;
+
+    const isInvoiceConverted = Boolean(
+      lineage?.invoiceNo ||
+      lineage?.invoiceId ||
+      challan.status === 'Converted' ||
+      (challan.convertedToInvoiceNo && challan.convertedToInvoiceNo.startsWith('INV-'))
+    );
+
+    return {
+      lineage,
+      isInvoiceConverted,
+      isFullyConverted: isInvoiceConverted,
+    };
+  };
+
+  // Convert to Sale Invoice from Table -> Opens New Sale Invoice page with calculations
   const handleConvertExistingToSale = async (challan: DeliveryChallanRecord) => {
-    if (challan.status === 'Converted') {
+    const stages = getChallanStages(challan);
+    if (stages.isFullyConverted || stages.isInvoiceConverted) {
       toast.info(`Delivery Challan ${challan.challanNo} is already converted.`);
       return;
     }
 
-    try {
-      setIsActionLoading(true);
-      const currentLineage = findDocumentLineage(challan.challanNo);
-      let invNo = currentLineage?.invoiceNo || `INV-${new Date().getFullYear()}-${String(300 + challans.length + 1).padStart(4, '0')}`;
-
-      if (UUID_REGEX.test(challan.id)) {
-        try {
-          const res = await commerceDeliveryChallanApi.convertChallan(challan.id, {
-            targetType: 'Invoice',
-            dueDate: challan.dueDate,
-          });
-          const apiInvNo =
-            res?.data?.convertedTo?.documentNo ||
-            res?.data?.document?.invoiceNo;
-          if (apiInvNo) invNo = apiInvNo;
-        } catch (apiErr) {
-          console.warn('API convert notice:', apiErr);
-        }
-      }
-
-      const newSale: SaleTransaction = {
-        id: `sale_${Date.now()}`,
-        invoiceNo: invNo,
-        referenceNo: challan.challanNo,
-        saleDate: new Date().toISOString().split('T')[0],
-        dueDate: challan.dueDate,
-        customerId: challan.customerId,
-        customerName: challan.partyName,
-        customerCompany: challan.customerCompany,
-        customerPhone: challan.customerPhone,
-        customerEmail: challan.customerEmail,
-        billingAddress: challan.billingAddress,
-        shippingAddress: challan.shippingAddress || challan.billingAddress,
-        items: challan.items,
-        subtotal: challan.subtotal,
-        withGst: challan.withGst,
-        gstType: challan.gstType,
-        cgst: challan.cgst,
-        sgst: challan.sgst,
-        igst: challan.igst,
-        totalDiscount: challan.discount || 0,
-        totalTax: challan.taxAmount || 0,
-        shippingCharges: 0,
-        otherCharges: 0,
-        grandTotal: challan.amount,
-        paidAmount: 0,
-        balance: challan.amount,
-        paymentMethod: 'Cash',
-        paymentTerms: '15 Days',
-        paymentStatus: 'Unpaid',
-        saleStatus: 'Confirmed',
-        createdBy: 'Sales Representative',
-        salesperson: 'Sales Rep',
-        notes: `Converted from Delivery Challan ${challan.challanNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveSale(newSale);
-      syncConvertedInvoiceToStorage(newSale);
-
-      recordDocumentConversion({
-        fromType: 'Challan',
-        fromNo: challan.challanNo,
-        toType: 'Invoice',
-        toNo: invNo,
-      });
-
-      const updated = challans.map((c) =>
-        c.id === challan.id || c.challanNo === challan.challanNo
-          ? { ...c, status: 'Converted' as const, convertedToInvoiceNo: invNo }
-          : c
-      );
-      persistChallans(updated);
-
-      dispatch(baseApi.util.invalidateTags([
-        { type: 'DeliveryChallan', id: challan.id },
-        { type: 'DeliveryChallan', id: 'LIST' },
-        { type: 'SalesInvoice', id: 'LIST' },
-      ]));
-
-      toast.success(`Delivery Challan ${challan.challanNo} converted to Invoice ${invNo}!`);
-      await fetchDeliveryChallans();
-    } catch (err: any) {
-      console.error('Convert failed:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to convert delivery challan');
-    } finally {
-      setIsActionLoading(false);
-    }
+    navigate('/sale-management/sales/sale', {
+      state: {
+        convertFrom: {
+          sourceType: 'Challan',
+          sourceId: challan.id,
+          sourceNo: challan.challanNo,
+          customerId: challan.customerId,
+          customerName: challan.partyName,
+          customerCompany: challan.customerCompany,
+          customerPhone: challan.customerPhone,
+          customerEmail: challan.customerEmail,
+          billingAddress: challan.billingAddress,
+          shippingAddress: challan.shippingAddress || challan.billingAddress,
+          items: challan.items,
+          subtotal: challan.subtotal,
+          withGst: challan.withGst,
+          gstType: challan.gstType,
+          cgst: challan.cgst,
+          sgst: challan.sgst,
+          igst: challan.igst,
+          discount: challan.discount || 0,
+          totalDiscount: challan.discount || 0,
+          taxAmount: challan.taxAmount || 0,
+          grandTotal: challan.amount,
+          paidAmount: 0,
+          paymentMethod: 'Bank Transfer',
+          paymentTerms: '15 Days',
+          dueDate: challan.dueDate,
+          notes: `Converted from Delivery Challan ${challan.challanNo}`,
+        },
+      },
+    });
   };
 
   // Delete Delivery Challan (DELETE /commerce/challans/{id}) with confirmation modal
@@ -1429,6 +1820,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             ...c,
             status: 'Converted' as const,
             convertedToInvoiceNo: invNo,
+            convertedAt: new Date().toISOString(),
           };
         }
         return c;
@@ -1453,47 +1845,75 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     }
   };
 
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  const buildChallanDocumentOptions = (item: DeliveryChallanRecord): DocumentPrintOptions => ({
+    docTypeTitle: 'DELIVERY CHALLAN',
+    docNo: item.challanNo,
+    docDate: isoToDdmmyyyy(item.invoiceDate),
+    dueDate: isoToDdmmyyyy(item.dueDate),
+    status: item.status,
+    statusColor: item.status === 'Delivered' ? 'emerald' : item.status === 'Cancelled' ? 'rose' : 'purple',
+    referenceNo: item.referenceNo,
+    companyName: companyProfile.companyName || 'YAA CREATIONS CRM',
+    companySubtitle: companyProfile.companySubtitle || 'Wholesale & Enterprise Distribution Hub',
+    companyAddress: companyProfile.companyAddress || undefined,
+    companyGstin: companyProfile.companyGstin || undefined,
+    companyPhone: companyProfile.companyPhone || undefined,
+    companyEmail: companyProfile.companyEmail || undefined,
+    partyTitle: 'Consignee / Customer',
+    partyName: item.partyName,
+    partyCompany: item.customerCompany,
+    partyPhone: item.customerPhone,
+    partyAddress: item.billingAddress,
+    extraMeta: [
+      ...(item.vehicleNo ? [{ label: 'Vehicle No', value: item.vehicleNo }] : []),
+      ...(item.driverName ? [{ label: 'Driver / Transporter', value: item.driverName }] : []),
+      { label: 'State of Supply', value: item.stateOfSupply || 'Tamil Nadu' },
+    ],
+    items: (item.items || []).map((it) => ({
+      name: it.productName,
+      sku: it.sku,
+      batch: it.batch,
+      unit: it.unit,
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      taxPercent: it.taxPercent,
+      total: it.total,
+    })),
+    subtotal: item.subtotal,
+    tax: {
+      withGst: true,
+      taxAmount: item.taxAmount,
+    },
+    grandTotal: item.amount,
+    balance: item.balance,
+    balanceLabel: 'Balance Value',
+    secondarySignatoryLabel: "Receiver's Signature & Stamp",
+    primarySignatoryLabel: 'For Yaa Creations (Authorized Signatory)',
+  });
+
   // Print Delivery Challan
   const handlePrintChallan = (item: DeliveryChallanRecord) => {
-    printBusinessDocument({
-      docTypeTitle: 'DELIVERY CHALLAN',
-      docNo: item.challanNo,
-      docDate: isoToDdmmyyyy(item.invoiceDate),
-      dueDate: isoToDdmmyyyy(item.dueDate),
-      status: item.status,
-      statusColor: item.status === 'Delivered' ? 'emerald' : item.status === 'Cancelled' ? 'rose' : 'purple',
-      referenceNo: item.referenceNo,
-      partyTitle: 'Consignee / Customer',
-      partyName: item.partyName,
-      partyCompany: item.customerCompany,
-      partyPhone: item.customerPhone,
-      partyAddress: item.billingAddress,
-      extraMeta: [
-        ...(item.vehicleNo ? [{ label: 'Vehicle No', value: item.vehicleNo }] : []),
-        ...(item.driverName ? [{ label: 'Driver / Transporter', value: item.driverName }] : []),
-        { label: 'State of Supply', value: item.stateOfSupply || 'Tamil Nadu' },
-      ],
-      items: (item.items || []).map((it) => ({
-        name: it.productName,
-        sku: it.sku,
-        batch: it.batch,
-        unit: it.unit,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        taxPercent: it.taxPercent,
-        total: it.total,
-      })),
-      subtotal: item.subtotal,
-      tax: {
-        withGst: true,
-        taxAmount: item.taxAmount,
-      },
-      grandTotal: item.amount,
-      balance: item.balance,
-      balanceLabel: 'Balance Value',
-      secondarySignatoryLabel: "Receiver's Signature & Stamp",
-      primarySignatoryLabel: 'For Yaa Creations (Authorized Signatory)',
-    });
+    printBusinessDocument(buildChallanDocumentOptions(item));
+  };
+
+  // Download Delivery Challan as valid PDF
+  const handleDownloadChallan = async (item: DeliveryChallanRecord) => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const toastId = `dl-dc-${item.id}`;
+    toast.loading(`Preparing PDF for Delivery Challan ${item.challanNo}...`, { id: toastId });
+    try {
+      const options = buildChallanDocumentOptions(item);
+      await downloadBusinessDocument(options, `DeliveryChallan_${item.challanNo.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`);
+      toast.success(`Delivery Challan ${item.challanNo} downloaded successfully!`, { id: toastId });
+    } catch (err: any) {
+      console.error('Delivery challan download error:', err);
+      toast.error('Failed to download delivery challan PDF.', { id: toastId });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Export to Excel
@@ -1503,18 +1923,25 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       return;
     }
 
-    const excelRows = challans.map((c) => ({
-      date: isoToDdmmyyyy(c.invoiceDate),
-      dueDate: isoToDdmmyyyy(c.dueDate),
-      challanNo: c.challanNo,
-      referenceNo: c.referenceNo || '-',
-      partyName: c.partyName,
-      customerPhone: c.customerPhone || '-',
-      vehicleNo: c.vehicleNo || '-',
-      amount: Number(c.amount || 0),
-      balance: Number(c.balance || 0),
-      status: c.status,
-    }));
+    const excelRows = challans.map((c) => {
+      const createdDt = formatDateTime(c.createdAt);
+      const convertedAt = resolveDocumentConvertedAt('Challan', c);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        date: isoToDdmmyyyy(c.invoiceDate),
+        dueDate: isoToDdmmyyyy(c.dueDate),
+        createdDt: createdDt ? createdDt.full : '—',
+        convertedDt: convertedDt ? convertedDt.full : '—',
+        challanNo: c.challanNo,
+        referenceNo: c.referenceNo || '-',
+        partyName: c.partyName,
+        customerPhone: c.customerPhone || '-',
+        vehicleNo: c.vehicleNo || '-',
+        amount: Number(c.amount || 0),
+        balance: Number(c.balance || 0),
+        status: c.status,
+      };
+    });
 
     exportTableToExcel({
       filename: `Delivery_Challans_Report_${new Date().toISOString().split('T')[0]}`,
@@ -1522,8 +1949,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       title: 'YAA CREATIONS CRM - DELIVERY CHALLAN REPORT',
       subtitle: `Filter: ${appliedPeriod} | Total Records: ${challans.length} | Generated: ${new Date().toLocaleDateString()}`,
       columns: [
-        { header: 'Challan Date', key: 'date', align: 'center', width: 15 },
-        { header: 'Due Date', key: 'dueDate', align: 'center', width: 15 },
+        { header: 'Created Date & Time', key: 'createdDt', align: 'center', width: 22 },
+        { header: 'Converted Date & Time', key: 'convertedDt', align: 'center', width: 22 },
         { header: 'Challan No.', key: 'challanNo', align: 'center', width: 18 },
         { header: 'Ref No.', key: 'referenceNo', align: 'center', width: 12 },
         { header: 'Customer Name', key: 'partyName', align: 'left', width: 28 },
@@ -1535,7 +1962,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       ],
       data: excelRows,
       summaryRow: {
-        date: 'TOTAL',
+        createdDt: 'TOTAL',
         partyName: `${challans.length} Challans`,
         amount: challans.reduce((sum, c) => sum + (c.amount || 0), 0),
         balance: challans.reduce((sum, c) => sum + (c.balance || 0), 0),
@@ -1552,26 +1979,33 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       return;
     }
 
-    const printRows = challans.map((c) => ({
-      challanNo: c.challanNo,
-      date: isoToDdmmyyyy(c.invoiceDate),
-      partyName: c.partyName,
-      customerPhone: c.customerPhone || '-',
-      amount: Number(c.amount || 0),
-      balance: Number(c.balance || 0),
-      status: c.status,
-    }));
+    const printRows = challans.map((c) => {
+      const createdDt = formatDateTime(c.createdAt);
+      const convertedAt = resolveDocumentConvertedAt('Challan', c);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        challanNo: c.challanNo,
+        createdDt: createdDt ? createdDt.full : '—',
+        convertedDt: convertedDt ? convertedDt.full : '—',
+        partyName: c.partyName,
+        customerPhone: c.customerPhone || '-',
+        amount: Number(c.amount || 0),
+        balance: Number(c.balance || 0),
+        status: c.status,
+      };
+    });
 
     printTableReport({
       title: 'DELIVERY CHALLAN REGISTER',
       subtitle: `Filter: ${appliedPeriod} | Total Challans: ${challans.length}`,
       columns: [
         { header: 'Challan No.', key: 'challanNo', align: 'center', width: '15%' },
-        { header: 'Date', key: 'date', align: 'center', width: '12%' },
-        { header: 'Customer Name', key: 'partyName', align: 'left', width: '25%' },
-        { header: 'Contact', key: 'customerPhone', align: 'left', width: '14%' },
-        { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: '14%' },
-        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '14%' },
+        { header: 'Created At', key: 'createdDt', align: 'center', width: '18%' },
+        { header: 'Converted At', key: 'convertedDt', align: 'center', width: '18%' },
+        { header: 'Customer Name', key: 'partyName', align: 'left', width: '22%' },
+        { header: 'Contact', key: 'customerPhone', align: 'left', width: '12%' },
+        { header: 'Amount (₹)', key: 'amount', align: 'right', type: 'currency', width: '12%' },
+        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '12%' },
         { header: 'Status', key: 'status', align: 'center', width: '10%' },
       ],
       data: printRows,
@@ -1651,11 +2085,15 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     );
   }, [allCustomers, partySearchQuery]);
 
-  // Close party dropdown on outside click
+  // Close party dropdown and product popover on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (partyDropdownRef.current && !partyDropdownRef.current.contains(e.target as Node)) {
         setIsPartyDropdownOpen(false);
+      }
+      const target = e.target as HTMLElement;
+      if (!target.closest('.dc-product-cell') && !target.closest('.dc-product-dropdown')) {
+        setOpenProductDropdownRow(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1671,9 +2109,9 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   // =========================================================================
   if (viewMode === 'form') {
     return (
-      <div className="min-h-screen bg-slate-100 flex flex-col font-sans -m-4 sm:-m-6 lg:-m-8">
-        {/* 1. Top Tabs Bar */}
-        <div className="bg-slate-200/80 px-4 pt-2.5 pb-0 flex items-center justify-between border-b border-slate-300">
+      <div className="min-h-screen bg-slate-50/50 flex flex-col font-sans -m-4 sm:-m-6 lg:-m-8">
+        {/* 1. TOP TABS BAR (CRM THEME) */}
+        <div className="bg-slate-100 px-4 pt-3 pb-0 flex items-center justify-between border-b border-slate-200">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
@@ -1683,62 +2121,62 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   onClick={() => setActiveTabId(tab.id)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-t-xl text-xs sm:text-[13px] font-bold cursor-pointer transition-all border-t border-x ${
                     isActive
-                      ? 'bg-white text-slate-800 border-slate-300 shadow-xs'
-                      : 'bg-slate-200 text-slate-600 border-transparent hover:bg-slate-300/70'
+                      ? "bg-white text-[#33077C] border-slate-200 shadow-2xs"
+                      : "bg-slate-200/70 text-slate-600 border-transparent hover:bg-slate-200"
                   }`}
                 >
                   <Truck className="w-3.5 h-3.5 text-[#33077C]" />
                   <span>{tab.title}</span>
-                  <button
-                    type="button"
-                    onClick={(e) => handleCloseTab(tab.id, e)}
-                    className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  {tabs.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleCloseTab(tab.id, e)}
+                      className="p-0.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors ml-1 cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
               );
             })}
             <button
               type="button"
               onClick={handleAddNewTab}
-              className="p-1.5 rounded-lg bg-white/70 hover:bg-white text-slate-700 transition-colors shadow-2xs cursor-pointer ml-1"
-              title="Add another Delivery Challan tab"
+              className="w-7 h-7 rounded-full bg-[#33077C] hover:bg-[#4309A2] text-white flex items-center justify-center shadow-xs transition-transform active:scale-95 cursor-pointer ml-1"
+              title="Add New Delivery Challan Tab"
             >
-              <Plus className="w-4 h-4 text-[#33077C]" />
-            </button>
-          </div>
-
-          {/* Top Right Tool Icons */}
-          <div className="flex items-center gap-2 pb-2">
-            <button
-              type="button"
-              onClick={() => toast.info('Configure Delivery Challan columns and print layouts')}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-[#33077C] transition-colors shadow-2xs cursor-pointer"
-              title="Template Settings"
-            >
-              <Receipt className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowColumnCustomizePopover(!showColumnCustomizePopover)}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-[#33077C] transition-colors shadow-2xs cursor-pointer"
-              title="Column Customization"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('list')}
-              className="p-1.5 rounded-lg bg-white/80 hover:bg-white text-slate-600 hover:text-rose-600 transition-colors shadow-2xs cursor-pointer"
-              title="Close and Return to List"
-            >
-              <X className="w-4 h-4" />
+              <Plus className="w-4 h-4 stroke-[3]" />
             </button>
           </div>
         </div>
 
-        {/* 2. Main Form Container */}
+        {/* 2. FORM HEADER / TITLE */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
+              <Truck className="w-5 h-5 stroke-[2.2]" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                  Delivery Challan
+                </h1>
+                {activeTab.formData.challanNo && (
+                  <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
+                    #{activeTab.formData.challanNo}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500">
+                {activeTab.editingChallan
+                  ? `Edit Delivery Challan #${activeTab.editingChallan.challanNo}`
+                  : "Issue delivery challans for goods transport, sample dispatches, and scheduled fulfillment"}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. MAIN FORM CONTAINER */}
         <form
           id="challan-form"
           noValidate
@@ -1746,162 +2184,129 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             e.preventDefault();
             handleSaveChallan(false);
           }}
-          className="flex-1 flex flex-col min-h-0 overflow-hidden"
+          className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-6 flex-1 flex flex-col justify-between mb-6"
         >
-          <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto space-y-6">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6 max-w-7xl mx-auto">
-            {/* Header Title */}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold">
-                  <Truck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                    Delivery Challan
-                  </h1>
-                  <p className="text-xs text-slate-500 font-medium">
-                    Issue delivery challans for goods transport, sample dispatches, and convert to invoice on fulfillment
-                  </p>
-                </div>
-              </div>
-            </div>
+          <div>
+            {/* Top Meta Details (Party + Ref/Date/State) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-6 border-b border-slate-100">
+              {/* Left Column: Customer Selection */}
+              <div className="lg:col-span-6 xl:col-span-5" ref={partyDropdownRef}>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Customer <span className="text-rose-500">*</span>
+                </label>
+                <CustomerSearchableSelect
+                  value={activeTab.formData.customerId}
+                  allowNone
+                  size="lg"
+                  onChange={(val, cust) => {
+                    updateActiveTabFormData((prev) => ({
+                      ...prev,
+                      customerId: val,
+                      partyName: cust ? cust.name : (val ? prev.partyName : ""),
+                      customerCompany: cust ? (cust.company || "") : (val ? prev.customerCompany : ""),
+                      customerPhone: cust ? (cust.phone || "") : (val ? prev.customerPhone : ""),
+                      customerEmail: cust ? (cust.email || "") : (val ? prev.customerEmail : ""),
+                      billingAddress: cust ? (cust.billingAddress || cust.address || "") : (val ? prev.billingAddress : ""),
+                    }));
+                  }}
+                  selectedCustomer={
+                    activeTab.formData.customerId
+                      ? {
+                          id: activeTab.formData.customerId,
+                          name: activeTab.formData.partyName,
+                          company: activeTab.formData.customerCompany,
+                          phone: activeTab.formData.customerPhone,
+                        }
+                      : null
+                  }
+                  onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
+                  placeholder="Select or search customer..."
+                />
 
-            {/* Row 1: Party Selection & Right Side Meta */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left Column: Party Dropdown */}
-              <div className="lg:col-span-6 space-y-3">
-                <div className="relative" ref={partyDropdownRef}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Customer <span className="text-rose-500">*</span>
-                    </label>
+                
+
+                {/* Selected Customer Details Preview Pill */}
+                {activeTab.formData.partyName && (
+                  <div className="mt-2.5 p-3 rounded-xl bg-purple-50/50 border border-purple-100 flex items-center justify-between text-xs text-slate-600">
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-slate-900 flex items-center gap-2">
+                        <span>{activeTab.formData.partyName}</span>
+                        {activeTab.formData.customerCompany && (
+                          <span className="text-[11px] font-medium text-slate-500">
+                            • {activeTab.formData.customerCompany}
+                          </span>
+                        )}
+                      </div>
+                      {activeTab.formData.customerPhone && (
+                        <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                          <Phone className="w-3 h-3 text-[#33077C]" />
+                          <span>{activeTab.formData.customerPhone}</span>
+                        </div>
+                      )}
+                      {activeTab.formData.billingAddress && (
+                        <div className="text-[11px] text-slate-500 truncate max-w-sm">
+                          {activeTab.formData.billingAddress}
+                        </div>
+                      )}
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setIsQuickCustomerModalOpen(true)}
-                      className="text-xs font-bold text-[#33077C] hover:underline flex items-center gap-1 cursor-pointer"
+                      onClick={() => {
+                        updateActiveTabFormData((prev) => ({
+                          ...prev,
+                          customerId: "",
+                          partyName: "",
+                          customerPhone: "",
+                          customerEmail: "",
+                          customerCompany: "",
+                          billingAddress: "",
+                          shippingAddress: "",
+                        }));
+                        setPartySearchQuery("");
+                      }}
+                      className="p-1 hover:bg-purple-100/60 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                      title="Clear customer"
                     >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add Customer</span>
+                      <X className="w-3.5 h-3.5" />
                     </button>
-                  </div>
-                  <div
-                    onClick={() => setIsPartyDropdownOpen(!isPartyDropdownOpen)}
-                    className="w-full h-11 px-3.5 bg-white border border-blue-500 ring-2 ring-blue-500/15 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 flex items-center justify-between cursor-pointer shadow-2xs"
-                  >
-                    <span className={activeTab.formData.partyName ? 'text-slate-900' : 'text-slate-400'}>
-                      {activeTab.formData.partyName || 'Select Customer'}
-                    </span>
-                    <ChevronDown className="w-4 h-4 text-slate-400" />
-                  </div>
-
-                  {/* Customer Dropdown Popup */}
-                  {isPartyDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-1.5 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in duration-100">
-                      <div className="relative mb-2">
-                        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input
-                          type="text"
-                          autoFocus
-                          placeholder="Search customer by name or phone..."
-                          value={partySearchQuery}
-                          onChange={(e) => setPartySearchQuery(e.target.value)}
-                          className="w-full h-8 pl-8 pr-2.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-[#4309A2] focus:bg-white"
-                        />
-                      </div>
-
-                      <div className="max-h-60 overflow-y-auto divide-y divide-slate-50 space-y-1">
-                        {filteredCustomerOptions.map((cust) => (
-                          <div
-                            key={cust.id}
-                            onClick={() => handleSelectCustomer(cust)}
-                            className="p-2 rounded-xl hover:bg-purple-50/60 cursor-pointer flex items-center justify-between transition-colors"
-                          >
-                            <div>
-                              <div className="text-xs font-bold text-slate-800">{cust.name}</div>
-                              <div className="text-[11px] text-slate-400">{cust.phone}</div>
-                            </div>
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 text-xs font-bold border border-teal-200">
-                              ₹{(cust.openingBalance || 0).toLocaleString('en-IN')}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {activeTab.formData.partyName && (
-                  <div className="p-3 rounded-xl bg-purple-50/50 border border-purple-100 text-xs text-slate-600 space-y-1">
-                    <div className="font-bold text-slate-900">{activeTab.formData.partyName}</div>
-                    {activeTab.formData.customerPhone && (
-                      <div>Phone: {activeTab.formData.customerPhone}</div>
-                    )}
-                    {activeTab.formData.billingAddress && (
-                      <div className="text-[11px] text-slate-500">{activeTab.formData.billingAddress}</div>
-                    )}
                   </div>
                 )}
               </div>
 
-              {/* Right Column: Challan No, Invoice Date, Due Date, State of supply */}
-              <div className="lg:col-span-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {/* Challan No */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Challan No.
-                  </label>
-                  <input
-                    type="text"
-                    value={activeTab.formData.referenceNo}
-                    onChange={(e) =>
-                      updateActiveTabFormData((prev) => ({ ...prev, referenceNo: e.target.value }))
-                    }
-                    className="w-full h-11 px-3 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                  />
-                </div>
-
-                {/* Invoice Date */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Invoice Date
+              {/* Right Column: Challan Date & State of supply */}
+              <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3">
+                {/* Challan Date */}
+                <div className="flex items-center justify-end gap-3">
+                  <label className="text-xs font-bold text-slate-600 w-28 text-right">
+                    Challan Date
                   </label>
                   <input
                     type="date"
                     value={activeTab.formData.invoiceDate}
                     onChange={(e) =>
-                      updateActiveTabFormData((prev) => ({ ...prev, invoiceDate: e.target.value }))
+                      updateActiveTabFormData((prev) => ({
+                        ...prev,
+                        invoiceDate: e.target.value,
+                      }))
                     }
-                    className="w-full h-11 px-2.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
-                  />
-                </div>
-
-                {/* Due Date */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Due Date
-                  </label>
-                  <input
-                    type="date"
-                    value={activeTab.formData.dueDate}
-                    onChange={(e) =>
-                      updateActiveTabFormData((prev) => ({ ...prev, dueDate: e.target.value }))
-                    }
-                    className="w-full h-11 px-2.5 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                    className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                   />
                 </div>
 
                 {/* State of supply */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                <div className="flex items-center justify-end gap-3">
+                  <label className="text-xs font-bold text-slate-600 w-28 text-right">
                     State of supply
                   </label>
                   <select
                     value={activeTab.formData.stateOfSupply}
                     onChange={(e) =>
-                      updateActiveTabFormData((prev) => ({ ...prev, stateOfSupply: e.target.value }))
+                      updateActiveTabFormData((prev) => ({
+                        ...prev,
+                        stateOfSupply: e.target.value,
+                      }))
                     }
-                    className="w-full h-11 px-2 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#33077C]/15 transition-all shadow-2xs"
+                    className="w-40 sm:w-48 h-9 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none cursor-pointer transition-colors"
                   >
                     {STATE_OPTIONS.map((st) => (
                       <option key={st} value={st}>
@@ -1913,292 +2318,696 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
-            {/* Transport & Vehicle Info Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-purple-50/30 rounded-2xl border border-purple-100">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Vehicle No.
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. TN-09-AB-1234"
-                  value={activeTab.formData.vehicleNo || ''}
-                  onChange={(e) =>
-                    updateActiveTabFormData((prev) => ({ ...prev, vehicleNo: e.target.value }))
-                  }
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Driver Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Muthu Vel"
-                  value={activeTab.formData.driverName || ''}
-                  onChange={(e) =>
-                    updateActiveTabFormData((prev) => ({ ...prev, driverName: e.target.value }))
-                  }
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Driver Phone
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. +91 98401 23456"
-                  value={activeTab.formData.driverPhone || ''}
-                  onChange={(e) =>
-                    updateActiveTabFormData((prev) => ({ ...prev, driverPhone: e.target.value }))
-                  }
-                  className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                />
-              </div>
-            </div>
-
-            {/* 3. Items Table */}
-            <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs sm:text-sm">
-                  <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
-                    <tr>
-                      <th className="py-3 px-3 w-10 text-center text-white/80">#</th>
-                      <th className="py-3 px-4 min-w-[200px] text-white">Item</th>
-                      <th className="py-3 px-3 min-w-[130px] text-center text-white">Batch No</th>
-                      <th className="py-3 px-3 w-20 text-center text-white">Qty</th>
-                      <th className="py-3 px-3 w-28 text-white">Unit</th>
-                      <th className="py-3 px-3 min-w-[130px] text-white">
-                        <div className="flex items-center justify-between">
-                          <span>Price/Unit</span>
-                          <span className="text-[10px] text-purple-200 font-medium normal-case">
-                            ({priceTaxMode})
-                          </span>
+            {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
+            <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
+              <table className="w-full text-xs border-collapse">
+                {/* Table Header */}
+                <thead>
+                  <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
+                    <th className="py-2.5 px-2.5 text-center border-r border-[#4309A2]/70 w-10 text-white/80 font-extrabold">+</th>
+                    <th className="py-2.5 px-3 text-left border-r border-[#4309A2]/70 min-w-[200px] text-white">ITEM</th>
+                    {columnSettings.showItemCategory && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[130px] text-white">ITEM CATEGORY</th>
+                    )}
+                    {columnSettings.showItemCode && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">ITEM CODE</th>
+                    )}
+                    {columnSettings.showHsnSac && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 w-28 text-white">HSN/SAC CODE</th>
+                    )}
+                    {columnSettings.showDescription && (
+                      <th className="py-2.5 px-2.5 text-left border-r border-[#4309A2]/70 min-w-[160px] text-white">DESCRIPTION</th>
+                    )}
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">BATCH NO</th>
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">QTY</th>
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">UNIT</th>
+                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
+                      <div>PRICE/UNIT</div>
+                      <div className="text-[9.5px] text-purple-200 font-normal lowercase">({priceTaxMode.toLowerCase()})</div>
+                    </th>
+                    {columnSettings.showDiscount && (
+                      <th colSpan={2} className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white">
+                        <div className="text-[10px]">DISCOUNT</div>
+                        <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
+                          <span>%</span>
+                          <span className="text-right pr-1">AMOUNT</span>
                         </div>
                       </th>
-                      {columnSettings.showDiscount && (
-                        <th className="py-3 px-3 min-w-[130px] text-white">Discount</th>
-                      )}
-                      <th className="py-3 px-3 min-w-[130px] text-white">Tax</th>
-                      <th className="py-3 px-4 w-32 text-right text-white">Amount</th>
-                      <th className="py-3 px-2 w-10 text-center text-white/80">
-                        <Plus className="w-4 h-4 text-white mx-auto" />
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {activeTab.formData.items.map((rowItem, idx) => (
-                      <tr key={rowItem.id || idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-3 px-3 text-center text-slate-400 font-semibold">{idx + 1}</td>
-                        <td className="py-2.5 px-3 min-w-[200px]">
-                          <SearchableSelect
-                            value={rowItem.productId || ''}
-                            onChange={(val) => {
-                              handleItemChange(idx, 'productId', val);
-                            }}
-                            onSearch={handleProductSearch}
-                            isLoading={isSearchingProducts}
-                            options={productOptions}
-                            placeholder="Select Product..."
-                            searchPlaceholder="Search product by name or SKU..."
-                            emptyText="Type to search products..."
-                            allowClear
-                            size="sm"
-                          />
-                        </td>
-                        {/* Batch No */}
-                        <td className="py-2.5 px-2">
-                          {(() => {
-                            const matchedStock = allStockItems.find(
-                              (s: any) => s.productId === rowItem.productId || s.id === rowItem.productId
-                            );
-                            const batches = (matchedStock as any)?.batches || [];
-                            if (batches.length > 0) {
-                              return (
-                                <select
-                                  value={rowItem.batch || ''}
-                                  onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
-                                  className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
-                                >
-                                  <option value="">Select Batch...</option>
-                                  {batches.map((b: any) => (
-                                    <option key={b.batchNo || b.id} value={b.batchNo}>
-                                      {b.batchNo} ({b.quantity} in stock)
-                                    </option>
-                                  ))}
-                                </select>
-                              );
-                            }
-                            return (
-                              <input
-                                type="text"
-                                placeholder="Batch No"
-                                value={rowItem.batch || ''}
-                                onChange={(e) => handleItemChange(idx, 'batch', e.target.value)}
-                                className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
-                              />
-                            );
-                          })()}
-                        </td>
-                        <td className="py-2.5 px-2">
-                          <input
-                            type="number"
-                            min="1"
-                            value={rowItem.quantity || ''}
-                            onChange={(e) => handleItemChange(idx, 'quantity', Number(e.target.value))}
-                            className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2]"
-                          />
-                        </td>
-                        <td className="py-2.5 px-2">
-                          <select
-                            value={rowItem.unit || 'NONE'}
-                            onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
-                            className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
-                          >
-                            {UNIT_OPTIONS.map((u) => (
-                              <option key={u} value={u}>
-                                {u}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2.5 px-2">
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0.00"
-                            value={rowItem.unitPrice || ''}
-                            onChange={(e) => handleItemChange(idx, 'unitPrice', Number(e.target.value))}
-                            className="w-full h-9 px-2.5 text-right bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                          />
-                        </td>
-                        {columnSettings.showDiscount && (
-                          <td className="py-2.5 px-2">
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                placeholder="%"
-                                value={rowItem.discountPercent || ''}
-                                onChange={(e) =>
-                                  handleItemChange(idx, 'discountPercent', Number(e.target.value))
-                                }
-                                className="w-16 h-9 px-1.5 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
-                              />
-                              <span className="text-[11px] text-slate-400">
-                                ₹{rowItem.discountAmount?.toFixed(0) || 0}
-                              </span>
-                            </div>
-                          </td>
-                        )}
-                        <td className="py-2.5 px-2">
-                          <select
-                            value={rowItem.taxPercent || 0}
-                            onChange={(e) => handleItemChange(idx, 'taxPercent', Number(e.target.value))}
-                            className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
-                          >
-                            {TAX_RATE_OPTIONS.map((tx) => (
-                              <option key={tx.label} value={tx.rate}>
-                                {tx.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2.5 px-4 text-right font-bold text-slate-900">
-                          ₹{rowItem.total?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || '0.00'}
-                        </td>
-                        <td className="py-2.5 px-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveRow(idx)}
-                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            title="Delete Row"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  {/* Totals Summary Footer Row */}
-                  <tfoot className="bg-slate-50 font-bold text-xs text-slate-800 border-t border-slate-200">
-                    <tr>
-                      <td colSpan={2} className="py-3 px-4">
+                    )}
+                    <th colSpan={2} className="py-2 px-2 text-center border-r border-[#4309A2]/70 text-white">
+                      <div className="text-[10px]">TAX</div>
+                      <div className="grid grid-cols-2 text-[9.5px] text-purple-200 font-semibold mt-0.5 border-t border-[#4309A2]/70 pt-1">
+                        <span>%</span>
+                        <span className="text-right pr-1">AMOUNT</span>
+                      </div>
+                    </th>
+                    <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 relative text-white">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <span>AMOUNT</span>
                         <button
                           type="button"
-                          onClick={handleAddRow}
-                          className="h-8 px-3 rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-[#33077C] font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowColumnCustomizePopover(!showColumnCustomizePopover);
+                          }}
+                          className="table-column-customize-btn inline-flex items-center justify-center w-5 h-5 rounded-full text-white hover:bg-white/20 transition-colors cursor-pointer"
+                          title="Customize table columns"
                         >
-                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>ADD ROW</span>
+                          <PlusCircle className="w-4 h-4 text-white stroke-[2.2]" />
                         </button>
+                      </div>
+
+                      {/* Customization Dropdown Popover */}
+                      {showColumnCustomizePopover && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="table-column-customize-popover absolute right-0 top-full mt-1.5 w-52 bg-white rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 text-left normal-case tracking-normal animate-in fade-in zoom-in-95 duration-100"
+                        >
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showItemCategory}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({ ...prev, showItemCategory: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">Item Category</span>
+                            </label>
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showItemCode}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({ ...prev, showItemCode: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">Item Code</span>
+                            </label>
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showHsnSac}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({ ...prev, showHsnSac: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">HSN/SAC Code</span>
+                            </label>
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showDescription}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({ ...prev, showDescription: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">Description</span>
+                            </label>
+                            <label className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-purple-50/60 cursor-pointer text-slate-700 select-none transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={columnSettings.showDiscount}
+                                onChange={(e) =>
+                                  setColumnSettings((prev) => ({ ...prev, showDiscount: e.target.checked }))
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-[#33077C] focus:ring-[#33077C] accent-[#33077C] cursor-pointer"
+                              />
+                              <span className="text-xs font-semibold text-slate-700">Discount</span>
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    <th className="py-2.5 px-2 text-center w-10 text-slate-400"></th>
+                  </tr>
+                </thead>
+
+                {/* Table Body */}
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {activeTab.formData.items.map((rowItem, idx) => (
+                    <tr
+                      key={rowItem.id || idx}
+                      className="hover:bg-slate-50/70 transition-colors"
+                    >
+                      <td className="py-3 px-3 text-center text-slate-400 font-semibold">
+                        {idx + 1}
                       </td>
-                      <td className="py-3 px-2 text-center font-black">
-                        {currentCalculations.totalQty}
+                      {/* Product cell with custom searchable popover */}
+                      <td className="py-2.5 px-3 min-w-[220px] relative dc-product-cell">
+                        <div className="relative" ref={openProductDropdownRow === idx ? productDropdownRef : undefined}>
+                          <div
+                            className={`w-full min-h-[38px] px-3 py-1.5 bg-white border rounded-xl flex items-center justify-between text-xs cursor-pointer transition-all ${
+                              openProductDropdownRow === idx
+                                ? "border-[#33077C] ring-2 ring-[#33077C]/10 bg-white"
+                                : rowItem.productName
+                                ? "border-slate-300 hover:border-slate-400"
+                                : "border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            <input
+                              type="text"
+                              placeholder="Type or select product item..."
+                              value={rowItem.productName || ""}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenProductDropdownRow(idx);
+                                setProductSearchQuery(rowItem.productName || "");
+                                if (liveProducts.length === 0) {
+                                  fetchLiveProducts();
+                                }
+                              }}
+                              onFocus={() => {
+                                setOpenProductDropdownRow(idx);
+                                setProductSearchQuery(rowItem.productName || "");
+                                if (liveProducts.length === 0) {
+                                  fetchLiveProducts();
+                                }
+                              }}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                handleItemChange(idx, "productName", val);
+                                setProductSearchQuery(val);
+                                setOpenProductDropdownRow(idx);
+                                if (productSearchTimerRef.current) {
+                                  clearTimeout(productSearchTimerRef.current);
+                                }
+                                if (val.trim()) {
+                                  productSearchTimerRef.current = setTimeout(() => {
+                                    fetchLiveProducts(val.trim());
+                                  }, 300);
+                                }
+                              }}
+                              className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
+                            />
+                            {isLoadingProducts ? (
+                              <Loader2 className="w-3.5 h-3.5 text-[#33077C] animate-spin shrink-0 ml-1" />
+                            ) : (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (openProductDropdownRow === idx) {
+                                    setOpenProductDropdownRow(null);
+                                  } else {
+                                    setOpenProductDropdownRow(idx);
+                                    setProductSearchQuery(rowItem.productName || "");
+                                    if (liveProducts.length === 0) {
+                                      fetchLiveProducts();
+                                    }
+                                  }
+                                }}
+                                className="p-0.5 hover:bg-slate-100 rounded cursor-pointer shrink-0 ml-1"
+                              >
+                                <ChevronDown
+                                  className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                                    openProductDropdownRow === idx
+                                      ? "rotate-180 text-[#33077C]"
+                                      : ""
+                                  }`}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Dropdown Menu for Product Selection */}
+                          {openProductDropdownRow === idx && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="product-dropdown-popover absolute left-0 top-full mt-1.5 w-[360px] sm:w-[420px] max-w-[90vw] bg-white rounded-2xl shadow-2xl border border-purple-100 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100"
+                            >
+                              {/* Search Bar matching Customer Dropdown */}
+                              <div className="relative mb-2">
+                                <div className="flex items-center w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-xl focus-within:border-[#33077C] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all">
+                                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+                                  <input
+                                    type="text"
+                                    placeholder="Search product by name, SKU or category..."
+                                    value={productSearchQuery}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setProductSearchQuery(val);
+                                      if (productSearchTimerRef.current) {
+                                        clearTimeout(productSearchTimerRef.current);
+                                      }
+                                      if (val.trim().length >= 1) {
+                                        productSearchTimerRef.current = setTimeout(() => {
+                                          fetchLiveProducts(val.trim());
+                                        }, 300);
+                                      }
+                                    }}
+                                    autoFocus
+                                    className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                  />
+                                  {productSearchQuery && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setProductSearchQuery('')}
+                                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* 1. Add New Product Button */}
+                              <div className="pb-2 mb-1.5 border-b border-slate-100">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveItemRowIndex(idx);
+                                    setOpenProductDropdownRow(null);
+                                    setIsAddItemModalOpen(true);
+                                  }}
+                                  className="w-full py-2 px-3 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <span>Add New Product</span>
+                                </button>
+                              </div>
+
+                              {/* 2. Options List */}
+                              <div className="max-h-64 overflow-y-auto p-0.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
+                                {/* Option: Clear / None */}
+                                <div
+                                  onClick={() => {
+                                    handleItemChange(idx, "productId", "");
+                                    handleItemChange(idx, "productName", "");
+                                    handleItemChange(idx, "unitPrice", 0);
+                                    setOpenProductDropdownRow(null);
+                                  }}
+                                  className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                    !rowItem.productName
+                                      ? "bg-purple-50 text-[#33077C] font-bold"
+                                      : "hover:bg-slate-50 text-slate-600"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-slate-400 italic">None / Clear Product</span>
+                                  </div>
+                                  {!rowItem.productName && (
+                                    <Check className="w-4 h-4 text-[#33077C]" />
+                                  )}
+                                </div>
+
+                                {isLoadingProducts && matchingProducts.length === 0 ? (
+                                  <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                                    <span>Loading products...</span>
+                                  </div>
+                                ) : matchingProducts.length === 0 ? (
+                                  <div className="py-6 px-3 text-center text-slate-400">
+                                    <p className="text-xs font-semibold text-slate-600">No products found</p>
+                                    <p className="text-[11px] text-slate-400 mt-0.5">Try typing a different name, category, or SKU</p>
+                                    {productSearchQuery.trim() && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveItemRowIndex(idx);
+                                          setOpenProductDropdownRow(null);
+                                          setIsAddItemModalOpen(true);
+                                        }}
+                                        className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
+                                      >
+                                        <Plus className="w-3 h-3" />
+                                        <span>Add "{productSearchQuery.trim()}"</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  matchingProducts.map((p: any) => {
+                                    const pId = p.productId || p.id;
+                                    const isSelected = rowItem.productId === pId || (rowItem.productName && rowItem.productName === p.productName);
+                                    const imgUrl = p.imageUrl || p.image;
+                                    return (
+                                      <div
+                                        key={pId}
+                                        onClick={() => handleSelectProduct(idx, p)}
+                                        className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
+                                          isSelected
+                                            ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
+                                            : "hover:bg-slate-50/80 text-slate-800"
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                          <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60 overflow-hidden">
+                                            {imgUrl ? (
+                                              <img
+                                                src={imgUrl}
+                                                alt={p.productName}
+                                                className="w-full h-full object-cover"
+                                              />
+                                            ) : (
+                                              <span>{getInitials(p.productName, "PR")}</span>
+                                            )}
+                                          </div>
+
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <span className="font-bold text-slate-900 truncate">
+                                                {p.productName}
+                                              </span>
+                                              {p.category && (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[120px]">
+                                                  {p.category}
+                                                </span>
+                                              )}
+                                              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                Active
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                                              <span className="font-mono text-slate-600">
+                                                SKU: {p.sku || p.productCode || "PRD"}
+                                              </span>
+                                              {p.unit && <span>• {p.unit}</span>}
+                                              {p.hsnCode && (
+                                                <span className="text-slate-400 font-mono text-[10px]">
+                                                  • HSN: {p.hsnCode}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span className="font-bold text-[#33077C] text-xs">
+                                            ₹{Number(p.unitPrice || 0).toLocaleString("en-IN")}
+                                          </span>
+                                          {isSelected && (
+                                            <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </td>
-                      <td></td>
-                      <td></td>
+                      {/* Batch No */}
+                      <td className="py-2.5 px-2">
+                        {(() => {
+                          const matchedStock = allStockItems.find(
+                            (s: any) =>
+                              s.productId === rowItem.productId ||
+                              s.id === rowItem.productId,
+                          );
+                          const batches =
+                            (matchedStock as any)?.batches || [];
+                          if (batches.length > 0) {
+                            return (
+                              <select
+                                value={rowItem.batch || ""}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "batch",
+                                    e.target.value,
+                                  )
+                                }
+                                className="w-full h-9 px-2 bg-purple-50/60 hover:bg-purple-50 text-[#33077C] border border-purple-200 rounded-lg text-xs font-bold outline-none cursor-pointer focus:border-[#4309A2]"
+                              >
+                                <option value="">Select Batch...</option>
+                                {batches.map((b: any) => (
+                                  <option
+                                    key={b.batchNo || b.id}
+                                    value={b.batchNo}
+                                  >
+                                    {b.batchNo} {b.quantity !== undefined ? `(${b.quantity} in stock)` : ''}
+                                  </option>
+                                ))}
+                                {rowItem.batch && !batches.some((b: any) => b.batchNo === rowItem.batch) && (
+                                  <option value={rowItem.batch}>{rowItem.batch}</option>
+                                )}
+                              </select>
+                            );
+                          }
+                          return (
+                            <input
+                              type="text"
+                              placeholder="Batch No"
+                              value={rowItem.batch || ""}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  idx,
+                                  "batch",
+                                  e.target.value,
+                                )
+                              }
+                              className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold font-mono text-[#33077C] outline-none focus:border-[#4309A2]"
+                            />
+                          );
+                        })()}
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <input
+                          type="number"
+                          min="1"
+                          value={rowItem.quantity || ""}
+                          onKeyDown={handleNonNegativeKeyDown}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "quantity",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2]"
+                        />
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <select
+                          value={rowItem.unit || "NONE"}
+                          onChange={(e) =>
+                            handleItemChange(idx, "unit", e.target.value)
+                          }
+                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
+                        >
+                          {UNIT_OPTIONS.map((u) => (
+                            <option key={u} value={u}>
+                              {u}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 px-2">
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0.00"
+                          value={rowItem.unitPrice || ""}
+                          onKeyDown={handleNonNegativeKeyDown}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "unitPrice",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2.5 text-right bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                        />
+                      </td>
                       {columnSettings.showDiscount && (
-                        <td className="py-3 px-2 text-slate-600">
-                          ₹{currentCalculations.totalDiscount.toFixed(2)}
+                        <td className="py-2.5 px-2">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              placeholder="%"
+                              value={rowItem.discountPercent || ""}
+                              onKeyDown={handleNonNegativeKeyDown}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  idx,
+                                  "discountPercent",
+                                  Number(e.target.value),
+                                )
+                              }
+                              className="w-16 h-9 px-1.5 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                            />
+                            <span className="text-[11px] text-slate-400">
+                              ₹{rowItem.discountAmount?.toFixed(0) || 0}
+                            </span>
+                          </div>
                         </td>
                       )}
-                      <td className="py-3 px-2 text-slate-600">
-                        ₹{currentCalculations.totalTax.toFixed(2)}
+                      <td className="py-2.5 px-2">
+                        <select
+                          value={rowItem.taxPercent || 0}
+                          onChange={(e) =>
+                            handleItemChange(
+                              idx,
+                              "taxPercent",
+                              Number(e.target.value),
+                            )
+                          }
+                          className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
+                        >
+                          {TAX_RATE_OPTIONS.map((tx) => (
+                            <option key={tx.label} value={tx.rate}>
+                              {tx.label}
+                            </option>
+                          ))}
+                        </select>
                       </td>
-                      <td className="py-3 px-4 text-right font-black text-slate-900 text-sm">
-                        ₹{currentCalculations.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      <td className="py-2.5 px-4 text-right font-bold text-slate-900">
+                        ₹
+                        {rowItem.total?.toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                        }) || "0.00"}
                       </td>
-                      <td></td>
+                      <td className="py-2.5 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRow(idx)}
+                          className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Delete Row"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                     </tr>
-                  </tfoot>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+
+                {/* Totals Summary Footer Row */}
+                <tfoot>
+                  <tr className="bg-slate-50/90 border-t border-slate-200 font-bold text-slate-800 text-xs">
+                    {/* Add Row Button Column */}
+                    <td
+                      colSpan={
+                        2 +
+                        (columnSettings.showItemCategory ? 1 : 0) +
+                        (columnSettings.showItemCode ? 1 : 0) +
+                        (columnSettings.showHsnSac ? 1 : 0) +
+                        (columnSettings.showDescription ? 1 : 0) +
+                        1
+                      }
+                      className="py-2.5 px-3 border-r border-slate-200"
+                    >
+                      <button
+                        type="button"
+                        onClick={handleAddRow}
+                        className="px-3 py-1.5 rounded-lg border border-[#33077C] text-[#33077C] hover:bg-purple-50 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>ADD ROW</span>
+                      </button>
+                    </td>
+
+                    {/* Total QTY */}
+                    <td className="py-2.5 px-2 text-center border-r border-slate-200 font-extrabold text-[#33077C]">
+                      {currentCalculations.totalQty}
+                    </td>
+
+                    {/* Total label */}
+                    <td className="py-2.5 px-2 text-center border-r border-slate-200 text-slate-500 uppercase text-[11px]">
+                      TOTAL
+                    </td>
+
+                    {/* Price total placeholder */}
+                    <td className="border-r border-slate-200"></td>
+
+                    {/* Discount total placeholder & amount */}
+                    {columnSettings.showDiscount && (
+                      <>
+                        <td className="border-r border-slate-200"></td>
+                        <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
+                          {currentCalculations.totalDiscount > 0
+                            ? currentCalculations.totalDiscount.toFixed(2)
+                            : "0"}
+                        </td>
+                      </>
+                    )}
+
+                    {/* Tax placeholder */}
+                    <td className="border-r border-slate-200"></td>
+
+                    {/* Total Tax Amount */}
+                    <td className="py-2.5 px-2 text-right border-r border-slate-200 pr-3 font-semibold text-slate-700">
+                      {currentCalculations.totalTax > 0
+                        ? currentCalculations.totalTax.toFixed(2)
+                        : "0"}
+                    </td>
+
+                    {/* Total Line Amount */}
+                    <td className="py-2.5 px-3 text-right border-r border-slate-200 font-extrabold text-[#33077C]">
+                      ₹
+                      {currentCalculations.finalAmount.toLocaleString(
+                        "en-IN",
+                        { minimumFractionDigits: 2 },
+                      )}
+                    </td>
+
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
 
-            {/* 4. Bottom Options */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+            {/* 5. BOTTOM SECTION: ACTION TILES (LEFT) & ROUND OFF / TOTAL (RIGHT) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-8 items-start">
+              {/* Left Column: Action Buttons & Expandable Cards */}
               <div className="lg:col-span-7 space-y-3">
-                <div className="flex flex-wrap gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <button
                     type="button"
                     onClick={() => setShowTermsSection(!showTermsSection)}
-                    className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                       showTermsSection
-                        ? 'bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
                     }`}
                   >
-                    <FileEdit className="w-3.5 h-3.5" />
-                    <span>ADD TERMS &amp; CONDITIONS</span>
+                    <AlignLeft className="w-3.5 h-3.5" />
+                    <span>ADD TERMS & CONDITIONS</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setShowDescriptionSection(!showDescriptionSection)}
-                    className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    onClick={() =>
+                      setShowDescriptionSection(!showDescriptionSection)
+                    }
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                       showDescriptionSection
-                        ? 'bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
                     }`}
                   >
-                    <AlignLeft className="w-3.5 h-3.5" />
+                    <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
                     <span>ADD DESCRIPTION</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowImageSection(!showImageSection);
-                      if (!attachedImageName) setAttachedImageName('delivery_vehicle_slip.jpg');
-                    }}
-                    className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    onClick={() => setShowTransportSection(!showTransportSection)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                      showTransportSection
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
+                    }`}
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>ADD TRANSPORT INFO</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowImageSection(!showImageSection)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                       showImageSection
-                        ? 'bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
                     }`}
                   >
                     <ImageIcon className="w-3.5 h-3.5" />
@@ -2207,14 +3016,13 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowDocumentSection(!showDocumentSection);
-                      if (!attachedDocName) setAttachedDocName('signed_gate_pass.pdf');
-                    }}
-                    className={`h-9 px-3.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    onClick={() =>
+                      setShowDocumentSection(!showDocumentSection)
+                    }
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                       showDocumentSection
-                        ? 'bg-purple-50 text-[#33077C] border-purple-300 shadow-2xs'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        ? "bg-purple-50 text-[#33077C] border-purple-300 ring-2 ring-purple-100"
+                        : "bg-white text-slate-600 hover:text-[#33077C] hover:bg-purple-50/50 border-slate-200"
                     }`}
                   >
                     <Paperclip className="w-3.5 h-3.5" />
@@ -2222,217 +3030,360 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   </button>
                 </div>
 
+                {/* Expandable Sections */}
                 {showTermsSection && (
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 animate-in fade-in">
-                    <label className="text-xs font-bold text-slate-700">Terms &amp; Conditions</label>
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Terms & Conditions
+                    </label>
                     <textarea
                       rows={3}
-                      value={activeTab.formData.terms}
+                      value={activeTab.formData.terms || ""}
                       onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({ ...prev, terms: e.target.value }))
+                        updateActiveTabFormData((prev) => ({
+                          ...prev,
+                          terms: e.target.value,
+                        }))
                       }
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#4309A2]"
+                      placeholder="Enter delivery challan terms and conditions..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#33077C]"
                     />
                   </div>
                 )}
 
                 {showDescriptionSection && (
-                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 animate-in fade-in">
-                    <label className="text-xs font-bold text-slate-700">Dispatch Notes / Gate Pass Info</label>
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-1.5 animate-in fade-in duration-100">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Challan Description / Gate Pass Notes
+                    </label>
                     <textarea
                       rows={2}
-                      placeholder="Add vehicle info, transport service, or driver name..."
-                      value={activeTab.formData.notes}
+                      value={activeTab.formData.notes || ""}
                       onChange={(e) =>
-                        updateActiveTabFormData((prev) => ({ ...prev, notes: e.target.value }))
+                        updateActiveTabFormData((prev) => ({
+                          ...prev,
+                          notes: e.target.value,
+                        }))
                       }
-                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#4309A2]"
+                      placeholder="Add dispatch instructions, site contact, or unloading remarks..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 outline-none focus:border-[#33077C]"
                     />
+                  </div>
+                )}
+
+                {showTransportSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-3 animate-in fade-in duration-100">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Transport & Vehicle Information
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Vehicle No.
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. TN-09-AB-1234"
+                          value={activeTab.formData.vehicleNo || ""}
+                          onChange={(e) =>
+                            updateActiveTabFormData((prev) => ({
+                              ...prev,
+                              vehicleNo: e.target.value,
+                            }))
+                          }
+                          className="w-full h-8 px-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Driver Name
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Muthu Vel"
+                          value={activeTab.formData.driverName || ""}
+                          onChange={(e) =>
+                            updateActiveTabFormData((prev) => ({
+                              ...prev,
+                              driverName: e.target.value,
+                            }))
+                          }
+                          className="w-full h-8 px-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Driver Phone
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. +91 98401 23456"
+                          value={activeTab.formData.driverPhone || ""}
+                          onChange={(e) =>
+                            updateActiveTabFormData((prev) => ({
+                              ...prev,
+                              driverPhone: e.target.value,
+                            }))
+                          }
+                          className="w-full h-8 px-2.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {showImageSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Attach Image
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
+                        <ImageIcon className="w-3.5 h-3.5 text-[#33077C]" />
+                        <span>Choose Image</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              setAttachedImageName(e.target.files[0].name);
+                              toast.success(
+                                `Image "${e.target.files[0].name}" attached!`,
+                              );
+                            }
+                          }}
+                        />
+                      </label>
+                      {attachedImageName && (
+                        <span className="text-slate-600 font-medium truncate max-w-xs">
+                          {attachedImageName}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {showDocumentSection && (
+                  <div className="p-3.5 bg-slate-50/70 border border-purple-100 rounded-xl space-y-2 animate-in fade-in duration-100 text-xs">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Attach Document / PDF
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="px-3 py-1.5 bg-white border border-slate-200 hover:border-[#33077C] rounded-lg font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5 transition-colors">
+                        <FileUp className="w-3.5 h-3.5 text-[#33077C]" />
+                        <span>Choose Document</span>
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              setAttachedDocName(e.target.files[0].name);
+                              toast.success(
+                                `Document "${e.target.files[0].name}" attached!`,
+                              );
+                            }
+                          }}
+                        />
+                      </label>
+                      {attachedDocName && (
+                        <span className="text-slate-600 font-medium truncate max-w-xs">
+                          {attachedDocName}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Right Side: Round Off & Total */}
-              <div className="lg:col-span-5 bg-slate-50 p-5 rounded-2xl border border-slate-200/80 space-y-3">
-                <div className="flex items-center justify-between text-xs text-slate-600">
-                  <span>Sub Total (Taxable)</span>
-                  <span className="font-semibold text-slate-800">
-                    ₹{currentCalculations.netTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-
-                {currentCalculations.totalTax > 0 && (
-                  <div className="flex items-center justify-between text-xs text-slate-600">
-                    <span>Total Tax</span>
-                    <span className="font-semibold text-slate-800">
-                      ₹{currentCalculations.totalTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                  <label className="flex items-center gap-2 cursor-pointer">
+              {/* Right Column: Round Off & Grand Total Box (CRM Theme) */}
+              <div className="lg:col-span-5 flex flex-col items-end gap-4">
+                {/* Round Off Input */}
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
                     <input
                       type="checkbox"
                       checked={enableRoundOff}
-                      onChange={(e) => setEnableRoundOff(e.target.checked)}
-                      className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C]"
+                      onChange={(e) => {
+                        setEnableRoundOff(e.target.checked);
+                        if (!e.target.checked) setManualRoundOff(null);
+                      }}
+                      className="w-4 h-4 rounded text-[#33077C] focus:ring-[#33077C] border-slate-300 accent-[#33077C]"
                     />
-                    <span className="text-xs font-bold text-slate-700">Round Off</span>
+                    <span>Round Off</span>
                   </label>
-                  <span className="text-xs font-bold text-slate-600">
-                    ₹{currentCalculations.roundOff.toFixed(2)}
-                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    disabled={!enableRoundOff}
+                    value={
+                      currentCalculations.roundOff
+                        ? currentCalculations.roundOff
+                        : ""
+                    }
+                    placeholder="0.00"
+                    onChange={(e) =>
+                      setManualRoundOff(Number(e.target.value))
+                    }
+                    className="w-24 h-8 px-2.5 text-right bg-white border border-slate-200 disabled:bg-slate-50 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#33077C]"
+                  />
                 </div>
 
-                <div className="flex items-center justify-between pt-3 border-t-2 border-slate-300">
-                  <span className="text-sm font-black text-slate-900 uppercase">Total Amount</span>
-                  <span className="text-xl font-black text-[#33077C]">
-                    ₹{currentCalculations.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                {/* Grand Total Display */}
+                <div className="flex items-center gap-4">
+                  <span className="text-sm font-bold text-slate-800">
+                    Total
                   </span>
+                  <div className="w-48 sm:w-56 h-11 px-3.5 bg-purple-50/30 border-2 border-purple-200 rounded-xl flex items-center justify-end text-base font-extrabold text-[#33077C] shadow-2xs">
+                    ₹{" "}
+                    {currentCalculations.finalAmount.toLocaleString(
+                      "en-IN",
+                      { minimumFractionDigits: 2 },
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* 5. Sticky Bottom Bar */}
-        <div className="bg-white border-t border-slate-200 px-6 py-4 flex items-center justify-between sticky bottom-0 z-30 shadow-lg">
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            className="h-10 px-5 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2"
-          >
-            <ArrowLeft className="w-4 h-4 text-slate-500 stroke-[2.5]" />
-            <span>Back to List</span>
-          </button>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => toast.success('Delivery Challan link copied & ready to share!')}
-              className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-xs sm:text-[13px] font-bold text-slate-700 hover:bg-slate-50 transition-all flex items-center gap-2"
-            >
-              <Share2 className="w-4 h-4 text-slate-600" />
-              <span>Share</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isActionLoading}
-              onClick={() => handleSaveChallan(true)}
-              className="h-10 px-5 rounded-xl border border-[#33077C]/30 bg-purple-50 hover:bg-purple-100 text-[#33077C] text-xs sm:text-[13px] font-bold transition-all flex items-center gap-2 disabled:opacity-50"
-            >
-              {isActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
-              <span>Save &amp; Convert to Sale</span>
-            </button>
-
-            <button
-              type="submit"
-              form="challan-form"
-              disabled={isActionLoading}
-              className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
-            >
-              {isActionLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4 stroke-[2.5]" />
-              )}
-              <span>{activeTab.editingChallan ? 'Update Challan' : 'Save'}</span>
-            </button>
-          </div>
-        </div>
-        </form>
-
-        {/* Quick Customer Modal */}
-        {isQuickCustomerModalOpen && (
-          <Modal
-            isOpen={isQuickCustomerModalOpen}
-            onClose={() => setIsQuickCustomerModalOpen(false)}
-            title="Add New Customer"
-            subtitle="Register customer details to link with this Delivery Challan"
-            maxWidth="md"
-            headerGradient={true}
-            showBackIcon={true}
-            hideCloseButton={true}
-          >
-            <form noValidate onSubmit={handleSaveQuickCustomer} className="p-4 sm:p-6 space-y-4 pt-4">
-              <div>
-                <FormLabel required>Customer / Business Name</FormLabel>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Apex Hospitality Corp"
-                  value={quickCustName}
-                  onChange={(e) => setQuickCustName(e.target.value)}
-                  className={FORM_INPUT_CLS}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <div>
-                  <FormLabel>Phone Number</FormLabel>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 9876543210"
-                    maxLength={10}
-                    value={quickCustPhone}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onChange={(e) => {
-                      const clean = normalizeIndianPhoneTo10Digits(e.target.value);
-                      setQuickCustPhone(clean);
-                      if (clean && !/^[6-9]\d{9}$/.test(clean)) {
-                        setQuickCustPhoneError('Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)');
-                      } else {
-                        setQuickCustPhoneError('');
-                      }
-                    }}
-                    className={getFormInputCls(Boolean(quickCustPhoneError))}
-                  />
-                  {quickCustPhoneError && <FormError message={quickCustPhoneError} />}
-                </div>
-                <div>
-                  <FormLabel>Email</FormLabel>
-                  <input
-                    type="email"
-                    placeholder="dispatch@company.com"
-                    value={quickCustEmail}
-                    onChange={(e) => setQuickCustEmail(e.target.value)}
-                    className={FORM_INPUT_CLS}
-                  />
-                </div>
-              </div>
-
-              <div className="pt-1">
-                <FormLabel>Delivery Address</FormLabel>
-                <input
-                  type="text"
-                  placeholder="Destination warehouse or site address"
-                  value={quickCustAddress}
-                  onChange={(e) => setQuickCustAddress(e.target.value)}
-                  className={FORM_INPUT_CLS}
-                />
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
-                <button
+            {/* 6. BOTTOM ACTION FOOTER (CRM THEME) */}
+            <div className="flex items-center justify-end gap-3 pt-6 mt-8 border-t border-slate-200">
+              <div className="flex items-center gap-3">
+                {/* Cancel / Back Button */}
+                <Button
+                  variant="secondary"
+                  size="md"
                   type="button"
-                  onClick={() => setIsQuickCustomerModalOpen(false)}
-                  className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                  onClick={() => setViewMode("list")}
                 >
                   Cancel
-                </button>
-                <button
-                  type="submit"
+                </Button>
+
+                {/* Share Dropdown Button */}
+
+                <div className="dc-share-footer-container relative">
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    type="button"
+                    onClick={() =>
+                      setShowShareFooterMenu(!showShareFooterMenu)
+                    }
+                    icon={<ChevronDown className="w-3.5 h-3.5 ml-1" />}
+                  >
+                    Share
+                  </Button>
+
+                  {/* Share Popover */}
+                  {showShareFooterMenu && (
+                    <div className="absolute right-0 bottom-full mb-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs text-left">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowShareFooterMenu(false);
+                          const text = encodeURIComponent(
+                            `Delivery Challan from YAA Mart\nChallan No: ${activeTab.formData.challanNo || activeTab.formData.referenceNo}\nCustomer: ${activeTab.formData.partyName}\nAmount: ₹${currentCalculations.finalAmount}`,
+                          );
+                          window.open(
+                            `https://wa.me/?text=${text}`,
+                            "_blank",
+                          );
+                        }}
+                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <span>Share via WhatsApp</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowShareFooterMenu(false);
+                          const subject = encodeURIComponent(
+                            `Delivery Challan ${activeTab.formData.challanNo || activeTab.formData.referenceNo}`,
+                          );
+                          const body = encodeURIComponent(
+                            `Dear ${activeTab.formData.partyName},\n\nChallan amount: ₹${currentCalculations.finalAmount}`,
+                          );
+                          window.open(
+                            `mailto:${activeTab.formData.customerEmail}?subject=${subject}&body=${body}`,
+                            "_blank",
+                          );
+                        }}
+                        className="w-full px-3 py-2 text-left font-bold text-slate-700 hover:bg-purple-50 hover:text-[#33077C] rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
+                      >
+                        <span>Share via Email</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <Button
+                  variant="secondary"
+                  size="md"
+                  type="button"
                   disabled={isActionLoading}
-                  className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md disabled:opacity-50"
+                  onClick={() => handleSaveChallan(true)}
+                  className="border-purple-200 text-[#33077C] bg-purple-50/50 hover:bg-purple-100/50"
+                  icon={
+                    isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                    ) : (
+                      <ShoppingCart className="w-4 h-4" />
+                    )
+                  }
                 >
-                  Save Customer
-                </button>
+                  Save & Convert to Sale
+                </Button>
+
+                {/* Save Button (CRM Primary Theme #33077C) */}
+                <Button
+                  variant="primary"
+                  size="md"
+                  type="submit"
+                  form="challan-form"
+                  disabled={isActionLoading}
+                  icon={
+                    isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    ) : (
+                      <Check className="w-4 h-4 text-white stroke-[3]" />
+                    )
+                  }
+                >
+                  {isActionLoading
+                    ? "Saving..."
+                    : activeTab.editingChallan
+                      ? "Update Challan"
+                      : "Save"}
+                </Button>
               </div>
-            </form>
-          </Modal>
-        )}
+            </div>
+          </div>
+        </form>
+
+        {/* Add Customer Modal */}
+        <AddCustomerModal
+          isOpen={isAddCustomerModalOpen}
+          onClose={() => setIsAddCustomerModalOpen(false)}
+          onCustomerCreated={(newCust) => {
+            dispatch(baseApi.util.invalidateTags(['CommerceCustomer', 'Customer'] as any));
+            handleSelectCustomer(newCust);
+            loadMasterData();
+          }}
+        />
+
+        {/* Add Item Modal */}
+        <AddItemModal
+          isOpen={isAddItemModalOpen}
+          onClose={() => setIsAddItemModalOpen(false)}
+          onProductCreated={(newProd) => {
+            dispatch(baseApi.util.invalidateTags(['Product', 'InventoryStock'] as any));
+            setLiveProducts((prev) => [newProd, ...prev]);
+            loadMasterData();
+            if (activeItemRowIndex !== null) {
+              handleSelectProduct(activeItemRowIndex, newProd);
+            }
+          }}
+        />
       </div>
     );
   }
@@ -2443,8 +3394,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* 1. Top Header Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-[220px] flex-1">
           <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <Truck className="w-4 h-4" />
           </div>
@@ -2463,7 +3414,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-end sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
@@ -2579,10 +3530,33 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         }}
         placeholder="Search by customer name, challan no, vehicle..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            appliedPeriod === pendingPeriod &&
+            appliedStatus === pendingStatus &&
+            page === 1;
+
+          setAppliedSearch(trimmed);
+          setAppliedPeriod(pendingPeriod);
+          setAppliedStatus(pendingStatus);
           setPage(1);
+
+          if (isSame) {
+            isFetchingChallansRef.current = false;
+            fetchDeliveryChallans();
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            appliedPeriod === 'This Month' &&
+            pendingPeriod === 'This Month' &&
+            appliedStatus === 'ALL' &&
+            pendingStatus === 'ALL' &&
+            page === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('This Month');
@@ -2590,25 +3564,28 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           setPendingStatus('ALL');
           setAppliedStatus('ALL');
           setPage(1);
+
+          if (isSame) {
+            isFetchingChallansRef.current = false;
+            fetchDeliveryChallans();
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Period : This Month"
-              value={appliedPeriod}
+              value={pendingPeriod}
               options={PERIOD_FILTER_OPTIONS}
               onChange={(val) => {
-                setAppliedPeriod(val);
-                setPage(1);
+                setPendingPeriod(val);
               }}
             />
             <FilterDropdown
               placeholder="Status : All"
-              value={appliedStatus}
+              value={pendingStatus}
               options={STATUS_FILTER_OPTIONS}
               onChange={(val) => {
-                setAppliedStatus(val);
-                setPage(1);
+                setPendingStatus(val);
               }}
             />
           </div>
@@ -2676,70 +3653,50 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-[13px] border-collapse min-w-[850px]">
-              {/* Royal Purple Header */}
-              <thead>
-                <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                  <th className="py-3.5 px-4 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[180px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>CUSTOMER NAME</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[140px] text-white">
-                    <div className="flex items-center justify-center gap-1">
-                      <span>CHALLAN NO.</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="flex items-center gap-1">DATE <span className="text-purple-200">↓</span></span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span>DUE DATE</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-right whitespace-nowrap min-w-[120px] text-white">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <span>TOTAL AMOUNT</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3 border-r border-[#4309A2]/70 text-center whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center justify-center gap-1.5">
-                      <span>STATUS</span>
-                      <Filter className="w-3 h-3 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-4 text-center whitespace-nowrap min-w-[140px] w-40 text-white">
-                    ACTION
-                  </th>
-                </tr>
-              </thead>
+              {/* Royal Purple Header with Standard Icons */}
+              <CommonTableHead
+                columns={[
+                  { label: "DELIVERY CHALLAN NO.", align: "center", minWidth: "140px" },
+                  { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
+                  { label: "CREATED DATE & TIME", align: "left", minWidth: "150px" },
+                  { label: "CONVERTED DATE & TIME", align: "left", minWidth: "150px" },
+                  { label: "TOTAL AMOUNT", align: "right", minWidth: "120px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTION", align: "center", minWidth: "190px" },
+                ]}
+              />
 
               {/* Table Rows */}
               <tbody className="divide-y divide-slate-200 text-slate-800 font-sans">
                 {paginatedChallans.map((item) => {
+                  const challanStages = getChallanStages(item);
                   const isActionOpen = activeDropdownId === item.id;
+                  const createdDt = formatDateTime(item.createdAt);
+                  const convertedAt = resolveDocumentConvertedAt('Challan', item);
+                  const convertedDt = formatDateTime(convertedAt);
+                  const resolvedCustomerCode =
+                    (item as any).customerCode ||
+                    liveCustomers.find(
+                      (c) =>
+                        (item.customerId && c.id === item.customerId) ||
+                        (c.phone && item.customerPhone && c.phone === item.customerPhone) ||
+                        (c.name && item.partyName && c.name.trim().toLowerCase() === item.partyName.trim().toLowerCase())
+                    )?.customerCode ||
+                    localCustomers.find(
+                      (c) =>
+                        (item.customerId && c.id === item.customerId) ||
+                        (c.phone && item.customerPhone && c.phone === item.customerPhone) ||
+                        (c.name && item.partyName && c.name.trim().toLowerCase() === item.partyName.trim().toLowerCase())
+                    )?.customerCode ||
+                    findDocumentLineage(item.challanNo)?.customerCode ||
+                    '';
 
                   return (
                     <tr
                       key={item.id}
                       className="hover:bg-purple-50/30 transition-colors border-b border-slate-200 group"
                     >
-                      {/* 1. PARTY */}
-                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
-                        <div>{item.partyName}</div>
-                        {item.customerPhone && (
-                          <div className="text-[11px] text-slate-400 font-normal">{item.customerPhone}</div>
-                        )}
-                      </td>
-
-                      {/* 2. CHALLAN NO. */}
+                      {/* 1. CHALLAN NO. */}
                       <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <div className="flex flex-col items-center justify-center gap-1">
                           <span>{item.challanNo || item.referenceNo}</span>
@@ -2747,14 +3704,53 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         </div>
                       </td>
 
-                      {/* 3. DATE */}
-                      <td className="py-3.5 px-3 text-slate-700 font-semibold border-r border-slate-200 whitespace-nowrap align-middle">
-                        {isoToDdmmyyyy(item.invoiceDate)}
+                      {/* 2. PARTY */}
+                      <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900">{item.partyName}</span>
+                          {resolvedCustomerCode && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                              {resolvedCustomerCode}
+                            </span>
+                          )}
+                        </div>
+                        {item.customerPhone && (
+                          <div className="text-[11px] text-slate-400 font-normal">{item.customerPhone}</div>
+                        )}
                       </td>
 
-                      {/* 4. DUE DATE */}
-                      <td className="py-3.5 px-3 text-slate-600 font-medium border-r border-slate-200 whitespace-nowrap align-middle">
-                        <span>{isoToDdmmyyyy(item.dueDate)}</span>
+                      {/* CREATED DATE & TIME */}
+                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                        {createdDt ? (
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-800">
+                              {createdDt.date}
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                              <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>{createdDt.time}</span>
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+
+                      {/* CONVERTED DATE & TIME */}
+                      <td className="py-3.5 px-3 sm:px-4 font-semibold text-slate-700 border-r border-slate-200 whitespace-nowrap align-middle">
+                        {convertedDt ? (
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-emerald-800">
+                              {convertedDt.date}
+                            </span>
+                            <span className="text-[11px] text-emerald-600 font-mono flex items-center gap-1 mt-0.5">
+                              <Clock className="w-3 h-3 text-emerald-500 shrink-0" />
+                              <span>{convertedDt.time}</span>
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-xs">—</span>
+                        )}
                       </td>
 
                       {/* 5. TOTAL AMOUNT */}
@@ -2765,7 +3761,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       {/* 6. STATUS */}
                       <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap text-center align-middle">
                         <div className="flex items-center justify-center">
-                          {item.status === 'Converted' || item.status === 'Delivered' ? (
+                          {challanStages.isFullyConverted || item.status === 'Converted' || item.status === 'Delivered' ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                               Converted
@@ -2785,21 +3781,56 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       </td>
 
                       {/* 7. ACTION */}
-                      <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                        <div className="inline-flex items-center justify-center gap-1.5">
-                          {/* CONVERT TO SALE Button */}
-                          <button
-                            type="button"
-                            disabled={item.status === 'Converted' || item.status === 'Cancelled' || isActionLoading}
-                            onClick={() => handleConvertExistingToSale(item)}
-                            className="px-2.5 py-1 text-[11px] font-bold text-[#33077C] hover:text-white bg-purple-50 hover:bg-[#33077C] disabled:opacity-40 disabled:pointer-events-none border border-purple-200 rounded transition-colors cursor-pointer uppercase tracking-wider select-none shadow-2xs"
-                          >
-                            CONVERT TO SALE
-                          </button>
+                      <td className="py-3.5 px-4 text-center whitespace-nowrap min-w-[190px] w-48 align-middle">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* CONVERT TO SALE Button slot with fixed width */}
+                          <div className="w-[104px] shrink-0 flex items-center justify-center">
+                          {challanStages.isFullyConverted ? (
+                            <button
+                              type="button"
+                              disabled
+                              aria-disabled="true"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                              title={`Delivery Challan has been converted (${item.convertedToInvoiceNo || 'Converted'})`}
+                              className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
+                            >
+                              <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
+                              <span>Converted</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={item.status === 'Cancelled' || isActionLoading}
+                              onClick={() => handleConvertExistingToSale(item)}
+                              className="text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none disabled:opacity-40"
+                              title="Convert to Sale Invoice"
+                            >
+                              <span>Convert</span>
+                              <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                            </button>
+                          )}
+
+                          </div>
+
+                          {/* Send / Share Popover Button */}
+                          <DocumentSharePopover
+                            id={item.id}
+                            getShareData={() => formatDeliveryChallanShare(item)}
+                            title="Share Delivery Challan"
+                          />
 
                           {/* 3-Dots Actions Menu */}
                           <SaleActionDropdown
                             items={[
+                              {
+                                label: 'Convert to Sales Invoice',
+                                variant: 'invoice',
+                                disabled: challanStages.isFullyConverted,
+                                onClick: () => handleConvertExistingToSale(item),
+                              },
                               {
                                 label: 'View/Edit',
                                 variant: 'edit',
@@ -2819,6 +3850,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                 label: 'Print Challan',
                                 variant: 'print',
                                 onClick: () => handlePrintChallan(item),
+                              },
+                              {
+                                label: 'Download Challan',
+                                variant: 'download',
+                                onClick: () => handleDownloadChallan(item),
                               },
                               {
                                 label: 'Delete / Cancel',
@@ -2844,7 +3880,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           total={totalApiRecords || filteredChallans.length}
           currentPage={safePage}
           pageSize={pageSize}
-          pageSizeOptions={[10, 20, 50]}
+          pageSizeOptions={[5, 10, 20, 50]}
           onPageChange={(newPage) => setPage(newPage)}
           onPageSizeChange={(newSize) => {
             setPageSize(newSize);
@@ -2999,7 +4035,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-4 text-xs">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
                 <p className="text-[11px] font-bold text-slate-400 uppercase">Consignee / Customer:</p>
                 <p className="text-sm font-bold text-slate-900 mt-0.5">{previewChallan.partyName}</p>
@@ -3015,7 +4051,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
-            <table className="w-full text-xs text-left border border-slate-200 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[560px] text-xs text-left">
               <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                 <tr>
                   <th className="p-2.5 text-white">#</th>
@@ -3041,9 +4078,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 ))}
               </tbody>
             </table>
+            </div>
 
             <div className="flex justify-end pt-2">
-              <div className="w-64 space-y-1.5 text-xs text-slate-600">
+              <div className="w-full sm:w-64 space-y-1.5 text-xs text-slate-600">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
                   <span className="font-semibold text-slate-800">₹{Number(previewChallan.subtotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
@@ -3062,18 +4100,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             </div>
 
             {/* Receiver's Acknowledgement Signature box */}
-            <div className="grid grid-cols-2 gap-4 pt-6 border-t border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-6 border-t border-slate-200 text-xs">
               <div className="space-y-8">
                 <p className="text-slate-500">Receiver's Signature &amp; Stamp:</p>
-                <div className="border-b border-slate-300 w-48"></div>
+                <div className="border-b border-slate-300 w-full max-w-[12rem]"></div>
               </div>
-              <div className="text-right space-y-8">
+              <div className="sm:text-right space-y-8">
                 <p className="text-slate-500">For Yaa Creations (Authorized Signatory):</p>
-                <div className="border-b border-slate-300 w-48 ml-auto"></div>
+                <div className="border-b border-slate-300 w-full max-w-[12rem] sm:ml-auto"></div>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
+            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setPreviewChallan(null)}
@@ -3084,10 +4122,19 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               <button
                 type="button"
                 onClick={() => handlePrintChallan(previewChallan)}
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                <span>Print Challan</span>
+              </button>
+              <button
+                type="button"
+                disabled={isDownloadingPdf}
+                onClick={() => handleDownloadChallan(previewChallan)}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
               >
-                <Printer className="w-4 h-4" />
-                <span>Print Challan</span>
+                <Download className="w-4 h-4" />
+                <span>Download Challan</span>
               </button>
             </div>
           </div>

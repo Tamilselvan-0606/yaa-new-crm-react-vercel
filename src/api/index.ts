@@ -31,6 +31,8 @@ export * from './platform/leadApi';
 export * from './platform/leadTypes';
 export * from './platform/clientApi';
 export * from './platform/clientTypes';
+export * from './platform/paymentApi';
+export * from './platform/paymentTypes';
 
 export * from './commerce/customerTypes';
 export * from './commerce/customerApi';
@@ -61,6 +63,7 @@ export * from './commerce/productTypes';
 export * from './commerce/productApi';
 export {
   productApi,
+  unpackProducts,
   mapApiProductToProductItem,
   mapProductItemToPayload,
 } from './commerce/productApi';

@@ -85,6 +85,7 @@ export interface ApiProformaInvoice {
   convertedToInvoiceNo?: string | null;
   convertedToType?: 'Invoice' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
 }
@@ -165,9 +166,10 @@ export interface ProformaDeleteResponse {
 
 /**
  * Payload for POST /commerce/proformas/{id}/convert
+ * Note: The Commerce API backend strictly only permits converting a Proforma Invoice to 'Invoice'.
  */
 export interface ConvertProformaPayload {
-  targetType: 'Invoice' | 'Order' | string;
+  targetType: 'Invoice' | string;
   dueDate?: string;
 }
 
@@ -181,7 +183,7 @@ export interface ConvertProformaResponse {
   data: {
     source: ApiProformaInvoice;
     convertedTo: {
-      type: 'Invoice' | 'Order' | string;
+      type: 'Invoice' | string;
       id: string;
       documentNo: string;
     };

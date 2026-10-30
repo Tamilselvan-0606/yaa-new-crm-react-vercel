@@ -9,6 +9,8 @@ import {
   CustomerLedgerResponse,
   CreateCustomerPayload,
   UpdateCustomerPayload,
+  CustomerBulkUploadResponse,
+  CustomerBulkUploadResult,
 } from './customerTypes';
 
 export * from './customerTypes';
@@ -36,7 +38,8 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     shippingAddress: apiCust.shippingAddress || apiCust.address || '',
     sameAsBilling: apiCust.sameAsBilling ?? true,
     creditLimit: Number(apiCust.creditLimit) || 0,
-    paymentTerms: apiCust.paymentTerms || 'Net 30 Days',
+    paymentTerms: apiCust.paymentTerms || (apiCust as any).paymentDuePeriod || 'Net 30 Days',
+    paymentDuePeriod: (apiCust as any).paymentDuePeriod || apiCust.paymentTerms || 'Net 30 Days',
     openingBalance: Number(apiCust.openingBalance) || 0,
     preferredPaymentMethod: apiCust.preferredPaymentMethod || 'Bank Transfer',
     notes: apiCust.notes || '',
@@ -44,6 +47,19 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     status: (apiCust.status as CustomerStatus) || 'Active',
     totalSales: (apiCust as any).totalSales ?? 0,
     paidAmount: (apiCust as any).paidAmount ?? 0,
+    paidAmountDate:
+      (apiCust as any).paidAmountDate ||
+      (apiCust as any).lastPaymentDate ||
+      (apiCust as any).paidDate ||
+      (apiCust as any).lastPayment?.date ||
+      (apiCust as any).paymentDate ||
+      null,
+    lastPaymentDate:
+      (apiCust as any).lastPaymentDate ||
+      (apiCust as any).paidAmountDate ||
+      (apiCust as any).paidDate ||
+      (apiCust as any).lastPayment?.date ||
+      null,
     outstandingAmount: (() => {
       const openingBal = Number(apiCust.openingBalance) || 0;
       const raw = (apiCust as any).outstandingAmount ?? (apiCust.outstandingBalance);
@@ -64,48 +80,159 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
  * (e.g. salesRepresentativeId, salesRepresentativeType which belong to /commerce/collections/assign-customer).
  */
 export const sanitizeCommerceCustomerPayload = <T extends Record<string, any>>(payload: T): T => {
-  const sanitized = { ...payload };
+  const sanitized: Record<string, any> = {};
+
+  const forbiddenKeys = new Set([
+    'salesRepresentativeId',
+    'salesRepresentativeType',
+    'salesRepresentativeName',
+    'salesRepresentative',
+    'paymentDuePeriod',
+    'id',
+    'activities',
+    'createdAt',
+    'updatedAt',
+    'totalSales',
+    'paidAmount',
+    'paidAmountDate',
+    'lastPaymentDate',
+    'outstandingAmount',
+    'outstandingBalance',
+  ]);
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (forbiddenKeys.has(key)) {
+      continue;
+    }
+    // Only pass values that were actually entered
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) continue;
+      sanitized[key] = trimmed;
+      continue;
+    }
+    if (typeof value === 'number') {
+      if (isNaN(value)) continue;
+      // Do not pass zero or negative defaults for credit limit or opening balance unless entered as positive number
+      if ((key === 'creditLimit' || key === 'openingBalance') && value <= 0) {
+        continue;
+      }
+      sanitized[key] = value;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const filtered = value.map((v) => (typeof v === 'string' ? v.trim() : v)).filter(Boolean);
+      if (filtered.length === 0) continue;
+      sanitized[key] = filtered;
+      continue;
+    }
+    sanitized[key] = value;
+  }
+
+  // Ensure forbidden keys are guaranteed to be absent
+  delete (sanitized as any).paymentDuePeriod;
   delete (sanitized as any).salesRepresentativeId;
   delete (sanitized as any).salesRepresentativeType;
   delete (sanitized as any).salesRepresentativeName;
   delete (sanitized as any).salesRepresentative;
-  if (!sanitized.customerCode || !String(sanitized.customerCode).trim()) {
-    delete (sanitized as any).customerCode;
-  }
-  return sanitized;
+
+  return sanitized as T;
 };
 
 export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPayload => {
   const cleanStr = (val?: string | null) => (val && val.trim() ? val.trim() : undefined);
 
-  return {
-    customerCode: cleanStr(cust.customerCode),
+  const payload: CreateCustomerPayload = {
     name: cust.name.trim(),
-    company: cleanStr(cust.company),
-    customerType: cust.customerType === 'Individual' ? 'Individual' : 'Business',
     phone: cust.phone.trim(),
-    alternatePhone: cleanStr(cust.alternatePhone),
-    email: cleanStr(cust.email),
-    gender: cleanStr(cust.gender),
-    dateOfBirth: cleanStr(cust.dateOfBirth),
-    address: cleanStr(cust.address),
-    city: cleanStr(cust.city),
-    state: cleanStr(cust.state),
-    country: cleanStr(cust.country) || 'India',
-    pincode: cleanStr(cust.pincode),
-    gstNumber: cleanStr(cust.gstNumber)?.toUpperCase(),
-    panNumber: cleanStr(cust.panNumber)?.toUpperCase(),
-    billingAddress: cleanStr(cust.billingAddress) || cleanStr(cust.address),
-    shippingAddress: cleanStr(cust.shippingAddress) || cleanStr(cust.address),
-    sameAsBilling: cust.sameAsBilling ?? true,
-    creditLimit: typeof cust.creditLimit === 'number' ? cust.creditLimit : Number(cust.creditLimit) || 0,
-    paymentTerms: cleanStr(cust.paymentTerms) || 'Net 30 Days',
-    openingBalance: typeof cust.openingBalance === 'number' ? cust.openingBalance : Number(cust.openingBalance) || 0,
-    preferredPaymentMethod: cleanStr(cust.preferredPaymentMethod) || 'Bank Transfer',
-    notes: cleanStr(cust.notes),
-    tags: Array.isArray(cust.tags) ? cust.tags : [],
-    status: cust.status || 'Active',
+    customerType: cust.customerType === 'Individual' ? 'Individual' : 'Business',
   };
+
+  const code = cleanStr(cust.customerCode);
+  if (code) payload.customerCode = code;
+
+  const company = cleanStr(cust.company);
+  if (company) payload.company = company;
+
+  const altPhone = cleanStr(cust.alternatePhone);
+  if (altPhone) payload.alternatePhone = altPhone;
+
+  const email = cleanStr(cust.email);
+  if (email) payload.email = email;
+
+  const gender = cleanStr(cust.gender);
+  if (gender) payload.gender = gender;
+
+  const dob = cleanStr(cust.dateOfBirth);
+  if (dob) payload.dateOfBirth = dob;
+
+  const addr = cleanStr(cust.address);
+  if (addr) payload.address = addr;
+
+  const city = cleanStr(cust.city);
+  if (city) payload.city = city;
+
+  const state = cleanStr(cust.state);
+  if (state) payload.state = state;
+
+  const country = cleanStr(cust.country);
+  if (country) payload.country = country;
+
+  const pin = cleanStr(cust.pincode);
+  if (pin) payload.pincode = pin;
+
+  const gst = cleanStr(cust.gstNumber);
+  if (gst) payload.gstNumber = gst.toUpperCase();
+
+  const pan = cleanStr(cust.panNumber);
+  if (pan) payload.panNumber = pan.toUpperCase();
+
+  const bill = cleanStr(cust.billingAddress);
+  if (bill) payload.billingAddress = bill;
+
+  const ship = cleanStr(cust.shippingAddress);
+  if (ship) payload.shippingAddress = ship;
+
+  if (typeof cust.sameAsBilling === 'boolean') {
+    payload.sameAsBilling = cust.sameAsBilling;
+  }
+
+  if (cust.creditLimit !== undefined && cust.creditLimit !== null && cust.creditLimit !== ('' as any)) {
+    const num = Number(cust.creditLimit);
+    if (!isNaN(num) && num > 0) {
+      payload.creditLimit = num;
+    }
+  }
+
+  const terms = cleanStr(cust.paymentTerms) || cleanStr((cust as any).paymentDuePeriod);
+  if (terms) payload.paymentTerms = terms;
+
+  if (cust.openingBalance !== undefined && cust.openingBalance !== null && cust.openingBalance !== ('' as any)) {
+    const num = Number(cust.openingBalance);
+    if (!isNaN(num) && num > 0) {
+      payload.openingBalance = num;
+    }
+  }
+
+  const method = cleanStr(cust.preferredPaymentMethod);
+  if (method) payload.preferredPaymentMethod = method;
+
+  const notes = cleanStr(cust.notes);
+  if (notes) payload.notes = notes;
+
+  if (Array.isArray(cust.tags) && cust.tags.length > 0) {
+    const cleanTags = cust.tags.map((t) => t.trim()).filter(Boolean);
+    if (cleanTags.length > 0) payload.tags = cleanTags;
+  }
+
+  if (cust.status) {
+    payload.status = cust.status;
+  }
+
+  return payload;
 };
 
 // =========================================================================
@@ -202,6 +329,18 @@ export const customerEndpoints = baseApi.injectEndpoints({
       query: (id) => `/commerce/customers/${encodeURIComponent(id)}/ledger`,
       providesTags: (_result, _error, id) => [{ type: 'Customer', id: `LEDGER_${id}` }],
     }),
+
+    bulkUploadCommerceCustomers: builder.mutation<CustomerBulkUploadResponse, FormData>({
+      query: (formData) => ({
+        url: '/commerce/customers/bulk-upload',
+        method: 'POST',
+        body: formData,
+      }),
+      invalidatesTags: [
+        { type: 'Customer', id: 'LIST' },
+        'Dashboard',
+      ],
+    }),
   }),
   overrideExisting: false,
 });
@@ -214,6 +353,7 @@ export const {
   usePatchCommerceCustomerMutation,
   useDeleteCommerceCustomerMutation,
   useGetCommerceCustomerLedgerQuery,
+  useBulkUploadCommerceCustomersMutation,
 } = customerEndpoints;
 
 /**
@@ -283,4 +423,22 @@ export const customerApi = {
     const response = await baseClient.get<CustomerLedgerResponse>(`/commerce/customers/${encodeURIComponent(id)}/ledger`);
     return response.data;
   },
+
+  bulkUploadCustomers: async (fileOrFormData: File | FormData | Blob): Promise<CustomerBulkUploadResponse> => {
+    const formData = fileOrFormData instanceof FormData ? fileOrFormData : new FormData();
+    if (!(fileOrFormData instanceof FormData)) {
+      formData.append('file', fileOrFormData as any);
+    }
+    const response = await baseClient.post<CustomerBulkUploadResponse>(
+      '/commerce/customers/bulk-upload',
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data;
+  },
 };
+

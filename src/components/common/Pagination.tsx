@@ -66,10 +66,10 @@ export const Pagination: React.FC<PaginationProps> = ({
 
   return (
     <div
-      className={`bg-white rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 ${className}`}
+      className={`bg-white rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3 px-3.5 sm:px-5 py-3 sm:py-3.5 ${className}`}
     >
       {/* Left: rows per page + record range */}
-      <div className="flex items-center gap-3 text-xs text-slate-500 font-medium">
+      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 sm:gap-3 text-xs text-slate-500 font-medium">
         <span>Rows per page:</span>
 
         {/* Custom page-size dropdown */}
@@ -117,7 +117,7 @@ export const Pagination: React.FC<PaginationProps> = ({
       </div>
 
       {/* Right: page navigation */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-center gap-1 sm:gap-1.5">
         {/* First */}
         <button
           onClick={() => onPageChange(1)}

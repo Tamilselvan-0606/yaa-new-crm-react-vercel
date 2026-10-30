@@ -25,6 +25,7 @@ export function FilterDropdown<T extends string = string>({
   className = '',
 }: FilterDropdownProps<T>) {
   const [open, setOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   const selected = options.find((o) => o.value === value);
@@ -37,13 +38,21 @@ export function FilterDropdown<T extends string = string>({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setAlignRight(rect.left + 190 > window.innerWidth - 12 && rect.right > 190);
+    }
+    setOpen((o) => !o);
+  };
+
   return (
-    <div ref={ref} className={`relative ${className}`}>
+    <div ref={ref} className={`relative max-w-full ${className}`}>
       {/* Trigger */}
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-2 h-11 px-3.5 bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700"
+        onClick={handleToggle}
+        className="inline-flex items-center gap-2 h-10 sm:h-11 px-3 sm:px-3.5 max-w-full bg-transparent hover:bg-slate-100/70 active:scale-[0.98] transition-all duration-150 cursor-pointer select-none text-xs sm:text-[13px] font-semibold text-slate-700"
         style={{ borderRadius: '4px' }}
       >
         {/* Active dot */}
@@ -53,9 +62,9 @@ export function FilterDropdown<T extends string = string>({
             style={{ backgroundColor: selected.dotColor }}
           />
         )}
-        <span className="flex-1 text-left whitespace-nowrap">{selected?.label ?? placeholder}</span>
+        <span className="flex-1 text-left truncate">{selected?.label ?? placeholder}</span>
         {selected?.count !== undefined && (
-          <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-[#33077C]/10 text-[#33077C] text-[10px] font-bold">
+          <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-[#33077C]/10 text-[#33077C] text-[10px] font-bold shrink-0">
             {selected.count}
           </span>
         )}
@@ -67,7 +76,7 @@ export function FilterDropdown<T extends string = string>({
       {/* Dropdown panel */}
       {open && (
         <div
-          className="absolute top-full mt-1.5 left-0 min-w-[170px] max-h-60 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 space-y-0.5"
+          className={`absolute top-full mt-1.5 ${alignRight ? 'right-0' : 'left-0'} min-w-[170px] max-w-[calc(100vw-1.5rem)] max-h-60 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 space-y-0.5`}
           style={{ borderRadius: '4px' }}
         >
           {options.map((option) => {

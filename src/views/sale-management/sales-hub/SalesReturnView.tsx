@@ -1,4 +1,7 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   RotateCcw,
   Plus,
@@ -16,7 +19,6 @@ import {
   Layers,
   ArrowRight,
   TrendingDown,
-  Printer,
   MoreVertical,
   Pencil,
   Trash2,
@@ -38,6 +40,7 @@ import {
   Forward,
   Loader2,
   FileCheck2,
+  Download,
 } from 'lucide-react';
 import {
   useSalesManagementStore,
@@ -56,7 +59,7 @@ import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { printTableReport, printBusinessDocument } from '../../../utils/printUtils';
+import { downloadBusinessDocument } from '../../../utils/printUtils';
 import { UniversalShareDropdown, formatCreditNoteShare } from '../../../utils/shareUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
 import { toast } from 'sonner';
@@ -72,7 +75,14 @@ import {
 import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
 import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
 import { productApi } from '../../../api/commerce/productApi';
-import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import {
+  FormLabel,
+  FORM_INPUT_CLS,
+  FORM_SELECT_CLS,
+  FORM_TEXTAREA_CLS,
+  handleNonNegativeKeyDown,
+  parseNumericValue,
+} from '../utils/formUtils';
 
 // Date format helper
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -134,6 +144,8 @@ export interface UnifiedTransactionRecord {
 }
 
 export const SalesReturnView: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const {
     sales,
@@ -156,6 +168,7 @@ export const SalesReturnView: React.FC = () => {
   const hasLoadedPrereqs = useRef(false);
 
   // Top Filter Controls
+  const [pendingPeriod, setPendingPeriod] = useState('This Month');
   const [selectedPeriod, setSelectedPeriod] = useState('This Month');
   const [startDate, setStartDate] = useState<string>(() => {
     const now = new Date();
@@ -167,28 +180,29 @@ export const SalesReturnView: React.FC = () => {
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     return end.toISOString().split('T')[0];
   });
+  const [pendingFirm, setPendingFirm] = useState('ALL FIRMS');
   const [selectedFirm, setSelectedFirm] = useState('ALL FIRMS');
+  const [pendingTxType, setPendingTxType] = useState('All Transaction');
   const [selectedTxType, setSelectedTxType] = useState('All Transaction');
+  const [pendingStatusFilter, setPendingStatusFilter] = useState('All');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('All');
 
   // Search & Pagination
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // Action Menus & Share Menus
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -208,6 +222,7 @@ export const SalesReturnView: React.FC = () => {
   const [deleteTargetTx, setDeleteTargetTx] = useState<UnifiedTransactionRecord | null>(null);
   const [isDeletingTx, setIsDeletingTx] = useState(false);
   const [deleteTxError, setDeleteTxError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // Status Change Modal
   const [statusModalReturn, setStatusModalReturn] = useState<SalesReturn | null>(null);
@@ -335,6 +350,61 @@ export const SalesReturnView: React.FC = () => {
       loadInvoicesForModal();
     }
   }, [isCreateModalOpen, loadInvoicesForModal]);
+
+  // Auto-open and prefill Create Return modal when navigated from SalesView
+  const handledNavStateRef = useRef(false);
+  useEffect(() => {
+    const state = location.state as {
+      invoiceNo?: string;
+      saleId?: string;
+      customerName?: string;
+      customerPhone?: string;
+      amount?: number;
+      items?: any[];
+    } | null;
+
+    if (!state || handledNavStateRef.current) return;
+    if (state.invoiceNo || state.saleId) {
+      handledNavStateRef.current = true;
+      loadInvoicesForModal();
+
+      const invId = state.saleId || '';
+      setSelectedInvoiceId(invId);
+      setPartyName(state.customerName || '');
+      setCustomerPhone(state.customerPhone || '');
+      setReturnDate(new Date().toISOString().split('T')[0]);
+      setRefundMethod('Store Credit');
+      setRefundStatus('Refunded');
+      setReturnStatus('Approved');
+      setGeneralNotes(state.invoiceNo ? `Return against Invoice #${state.invoiceNo}` : '');
+
+      if (Array.isArray(state.items) && state.items.length > 0) {
+        setReturnItems(
+          state.items.map((it: any, idx: number) => {
+            const soldQty = Number(it.quantity) || 1;
+            const retQty = Math.min(1, soldQty);
+            const uPrice = Number(it.unitPrice ?? it.rate ?? 0);
+            return {
+              id: `ret_item_${Date.now()}_${idx}`,
+              productId: it.productId,
+              productName: it.productName || it.name || 'Unnamed Product',
+              sku: it.sku,
+              batch: it.batch,
+              soldQuantity: soldQty,
+              returnQuantity: retQty,
+              unitPrice: uPrice,
+              returnAmount: retQty * uPrice,
+              reason: 'Defective',
+            };
+          })
+        );
+      }
+
+      setIsCreateModalOpen(true);
+      // Clean up history state so reloading doesn't re-trigger
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, loadInvoicesForModal, navigate, location.pathname]);
 
   // Trigger fetch on filter change
   useEffect(() => {
@@ -484,7 +554,7 @@ export const SalesReturnView: React.FC = () => {
           date: s?.saleDate || new Date().toISOString().split('T')[0],
           refNo: String((s?.invoiceNo || '').replace('INV-', '') || index + 1),
           partyName: s?.customerName || 'Customer',
-          categoryName: s?.items?.[0]?.productName ? 'Groceries' : 'General Goods',
+          categoryName: s?.items?.[0]?.productName || 'General Goods',
           type: 'Sale',
           total: tot,
           receivedPaid: paid,
@@ -610,55 +680,6 @@ export const SalesReturnView: React.FC = () => {
     toast.success(`Excel report downloaded successfully (${filteredTransactions.length} records)!`);
   };
 
-  // Print Transactions Table Report
-  const handlePrintTableReport = () => {
-    if (filteredTransactions.length === 0) {
-      toast.info('No transactions to print.');
-      return;
-    }
-
-    const printRows = filteredTransactions.map((tx, idx) => ({
-      srNo: idx + 1,
-      date: isoToDdmmyyyy(tx.date),
-      refNo: tx.refNo || '-',
-      partyName: tx.partyName,
-      categoryName: tx.categoryName || '-',
-      type: tx.type,
-      total: Number(tx.total || 0),
-      receivedPaid: Number(tx.receivedPaid || 0),
-      balance: Number(tx.balance || 0),
-    }));
-
-    printTableReport({
-      title: 'Sales Return & Transactions Ledger',
-      subtitle: `Period: ${selectedPeriod} | Total: ${filteredTransactions.length} Transactions`,
-      orientation: 'landscape',
-      metrics: [
-        { label: 'Total Records', value: filteredTransactions.length },
-        { label: 'Total Amount', value: ledgerTotals.totalSum },
-        { label: 'Total Balance', value: ledgerTotals.balanceSum },
-      ],
-      columns: [
-        { header: '#', key: 'srNo', align: 'center', width: '35px' },
-        { header: 'Date', key: 'date', align: 'center', width: '85px' },
-        { header: 'Ref No.', key: 'refNo', align: 'center', width: '90px' },
-        { header: 'Customer Name', key: 'partyName', align: 'left', width: '180px' },
-        { header: 'Category', key: 'categoryName', align: 'left', width: '120px' },
-        { header: 'Type', key: 'type', align: 'left', width: '100px' },
-        { header: 'Total (₹)', key: 'total', align: 'right', type: 'currency', width: '100px' },
-        { header: 'Received/Paid (₹)', key: 'receivedPaid', align: 'right', type: 'currency', width: '110px' },
-        { header: 'Balance (₹)', key: 'balance', align: 'right', type: 'currency', width: '100px' },
-      ],
-      data: printRows,
-      summaryRow: {
-        srNo: 'TOTAL',
-        partyName: `${filteredTransactions.length} Transactions`,
-        total: ledgerTotals.totalSum,
-        balance: ledgerTotals.balanceSum,
-      },
-    });
-  };
-
   // Pagination
   const totalPages = Math.ceil(filteredTransactions.length / pageSize) || 1;
   const safePage = Math.min(currentPage, totalPages);
@@ -711,6 +732,11 @@ export const SalesReturnView: React.FC = () => {
     e.preventDefault();
     if (!partyName.trim()) {
       toast.error('Please enter customer name');
+      return;
+    }
+    const hasNegative = returnItems.some((i) => i.returnQuantity < 0 || i.unitPrice < 0);
+    if (hasNegative) {
+      toast.error('Return quantity and unit price cannot be negative');
       return;
     }
     const validItems = returnItems.filter((i) => i.returnQuantity > 0);
@@ -886,15 +912,13 @@ export const SalesReturnView: React.FC = () => {
     setIsViewModalOpen(true);
   };
 
-  // Print Credit Note / Sales Return
-  const handlePrintCreditNote = (txOrReturn: UnifiedTransactionRecord | SalesReturn) => {
-    setActiveMenuId(null);
+  const buildCreditNoteDocumentOptions = (txOrReturn: UnifiedTransactionRecord | SalesReturn) => {
     const isTx = 'refNo' in txOrReturn;
     const docNo = isTx ? txOrReturn.refNo : txOrReturn.returnNo;
     const date = isTx ? isoToDdmmyyyy(txOrReturn.date) : isoToDdmmyyyy(txOrReturn.returnDate);
-    const partyName = isTx ? txOrReturn.partyName : txOrReturn.customerName;
+    const pName = isTx ? txOrReturn.partyName : txOrReturn.customerName;
     const origReturn = isTx ? txOrReturn.originalReturn : txOrReturn;
-    const customer = customers.find((c) => c.name.toLowerCase() === partyName.toLowerCase());
+    const customer = customers.find((c) => c.name.toLowerCase() === pName.toLowerCase());
 
     const items = origReturn?.items && origReturn.items.length > 0
       ? origReturn.items.map((it) => ({
@@ -911,15 +935,15 @@ export const SalesReturnView: React.FC = () => {
     const paidAmount = isTx ? txOrReturn.receivedPaid : 0;
     const balance = isTx ? txOrReturn.balance : grandTotal;
 
-    printBusinessDocument({
+    return {
       docTypeTitle: 'CREDIT NOTE / SALES RETURN',
       docNo,
       docDate: date,
       status: (origReturn?.returnStatus || (isTx ? txOrReturn.status : 'Approved')) as string,
-      statusColor: 'rose',
+      statusColor: 'rose' as const,
       referenceNo: origReturn?.invoiceNo || undefined,
       partyTitle: 'Customer Details',
-      partyName,
+      partyName: pName,
       partyCompany: customer?.company,
       partyPhone: customer?.phone,
       partyEmail: customer?.email,
@@ -937,12 +961,25 @@ export const SalesReturnView: React.FC = () => {
       notes: origReturn?.notes,
       primarySignatoryLabel: 'Authorized Signatory',
       secondarySignatoryLabel: "Customer's Signature",
-    });
+    };
   };
 
-  // Print Row
-  const handlePrintRow = (tx: UnifiedTransactionRecord) => {
-    handlePrintCreditNote(tx);
+  // Download Credit Note / Sales Return
+  const handleDownloadReturn = async (txOrReturn: UnifiedTransactionRecord | SalesReturn) => {
+    setActiveMenuId(null);
+    if (isDownloading) return;
+    setIsDownloading(true);
+    const docNo = 'refNo' in txOrReturn ? txOrReturn.refNo : txOrReturn.returnNo;
+    const filename = `CreditNote_${(docNo || 'return').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+    try {
+      await downloadBusinessDocument(buildCreditNoteDocumentOptions(txOrReturn), filename);
+      toast.success(`Downloaded ${filename}`);
+    } catch (err) {
+      console.error('Failed to download credit note:', err);
+      toast.error('Failed to download credit note PDF. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   // Share Handlers (Email, WhatsApp)
@@ -1061,8 +1098,8 @@ export const SalesReturnView: React.FC = () => {
   return (
     <div className="space-y-5 pb-16 font-sans">
       {/* 1. Top Header Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-[220px] flex-1">
           <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
             <RotateCcw className="w-4 h-4" />
           </div>
@@ -1084,7 +1121,7 @@ export const SalesReturnView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 self-end sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
@@ -1115,59 +1152,88 @@ export const SalesReturnView: React.FC = () => {
         }}
         placeholder="Search customer name, return #, or remarks..."
         onSubmit={() => {
-          setAppliedSearch(pendingSearch);
+          const trimmed = pendingSearch.trim();
+          const isSame =
+            appliedSearch === trimmed &&
+            selectedPeriod === pendingPeriod &&
+            selectedStatusFilter === pendingStatusFilter &&
+            selectedTxType === pendingTxType &&
+            selectedFirm === pendingFirm &&
+            currentPage === 1;
+
+          setAppliedSearch(trimmed);
+          handlePeriodChange(pendingPeriod);
+          setSelectedStatusFilter(pendingStatusFilter);
+          setSelectedTxType(pendingTxType);
+          setSelectedFirm(pendingFirm);
           setCurrentPage(1);
+
+          if (isSame) {
+            isFetchingRef.current = false;
+            fetchSalesReturns();
+          }
         }}
         onReset={() => {
+          const isSame =
+            appliedSearch === '' &&
+            pendingSearch === '' &&
+            selectedPeriod === 'This Month' &&
+            pendingPeriod === 'This Month' &&
+            selectedStatusFilter === 'All' &&
+            pendingStatusFilter === 'All' &&
+            selectedTxType === 'All Transaction' &&
+            pendingTxType === 'All Transaction' &&
+            selectedFirm === 'ALL FIRMS' &&
+            pendingFirm === 'ALL FIRMS' &&
+            currentPage === 1;
+
           setPendingSearch('');
           setAppliedSearch('');
+          setPendingPeriod('This Month');
           handlePeriodChange('This Month');
+          setPendingStatusFilter('All');
           setSelectedStatusFilter('All');
+          setPendingTxType('All Transaction');
           setSelectedTxType('All Transaction');
+          setPendingFirm('ALL FIRMS');
           setSelectedFirm('ALL FIRMS');
           setCurrentPage(1);
+
+          if (isSame) {
+            isFetchingRef.current = false;
+            fetchSalesReturns();
+          }
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
             <FilterDropdown
               placeholder="Period : This Month"
-              value={selectedPeriod}
+              value={pendingPeriod}
               options={PERIOD_FILTER_OPTIONS}
               onChange={(val) => {
-                handlePeriodChange(val);
+                setPendingPeriod(val);
               }}
             />
             <FilterDropdown
               placeholder="Status : All"
-              value={selectedStatusFilter}
+              value={pendingStatusFilter}
               options={STATUS_FILTER_OPTIONS}
               onChange={(val) => {
-                setSelectedStatusFilter(val);
-                setCurrentPage(1);
+                setPendingStatusFilter(val);
               }}
             />
             <FilterDropdown
               placeholder="Type : All"
-              value={selectedTxType}
+              value={pendingTxType}
               options={TRANSACTION_TYPE_OPTIONS}
               onChange={(val) => {
-                setSelectedTxType(val);
-                setCurrentPage(1);
+                setPendingTxType(val);
               }}
             />
           </div>
         }
         rightSlot={
           <div className="flex items-center gap-3 pr-1 flex-wrap sm:flex-nowrap">
-            <Button
-              variant="secondary"
-              size="md"
-              onClick={handlePrintTableReport}
-              className="hover:border-slate-300 hover:bg-slate-50 text-slate-700"
-              icon={<Printer className="w-4 h-4 text-slate-600" />}
-            >
-              Print
-            </Button>
             <span className="text-xs font-semibold text-slate-500 shrink-0">
               Total Returns :{' '}
               <span className="text-[#33077C] font-bold">
@@ -1212,50 +1278,37 @@ export const SalesReturnView: React.FC = () => {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-[13px] border-collapse min-w-[900px]">
-              {/* Royal Purple Header */}
-              <thead>
-                <tr className="bg-[#33077C] text-white font-bold uppercase text-[10.5px] border-b border-[#4309A2] tracking-wider select-none">
-                  <th className="py-3.5 px-3 w-12 text-center border-r border-[#4309A2]/70 text-white">#</th>
-                  <th className="py-3.5 px-4 min-w-[160px] border-r border-[#4309A2]/70 whitespace-nowrap text-white">
-                    <span>CUSTOMER NAME</span>
-                  </th>
-                  <th className="py-3.5 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap min-w-[100px] text-white">
-                    <span>REF NO.</span>
-                  </th>
-                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <div className="flex items-center gap-1.5">
-                      <span>DATE</span>
-                      <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[140px] text-white">
-                    <span>CATEGORY / ITEM</span>
-                  </th>
-                  <th className="py-3.5 px-3.5 border-r border-[#4309A2]/70 whitespace-nowrap min-w-[100px] text-white">
-                    <span>TYPE</span>
-                  </th>
-                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <span>TOTAL</span>
-                  </th>
-                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[120px] text-white">
-                    <span>REFUNDED/PAID</span>
-                  </th>
-                  <th className="py-3.5 px-3.5 text-right border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <span>BALANCE</span>
-                  </th>
-                  <th className="py-3.5 px-3 text-center border-r border-[#4309A2]/70 whitespace-nowrap min-w-[110px] text-white">
-                    <span>STATUS</span>
-                  </th>
-                  <th className="py-3.5 px-4 text-center whitespace-nowrap min-w-[130px] w-36 text-white">
-                    PRINT / SHARE
-                  </th>
-                </tr>
-              </thead>
+              {/* Royal Purple Header with Standard Icons */}
+              <CommonTableHead
+                columns={[
+                  { label: "#", align: "center", width: "48px" },
+                  { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
+                  { label: "REF NO.", align: "center", minWidth: "100px" },
+                  { label: "DATE", align: "left", minWidth: "110px" },
+                  { label: "CATEGORY / ITEM", align: "left", minWidth: "140px" },
+                  { label: "TYPE", align: "left", minWidth: "100px" },
+                  { label: "TOTAL", align: "right", minWidth: "110px" },
+                  { label: "REFUNDED/PAID", align: "right", minWidth: "120px" },
+                  { label: "BALANCE", align: "right", minWidth: "110px" },
+                  { label: "STATUS", align: "center", minWidth: "110px" },
+                  { label: "ACTION", align: "center", minWidth: "100px" },
+                ]}
+              />
 
               {/* Table Body */}
               <tbody className="divide-y divide-slate-200 text-slate-800 font-sans">
                 {paginatedTransactions.map((row, idx) => {
                   const isActionOpen = activeMenuId === row.id;
+                  const rowCustomerId = row.originalReturn?.customerId || row.originalSale?.customerId || '';
+                  const resolvedCustomerCode =
+                    customers.find(
+                      (c) =>
+                        (rowCustomerId && c.id === rowCustomerId) ||
+                        (c.name && row.partyName && c.name.trim().toLowerCase() === row.partyName.trim().toLowerCase())
+                    )?.customerCode ||
+                    (rowCustomerId && !rowCustomerId.startsWith('cust_') && rowCustomerId.length > 5
+                      ? rowCustomerId.slice(0, 8).toUpperCase()
+                      : '');
 
                   return (
                     <tr
@@ -1269,7 +1322,14 @@ export const SalesReturnView: React.FC = () => {
 
                       {/* PARTY NAME */}
                       <td className="py-3.5 px-4 font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap align-middle">
-                        {row.partyName}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900">{row.partyName}</span>
+                          {resolvedCustomerCode && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                              {resolvedCustomerCode}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* REF NO. */}
@@ -1332,20 +1392,10 @@ export const SalesReturnView: React.FC = () => {
                         </span>
                       </td>
 
-                      {/* PRINT / SHARE / ACTIONS */}
+                      {/* SHARE / ACTIONS */}
                       <td className="py-3.5 px-4 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
-                        <div className="inline-flex items-center justify-center gap-1.5">
-                          {/* 1. Direct Print Button */}
-                          <button
-                            type="button"
-                            onClick={() => handlePrintRow(row)}
-                            className="w-7 h-7 rounded-lg text-slate-500 hover:text-[#33077C] hover:bg-purple-50 flex items-center justify-center transition-colors cursor-pointer"
-                            title="Print Receipt"
-                          >
-                            <Printer className="w-4 h-4 text-slate-600" />
-                          </button>
-
-                          {/* 2. Share Dropdown Button */}
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* 1. Share Dropdown Button */}
                           <UniversalShareDropdown
                             id={row.id}
                             activeShareId={activeShareDropdownId}
@@ -1356,7 +1406,7 @@ export const SalesReturnView: React.FC = () => {
                             title="Share Credit Note / Return"
                           />
 
-                          {/* 3. 3-Dots Floating Menu */}
+                          {/* 2. 3-Dots Floating Menu */}
                           <SaleActionDropdown
                             items={[
                               {
@@ -1370,20 +1420,16 @@ export const SalesReturnView: React.FC = () => {
                                 hidden: !row.originalReturn,
                                 onClick: () => handleOpenStatusModal(row.originalReturn!),
                               },
-                              {
-                                label: 'Generate e-Invoice',
-                                variant: 'invoice',
-                                onClick: () => handleGenerateEInvoice(row),
-                              },
+
                               {
                                 label: 'Duplicate',
                                 variant: 'duplicate',
                                 onClick: () => handleDuplicate(row),
                               },
                               {
-                                label: 'Print Credit Note',
-                                variant: 'print',
-                                onClick: () => handlePrintCreditNote(row),
+                                label: 'Download Return',
+                                variant: 'download',
+                                onClick: () => handleDownloadReturn(row),
                               },
                               {
                                 label: 'View History',
@@ -1430,7 +1476,7 @@ export const SalesReturnView: React.FC = () => {
           total={filteredTransactions.length}
           currentPage={safePage}
           pageSize={pageSize}
-          pageSizeOptions={[10, 20, 50]}
+          pageSizeOptions={[5, 10, 20, 50]}
           onPageChange={(newPage) => setCurrentPage(newPage)}
           onPageSizeChange={(newSize) => {
             setPageSize(newSize);
@@ -1550,8 +1596,10 @@ export const SalesReturnView: React.FC = () => {
                               min="0"
                               max={item.soldQuantity || 9999}
                               value={item.returnQuantity}
+                              onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) => {
-                                const qty = Number(e.target.value);
+                                const parsed = parseNumericValue(e.target.value, 0);
+                                const qty = parsed !== null ? Math.max(0, parsed) : 0;
                                 const updated = [...returnItems];
                                 updated[idx] = {
                                   ...updated[idx],
@@ -1704,7 +1752,7 @@ export const SalesReturnView: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-4 text-xs">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
                 <p className="text-[11px] font-bold text-slate-400 uppercase">Customer Details:</p>
                 <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedReturn.customerName}</p>
@@ -1718,7 +1766,8 @@ export const SalesReturnView: React.FC = () => {
               </div>
             </div>
 
-            <table className="w-full text-xs text-left border border-slate-200 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[560px] text-xs text-left">
               <thead className="bg-[#33077C] text-white font-bold uppercase text-[11px] tracking-wider">
                 <tr>
                   <th className="p-2.5 text-white">#</th>
@@ -1746,9 +1795,10 @@ export const SalesReturnView: React.FC = () => {
                 ))}
               </tbody>
             </table>
+            </div>
 
             <div className="flex justify-end pt-2">
-              <div className="w-64 space-y-1.5 text-xs text-slate-600">
+              <div className="w-full sm:w-64 space-y-1.5 text-xs text-slate-600">
                 <div className="flex justify-between text-sm font-black text-rose-700 pt-2 border-t border-slate-200">
                   <span>Total Refund:</span>
                   <span>₹{Number(selectedReturn.returnAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
@@ -1756,7 +1806,7 @@ export const SalesReturnView: React.FC = () => {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
+            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsViewModalOpen(false)}
@@ -1766,15 +1816,16 @@ export const SalesReturnView: React.FC = () => {
               </button>
               <button
                 type="button"
+                disabled={isDownloading}
                 onClick={() => {
                   if (selectedReturn) {
-                    handlePrintCreditNote(selectedReturn);
+                    handleDownloadReturn(selectedReturn);
                   }
                 }}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md"
+                className="h-10 px-5 rounded-xl bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold flex items-center gap-2 shadow-md transition disabled:opacity-50"
               >
-                <Printer className="w-4 h-4" />
-                <span>Print Credit Note</span>
+                {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                <span>{isDownloading ? 'Generating...' : 'Download Return'}</span>
               </button>
             </div>
           </div>

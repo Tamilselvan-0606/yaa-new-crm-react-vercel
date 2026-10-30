@@ -42,6 +42,7 @@ export interface SaleOrderRecord {
   orderDate: string;
   dueDate: string;
   customerId: string;
+  customerCode?: string;
   partyName: string;
   customerPhone?: string;
   customerEmail?: string;
@@ -67,6 +68,7 @@ export interface SaleOrderRecord {
   convertedToInvoiceNo?: string;
   convertedToType?: 'Invoice' | string | null;
   convertedToId?: string | null;
+  convertedAt?: string | null;
   notes?: string;
   terms?: string;
   attachedImageName?: string;
@@ -156,6 +158,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
     orderDate: orderDateStr,
     dueDate: dueDateStr,
     customerId: apiO.customerId || apiO.customer?.id || '',
+    customerCode: apiO.customer?.customerCode || (apiO as any).customerCode || '',
     partyName: apiO.partyName || apiO.customer?.name || 'Unnamed Party',
     customerPhone: apiO.customerPhone || apiO.customer?.phone || undefined,
     customerEmail: apiO.customerEmail || apiO.customer?.email || undefined,
@@ -181,6 +184,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
     convertedToInvoiceNo: apiO.convertedToInvoiceNo || undefined,
     convertedToType: apiO.convertedToType || undefined,
     convertedToId: apiO.convertedToId || undefined,
+    convertedAt: (apiO as any).convertedAt || undefined,
     notes: apiO.notes || undefined,
     terms: apiO.terms || undefined,
     attachedImageName: apiO.attachedImageName || undefined,

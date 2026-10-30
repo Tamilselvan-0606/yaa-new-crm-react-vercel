@@ -1,3 +1,7 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
+import { SalesRepSearchableSelect } from './SalesRepSearchableSelect';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
@@ -74,8 +78,11 @@ import {
   CustomerCollectionTimelineData,
 } from '../../../api/commerce/collectionApi';
 import { salesRepresentativeApi, ApiSalesRepresentative } from '../../../api/commerce/salesRepresentativeApi';
-import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS } from '../utils/formUtils';
+import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
+import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
+import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 
+import { formatDate } from '../utils/dateUtils';
 type CollectionTab = 'all' | 'due-today' | 'overdue' | 'promise-to-pay' | 'collected';
 type CollectionsSubView =
   | 'dashboard'
@@ -99,7 +106,24 @@ export const CollectionsView: React.FC = () => {
     addCollectionFollowUp,
     savePromiseToPay,
     getCollectionDashboardMetrics,
+    setSalesList,
+    setCustomersList,
   } = useSalesManagementStore();
+
+  // Load Customers list from API once if not yet populated
+  const hasLoadedCustomersRef = useRef(false);
+  useEffect(() => {
+    if (hasLoadedCustomersRef.current) return;
+    hasLoadedCustomersRef.current = true;
+    customerApi
+      .getCustomers({ pagination_required: false, page_size: 200 })
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data)) {
+          setCustomersList(res.data.map(mapApiCustomerToSalesCustomer));
+        }
+      })
+      .catch((e) => console.warn('Customer load error in Collections:', e));
+  }, [setCustomersList]);
 
   // Live sales representatives from API
   const [liveReps, setLiveReps] = React.useState<ApiSalesRepresentative[]>([]);
@@ -116,17 +140,16 @@ export const CollectionsView: React.FC = () => {
   const initialSearch = searchParams.get('search') || '';
   const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [appliedSearch, setAppliedSearch] = useState(initialSearch);
+  const [debouncedSearch] = useDebounce(searchTerm, 400);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = searchTerm.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [searchTerm, appliedSearch]);
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
 
   // Main Sub-views: Dashboard | Customer Assignments | Follow-ups | Collection History
   const rawInitial = (searchParams.get('subView') || searchParams.get('tab') || searchParams.get('view') || 'dashboard') as string;
@@ -153,16 +176,21 @@ export const CollectionsView: React.FC = () => {
   // Active Tab for Collection Dashboard
   const [activeTab, setActiveTab] = useState<CollectionTab>('all');
 
-  // Filters
+  // Filters (Pending buffered vs Applied for API calls)
+  const [pendingRepFilter, setPendingRepFilter] = useState<string>('ALL');
   const [selectedRepFilter, setSelectedRepFilter] = useState<string>('ALL');
+  const [pendingCustomerFilter, setPendingCustomerFilter] = useState<string>('ALL');
   const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>('ALL');
+  const [pendingDueDateFilter, setPendingDueDateFilter] = useState<string>('ALL');
   const [dueDateFilter, setDueDateFilter] = useState<string>('ALL');
+  const [pendingStatusFilter, setPendingStatusFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [pendingPaymentStatusFilter, setPendingPaymentStatusFilter] = useState<string>('ALL');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>('ALL');
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // Action Menu Dropdown State
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
@@ -207,6 +235,11 @@ export const CollectionsView: React.FC = () => {
   const [customerTimeline, setCustomerTimeline] = useState<CustomerCollectionTimelineData | null>(null);
   const [isTimelineLoading, setIsTimelineLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Timeline UI Interactive Filter States
+  const [timelineTab, setTimelineTab] = useState<'all' | 'payments' | 'invoices' | 'follow-ups' | 'promises'>('all');
+  const [timelineInvoiceTab, setTimelineInvoiceTab] = useState<'all' | 'open' | 'settled' | 'cancelled'>('all');
+  const [timelineSearch, setTimelineSearch] = useState<string>('');
 
   // Selected Target for Action Modals
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
@@ -285,47 +318,69 @@ export const CollectionsView: React.FC = () => {
     }
   }, [selectedRepFilter, todayStr]);
 
+  const isFetchingInvoicesRef = useRef(false);
+
   const loadInvoices = React.useCallback(async () => {
+    if (isFetchingInvoicesRef.current) return;
+    isFetchingInvoicesRef.current = true;
     try {
       setIsInvoicesLoading(true);
-      const res = await collectionApi.getCollectionInvoices({
-        tab: activeTab,
-        search: appliedSearch || undefined,
-        salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
-        customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
-        dueDateFilter: dueDateFilter !== 'ALL' ? dueDateFilter : undefined,
-        status: statusFilter !== 'ALL' ? statusFilter : undefined,
-        paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
-        page: currentPage,
-        limit: pageSize,
-      });
-      if (res?.success) {
-        setApiInvoices(Array.isArray(res.data) ? res.data : []);
-        if (res.tabCounts) {
-          setTabCounts(res.tabCounts);
-        }
-        if (res.pagination?.totalRecords !== undefined) {
-          setTotalInvoices(res.pagination.totalRecords);
-        } else {
-          setTotalInvoices(Array.isArray(res.data) ? res.data.length : 0);
+
+      const [colRes, invRes, assignRes] = await Promise.allSettled([
+        collectionApi.getCollectionInvoices({
+          search: appliedSearch || undefined,
+          salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
+          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
+          dueDateFilter: dueDateFilter !== 'ALL' ? dueDateFilter : undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+          limit: 200,
+        }),
+        commerceInvoiceApi.getInvoices({
+          pagination_required: false,
+          search: appliedSearch || undefined,
+          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+          page_size: 200,
+        }),
+        collectionApi.getCustomerAssignments({ limit: 200 }),
+      ]);
+
+      if (assignRes.status === 'fulfilled' && assignRes.value?.success && Array.isArray(assignRes.value.data)) {
+        setApiAssignments(assignRes.value.data);
+      }
+
+      let colInvoices: ApiCollectionInvoiceItem[] = [];
+      if (colRes.status === 'fulfilled' && colRes.value?.success) {
+        colInvoices = Array.isArray(colRes.value.data) ? colRes.value.data : [];
+        if (colRes.value.tabCounts) {
+          setTabCounts(colRes.value.tabCounts);
         }
       }
+
+      if (invRes.status === 'fulfilled' && invRes.value?.success && Array.isArray(invRes.value.data)) {
+        const mappedSales = invRes.value.data.map(mapApiInvoiceToSaleTransaction);
+        setSalesList(mappedSales);
+      }
+
+      setApiInvoices(colInvoices);
+      setTotalInvoices(colInvoices.length);
     } catch (err) {
       console.error('Failed to load collection invoices:', err);
       setApiInvoices([]);
     } finally {
       setIsInvoicesLoading(false);
+      isFetchingInvoicesRef.current = false;
     }
   }, [
-    activeTab,
     appliedSearch,
     selectedRepFilter,
     selectedCustomerFilter,
     dueDateFilter,
     statusFilter,
     paymentStatusFilter,
-    currentPage,
-    pageSize,
+    setSalesList,
   ]);
 
   const loadAssignments = React.useCallback(async () => {
@@ -432,7 +487,7 @@ export const CollectionsView: React.FC = () => {
     };
   }, [loadMetrics, loadInvoices, loadAssignments, loadFollowUps, loadHistory, subView]);
 
-  // Derived Collection Items from API Invoices
+  // Derived Collection Items from API Invoices and Sales Invoices
   interface CollectionItem {
     id: string;
     invoice: any;
@@ -454,11 +509,15 @@ export const CollectionsView: React.FC = () => {
     hasPendingPromise: boolean;
     pendingPromise?: any;
     lastPaymentDate?: string;
+    isCancelled?: boolean;
   }
 
   const collectionItems = useMemo<CollectionItem[]>(() => {
-    if (apiInvoices.length > 0) {
-      return apiInvoices.map((inv) => {
+    const itemsMap = new Map<string, CollectionItem>();
+
+    // 1. Process apiInvoices (authoritative for collection follow-ups & assignments)
+    if (Array.isArray(apiInvoices) && apiInvoices.length > 0) {
+      apiInvoices.forEach((inv) => {
         const invoiceTotal = Number(inv.grandTotal || 0);
         const paidAmount = Number(inv.paidAmount || 0);
         const outstandingAmount =
@@ -484,11 +543,36 @@ export const CollectionsView: React.FC = () => {
           pStatus = 'Partial';
         }
 
-        const matchedCustomer = customers.find((c) => c.id === inv.customerId) || null;
+        const matchedCustomer = customers.find((c) => c.id === inv.customerId || c.name === inv.customerName) || null;
+        const matchedAssignment = apiAssignments.find((ca) => ca.id === inv.customerId || ca.customerName === inv.customerName) || null;
         const matchedSale = sales.find((s) => s.id === inv.id || s.invoiceNo === inv.invoiceNo);
-        const rep = liveReps.find((r) => r.id === inv.salesRepresentativeId) || null;
+        const resolvedInvRepId =
+          inv.salesRepresentativeId ||
+          matchedAssignment?.salesRepresentative?.id ||
+          matchedCustomer?.salesRepresentativeId ||
+          '';
+        const rep = resolvedInvRepId ? (liveReps.find((r) => r.id === resolvedInvRepId) || null) : null;
+        const rawInvRepName =
+          inv.salesRepresentativeName ||
+          matchedAssignment?.salesRepresentative?.name ||
+          matchedCustomer?.salesRepresentativeName ||
+          rep?.name ||
+          '';
+        const resolvedInvRepName =
+          rawInvRepName && rawInvRepName.trim() !== '' && rawInvRepName.trim().toLowerCase() !== 'unassigned'
+            ? rawInvRepName
+            : 'Unassigned';
 
-        return {
+        const isCancelled =
+          (inv as any).status === 'Cancelled' ||
+          (inv.paymentStatus as string) === 'Cancelled' ||
+          matchedSale?.saleStatus === 'Cancelled' ||
+          (matchedSale as any)?.status === 'Cancelled';
+
+        const key = (inv.invoiceNo || inv.id || '').trim().toUpperCase();
+        if (!key) return;
+
+        itemsMap.set(key, {
           id: inv.id,
           invoice: matchedSale || ({
             id: inv.id,
@@ -505,6 +589,7 @@ export const CollectionsView: React.FC = () => {
             salesRepresentativeId: inv.salesRepresentativeId,
             salesRepresentativeName: inv.salesRepresentativeName,
             status: inv.paymentStatus,
+            saleStatus: isCancelled ? 'Cancelled' : 'Confirmed',
           } as any),
           invoiceNumber: inv.invoiceNo,
           invoiceDate: inv.invoiceDate,
@@ -518,11 +603,11 @@ export const CollectionsView: React.FC = () => {
             salesRepresentativeId: inv.salesRepresentativeId,
           } as any),
           customerId: inv.customerId,
-          customerName: inv.customerName,
-          customerPhone: inv.customerPhone || 'N/A',
-          customerEmail: inv.customerEmail || '',
+          customerName: inv.customerName || matchedCustomer?.name || 'Direct Customer',
+          customerPhone: inv.customerPhone || matchedCustomer?.phone || 'N/A',
+          customerEmail: inv.customerEmail || matchedCustomer?.email || '',
           salesRep: rep,
-          salesRepName: inv.salesRepresentativeName || rep?.name || 'Unassigned',
+          salesRepName: resolvedInvRepName,
           invoiceTotal,
           paidAmount,
           outstandingAmount,
@@ -531,22 +616,248 @@ export const CollectionsView: React.FC = () => {
           hasPendingPromise: !!inv.promiseToPay,
           pendingPromise: inv.promiseToPay as any,
           lastPaymentDate: undefined,
-        };
+          isCancelled,
+        });
       });
     }
 
-    return [];
-  }, [apiInvoices, customers, sales, liveReps, todayStr]);
+    // 2. Augment with confirmed sales invoices from Zustand store across all customers
+    if (Array.isArray(sales) && sales.length > 0) {
+      sales.forEach((sale) => {
+        const key = (sale.invoiceNo || sale.id || '').trim().toUpperCase();
+        if (!key) return;
 
-  // Invoices are filtered and paginated on server
-  const filteredItems = collectionItems;
-  const totalPages = Math.ceil(totalInvoices / pageSize) || 1;
-  const paginatedItems = collectionItems;
+        const isCancelled = sale.saleStatus === 'Cancelled' || (sale as any).status === 'Cancelled';
 
-  // Sub-view 2: Customer Assignments Memo
+        if (itemsMap.has(key)) {
+          const existing = itemsMap.get(key)!;
+          if (!existing.invoice || Object.keys(existing.invoice).length <= 2) {
+            existing.invoice = sale;
+          }
+          if (isCancelled) {
+            existing.isCancelled = true;
+          }
+          return;
+        }
+
+        const invoiceTotal = Number(sale.grandTotal || 0);
+        const paidAmount = Number(sale.paidAmount || 0);
+        const outstandingAmount =
+          sale.balance !== undefined ? Number(sale.balance) : Math.max(0, invoiceTotal - paidAmount);
+
+        const ptp = promisesToPay.find(
+          (p) =>
+            (p.invoiceId && (p.invoiceId === sale.id || p.invoiceNo === sale.invoiceNo)) &&
+            ((p.status as string) === 'Pending' || (p.status as string) === 'Active')
+        );
+
+        let status: 'Overdue' | 'Due Today' | 'Upcoming' | 'Promise to Pay' | 'Paid' = 'Paid';
+        if (outstandingAmount > 0) {
+          if (ptp) {
+            status = 'Promise to Pay';
+          } else if (sale.dueDate && sale.dueDate < todayStr) {
+            status = 'Overdue';
+          } else if (sale.dueDate && sale.dueDate === todayStr) {
+            status = 'Due Today';
+          } else {
+            status = 'Upcoming';
+          }
+        }
+
+        let pStatus: 'Unpaid' | 'Partial' | 'Paid' = 'Unpaid';
+        if (outstandingAmount <= 0 || sale.paymentStatus === 'Paid') {
+          pStatus = 'Paid';
+        } else if (paidAmount > 0 || sale.paymentStatus === 'Partial') {
+          pStatus = 'Partial';
+        }
+
+        const matchedCustomer = customers.find((c) => c.id === sale.customerId || c.name === sale.customerName) || null;
+        const matchedAssignment = apiAssignments.find((ca) => ca.id === sale.customerId || ca.customerName === sale.customerName) || null;
+        const resolvedSaleRepId =
+          sale.salesRepresentativeId ||
+          matchedAssignment?.salesRepresentative?.id ||
+          matchedCustomer?.salesRepresentativeId ||
+          '';
+        const rep = resolvedSaleRepId ? (liveReps.find((r) => r.id === resolvedSaleRepId) || null) : null;
+        const rawSaleRepName =
+          sale.salesRepresentativeName ||
+          matchedAssignment?.salesRepresentative?.name ||
+          matchedCustomer?.salesRepresentativeName ||
+          rep?.name ||
+          '';
+        const resolvedSaleRepName =
+          rawSaleRepName && rawSaleRepName.trim() !== '' && rawSaleRepName.trim().toLowerCase() !== 'unassigned'
+            ? rawSaleRepName
+            : 'Unassigned';
+
+        itemsMap.set(key, {
+          id: sale.id,
+          invoice: sale,
+          invoiceNumber: sale.invoiceNo,
+          invoiceDate: sale.saleDate,
+          dueDate: sale.dueDate || sale.saleDate,
+          customer: matchedCustomer || ({
+            id: sale.customerId,
+            name: sale.customerName,
+            phone: sale.customerPhone,
+            email: sale.customerEmail,
+            salesRepresentativeId: sale.salesRepresentativeId,
+          } as any),
+          customerId: sale.customerId,
+          customerName: sale.customerName || matchedCustomer?.name || 'Direct Customer',
+          customerPhone: sale.customerPhone || matchedCustomer?.phone || 'N/A',
+          customerEmail: sale.customerEmail || matchedCustomer?.email || '',
+          salesRep: rep,
+          salesRepName: resolvedSaleRepName,
+          invoiceTotal,
+          paidAmount,
+          outstandingAmount,
+          status,
+          paymentStatus: pStatus,
+          hasPendingPromise: !!ptp,
+          pendingPromise: ptp as any,
+          lastPaymentDate: undefined,
+          isCancelled,
+        });
+      });
+    }
+
+    return Array.from(itemsMap.values());
+  }, [apiInvoices, apiAssignments, sales, customers, liveReps, promisesToPay, todayStr]);
+
+  // Client-side filtering by Tab, Rep, Customer, Due Date, Status, Payment Status, Search
+  const filteredItems = useMemo<CollectionItem[]>(() => {
+    return collectionItems.filter((item) => {
+      // Exclude cancelled invoices from active collection dues
+      if (item.isCancelled) {
+        return false;
+      }
+
+      // 1. Tab filter
+      if (activeTab === 'all') {
+        if (item.outstandingAmount <= 0) return false;
+      } else if (activeTab === 'due-today') {
+        if (item.outstandingAmount <= 0) return false;
+        if (item.dueDate !== todayStr) return false;
+      } else if (activeTab === 'overdue') {
+        if (item.outstandingAmount <= 0) return false;
+        if (!item.dueDate || item.dueDate >= todayStr) return false;
+      } else if (activeTab === 'promise-to-pay') {
+        if (item.outstandingAmount <= 0) return false;
+        if (!item.hasPendingPromise && item.status !== 'Promise to Pay') return false;
+      } else if (activeTab === 'collected') {
+        if (item.outstandingAmount > 0 && item.paymentStatus !== 'Paid') return false;
+      }
+
+      // 2. Representative filter
+      if (selectedRepFilter !== 'ALL') {
+        const repId = item.salesRep?.id || item.invoice?.salesRepresentativeId;
+        if (repId !== selectedRepFilter) return false;
+      }
+
+      // 3. Customer filter
+      if (selectedCustomerFilter !== 'ALL') {
+        if (item.customerId !== selectedCustomerFilter) return false;
+      }
+
+      // 4. Due date filter
+      if (dueDateFilter !== 'ALL') {
+        if (dueDateFilter === 'OVERDUE') {
+          if (!item.dueDate || item.dueDate >= todayStr || item.outstandingAmount <= 0) return false;
+        } else if (dueDateFilter === 'TODAY') {
+          if (item.dueDate !== todayStr) return false;
+        } else if (dueDateFilter === 'THIS_MONTH') {
+          const now = new Date();
+          const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+          const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+          if (!item.dueDate || item.dueDate < monthStart || item.dueDate > monthEnd) return false;
+        }
+      }
+
+      // 5. Status filter
+      if (statusFilter !== 'ALL') {
+        if (item.status !== statusFilter) return false;
+      }
+
+      // 6. Payment status filter
+      if (paymentStatusFilter !== 'ALL') {
+        if (item.paymentStatus !== paymentStatusFilter) return false;
+      }
+
+      // 7. Search filter
+      if (appliedSearch) {
+        const query = appliedSearch.toLowerCase();
+        const matchesNo = item.invoiceNumber?.toLowerCase().includes(query);
+        const matchesCust = item.customerName?.toLowerCase().includes(query);
+        const matchesPhone = item.customerPhone?.toLowerCase().includes(query);
+        const matchesEmail = item.customerEmail?.toLowerCase().includes(query);
+        if (!matchesNo && !matchesCust && !matchesPhone && !matchesEmail) return false;
+      }
+
+      return true;
+    });
+  }, [
+    collectionItems,
+    activeTab,
+    selectedRepFilter,
+    selectedCustomerFilter,
+    dueDateFilter,
+    statusFilter,
+    paymentStatusFilter,
+    appliedSearch,
+    todayStr,
+  ]);
+
+  // Aggregated metrics across all eligible receivables for dashboard consistency
+  const {
+    computedTotalOutstanding,
+    computedOverdueAmount,
+    computedOverdueCount,
+    computedDueTodayAmount,
+    computedDueTodayCount,
+  } = useMemo(() => {
+    let totOut = 0;
+    let overAmt = 0;
+    let overCnt = 0;
+    let todayAmt = 0;
+    let todayCnt = 0;
+
+    collectionItems.forEach((item) => {
+      if (item.isCancelled) return;
+      if (item.outstandingAmount > 0) {
+        totOut += item.outstandingAmount;
+        if (item.dueDate && item.dueDate < todayStr) {
+          overAmt += item.outstandingAmount;
+          overCnt++;
+        }
+        if (item.dueDate === todayStr) {
+          todayAmt += item.outstandingAmount;
+          todayCnt++;
+        }
+      }
+    });
+
+    return {
+      computedTotalOutstanding: totOut,
+      computedOverdueAmount: overAmt,
+      computedOverdueCount: overCnt,
+      computedDueTodayAmount: todayAmt,
+      computedDueTodayCount: todayCnt,
+    };
+  }, [collectionItems, todayStr]);
+
+  const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;
+  const paginatedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredItems.slice(start, start + pageSize);
+  }, [filteredItems, currentPage, pageSize]);
+
+  // Sub-view 2: Customer Assignments Memo (Merged with registered Customers)
   const customerAssignmentsList = useMemo(() => {
+    const map = new Map<string, any>();
+
     if (apiAssignments.length > 0) {
-      return apiAssignments.map((ca) => {
+      apiAssignments.forEach((ca) => {
         const rep = liveReps.find((r) => r.id === ca.salesRepresentative?.id);
         const matchedCust = customers.find((c) => c.id === ca.id);
         const custForCalc = matchedCust || {
@@ -562,7 +873,7 @@ export const CollectionsView: React.FC = () => {
           (salesReturns || []) as any,
           (paymentIns || []) as any
         );
-        return {
+        map.set(ca.id, {
           customer: matchedCust || ({
             id: ca.id,
             name: ca.customerName,
@@ -580,14 +891,44 @@ export const CollectionsView: React.FC = () => {
           repType: ca.salesRepresentative?.type || 'Primary',
           assignedDate: ca.assignedDate || '—',
           status: ca.status || 'Active',
-        };
+        });
       });
     }
-    return [];
+
+    if (customers.length > 0) {
+      customers.forEach((cust) => {
+        if (!map.has(cust.id)) {
+          const rep = liveReps.find((r) => r.id === cust.salesRepresentativeId);
+          const metrics = calculateCustomerOutstanding(
+            cust as any,
+            (sales || []) as any,
+            (salesReturns || []) as any,
+            (paymentIns || []) as any
+          );
+          map.set(cust.id, {
+            customer: cust,
+            outstanding: metrics.outstandingAmount,
+            rep,
+            repName: cust.salesRepresentativeName || rep?.name || 'Unassigned',
+            repType: cust.salesRepresentativeType || 'Primary',
+            assignedDate: (cust as any).assignedDate || '—',
+            status: cust.status || 'Active',
+          });
+        }
+      });
+    }
+
+    return Array.from(map.values());
   }, [apiAssignments, customers, liveReps, sales, salesReturns, paymentIns]);
 
   const filteredCustomerAssignments = customerAssignmentsList;
-  const paginatedCustomerAssignments = customerAssignmentsList;
+  const paginatedCustomerAssignments = useMemo(() => {
+    if (customerAssignmentsList.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return customerAssignmentsList.slice(start, start + pageSize);
+    }
+    return customerAssignmentsList;
+  }, [customerAssignmentsList, currentPage, pageSize]);
 
   // Sub-view 3: Follow-ups Memo
   const filteredFollowUps = useMemo(() => {
@@ -597,7 +938,13 @@ export const CollectionsView: React.FC = () => {
     return [];
   }, [apiFollowUps]);
 
-  const paginatedFollowUps = filteredFollowUps;
+  const paginatedFollowUps = useMemo(() => {
+    if (filteredFollowUps.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return filteredFollowUps.slice(start, start + pageSize);
+    }
+    return filteredFollowUps;
+  }, [filteredFollowUps, currentPage, pageSize]);
 
   // Sub-view 4: Collection History Memo
   const filteredCollectionHistory = useMemo(() => {
@@ -607,21 +954,84 @@ export const CollectionsView: React.FC = () => {
     return [];
   }, [apiHistory]);
 
-  const paginatedHistory = filteredCollectionHistory;
+  const paginatedHistory = useMemo(() => {
+    if (filteredCollectionHistory.length > pageSize) {
+      const start = (currentPage - 1) * pageSize;
+      return filteredCollectionHistory.slice(start, start + pageSize);
+    }
+    return filteredCollectionHistory;
+  }, [filteredCollectionHistory, currentPage, pageSize]);
+
+  // Apply buffered search & dropdown filters
+  const handleApplyFilters = () => {
+    const trimmed = searchTerm.trim();
+    const isSame =
+      appliedSearch === trimmed &&
+      selectedRepFilter === pendingRepFilter &&
+      selectedCustomerFilter === pendingCustomerFilter &&
+      dueDateFilter === pendingDueDateFilter &&
+      statusFilter === pendingStatusFilter &&
+      paymentStatusFilter === pendingPaymentStatusFilter &&
+      currentPage === 1;
+
+    setAppliedSearch(trimmed);
+    setSelectedRepFilter(pendingRepFilter);
+    setSelectedCustomerFilter(pendingCustomerFilter);
+    setDueDateFilter(pendingDueDateFilter);
+    setStatusFilter(pendingStatusFilter);
+    setPaymentStatusFilter(pendingPaymentStatusFilter);
+    setCurrentPage(1);
+
+    if (isSame) {
+      loadMetrics();
+      if (subView === 'dashboard') loadInvoices();
+      else if (subView === 'customer-assignments') loadAssignments();
+      else if (subView === 'follow-ups') loadFollowUps();
+      else if (subView === 'collection-history') loadHistory();
+    }
+  };
 
   // Reset all filters
   const handleResetFilters = () => {
+    const isSame =
+      searchTerm === '' &&
+      appliedSearch === '' &&
+      pendingRepFilter === 'ALL' &&
+      selectedRepFilter === 'ALL' &&
+      pendingCustomerFilter === 'ALL' &&
+      selectedCustomerFilter === 'ALL' &&
+      pendingDueDateFilter === 'ALL' &&
+      dueDateFilter === 'ALL' &&
+      pendingStatusFilter === 'ALL' &&
+      statusFilter === 'ALL' &&
+      pendingPaymentStatusFilter === 'ALL' &&
+      paymentStatusFilter === 'ALL' &&
+      currentPage === 1;
+
     setSearchTerm('');
     setAppliedSearch('');
+    setPendingRepFilter('ALL');
     setSelectedRepFilter('ALL');
+    setPendingCustomerFilter('ALL');
     setSelectedCustomerFilter('ALL');
+    setPendingDueDateFilter('ALL');
     setDueDateFilter('ALL');
+    setPendingStatusFilter('ALL');
     setStatusFilter('ALL');
+    setPendingPaymentStatusFilter('ALL');
     setPaymentStatusFilter('ALL');
     setActiveTab('all');
     setCurrentPage(1);
     setSearchParams({});
     toast.info('Filters have been reset');
+
+    if (isSame) {
+      loadMetrics();
+      if (subView === 'dashboard') loadInvoices();
+      else if (subView === 'customer-assignments') loadAssignments();
+      else if (subView === 'follow-ups') loadFollowUps();
+      else if (subView === 'collection-history') loadHistory();
+    }
   };
 
   // Helper: Open Record Payment Modal prefilled with invoice
@@ -741,6 +1151,11 @@ export const CollectionsView: React.FC = () => {
       return;
     }
 
+    if (followUpHasPromise && (isNaN(Number(followUpPromiseAmount)) || Number(followUpPromiseAmount) <= 0)) {
+      toast.error('Promised amount must be greater than zero when Promise to Pay is checked.');
+      return;
+    }
+
     const savedOutcome = followUpHasPromise ? 'Promise to Pay' : followUpOutcome;
 
     try {
@@ -853,10 +1268,60 @@ export const CollectionsView: React.FC = () => {
         notes: assignNotes,
       });
 
-      assignCustomerSalesRep(assignCustomerId, assignRepId, assignType, assignEffectiveFrom, assignNotes);
       const targetCust = customers.find((c) => c.id === assignCustomerId);
       const targetRep = liveReps.find((r) => r.id === assignRepId);
-      toast.success(`Assigned ${targetRep?.name || 'Sales Rep'} to ${targetCust?.name || 'Customer'}`);
+      const resolvedRepName = targetRep?.name || 'Sales Rep';
+      assignCustomerSalesRep(assignCustomerId, assignRepId, assignType, assignEffectiveFrom, assignNotes, resolvedRepName);
+      setApiInvoices((prev) =>
+        prev.map((inv) =>
+          inv.customerId === assignCustomerId
+            ? {
+                ...inv,
+                salesRepresentativeId: assignRepId,
+                salesRepresentativeName: resolvedRepName,
+              }
+            : inv
+        )
+      );
+      setApiAssignments((prev) => {
+        const exists = prev.some((ca) => ca.id === assignCustomerId);
+        if (exists) {
+          return prev.map((ca) =>
+            ca.id === assignCustomerId
+              ? {
+                  ...ca,
+                  salesRepresentative: {
+                    id: assignRepId,
+                    name: resolvedRepName,
+                    mobile: targetRep?.mobile,
+                    type: assignType,
+                  },
+                  assignedDate: assignEffectiveFrom,
+                }
+              : ca
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: assignCustomerId,
+            customerName: targetCust?.name || 'Customer',
+            customerCode: targetCust?.customerCode,
+            company: targetCust?.company,
+            phone: targetCust?.phone,
+            totalOutstanding: Number(targetCust?.outstandingAmount || 0),
+            salesRepresentative: {
+              id: assignRepId,
+              name: resolvedRepName,
+              mobile: targetRep?.mobile,
+              type: assignType,
+            },
+            assignedDate: assignEffectiveFrom,
+            status: targetCust?.status || 'Active',
+          },
+        ];
+      });
+      toast.success(`Assigned ${resolvedRepName} to ${targetCust?.name || 'Customer'}`);
       setIsAssignCustomerModalOpen(false);
       store.dispatch(
         baseApi.util.invalidateTags([
@@ -952,6 +1417,9 @@ export const CollectionsView: React.FC = () => {
   const handleOpenTimeline = async (item: CollectionItem) => {
     setSelectedInvoice(item.invoice);
     setSelectedCustomer(item.customer);
+    setTimelineTab('all');
+    setTimelineInvoiceTab('all');
+    setTimelineSearch('');
     setIsTimelineModalOpen(true);
     setActiveActionId(null);
 
@@ -1056,6 +1524,39 @@ export const CollectionsView: React.FC = () => {
     });
   };
 
+  // Helper: Format raw timestamps into human-readable friendly dates with relative indicators
+  const formatTimelineTimestamp = (rawDate?: string): { formatted: string; relative: string } => {
+    if (!rawDate) return { formatted: '—', relative: '' };
+    try {
+      const d = new Date(rawDate);
+      if (isNaN(d.getTime())) return { formatted: rawDate, relative: '' };
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const eventDate = new Date(d);
+      eventDate.setHours(0, 0, 0, 0);
+
+      const diffDays = Math.round((today.getTime() - eventDate.getTime()) / (1000 * 60 * 60 * 24));
+      let relative = '';
+      if (diffDays === 0) relative = 'Today';
+      else if (diffDays === 1) relative = 'Yesterday';
+      else if (diffDays === -1) relative = 'Tomorrow';
+      else if (diffDays > 1 && diffDays < 30) relative = `${diffDays} days ago`;
+      else if (diffDays >= 30) relative = `${Math.floor(diffDays / 30)} mo ago`;
+
+      const day = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const hasTime = rawDate.includes('T') && !rawDate.endsWith('T00:00:00.000Z') && !rawDate.endsWith('T00:00:00Z');
+      const time = hasTime ? d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+
+      return {
+        formatted: time ? `${day}, ${time}` : day,
+        relative,
+      };
+    } catch {
+      return { formatted: rawDate, relative: '' };
+    }
+  };
+
   // Status Badge Component
   const renderStatusBadge = (status: CollectionItem['status']) => {
     switch (status) {
@@ -1097,11 +1598,36 @@ export const CollectionsView: React.FC = () => {
     }
   };
 
+  const displayTotalOutstanding =
+    dashboardMetrics?.totalOutstanding !== undefined && Number(dashboardMetrics.totalOutstanding) > 0
+      ? Math.max(Number(dashboardMetrics.totalOutstanding), computedTotalOutstanding)
+      : computedTotalOutstanding;
+
+  const overdueData = dashboardMetrics?.overdue;
+  const overdueAmt =
+    typeof overdueData === 'object' && overdueData?.amount !== undefined
+      ? Math.max(Number(overdueData.amount), computedOverdueAmount)
+      : (dashboardMetrics?.overdueAmount !== undefined ? Math.max(Number(dashboardMetrics.overdueAmount), computedOverdueAmount) : computedOverdueAmount);
+  const overdueCnt =
+    typeof overdueData === 'object' && overdueData?.count !== undefined
+      ? Math.max(Number(overdueData.count), computedOverdueCount)
+      : (dashboardMetrics?.overdueCount !== undefined ? Math.max(Number(dashboardMetrics.overdueCount), computedOverdueCount) : computedOverdueCount);
+
+  const dueTodayData = dashboardMetrics?.dueToday;
+  const dueTodayAmt =
+    typeof dueTodayData === 'object' && dueTodayData?.amount !== undefined
+      ? Math.max(Number(dueTodayData.amount), computedDueTodayAmount)
+      : (dashboardMetrics?.dueTodayAmount !== undefined ? Math.max(Number(dashboardMetrics.dueTodayAmount), computedDueTodayAmount) : computedDueTodayAmount);
+  const dueTodayCnt =
+    typeof dueTodayData === 'object' && dueTodayData?.count !== undefined
+      ? Math.max(Number(dueTodayData.count), computedDueTodayCount)
+      : (dashboardMetrics?.dueTodayCount !== undefined ? Math.max(Number(dashboardMetrics.dueTodayCount), computedDueTodayCount) : computedDueTodayCount);
+
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
       {/* 1. Page Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-[220px] flex-1">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#33077C]/10 text-[#33077C] flex items-center justify-center font-bold shrink-0">
               <IndianRupee className="w-4.5 h-4.5" />
@@ -1116,11 +1642,11 @@ export const CollectionsView: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 sm:gap-3 shrink-0 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={handleExportExcel}
             icon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
           >
@@ -1130,7 +1656,7 @@ export const CollectionsView: React.FC = () => {
           <Button
             variant="secondary"
             size="md"
-            className="w-full sm:w-auto justify-center hover:border-purple-300"
+            className="flex-1 sm:flex-initial justify-center hover:border-purple-300"
             onClick={handlePrintTableReport}
             icon={<Printer className="w-4 h-4 text-slate-600" />}
           >
@@ -1140,7 +1666,7 @@ export const CollectionsView: React.FC = () => {
           <Button
             variant="primary"
             size="md"
-            className="w-full sm:w-auto justify-center"
+            className="flex-1 sm:flex-initial justify-center"
             onClick={() => {
               // Open general record payment modal with first open invoice or blank
               const firstOpen = collectionItems.find((i) => i.outstandingAmount > 0);
@@ -1174,7 +1700,7 @@ export const CollectionsView: React.FC = () => {
               {isMetricsLoading ? (
                 <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `₹${Number(dashboardMetrics?.totalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                `₹${Number(displayTotalOutstanding ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
             </div>
             <div className="text-xs text-slate-500 mt-0.5">
@@ -1198,19 +1724,11 @@ export const CollectionsView: React.FC = () => {
               {isMetricsLoading ? (
                 <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `₹${Number(
-                  (typeof dashboardMetrics?.overdue === 'object'
-                    ? dashboardMetrics?.overdue?.amount
-                    : dashboardMetrics?.overdueAmount) ?? 0
-                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                `₹${Number(overdueAmt ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
             </div>
             <div className="text-xs text-rose-600 font-medium mt-0.5">
-              {Number(
-                (typeof dashboardMetrics?.overdue === 'object'
-                  ? dashboardMetrics?.overdue?.count
-                  : dashboardMetrics?.overdueCount) ?? tabCounts.overdue ?? 0
-              )}{' '}
+              {Number(overdueCnt ?? 0)}{' '}
               invoices past due date
             </div>
           </div>
@@ -1231,19 +1749,11 @@ export const CollectionsView: React.FC = () => {
               {isMetricsLoading ? (
                 <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `₹${Number(
-                  (typeof dashboardMetrics?.dueToday === 'object'
-                    ? dashboardMetrics?.dueToday?.amount
-                    : dashboardMetrics?.dueTodayAmount) ?? 0
-                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                `₹${Number(dueTodayAmt ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
             </div>
             <div className="text-xs text-amber-600 font-medium mt-0.5">
-              {Number(
-                (typeof dashboardMetrics?.dueToday === 'object'
-                  ? dashboardMetrics?.dueToday?.count
-                  : dashboardMetrics?.dueTodayCount) ?? tabCounts.dueToday ?? 0
-              )}{' '}
+              {Number(dueTodayCnt ?? 0)}{' '}
               invoices maturing today
             </div>
           </div>
@@ -1408,20 +1918,16 @@ export const CollectionsView: React.FC = () => {
         value={searchTerm}
         onChange={(val) => {
           setSearchTerm(val);
-          setCurrentPage(1);
         }}
-        onSubmit={() => {
-          setCurrentPage(1);
-        }}
+        onSubmit={handleApplyFilters}
         onReset={handleResetFilters}
         filterSlot={
           <div className="flex items-center gap-2 flex-wrap">
             {/* Sales Representative Filter */}
             <select
-              value={selectedRepFilter}
+              value={pendingRepFilter}
               onChange={(e) => {
-                setSelectedRepFilter(e.target.value);
-                setCurrentPage(1);
+                setPendingRepFilter(e.target.value);
               }}
               className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
@@ -1435,10 +1941,9 @@ export const CollectionsView: React.FC = () => {
 
             {/* Due Date Filter */}
             <select
-              value={dueDateFilter}
+              value={pendingDueDateFilter}
               onChange={(e) => {
-                setDueDateFilter(e.target.value);
-                setCurrentPage(1);
+                setPendingDueDateFilter(e.target.value);
               }}
               className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
@@ -1450,10 +1955,9 @@ export const CollectionsView: React.FC = () => {
 
             {/* Status Filter */}
             <select
-              value={statusFilter}
+              value={pendingStatusFilter}
               onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setCurrentPage(1);
+                setPendingStatusFilter(e.target.value);
               }}
               className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
@@ -1467,10 +1971,9 @@ export const CollectionsView: React.FC = () => {
 
             {/* Payment Status */}
             <select
-              value={paymentStatusFilter}
+              value={pendingPaymentStatusFilter}
               onChange={(e) => {
-                setPaymentStatusFilter(e.target.value);
-                setCurrentPage(1);
+                setPendingPaymentStatusFilter(e.target.value);
               }}
               className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium focus:outline-hidden focus:ring-1 focus:ring-[#33077C]"
             >
@@ -1501,20 +2004,20 @@ export const CollectionsView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-            <thead>
-              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CUSTOMER</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE NO</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">INVOICE DATE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">DUE DATE</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">INVOICE AMOUNT</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PAID AMOUNT</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">OUTSTANDING</th>
-                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white">SALES REP</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
-              </tr>
-            </thead>
+            <CommonTableHead
+              columns={[
+                { label: "CUSTOMER", align: "left", minWidth: "180px" },
+                { label: "INVOICE NO", align: "left", minWidth: "140px" },
+                { label: "INVOICE DATE", align: "left", minWidth: "140px" },
+                { label: "DUE DATE", align: "left", minWidth: "140px" },
+                { label: "INVOICE AMOUNT", align: "right", minWidth: "130px" },
+                { label: "PAID AMOUNT", align: "right", minWidth: "130px" },
+                { label: "OUTSTANDING", align: "right", minWidth: "130px" },
+                { label: "SALES REP", align: "left", minWidth: "140px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTIONS", align: "center", minWidth: "130px" },
+              ]}
+            />
             <tbody className="text-sm">
               {isInvoicesLoading ? (
                 <tr>
@@ -1542,6 +2045,17 @@ export const CollectionsView: React.FC = () => {
                     .join('')
                     .toUpperCase()
                     .slice(0, 2);
+                  const resolvedCustomerCode =
+                    item.customer?.customerCode ||
+                    customers.find(
+                      (c) =>
+                        (item.customerId && c.id === item.customerId) ||
+                        (c.phone && item.customerPhone && c.phone === item.customerPhone) ||
+                        (c.name && item.customerName && c.name.trim().toLowerCase() === item.customerName.trim().toLowerCase())
+                    )?.customerCode ||
+                    (item.customerId && !item.customerId.startsWith('cust_') && item.customerId.length > 5
+                      ? item.customerId.slice(0, 8).toUpperCase()
+                      : '');
 
                   return (
                     <tr
@@ -1555,13 +2069,20 @@ export const CollectionsView: React.FC = () => {
                             {customerInitials}
                           </div>
                           <div className="flex flex-col">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenTimeline(item)}
-                              className="font-bold text-slate-900 text-xs sm:text-[14px] text-left hover:text-[#33077C] hover:underline cursor-pointer"
-                            >
-                              {item.customerName}
-                            </button>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenTimeline(item)}
+                                className="font-bold text-slate-900 text-xs sm:text-[14px] text-left hover:text-[#33077C] hover:underline cursor-pointer"
+                              >
+                                {item.customerName}
+                              </button>
+                              {resolvedCustomerCode && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                                  {resolvedCustomerCode}
+                                </span>
+                              )}
+                            </div>
                             <span className="text-[11px] text-slate-500 font-mono mt-0.5">
                               {item.customerPhone}
                             </span>
@@ -1582,7 +2103,7 @@ export const CollectionsView: React.FC = () => {
 
                       {/* Invoice Date */}
                       <td className="py-4 px-4 border border-slate-200 text-slate-600 whitespace-nowrap text-xs">
-                        {item.invoiceDate}
+                        {formatDate(item.invoiceDate)}
                       </td>
 
                       {/* Due Date */}
@@ -1597,7 +2118,7 @@ export const CollectionsView: React.FC = () => {
                                 : 'text-slate-700'
                             }`}
                           >
-                            {item.dueDate}
+                            {formatDate(item.dueDate)}
                           </span>
                           {item.outstandingAmount > 0 && item.dueDate === todayStr && (
                             <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-bold">
@@ -1703,7 +2224,19 @@ export const CollectionsView: React.FC = () => {
                               badgeBg: 'bg-amber-500',
                             },
                             {
-                              label: 'Assign / Change Rep',
+                              label: 'Assign Sales Rep',
+                              hidden: Boolean(
+                                item.salesRep?.id ||
+                                (item.salesRepName &&
+                                  item.salesRepName.trim() !== '' &&
+                                  item.salesRepName.trim().toLowerCase() !== 'unassigned') ||
+                                (item.customer?.salesRepresentativeId &&
+                                  String(item.customer.salesRepresentativeId).trim() !== '' &&
+                                  String(item.customer.salesRepresentativeId).trim().toLowerCase() !== 'unassigned') ||
+                                (item.customer?.salesRepresentativeName &&
+                                  String(item.customer.salesRepresentativeName).trim() !== '' &&
+                                  String(item.customer.salesRepresentativeName).trim().toLowerCase() !== 'unassigned')
+                              ),
                               onClick: () => handleOpenAssignCustomer(item.customer),
                               variant: 'assign',
                             },
@@ -1736,23 +2269,22 @@ export const CollectionsView: React.FC = () => {
             </tbody>
           </table>
         </div>
-
-        {/* Pagination */}
-        {(totalInvoices > 0 || filteredItems.length > 0) && (
-          <div className="p-3 border-t border-slate-100 dark:border-slate-700">
-            <Pagination
-              currentPage={currentPage}
-              onPageChange={setCurrentPage}
-              pageSize={pageSize}
-              onPageSizeChange={(newSize) => {
-                setPageSize(newSize);
-                setCurrentPage(1);
-              }}
-              totalItems={totalInvoices || filteredItems.length}
-            />
-          </div>
-        )}
       </div>
+
+      {/* Pagination */}
+      {filteredItems.length > 0 && (
+        <Pagination
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          pageSize={pageSize}
+          pageSizeOptions={[5, 10, 20, 50]}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setCurrentPage(1);
+          }}
+          totalItems={filteredItems.length}
+        />
+      )}
     </div>
   )}
 
@@ -1762,55 +2294,44 @@ export const CollectionsView: React.FC = () => {
       {subView === 'customer-assignments' && (
         <div className="space-y-4">
           {/* Filter Bar */}
-          <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex-1 max-w-md">
-              <SearchBar
-                value={searchTerm}
-                onChange={(val) => {
-                  setSearchTerm(val);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search customer, customer code, phone, rep..."
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <select
-                value={selectedRepFilter}
-                onChange={(e) => {
-                  setSelectedRepFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-slate-800 font-medium"
-              >
-                <option value="ALL">All Representatives</option>
-                {liveReps.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-slate-800 font-medium"
-              >
-                <option value="ALL">All Statuses</option>
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-              </select>
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                title="Reset Filters"
-                className="h-9 px-2.5 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-500 hover:text-slate-800 bg-slate-50 flex items-center justify-center cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
+          <SearchBar
+            value={searchTerm}
+            onChange={(val) => {
+              setSearchTerm(val);
+            }}
+            onSubmit={handleApplyFilters}
+            onReset={handleResetFilters}
+            placeholder="Search customer, customer code, phone, rep..."
+            filterSlot={
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={pendingRepFilter}
+                  onChange={(e) => {
+                    setPendingRepFilter(e.target.value);
+                  }}
+                  className="h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-slate-800 font-medium"
+                >
+                  <option value="ALL">All Representatives</option>
+                  {liveReps.map((rep) => (
+                    <option key={rep.id} value={rep.id}>
+                      {rep.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={pendingStatusFilter}
+                  onChange={(e) => {
+                    setPendingStatusFilter(e.target.value);
+                  }}
+                  className="h-9 px-3 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-slate-800 font-medium"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
+            }
+          />
 
           {/* Table */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs overflow-hidden">
@@ -1874,7 +2395,7 @@ export const CollectionsView: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-slate-600 font-medium">
-                          {item.assignedDate}
+                          {formatDate(item.assignedDate)}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1914,21 +2435,20 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {(totalAssignments > 0 || filteredCustomerAssignments.length > 0) && (
-              <div className="p-3 border-t border-slate-100">
-                <Pagination
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  pageSize={pageSize}
-                  onPageSizeChange={(newSize) => {
-                    setPageSize(newSize);
-                    setCurrentPage(1);
-                  }}
-                  totalItems={totalAssignments || filteredCustomerAssignments.length}
-                />
-              </div>
-            )}
           </div>
+          {(totalAssignments > 0 || filteredCustomerAssignments.length > 0) && (
+            <Pagination
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              pageSize={pageSize}
+              pageSizeOptions={[5, 10, 20, 50]}
+              onPageSizeChange={(newSize) => {
+                setPageSize(newSize);
+                setCurrentPage(1);
+              }}
+              totalItems={totalAssignments || filteredCustomerAssignments.length}
+            />
+          )}
         </div>
       )}
 
@@ -1938,59 +2458,48 @@ export const CollectionsView: React.FC = () => {
       {subView === 'follow-ups' && (
         <div className="space-y-4">
           {/* Filter Bar */}
-          <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex-1 max-w-md">
-              <SearchBar
-                value={searchTerm}
-                onChange={(val) => {
-                  setSearchTerm(val);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search customer, invoice, follow-up notes..."
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <select
-                value={selectedRepFilter}
-                onChange={(e) => {
-                  setSelectedRepFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
-              >
-                <option value="ALL">All Representatives</option>
-                {liveReps.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
-              >
-                <option value="ALL">All Outcomes</option>
-                <option value="Customer Contacted">Customer Contacted</option>
-                <option value="Promise to Pay">Promise to Pay</option>
-                <option value="Payment Received">Payment Received</option>
-                <option value="No Response">No Response</option>
-                <option value="Dispute Raised">Dispute Raised</option>
-                <option value="Follow-up Required">Follow-up Required</option>
-              </select>
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                title="Reset Filters"
-                className="h-9 px-2.5 rounded-xl border border-slate-200 text-slate-500 bg-slate-50 flex items-center justify-center cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
+          <SearchBar
+            value={searchTerm}
+            onChange={(val) => {
+              setSearchTerm(val);
+            }}
+            onSubmit={handleApplyFilters}
+            onReset={handleResetFilters}
+            placeholder="Search customer, invoice, follow-up notes..."
+            filterSlot={
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={pendingRepFilter}
+                  onChange={(e) => {
+                    setPendingRepFilter(e.target.value);
+                  }}
+                  className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
+                >
+                  <option value="ALL">All Representatives</option>
+                  {liveReps.map((rep) => (
+                    <option key={rep.id} value={rep.id}>
+                      {rep.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={pendingStatusFilter}
+                  onChange={(e) => {
+                    setPendingStatusFilter(e.target.value);
+                  }}
+                  className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
+                >
+                  <option value="ALL">All Outcomes</option>
+                  <option value="Customer Contacted">Customer Contacted</option>
+                  <option value="Promise to Pay">Promise to Pay</option>
+                  <option value="Payment Received">Payment Received</option>
+                  <option value="No Response">No Response</option>
+                  <option value="Dispute Raised">Dispute Raised</option>
+                  <option value="Follow-up Required">Follow-up Required</option>
+                </select>
+              </div>
+            }
+          />
 
           {/* Table */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs overflow-hidden">
@@ -2114,21 +2623,20 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {(totalFollowUps > 0 || filteredFollowUps.length > 0) && (
-              <div className="p-3 border-t border-slate-100">
-                <Pagination
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  pageSize={pageSize}
-                  onPageSizeChange={(newSize) => {
-                    setPageSize(newSize);
-                    setCurrentPage(1);
-                  }}
-                  totalItems={totalFollowUps || filteredFollowUps.length}
-                />
-              </div>
-            )}
           </div>
+          {(totalFollowUps > 0 || filteredFollowUps.length > 0) && (
+            <Pagination
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              pageSize={pageSize}
+              pageSizeOptions={[5, 10, 20, 50]}
+              onPageSizeChange={(newSize) => {
+                setPageSize(newSize);
+                setCurrentPage(1);
+              }}
+              totalItems={totalFollowUps || filteredFollowUps.length}
+            />
+          )}
         </div>
       )}
 
@@ -2138,43 +2646,33 @@ export const CollectionsView: React.FC = () => {
       {subView === 'collection-history' && (
         <div className="space-y-4">
           {/* Filter Bar */}
-          <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex-1 max-w-md">
-              <SearchBar
-                value={searchTerm}
-                onChange={(val) => {
-                  setSearchTerm(val);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search receipt no, customer, invoice no, ref..."
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <select
-                value={selectedRepFilter}
-                onChange={(e) => {
-                  setSelectedRepFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
-              >
-                <option value="ALL">All Representatives</option>
-                {liveReps.map((rep) => (
-                  <option key={rep.id} value={rep.id}>
-                    {rep.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                title="Reset Filters"
-                className="h-9 px-2.5 rounded-xl border border-slate-200 text-slate-500 bg-slate-50 flex items-center justify-center cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
+          <SearchBar
+            value={searchTerm}
+            onChange={(val) => {
+              setSearchTerm(val);
+            }}
+            onSubmit={handleApplyFilters}
+            onReset={handleResetFilters}
+            placeholder="Search receipt no, customer, invoice no, ref..."
+            filterSlot={
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={pendingRepFilter}
+                  onChange={(e) => {
+                    setPendingRepFilter(e.target.value);
+                  }}
+                  className="h-9 px-3 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-medium"
+                >
+                  <option value="ALL">All Representatives</option>
+                  {liveReps.map((rep) => (
+                    <option key={rep.id} value={rep.id}>
+                      {rep.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            }
+          />
 
           {/* Table */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs overflow-hidden">
@@ -2248,21 +2746,20 @@ export const CollectionsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {(totalHistory > 0 || filteredCollectionHistory.length > 0) && (
-              <div className="p-3 border-t border-slate-100">
-                <Pagination
-                  currentPage={currentPage}
-                  onPageChange={setCurrentPage}
-                  pageSize={pageSize}
-                  onPageSizeChange={(newSize) => {
-                    setPageSize(newSize);
-                    setCurrentPage(1);
-                  }}
-                  totalItems={totalHistory || filteredCollectionHistory.length}
-                />
-              </div>
-            )}
           </div>
+          {(totalHistory > 0 || filteredCollectionHistory.length > 0) && (
+            <Pagination
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              pageSize={pageSize}
+              pageSizeOptions={[5, 10, 20, 50]}
+              onPageSizeChange={(newSize) => {
+                setPageSize(newSize);
+                setCurrentPage(1);
+              }}
+              totalItems={totalHistory || filteredCollectionHistory.length}
+            />
+          )}
         </div>
       )}
 
@@ -2314,6 +2811,7 @@ export const CollectionsView: React.FC = () => {
                   step="0.01"
                   min="0.01"
                   value={paymentAmount}
+                  onKeyDown={handleNonNegativeKeyDown}
                   onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
                   className={`${FORM_INPUT_CLS} font-bold text-sm`}
                   required
@@ -2343,8 +2841,9 @@ export const CollectionsView: React.FC = () => {
                   <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
                   <option value="Cash">Cash</option>
                   <option value="UPI">UPI / QR</option>
+                  <option value="Card">Card (Credit / Debit / POS)</option>
                   <option value="Cheque">Cheque</option>
-                  <option value="Credit Card">Credit Card / POS</option>
+                  <option value="Online Payment">Online Payment / Gateway</option>
                 </select>
               </div>
 
@@ -2444,7 +2943,7 @@ export const CollectionsView: React.FC = () => {
                     : Math.max(0, (selectedInvoice.grandTotal || 0) - (selectedInvoice.paidAmount || 0))
                   ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
-                <span className="text-[11px] text-slate-500 block">Due Date: {selectedInvoice.dueDate || '08 Oct 2026'}</span>
+                <span className="text-[11px] text-slate-500 block">Due Date: {formatDate(selectedInvoice.dueDate, '08 Oct 2026')}</span>
               </div>
             </div>
 
@@ -2576,6 +3075,7 @@ export const CollectionsView: React.FC = () => {
                         step="0.01"
                         min="1"
                         value={followUpPromiseAmount}
+                        onKeyDown={handleNonNegativeKeyDown}
                         onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
                         className={`${FORM_INPUT_CLS} font-bold`}
                         required={followUpHasPromise}
@@ -2673,6 +3173,7 @@ export const CollectionsView: React.FC = () => {
                 step="0.01"
                 min="1"
                 value={promisedAmount}
+                onKeyDown={handleNonNegativeKeyDown}
                 onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
                 className={`${FORM_INPUT_CLS} font-bold text-sm`}
                 required
@@ -2723,18 +3224,18 @@ export const CollectionsView: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL 4: CUSTOMER COLLECTION DETAIL & TIMELINE                            */}
+      {/* MODAL 4: CUSTOMER COLLECTION DETAIL & TIMELINE (IMPROVISED USER-FRIENDLY)   */}
       {/* ========================================================================= */}
       {isTimelineModalOpen && selectedCustomer && (
         <Modal
           isOpen={isTimelineModalOpen}
           onClose={() => setIsTimelineModalOpen(false)}
           title={`Collection Detail: ${selectedCustomer.name}`}
-          subtitle={`Phone: ${selectedCustomer.phone} - Ledger & Receivable Status`}
-          maxWidth="3xl"
+          subtitle={`${selectedCustomer.phone || 'No phone'} • ${selectedCustomer.company || 'Direct Customer'} • Ledger & Collection Timeline`}
+          maxWidth="4xl"
           headerGradient={true}
           showBackIcon={true}
-          hideCloseButton={true}
+          hideCloseButton={false}
           onBack={() => setIsTimelineModalOpen(false)}
         >
           {(() => {
@@ -2743,16 +3244,31 @@ export const CollectionsView: React.FC = () => {
                 s.customerId === selectedCustomer.id ||
                 s.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase()
             );
-            const totalOutstanding = custSales.reduce(
+
+            // Separate active open, settled, and cancelled invoices
+            const openSales = custSales.filter((s) => {
+              const isCanc = (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+              const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+              return !isCanc && bal > 0;
+            });
+
+            const settledSales = custSales.filter((s) => {
+              const isCanc = (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+              const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+              return !isCanc && bal <= 0;
+            });
+
+            const cancelledSales = custSales.filter((s) => {
+              return (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+            });
+
+            const totalOutstanding = openSales.reduce(
               (acc, s) =>
                 acc + (s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0))),
               0
             );
-            const overdueSales = custSales.filter((s) => {
-              const bal =
-                s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
-              return bal > 0 && s.dueDate && s.dueDate < todayStr;
-            });
+
+            const overdueSales = openSales.filter((s) => s.dueDate && s.dueDate < todayStr);
             const overdueAmount = overdueSales.reduce(
               (acc, s) =>
                 acc + (s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0))),
@@ -2760,12 +3276,12 @@ export const CollectionsView: React.FC = () => {
             );
 
             const custPayments = paymentIns
-              .filter((p) => p.customerId === selectedCustomer.id)
+              .filter((p) => p.customerId === selectedCustomer.id || (p as any).partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase() || (p as any).customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
               .sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || ''));
             const lastPayment = custPayments[0] || null;
 
             const custFollowUps = collectionFollowUps
-              .filter((f) => f.customerId === selectedCustomer.id)
+              .filter((f) => f.customerId === selectedCustomer.id || f.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
               .sort((a, b) => (b.followUpDate || '').localeCompare(a.followUpDate || ''));
             const nextFollowUp =
               custFollowUps.find((f) => f.nextFollowUpDate && f.nextFollowUpDate >= todayStr) ||
@@ -2773,267 +3289,714 @@ export const CollectionsView: React.FC = () => {
               null;
 
             const custPromises = promisesToPay
-              .filter((p) => p.customerId === selectedCustomer.id)
+              .filter((p) => p.customerId === selectedCustomer.id || p.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
               .sort((a, b) => (b.promiseDate || '').localeCompare(a.promiseDate || ''));
 
             const rep = liveReps.find(
               (r) => r.id === selectedCustomer.salesRepresentativeId
             );
 
+            const initials = (selectedCustomer.name || 'CU')
+              .split(' ')
+              .map((n: string) => n[0])
+              .join('')
+              .toUpperCase()
+              .slice(0, 2);
+
+            // Filter invoices by invoice tab
+            const displayedInvoices = custSales.filter((s) => {
+              const isCanc = (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+              const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+              if (timelineInvoiceTab === 'open') return !isCanc && bal > 0;
+              if (timelineInvoiceTab === 'settled') return !isCanc && bal <= 0;
+              if (timelineInvoiceTab === 'cancelled') return isCanc;
+              return true;
+            });
+
+            // Build unified timeline events list
+            type UnifiedEvent = {
+              id: string;
+              category: 'payments' | 'invoices' | 'follow-ups' | 'promises' | 'other';
+              title: string;
+              subtitle?: string;
+              rawDate: string;
+              formattedDate: string;
+              relativeDate: string;
+              details?: string;
+              amount?: number;
+              method?: string;
+              refNo?: string;
+              repName?: string;
+            };
+
+            const unifiedEvents: UnifiedEvent[] = [];
+
+            if (customerTimeline?.events && customerTimeline.events.length > 0) {
+              customerTimeline.events.forEach((evt) => {
+                const titleLower = evt.title.toLowerCase();
+                const typeLower = (evt.type || '').toLowerCase();
+                let category: UnifiedEvent['category'] = 'other';
+                if (typeLower.includes('payment') || titleLower.includes('payment') || titleLower.includes('receipt')) {
+                  category = 'payments';
+                } else if (typeLower.includes('invoice') || titleLower.includes('invoice')) {
+                  category = 'invoices';
+                } else if (typeLower.includes('follow') || titleLower.includes('follow') || titleLower.includes('call') || titleLower.includes('contact')) {
+                  category = 'follow-ups';
+                } else if (typeLower.includes('promise') || titleLower.includes('promise')) {
+                  category = 'promises';
+                }
+
+                const { formatted, relative } = formatTimelineTimestamp(evt.date);
+                unifiedEvents.push({
+                  id: evt.id || `evt_${Math.random()}`,
+                  category,
+                  title: evt.title,
+                  subtitle: evt.subtitle,
+                  rawDate: evt.date,
+                  formattedDate: formatted,
+                  relativeDate: relative,
+                  details: evt.details?.replace(/^"|"$/g, ''),
+                });
+              });
+            } else {
+              // Construct unified events from store records if API timeline is not loaded
+              custPayments.forEach((p) => {
+                const { formatted, relative } = formatTimelineTimestamp(p.paymentDate || p.createdAt);
+                unifiedEvents.push({
+                  id: p.id,
+                  category: 'payments',
+                  title: `Payment Received: ₹${Number(p.amount || p.receivedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                  subtitle: `Receipt #${p.receiptNo || 'REC'} • ${p.paymentMethod || p.paymentType || 'Cash'}${p.referenceNo ? ` • Ref: ${p.referenceNo}` : ''}`,
+                  rawDate: p.paymentDate || p.createdAt || '',
+                  formattedDate: formatted,
+                  relativeDate: relative,
+                  details: p.notes,
+                  amount: Number(p.amount || p.receivedAmount || 0),
+                  method: p.paymentMethod || p.paymentType,
+                  refNo: p.referenceNo,
+                  repName: p.salesRepresentativeName,
+                });
+              });
+
+              custSales.forEach((s) => {
+                const isCanc = (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+                const bal = s.balance !== undefined ? s.balance : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+                const { formatted, relative } = formatTimelineTimestamp(s.saleDate || s.createdAt);
+                unifiedEvents.push({
+                  id: s.id,
+                  category: 'invoices',
+                  title: `Invoice ${s.invoiceNo} Raised: ₹${Number(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                  subtitle: `Due Date: ${s.dueDate || s.saleDate || 'N/A'} • Status: ${isCanc ? 'Cancelled' : bal <= 0 ? 'Paid' : 'Partial'}`,
+                  rawDate: s.saleDate || s.createdAt || '',
+                  formattedDate: formatted,
+                  relativeDate: relative,
+                  details: `Outstanding Balance: ₹${bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                  amount: Number(s.grandTotal || 0),
+                  repName: s.salesRepresentativeName,
+                });
+              });
+
+              custFollowUps.forEach((f) => {
+                const { formatted, relative } = formatTimelineTimestamp(`${f.followUpDate}${f.followUpTime ? ` ${f.followUpTime}` : ''}`);
+                unifiedEvents.push({
+                  id: f.id,
+                  category: 'follow-ups',
+                  title: `Follow-up: ${f.outcome || 'Customer Contacted'}`,
+                  subtitle: `Method: ${f.contactMethod || 'Phone'}${f.nextFollowUpDate ? ` • Next: ${f.nextFollowUpDate}` : ''}`,
+                  rawDate: f.followUpDate,
+                  formattedDate: formatted,
+                  relativeDate: relative,
+                  details: f.notes,
+                  repName: f.salesRepresentativeName,
+                });
+              });
+
+              custPromises.forEach((ptp) => {
+                const { formatted, relative } = formatTimelineTimestamp(ptp.createdAt || ptp.promiseDate);
+                unifiedEvents.push({
+                  id: ptp.id,
+                  category: 'promises',
+                  title: `Promise to Pay: ₹${Number(ptp.promisedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                  subtitle: `Promised Date: ${ptp.promiseDate} • Status: ${ptp.status}`,
+                  rawDate: ptp.promiseDate || ptp.createdAt || '',
+                  formattedDate: formatted,
+                  relativeDate: relative,
+                  details: ptp.notes,
+                  amount: Number(ptp.promisedAmount || 0),
+                  repName: ptp.salesRepresentativeName,
+                });
+              });
+            }
+
+            // Sort unified events descending by date
+            unifiedEvents.sort((a, b) => (b.rawDate || '').localeCompare(a.rawDate || ''));
+
+            // Filter timeline events by category tab and search query
+            const filteredTimelineEvents = unifiedEvents.filter((evt) => {
+              if (timelineTab !== 'all' && evt.category !== timelineTab) {
+                return false;
+              }
+              if (timelineSearch.trim()) {
+                const q = timelineSearch.toLowerCase().trim();
+                const matchTitle = evt.title.toLowerCase().includes(q);
+                const matchSub = (evt.subtitle || '').toLowerCase().includes(q);
+                const matchDet = (evt.details || '').toLowerCase().includes(q);
+                if (!matchTitle && !matchSub && !matchDet) return false;
+              }
+              return true;
+            });
+
+            const paymentCount = unifiedEvents.filter((e) => e.category === 'payments').length;
+            const invoiceCount = unifiedEvents.filter((e) => e.category === 'invoices').length;
+            const followUpCount = unifiedEvents.filter((e) => e.category === 'follow-ups').length;
+            const promiseCount = unifiedEvents.filter((e) => e.category === 'promises').length;
+
             return (
-              <div className="space-y-4 p-2 text-xs max-h-[75vh] overflow-y-auto">
-                {/* Header Information Card */}
-                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between flex-wrap gap-2">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900">{selectedCustomer.name}</h3>
-                    <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                      Phone: {selectedCustomer.phone} - Email: {selectedCustomer.email || 'N/A'}
-                    </p>
+              <div className="space-y-5 p-1 text-xs max-h-[80vh] overflow-y-auto pr-1 sm:pr-2">
+                {/* 1. Customer Profile Banner with Quick Actions */}
+                <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50 via-purple-50/20 to-slate-50 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#33077C] to-[#581c87] text-white font-bold text-base flex items-center justify-center shadow-sm shrink-0">
+                      {initials}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-base font-bold text-slate-900 tracking-tight">{selectedCustomer.name}</h3>
+                        {selectedCustomer.customerCode && (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-slate-200/70 text-slate-700">
+                            {selectedCustomer.customerCode}
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1 bg-purple-100/70 text-[#33077C] px-2.5 py-0.5 rounded-full font-bold text-[10px] border border-purple-200/60">
+                          <UserCheck className="w-3 h-3" />
+                          <span>Rep: {rep?.name || selectedCustomer.salesRepresentativeName || 'Unassigned'}</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 flex-wrap mt-1 text-[11px] text-slate-500 font-medium">
+                        {selectedCustomer.phone && (
+                          <a
+                            href={`tel:${selectedCustomer.phone}`}
+                            className="inline-flex items-center gap-1 hover:text-[#33077C] transition-colors"
+                          >
+                            <Phone className="w-3 h-3 text-slate-400" />
+                            <span>{selectedCustomer.phone}</span>
+                          </a>
+                        )}
+                        {selectedCustomer.email && (
+                          <a
+                            href={`mailto:${selectedCustomer.email}`}
+                            className="inline-flex items-center gap-1 hover:text-[#33077C] transition-colors"
+                          >
+                            <Mail className="w-3 h-3 text-slate-400" />
+                            <span>{selectedCustomer.email}</span>
+                          </a>
+                        )}
+                        {selectedCustomer.company && (
+                          <span className="inline-flex items-center gap-1 text-slate-600">
+                            <Building2 className="w-3 h-3 text-slate-400" />
+                            <span>{selectedCustomer.company}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 bg-purple-50 text-[#33077C] px-3 py-1.5 rounded-lg border border-purple-200 font-semibold text-xs">
-                    <UserCheck className="w-3.5 h-3.5" />
-                    <span>Rep: {rep?.name || 'Unassigned'}</span>
+
+                  {/* Quick Action Shortcuts inside Customer Banner */}
+                  <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetSale = openSales[0] || custSales[0];
+                        if (targetSale) {
+                          setSelectedInvoice(targetSale);
+                          const bal = targetSale.balance !== undefined ? targetSale.balance : Math.max(0, (targetSale.grandTotal || 0) - (targetSale.paidAmount || 0));
+                          setPaymentAmount(bal);
+                        }
+                        setPaymentDate(todayStr);
+                        setPaymentRepId(rep?.id || '');
+                        setIsTimelineModalOpen(false);
+                        setIsRecordPaymentModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Record Payment</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetSale = openSales[0] || custSales[0];
+                        if (targetSale) setSelectedInvoice(targetSale);
+                        setFollowUpDate(todayStr);
+                        setFollowUpRepId(rep?.id || '');
+                        setIsTimelineModalOpen(false);
+                        setIsFollowUpModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>Log Follow-up</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetSale = openSales[0] || custSales[0];
+                        if (targetSale) {
+                          setSelectedInvoice(targetSale);
+                          const bal = targetSale.balance !== undefined ? targetSale.balance : Math.max(0, (targetSale.grandTotal || 0) - (targetSale.paidAmount || 0));
+                          setPromisedAmount(bal);
+                        }
+                        setPromiseDate('');
+                        setIsTimelineModalOpen(false);
+                        setIsPromiseModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Calendar className="w-3.5 h-3.5" />
+                      <span>Promise to Pay</span>
+                    </button>
                   </div>
                 </div>
 
-                {/* 4 Summary Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3 rounded-xl bg-purple-50 border border-purple-100">
-                    <span className="text-[10px] text-purple-700 font-semibold uppercase block">
-                      Total Outstanding
-                    </span>
-                    <span className="text-base font-bold text-purple-900">
-                      �{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </span>
+                {/* 2. Four Modern Elevated KPI Metric Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {/* Card 1: Total Outstanding */}
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-br from-purple-50 via-purple-50/60 to-indigo-50/40 border border-purple-200/90 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-purple-700 font-bold uppercase tracking-wider">
+                        Total Outstanding
+                      </span>
+                      <div className="w-7 h-7 rounded-lg bg-purple-100 text-[#33077C] flex items-center justify-center">
+                        <IndianRupee className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-lg font-extrabold text-purple-950">
+                        ₹{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-[10px] text-purple-600 font-semibold mt-0.5">
+                        Across {openSales.length} open receivables
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-100">
-                    <span className="text-[10px] text-rose-700 font-semibold uppercase block">
-                      Overdue Amount
-                    </span>
-                    <span className="text-base font-bold text-rose-900">
-                      �{overdueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </span>
+                  {/* Card 2: Overdue Amount */}
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-br from-rose-50 via-rose-50/60 to-red-50/40 border border-rose-200/90 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-rose-700 font-bold uppercase tracking-wider">
+                        Overdue Amount
+                      </span>
+                      <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center">
+                        <Clock className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-lg font-extrabold text-rose-950">
+                        ₹{overdueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-[10px] text-rose-600 font-semibold mt-0.5">
+                        {overdueSales.length} invoices past due date
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-100">
-                    <span className="text-[10px] text-emerald-700 font-semibold uppercase block">
-                      Last Payment
-                    </span>
-                    <span className="text-xs font-bold text-emerald-900">
-                      {lastPayment
-                        ? `�${(lastPayment.amount || 0).toLocaleString()} (${lastPayment.paymentDate})`
-                        : 'None'}
-                    </span>
+                  {/* Card 3: Last Payment */}
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-50 via-emerald-50/60 to-teal-50/40 border border-emerald-200/90 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider">
+                        Last Payment
+                      </span>
+                      <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-lg font-extrabold text-emerald-950 truncate">
+                        {lastPayment
+                          ? `₹${Number(lastPayment.amount || lastPayment.receivedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                          : 'None'}
+                      </div>
+                      <div className="text-[10px] text-emerald-600 font-semibold mt-0.5 truncate">
+                        {lastPayment ? `Received on ${lastPayment.paymentDate || 'recently'}` : 'No payments collected yet'}
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-100">
-                    <span className="text-[10px] text-indigo-700 font-semibold uppercase block">
-                      Next Follow-up
-                    </span>
-                    <span className="text-xs font-bold text-indigo-900">
-                      {nextFollowUp?.nextFollowUpDate || 'None Scheduled'}
-                    </span>
+                  {/* Card 4: Next Follow-up */}
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-br from-sky-50 via-sky-50/60 to-indigo-50/40 border border-sky-200/90 shadow-2xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-sky-700 font-bold uppercase tracking-wider">
+                        Next Follow-up
+                      </span>
+                      <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center">
+                        <CalendarClock className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-lg font-extrabold text-sky-950 truncate">
+                        {nextFollowUp?.nextFollowUpDate
+                          ? formatTimelineTimestamp(nextFollowUp.nextFollowUpDate).formatted
+                          : 'None Scheduled'}
+                      </div>
+                      <div className="text-[10px] text-sky-600 font-semibold mt-0.5 truncate">
+                        {nextFollowUp?.outcome || 'No upcoming interaction'}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Outstanding Invoices */}
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
-                    Customer Invoices ({custSales.length})
-                  </h4>
-                  <div className="rounded-xl border border-slate-200 overflow-hidden">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#33077C] text-white text-[10px] font-bold uppercase">
+                {/* 3. Customer Invoices Table Section */}
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                  {/* Table Header Controls */}
+                  <div className="p-3 sm:px-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-[#33077C]" />
+                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Customer Invoices
+                      </h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-[#33077C]">
+                        {custSales.length}
+                      </span>
+                    </div>
+
+                    {/* Filter Pills */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { id: 'all', label: `All (${custSales.length})` },
+                        { id: 'open', label: `Open (${openSales.length})` },
+                        { id: 'settled', label: `Settled (${settledSales.length})` },
+                        { id: 'cancelled', label: `Cancelled (${cancelledSales.length})` },
+                      ].map((tab) => {
+                        const isActive = timelineInvoiceTab === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setTimelineInvoiceTab(tab.id as any)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-[#33077C] text-white shadow-2xs'
+                                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Table Body */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-[#33077C] text-white text-[11px] font-bold uppercase tracking-wider">
                         <tr>
-                          <th className="py-2 px-3">Invoice No</th>
-                          <th className="py-2 px-3">Date</th>
-                          <th className="py-2 px-3">Due Date</th>
-                          <th className="py-2 px-3 text-right">Amount</th>
-                          <th className="py-2 px-3 text-right">Paid</th>
-                          <th className="py-2 px-3 text-right">Balance</th>
-                          <th className="py-2 px-3 text-center">Status</th>
-                          <th className="py-2 px-3 text-center">Action</th>
+                          <th className="py-2.5 px-3">INVOICE NO</th>
+                          <th className="py-2.5 px-3">DATE</th>
+                          <th className="py-2.5 px-3">DUE DATE</th>
+                          <th className="py-2.5 px-3 text-right">AMOUNT</th>
+                          <th className="py-2.5 px-3 text-right">PAID</th>
+                          <th className="py-2.5 px-3 text-right">BALANCE</th>
+                          <th className="py-2.5 px-3 text-center">STATUS</th>
+                          <th className="py-2.5 px-3 text-center">ACTION</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {custSales.map((s) => {
-                          const bal =
-                            s.balance !== undefined
-                              ? s.balance
-                              : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
-                          let statusLabel = 'Paid';
-                          let statusBg = 'bg-emerald-100 text-emerald-700';
-                          if (bal > 0) {
-                            if (s.dueDate && s.dueDate < todayStr) {
-                              statusLabel = 'Overdue';
-                              statusBg = 'bg-rose-100 text-rose-700';
-                            } else if (s.dueDate && s.dueDate === todayStr) {
-                              statusLabel = 'Due Today';
-                              statusBg = 'bg-amber-100 text-amber-700';
-                            } else {
-                              statusLabel = 'Upcoming';
-                              statusBg = 'bg-blue-100 text-blue-700';
-                            }
-                          }
-                          return (
-                            <tr key={s.id} className="hover:bg-slate-50">
-                              <td className="py-2 px-3 font-mono font-bold text-[#33077C]">{s.invoiceNo}</td>
-                              <td className="py-2 px-3 text-slate-600">{s.saleDate}</td>
-                              <td className="py-2 px-3 text-slate-600">{s.dueDate || 'N/A'}</td>
-                              <td className="py-2 px-3 text-right">
-                                �{(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="py-2 px-3 text-right text-emerald-600">
-                                �{(s.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="py-2 px-3 text-right font-bold text-rose-600">
-                                �{bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </td>
-                              <td className="py-2 px-3 text-center">
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusBg}`}>
-                                  {statusLabel}
+                      <tbody className="divide-y divide-slate-100 text-[11px]">
+                        {displayedInvoices.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="py-8 text-center text-slate-400 font-medium">
+                              No invoices found in this category
+                            </td>
+                          </tr>
+                        ) : (
+                          displayedInvoices.map((s) => {
+                            const isCanc = (s.saleStatus as string) === 'Cancelled' || (s as any).status === 'Cancelled';
+                            const bal =
+                              s.balance !== undefined
+                                ? s.balance
+                                : Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0));
+
+                            let statusBadge = (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                Paid
+                              </span>
+                            );
+
+                            if (isCanc) {
+                              statusBadge = (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                                  Cancelled
                                 </span>
-                              </td>
-                              <td className="py-2 px-3 text-center">
-                                {bal > 0 ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setIsTimelineModalOpen(false);
-                                      setSelectedInvoice(s);
-                                      setPaymentAmount(bal);
-                                      setPaymentDate(todayStr);
-                                      setPaymentRepId(rep?.id || '');
-                                      setIsRecordPaymentModalOpen(true);
-                                    }}
-                                    className="px-2 py-1 rounded bg-[#33077C] hover:bg-[#4309A2] text-white text-[10px] font-bold cursor-pointer"
-                                  >
-                                    Collect
-                                  </button>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400">Settled</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                              );
+                            } else if (bal > 0) {
+                              if (s.dueDate && s.dueDate < todayStr) {
+                                statusBadge = (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 animate-pulse">
+                                    Overdue
+                                  </span>
+                                );
+                              } else if (s.dueDate && s.dueDate === todayStr) {
+                                statusBadge = (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                    Due Today
+                                  </span>
+                                );
+                              } else {
+                                statusBadge = (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                                    Upcoming
+                                  </span>
+                                );
+                              }
+                            }
+
+                            return (
+                              <tr key={s.id} className="hover:bg-purple-50/30 transition-colors">
+                                <td className="py-2.5 px-3 font-mono font-bold text-[#33077C] whitespace-nowrap">
+                                  {s.invoiceNo}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                                  {formatTimelineTimestamp(s.saleDate).formatted}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                                  {s.dueDate ? formatTimelineTimestamp(s.dueDate).formatted : 'N/A'}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-medium text-slate-800 whitespace-nowrap">
+                                  ₹{(s.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-medium text-emerald-600 whitespace-nowrap">
+                                  ₹{(s.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold text-rose-600 whitespace-nowrap">
+                                  ₹{bal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                  {statusBadge}
+                                </td>
+                                <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                  {isCanc ? (
+                                    <span className="text-[11px] font-medium text-slate-400">Cancelled</span>
+                                  ) : bal > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsTimelineModalOpen(false);
+                                        setSelectedInvoice(s);
+                                        setPaymentAmount(bal);
+                                        setPaymentDate(todayStr);
+                                        setPaymentRepId(rep?.id || '');
+                                        setIsRecordPaymentModalOpen(true);
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-[11px] font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 mx-auto"
+                                    >
+                                      <CreditCard className="w-3 h-3" />
+                                      <span>Collect</span>
+                                    </button>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/50">
+                                      <Check className="w-3 h-3 text-emerald-600" />
+                                      <span>Settled</span>
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
                 </div>
 
-                {/* Collection Timeline */}
-                <div className="pt-2">
-                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">
-                    Collection Activity Timeline
-                  </h4>
-
-                  {isTimelineLoading ? (
-                    <div className="py-8 text-center text-slate-500">
-                      <Loader2 className="w-6 h-6 animate-spin mx-auto text-[#33077C] mb-2" />
-                      <p className="text-xs font-medium">Loading collection timeline...</p>
+                {/* 4. Improvised Collection Activity Timeline Section */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+                  {/* Timeline Title & Interactive Category Filter Tabs */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <History className="w-4 h-4 text-[#33077C]" />
+                        <h4 className="text-sm font-bold text-slate-900 tracking-tight">
+                          Collection Activity Timeline
+                        </h4>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
+                          {unifiedEvents.length} Events
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Chronological record of invoices, receipts, customer calls, and commitments.
+                      </p>
                     </div>
-                  ) : customerTimeline?.events && customerTimeline.events.length > 0 ? (
-                    <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                      {customerTimeline.events.map((evt) => (
-                        <div key={evt.id} className="relative flex items-start gap-3">
-                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#4309A2] border-2 border-white" />
-                          <div className="flex-1 bg-purple-50/50 p-3 rounded-xl border border-purple-100">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-slate-900">{evt.title}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">{evt.date}</span>
-                            </div>
-                            {evt.subtitle && (
-                              <p className="text-[11px] font-semibold text-purple-700 mt-0.5">{evt.subtitle}</p>
-                            )}
-                            {evt.details && <p className="text-slate-600 mt-1 italic text-[11px]">"{evt.details}"</p>}
-                          </div>
-                        </div>
-                      ))}
+
+                    {/* Timeline Category Tabs */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[
+                        { id: 'all', label: `All (${unifiedEvents.length})` },
+                        { id: 'payments', label: `Payments (${paymentCount})` },
+                        { id: 'invoices', label: `Invoices (${invoiceCount})` },
+                        { id: 'follow-ups', label: `Follow-ups (${followUpCount})` },
+                        { id: 'promises', label: `Promises (${promiseCount})` },
+                      ].map((tab) => {
+                        const isActive = timelineTab === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setTimelineTab(tab.id as any)}
+                            className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-[#33077C] text-white shadow-2xs'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Search bar within Timeline */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Filter timeline by invoice, receipt, keyword..."
+                      value={timelineSearch}
+                      onChange={(e) => setTimelineSearch(e.target.value)}
+                      className="w-full h-8 pl-8 pr-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-[#33077C] text-slate-700"
+                    />
+                    {timelineSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setTimelineSearch('')}
+                        className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Timeline Stream */}
+                  {isTimelineLoading ? (
+                    <div className="py-12 text-center text-slate-500">
+                      <Loader2 className="w-7 h-7 animate-spin mx-auto text-[#33077C] mb-2" />
+                      <p className="text-xs font-semibold text-slate-700">Loading collection timeline...</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Fetching verified chronological customer audit trail</p>
+                    </div>
+                  ) : filteredTimelineEvents.length === 0 ? (
+                    <div className="py-10 text-center text-slate-400">
+                      <History className="w-8 h-8 mx-auto text-slate-300 mb-2 opacity-50" />
+                      <p className="text-xs font-semibold text-slate-700">No collection interactions found</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {timelineSearch
+                          ? `No activity matches "${timelineSearch}". Try clearing the search.`
+                          : 'No recorded interactions or payments under this category yet.'}
+                      </p>
                     </div>
                   ) : (
-                    <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                      {/* Events list */}
-                      {custFollowUps.map((f) => (
-                        <div key={f.id} className="relative flex items-start gap-3">
-                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#4309A2] border-2 border-white" />
-                          <div className="flex-1 bg-purple-50/50 p-3 rounded-xl border border-purple-100">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-slate-900">
-                                Follow-up Made: {f.outcome}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                {f.followUpDate} {f.followUpTime}
-                              </span>
+                    <div className="relative pl-6 space-y-4 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                      {filteredTimelineEvents.map((evt) => {
+                        // Event styling and iconography based on category
+                        let iconNode = <History className="w-3.5 h-3.5 text-purple-600" />;
+                        let dotBg = 'bg-[#33077C]';
+                        let cardBorder = 'border-slate-200/90';
+                        let accentBg = 'bg-white';
+
+                        if (evt.category === 'payments') {
+                          iconNode = <CreditCard className="w-3.5 h-3.5 text-white" />;
+                          dotBg = 'bg-emerald-600 text-white';
+                          cardBorder = 'border-emerald-200 hover:border-emerald-300';
+                          accentBg = 'bg-gradient-to-r from-emerald-50/40 via-white to-white';
+                        } else if (evt.category === 'invoices') {
+                          iconNode = <FileText className="w-3.5 h-3.5 text-white" />;
+                          dotBg = 'bg-blue-600 text-white';
+                          cardBorder = 'border-blue-200 hover:border-blue-300';
+                          accentBg = 'bg-gradient-to-r from-blue-50/40 via-white to-white';
+                        } else if (evt.category === 'follow-ups') {
+                          iconNode = <PhoneCall className="w-3.5 h-3.5 text-white" />;
+                          dotBg = 'bg-amber-500 text-white';
+                          cardBorder = 'border-amber-200 hover:border-amber-300';
+                          accentBg = 'bg-gradient-to-r from-amber-50/40 via-white to-white';
+                        } else if (evt.category === 'promises') {
+                          iconNode = <CalendarClock className="w-3.5 h-3.5 text-white" />;
+                          dotBg = 'bg-indigo-600 text-white';
+                          cardBorder = 'border-indigo-200 hover:border-indigo-300';
+                          accentBg = 'bg-gradient-to-r from-indigo-50/40 via-white to-white';
+                        }
+
+                        return (
+                          <div key={evt.id} className="relative flex items-start gap-3.5 group">
+                            {/* Modern circular badge along spine */}
+                            <div
+                              className={`absolute -left-6 top-1 w-6 h-6 rounded-full ${dotBg} flex items-center justify-center shadow-xs ring-4 ring-white z-10`}
+                            >
+                              {iconNode}
                             </div>
-                            <p className="text-slate-600 mt-1 italic">"{f.notes}"</p>
-                            <div className="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1 border-t border-purple-100">
-                              <span>Rep: {f.salesRepresentativeName}</span>
-                              {f.nextFollowUpDate && (
-                                <span className="font-semibold text-purple-700">
-                                  Next: {f.nextFollowUpDate}
-                                </span>
+
+                            {/* Elevated Event Card */}
+                            <div
+                              className={`flex-1 ${accentBg} p-3.5 sm:p-4 rounded-2xl border ${cardBorder} shadow-2xs transition-all`}
+                            >
+                              <div className="flex items-start justify-between gap-2 flex-wrap">
+                                <div className="space-y-0.5">
+                                  <h5 className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
+                                    {evt.title}
+                                  </h5>
+                                  {evt.subtitle && (
+                                    <div className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5 flex-wrap">
+                                      <span>{evt.subtitle}</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Human-friendly Date Badge */}
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {evt.relativeDate && (
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600">
+                                      {evt.relativeDate}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                                    {evt.formattedDate}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Details / Notes Bubble */}
+                              {evt.details && (
+                                <div className="mt-2.5 p-2.5 bg-slate-50/90 rounded-xl border border-slate-200/70 text-[11px] text-slate-700 font-sans">
+                                  <p>{evt.details}</p>
+                                </div>
+                              )}
+
+                              {/* Footer tag with Sales Representative */}
+                              {evt.repName && (
+                                <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+                                  <span className="inline-flex items-center gap-1">
+                                    <UserCheck className="w-3 h-3 text-[#33077C]" />
+                                    <span>Handled by: <strong className="text-slate-700 font-semibold">{evt.repName}</strong></span>
+                                  </span>
+                                </div>
                               )}
                             </div>
                           </div>
-                        </div>
-                      ))}
-
-                      {custPromises.map((p) => (
-                        <div key={p.id} className="relative flex items-start gap-3">
-                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-indigo-600 border-2 border-white" />
-                          <div className="flex-1 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-indigo-900">
-                                Promise to Pay: �{p.promisedAmount.toLocaleString()}
-                              </span>
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                                Status: {p.status}
-                              </span>
-                            </div>
-                            <p className="text-slate-600 mt-1">
-                              Promised settlement on: <span className="font-bold">{p.promiseDate}</span>
-                            </p>
-                            {p.notes && <p className="text-slate-500 italic mt-0.5 text-[11px]">"{p.notes}"</p>}
-                          </div>
-                        </div>
-                      ))}
-
-                      {custPayments.map((pay) => (
-                        <div key={pay.id} className="relative flex items-start gap-3">
-                          <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-emerald-600 border-2 border-white" />
-                          <div className="flex-1 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-emerald-900">
-                                Payment Received: �{pay.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                              </span>
-                              <span className="text-[10px] text-emerald-700 font-mono">
-                                {pay.paymentDate}
-                              </span>
-                            </div>
-                            <p className="text-slate-600 mt-1">
-                              Settled via {pay.paymentMethod || 'Bank Transfer'}{' '}
-                              {pay.referenceNo && `- Ref: ${pay.referenceNo}`}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-
-                      {custFollowUps.length === 0 && custPromises.length === 0 && custPayments.length === 0 && (
-                        <p className="text-slate-400 py-3 text-center">
-                          No collection interactions or payment records logged yet.
-                        </p>
-                      )}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
 
-                <div className="pt-3 flex justify-end">
+                {/* Footer Modal Action */}
+                <div className="pt-2 flex items-center justify-between border-t border-slate-200/80">
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    {displayedInvoices.length} invoices • {unifiedEvents.length} timeline interactions recorded
+                  </span>
                   <button
                     type="button"
                     onClick={() => setIsTimelineModalOpen(false)}
-                    className="h-9 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                    className="h-9 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
                   >
                     Close
                   </button>
@@ -3060,7 +4023,7 @@ export const CollectionsView: React.FC = () => {
           onBack={() => setIsInvoicePreviewModalOpen(false)}
         >
           <div className="space-y-4 p-2 text-xs">
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="font-bold text-slate-900 text-sm">{selectedInvoice.customerName}</p>
                 <p className="text-[11px] text-slate-500 font-mono mt-0.5">
@@ -3075,8 +4038,8 @@ export const CollectionsView: React.FC = () => {
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 overflow-hidden">
-              <table className="w-full text-left text-xs">
+            <div className="rounded-xl border border-slate-200 overflow-x-auto">
+              <table className="w-full min-w-[420px] text-left text-xs">
                 <thead className="bg-[#33077C] text-white text-[10px] font-bold uppercase">
                   <tr>
                     <th className="py-2 px-3">Item</th>
@@ -3102,7 +4065,7 @@ export const CollectionsView: React.FC = () => {
               </table>
             </div>
 
-            <div className="p-3 bg-purple-50/60 rounded-xl border border-purple-100 flex items-center justify-between">
+            <div className="p-3 bg-purple-50/60 rounded-xl border border-purple-100 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <span className="text-[11px] text-slate-600">Settled to Date:</span>
                 <span className="font-bold text-emerald-700 ml-1.5">
@@ -3183,14 +4146,14 @@ export const CollectionsView: React.FC = () => {
             </div>
 
             {selectedCustomer.email && (
-              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-[#33077C]" />
-                  <span className="font-medium text-slate-800">{selectedCustomer.email}</span>
+              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Mail className="w-4 h-4 text-[#33077C] shrink-0" />
+                  <span className="font-medium text-slate-800 truncate">{selectedCustomer.email}</span>
                 </div>
                 <a
                   href={`mailto:${selectedCustomer.email}`}
-                  className="px-3 py-1 rounded-lg bg-purple-100 text-[#33077C] font-bold text-[11px]"
+                  className="px-3 py-1 rounded-lg bg-purple-100 text-[#33077C] font-bold text-[11px] shrink-0"
                 >
                   Email
                 </a>
@@ -3228,41 +4191,25 @@ export const CollectionsView: React.FC = () => {
           <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs pt-1">
             <div>
               <FormLabel required>Customer</FormLabel>
-              <select
+              <CustomerSearchableSelect
                 value={assignCustomerId}
-                onChange={(e) => setAssignCustomerId(e.target.value)}
-                className={FORM_SELECT_CLS}
-                required
-              >
-                <option value="">Select customer...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.customerCode || c.id}) {c.company ? `- ${c.company}` : ''}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setAssignCustomerId(val)}
+                placeholder="Select or search customer..."
+              />
             </div>
 
             <div>
               <FormLabel required>Sales Representative</FormLabel>
-              <select
+              <SalesRepSearchableSelect
                 value={assignRepId}
-                onChange={(e) => setAssignRepId(e.target.value)}
-                className={FORM_SELECT_CLS}
-                required
-              >
-                <option value="">Select sales representative...</option>
-                {liveReps.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} {r.designation ? `(${r.designation})` : ''} - {r.mobile}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setAssignRepId(val)}
+                placeholder="Select sales representative..."
+              />
             </div>
 
             <div>
               <FormLabel>Assignment Type</FormLabel>
-              <div className="flex items-center gap-6 h-11 px-4 bg-white rounded-xl border border-slate-200">
+              <div className="flex flex-wrap items-center gap-4 sm:gap-6 min-h-11 py-2 px-4 bg-white rounded-xl border border-slate-200">
                 <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 text-xs sm:text-[13px]">
                   <input
                     type="radio"

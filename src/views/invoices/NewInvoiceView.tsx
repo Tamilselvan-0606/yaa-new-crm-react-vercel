@@ -44,11 +44,13 @@ import {
   UpdateInvoiceRequest,
   InvoiceApiItem,
   organizationApi,
+  subOrganizationApi,
   OrganizationApiItem,
   subscriptionPlanApi,
   platformClientApi,
   PlatformClientItem,
   getStoredOrganizationId,
+  quoteApi,
 } from '../../api';
 
 interface BankAccount {
@@ -70,7 +72,9 @@ interface SaleItem {
   qty: number;
   taxPercent: number; // GST
   unitPrice: number; // Price
-  discount: number; // Discount
+  discountPercent?: number; // Discount %
+  discount: number; // Discount Amount (₹)
+  discountType?: 'percent' | 'amount';
 }
 
 interface NewInvoiceViewProps {
@@ -81,6 +85,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const navigate = useNavigate();
   const location = useLocation();
   const invoiceToEdit = (location.state as any)?.invoiceToEdit as SavedInvoice | undefined;
+  // Duplicate / Convert: prefill like an edit, but save as a new record with a fresh number and date
+  const invoiceToDuplicate = (location.state as any)?.invoiceToDuplicate as SavedInvoice | undefined;
+  const convertedFromQuoteNumber = (location.state as any)?.convertedFromQuoteNumber as string | undefined;
+  const convertedFromQuoteId = (location.state as any)?.convertedFromQuoteId as string | undefined;
+  const convertedFromProformaNumber = (location.state as any)?.convertedFromProformaNumber as string | undefined;
+  const convertedFromProformaId = (location.state as any)?.convertedFromProformaId as string | undefined;
   const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
   const { addInvoice: addStandardInvoice } = useInvoiceStore();
   const { addProformaInvoice } = useProformaInvoiceStore();
@@ -93,6 +103,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [isExistingInvoiceModalOpen, setIsExistingInvoiceModalOpen] = useState(false);
 
   // Column 1: Company Details & Selected Product Suite
+  const [companyLogo, setCompanyLogo] = useState<string>('/yaa-creations-logo.png');
   const [companyDetails, setCompanyDetails] = useState({
     name: 'Yaa Creations',
     taxId: '27AABCA1234F1Z8',
@@ -111,6 +122,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   // Column 1: Invoice Number & Description
   const [invoiceNumber, setInvoiceNumber] = useState(invoiceToEdit?.invoiceNumber || '');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [createdDate, setCreatedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toISOString().split('T')[0];
+  });
   const [invoiceDescription, setInvoiceDescription] = useState('');
 
   // Column 1: Reference Number(s)
@@ -200,11 +217,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   useEffect(() => {
     let isMounted = true;
-    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+    const fetchAllData = async () => {
+      const orgId = currentUser?.organizationId || getStoredOrganizationId();
 
-    if (isSuperAdmin && !isOrgSuperAdmin) {
-      // Platform Administrator: load registered organizations
-      const fetchOrgs = async () => {
+      if (isSuperAdmin && !isOrgSuperAdmin) {
+        // Platform Administrator: load registered organizations
         try {
           const res = await organizationApi.getOrganizations(1, 100);
           if (isMounted && res.data) {
@@ -213,11 +230,104 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         } catch (err) {
           console.error('Failed to load organizations in NewInvoiceView:', err);
         }
-      };
-      fetchOrgs();
-    } else {
-      // Org Admin: load clients from client API
-      const fetchClients = async () => {
+      } else {
+        // 1. Resolve Seller / Company Info: Check if logged in / active as Sub-Organization first, else Parent Organization
+        let sellerResolved = false;
+        const userRole = (currentUser?.role || '').toString().toUpperCase();
+        const isSubOrgUser =
+          userRole === 'SUB_ORG_ADMIN' ||
+          userRole === 'SUBORGADMIN' ||
+          currentUser?.email?.toLowerCase().includes('suborg') ||
+          (currentUser as any)?.subOrganizationId ||
+          (currentUser as any)?.subOrganization?.id ||
+          (currentUser as any)?.memberships?.some((m: any) => m.subOrganizationId);
+
+        const activeSubOrgId =
+          localStorage.getItem('active_sub_organization_id_sales') ||
+          localStorage.getItem('active_sub_organization_id') ||
+          (currentUser as any)?.subOrganizationId ||
+          (currentUser as any)?.subOrganization?.id ||
+          (currentUser as any)?.memberships?.[0]?.subOrganizationId;
+
+        const activeSubOrgName =
+          localStorage.getItem('active_sub_organization_sales') ||
+          localStorage.getItem('active_sub_organization') ||
+          (currentUser as any)?.subOrganization?.name ||
+          (currentUser as any)?.subOrganizationName ||
+          '';
+
+        // Pre-fetch active parent organization details so we can fall back if sub-org lacks specific fields
+        let parentOrg: any = null;
+        if (orgId) {
+          try {
+            const orgRes = await organizationApi.getOrganizationById(orgId);
+            if (isMounted && orgRes?.data) {
+              parentOrg = orgRes.data;
+            }
+          } catch (e) {
+            console.warn('Notice: Could not load parent organization details for NewInvoiceView:', e);
+          }
+        }
+
+        if (orgId && (isSubOrgUser || (activeSubOrgName && activeSubOrgName !== 'All') || activeSubOrgId)) {
+          try {
+            const subRes = await subOrganizationApi.getSubOrganizations(
+              { page_no: 1, page_size: 100, pagination_required: 'false' },
+              orgId
+            );
+            if (isMounted && subRes?.data && Array.isArray(subRes.data) && subRes.data.length > 0) {
+              const matchedSub =
+                (activeSubOrgId ? subRes.data.find((s) => s.id === activeSubOrgId) : null) ||
+                (activeSubOrgName && activeSubOrgName !== 'All'
+                  ? subRes.data.find((s) => s.name?.toLowerCase() === activeSubOrgName.toLowerCase())
+                  : null) ||
+                (isSubOrgUser ? subRes.data[0] : null);
+
+              if (matchedSub) {
+                sellerResolved = true;
+                const subGst =
+                  matchedSub.gstNumber ||
+                  (matchedSub as any).gstin ||
+                  (matchedSub as any).taxId ||
+                  parentOrg?.gstNumber ||
+                  '';
+                const subPan =
+                  matchedSub.panNumber ||
+                  (matchedSub as any).pan ||
+                  parentOrg?.panNumber ||
+                  '';
+
+                setCompanyDetails({
+                  name: matchedSub.name || parentOrg?.name || 'Company',
+                  taxId: subGst,
+                  pan: subPan,
+                  address: matchedSub.address || matchedSub.location || parentOrg?.address || '',
+                  email: matchedSub.email || parentOrg?.email || '',
+                  phone: matchedSub.phone || matchedSub.whatsapp || parentOrg?.phone || '',
+                });
+                const subLogo = matchedSub.logo || (matchedSub as any)?.logoUrl || parentOrg?.logo || (parentOrg as any)?.logoUrl;
+                if (subLogo) setCompanyLogo(subLogo);
+              }
+            }
+          } catch (e) {
+            console.warn('Notice: Could not load sub-org details for NewInvoiceView:', e);
+          }
+        }
+
+        if (!sellerResolved && parentOrg) {
+          setCompanyDetails({
+            name: parentOrg.name || 'Organization',
+            taxId: parentOrg.gstNumber || '',
+            pan: parentOrg.panNumber || '',
+            address: parentOrg.address || '',
+            email: parentOrg.email || '',
+            phone: parentOrg.phone || '',
+          });
+          const orgLogo = parentOrg.logo || (parentOrg as any)?.logoUrl;
+          if (orgLogo) setCompanyLogo(orgLogo);
+        }
+
+        // Org Admin: load clients from client API
         try {
           const res = await platformClientApi.getClients({ page: 1, limit: 100, organization_id: orgId || undefined });
           if (isMounted && res.data) {
@@ -226,43 +336,55 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         } catch (err) {
           console.error('Failed to load clients in NewInvoiceView:', err);
         }
-      };
-      fetchClients();
-    }
+      }
+    };
+
+    fetchAllData();
+
+    const handleOrgOrSubOrgChanged = () => {
+      fetchAllData();
+    };
+
+    window.addEventListener('subOrgChanged', handleOrgOrSubOrgChanged);
+    window.addEventListener('orgChanged', handleOrgOrSubOrgChanged);
+    window.addEventListener('storage', handleOrgOrSubOrgChanged);
 
     return () => {
       isMounted = false;
+      window.removeEventListener('subOrgChanged', handleOrgOrSubOrgChanged);
+      window.removeEventListener('orgChanged', handleOrgOrSubOrgChanged);
+      window.removeEventListener('storage', handleOrgOrSubOrgChanged);
     };
   }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
 
   const mappedPlatformClients: Customer[] = (isSuperAdmin && !isOrgSuperAdmin)
     ? platformOrgs.map((org: any) => ({
-        id: org.id,
-        name: org.name,
-        company: org.name,
-        email: org.email || '',
-        phone: org.phone || '',
-        location: org.location || '',
-        address: org.address || org.location || org.user?.address || '',
-        status: 'Active' as const,
-        linkedProducts: [],
-        gstin: org.gstNumber || '',
-        taxId: org.gstNumber || '',
-      }))
+      id: org.id,
+      name: org.name,
+      company: org.name,
+      email: org.email || '',
+      phone: org.phone || '',
+      location: org.location || '',
+      address: org.address || org.location || org.user?.address || '',
+      status: 'Active' as const,
+      linkedProducts: [],
+      gstin: org.gstNumber || '',
+      taxId: org.gstNumber || '',
+    }))
     : platformClients.map((client) => ({
-        id: client.id,
-        name: client.contactPerson || client.name,
-        company: client.name || client.legalName || 'Client',
-        email: client.email || '',
-        phone: client.phone || client.whatsapp || '',
-        location: client.address || client.location || '',
-        address: client.address || client.location || '',
-        status: 'Active' as const,
-        linkedProducts: [],
-        gstin: client.gstNumber || '',
-        taxId: client.gstNumber || '',
-        pan: client.panNumber || '',
-      }));
+      id: client.id,
+      name: client.contactPerson || client.name,
+      company: client.name || client.legalName || 'Client',
+      email: client.email || '',
+      phone: client.phone || client.whatsapp || '',
+      location: client.address || client.location || '',
+      address: client.address || client.location || '',
+      status: 'Active' as const,
+      linkedProducts: [],
+      gstin: client.gstNumber || '',
+      taxId: client.gstNumber || '',
+      pan: client.panNumber || '',
+    }));
 
   const availableCustomers = mappedPlatformClients.length > 0 ? mappedPlatformClients : commerceCustomers;
 
@@ -475,17 +597,26 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   } | null>(null);
   const [tempDescription, setTempDescription] = useState('');
 
-  // Populate data when editing an invoice
+  // Populate data when editing or duplicating an invoice
   useEffect(() => {
-    if (invoiceToEdit) {
-      if (invoiceToEdit.invoiceNumber) setInvoiceNumber(invoiceToEdit.invoiceNumber);
-      if (invoiceToEdit.invoiceDate) setInvoiceDate(invoiceToEdit.invoiceDate);
-      if (invoiceToEdit.description) setInvoiceDescription(invoiceToEdit.description);
-      if (invoiceToEdit.referenceNumbers?.length) setReferenceNumbers(invoiceToEdit.referenceNumbers);
-      if (invoiceToEdit.roundMode) setRoundMode(invoiceToEdit.roundMode);
-      if (invoiceToEdit.items?.length) {
+    const src = invoiceToEdit || invoiceToDuplicate;
+    if (src) {
+      if (invoiceToEdit?.invoiceNumber) setInvoiceNumber(invoiceToEdit.invoiceNumber);
+      if (invoiceToEdit?.invoiceDate) setInvoiceDate(invoiceToEdit.invoiceDate);
+      if ((src as any)?.createdAt) {
+        setCreatedDate(((src as any).createdAt).split('T')[0]);
+      } else if (src?.invoiceDate) {
+        setCreatedDate(src.invoiceDate.split('T')[0]);
+      }
+      if (src?.dueDate) {
+        setDueDate(src.dueDate.split('T')[0]);
+      }
+      if (src.description) setInvoiceDescription(src.description);
+      if (src.referenceNumbers?.length) setReferenceNumbers(src.referenceNumbers);
+      if (src.roundMode) setRoundMode(src.roundMode);
+      if (src.items?.length) {
         setItems(
-          invoiceToEdit.items.map((it, idx) => ({
+          src.items.map((it, idx) => ({
             id: it.id || `item-${idx + 1}`,
             name: it.name,
             description: it.description || '',
@@ -493,27 +624,41 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             qty: Number(it.qty) || 1,
             taxPercent: Number(it.taxPercent) || 18,
             unitPrice: Number(it.unitPrice) || 0,
+            discountPercent: (it as any).discountPercent || 0,
             discount: Number(it.discount) || 0,
+            discountType: (it as any).discountType || ((it as any).discountPercent ? 'percent' : 'amount'),
           }))
         );
       }
-      if (invoiceToEdit.client) {
-        setSelectedCustomer(invoiceToEdit.client as any);
+      if (src.client) {
+        setSelectedCustomer(src.client as any);
       }
-      if (invoiceToEdit.company) {
-        setCompanyDetails((prev) => ({ ...prev, ...invoiceToEdit.company }));
+      if (src.company) {
+        setCompanyDetails((prev) => ({ ...prev, ...src.company }));
       }
-      if (invoiceToEdit.bank) {
-        const foundBank = bankAccounts.find(
-          (b) => b.accountNumber === invoiceToEdit.bank.accountNumber
-        );
-        if (foundBank) {
-          setSelectedBankId(foundBank.id);
-        }
+      if (src.bank && src.bank.accountNumber) {
+        setBankAccounts((prev) => {
+          const exists = prev.find((b) => b.accountNumber === src.bank.accountNumber);
+          if (exists) {
+            setSelectedBankId(exists.id);
+            return prev;
+          }
+          const loadedBank: BankAccount = {
+            id: `bank_${Date.now()}`,
+            bankName: src.bank.bankName || 'Bank Account',
+            accountName: src.bank.accountName || '',
+            accountNumber: src.bank.accountNumber,
+            ifscCode: (src.bank.ifscCode || '').toUpperCase().trim(),
+            branchName: src.bank.branchName || '',
+            upiId: src.bank.upiId || '',
+          };
+          setSelectedBankId(loadedBank.id);
+          return [...prev, loadedBank];
+        });
       }
-      if (invoiceToEdit.customFields?.length) {
+      if (src.customFields?.length) {
         setCustomInvoiceFields(
-          invoiceToEdit.customFields.map((cf) => ({
+          src.customFields.map((cf) => ({
             id: cf.id || `cf_${Date.now()}_${Math.random()}`,
             label: cf.label,
             value: cf.value,
@@ -522,7 +667,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         );
       }
     }
-  }, [invoiceToEdit]);
+  }, [invoiceToEdit, invoiceToDuplicate]);
 
   const handleProductChange = (itemId: string, productName: string) => {
     const activeProjects = getActiveClientProjects();
@@ -566,7 +711,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       qty: 1,
       taxPercent: 18,
       unitPrice: 0,
+      discountPercent: 0,
       discount: 0,
+      discountType: 'amount',
     };
     setItems((prev) => [...prev, newItem]);
     showToast('info', 'Line Item Added', 'New line item added. Select or enter item details.');
@@ -580,22 +727,45 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const updateItem = (id: string, field: keyof SaleItem, value: any) => {
     setItems(
       items.map((item) => {
-        if (item.id === id) {
-          return { ...item, [field]: value };
+        if (item.id !== id) return item;
+        const updated = { ...item, [field]: value };
+        const qty = Math.max(0, Number(updated.qty) || 0);
+        const rate = Math.max(0, Number(updated.unitPrice) || 0);
+        const gross = qty * rate;
+
+        if (field === 'discountPercent') {
+          updated.discountType = 'percent';
+          updated.discountPercent = Math.max(0, Math.min(100, Number(value) || 0));
+          updated.discount = 0;
+        } else if (field === 'discount') {
+          updated.discountType = 'amount';
+          updated.discount = Math.max(0, Math.min(gross, Number(value) || 0));
+          updated.discountPercent = 0;
         }
-        return item;
+
+        return updated;
       })
     );
+  };
+
+  // Helper to get effective discount amount of a line item
+  const getItemDiscountAmount = (it: SaleItem): number => {
+    const gross = (Number(it.qty) || 0) * (Number(it.unitPrice) || 0);
+    if (it.discountType === 'percent') {
+      const p = Number(it.discountPercent) || 0;
+      return gross > 0 && p > 0 ? parseFloat(((gross * p) / 100).toFixed(2)) : 0;
+    }
+    return Math.min(gross, Number(it.discount) || 0);
   };
 
   // Section 2 Calculation (Subtotal, Discount, GST, Rounding, Grand Total)
   const [roundMode, setRoundMode] = useState<'none' | 'up' | 'down'>('none');
   const subtotal = items.reduce((acc, item) => acc + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0), 0);
-  const totalDiscount = items.reduce((acc, item) => acc + (Number(item.discount) || 0), 0);
+  const totalDiscount = items.reduce((acc, item) => acc + getItemDiscountAmount(item), 0);
   const taxableAmount = Math.max(0, subtotal - totalDiscount);
   const taxTotal = items.reduce((acc, item) => {
     const itemSub = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
-    const itemDisc = Number(item.discount) || 0;
+    const itemDisc = getItemDiscountAmount(item);
     const itemTaxable = Math.max(0, itemSub - itemDisc);
     return acc + (itemTaxable * (Number(item.taxPercent) || 0)) / 100;
   }, 0);
@@ -644,7 +814,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       setItems(
         inv.items.map((it, idx) => ({
           id: it.id || `item_${idx + 1}`,
-          name: it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+          name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
           description: it.itemDescription || '',
           hsnCode: it.hsnCode || '998314',
           qty: Number(it.quantity) || 1,
@@ -673,45 +843,63 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   return (
     <div className="space-y-6">
-      {/* Top Banner when in Edit Mode */}
-      {invoiceToEdit && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white px-6 py-4 rounded-2xl border border-[#8B5CF6]/30 bg-gradient-to-r from-purple-50/50 via-white to-white shadow-xs">
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-xl bg-[#8B5CF6] text-white flex items-center justify-center shadow-xs">
-              <Pencil className="w-5 h-5 stroke-[2.2]" />
-            </div>
+      {/* Top Full-Page Navigation Header when in Duplicate / Convert Mode */}
+      {invoiceToDuplicate && !invoiceToEdit && (
+        <div className="bg-[#33077C] rounded-2xl shadow-md p-5 sm:p-6 flex items-center justify-between gap-4 text-white">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => navigate(isProforma ? '/proforma/invoices' : '/sales/invoices')}
+              className="inline-flex items-center justify-center gap-2 h-10 px-4.5 bg-white text-[#33077C] hover:bg-slate-100 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <ArrowLeft className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+            <span className="text-white/30 text-lg">|</span>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                  Edit Invoice
-                </h2>
-                <span className="text-xs px-2.5 py-0.5 rounded-full font-extrabold bg-[#33077C] text-white">
-                  #{invoiceToEdit.invoiceNumber}
-                </span>
-                <span
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${invoiceToEdit.status === 'Paid'
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : invoiceToEdit.status === 'Partially Paid'
-                      ? 'bg-sky-50 text-sky-700 border border-sky-200'
-                      : 'bg-amber-50 text-amber-700 border border-amber-200'
-                    }`}
-                >
-                  {invoiceToEdit.status}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Update billing details, items, or settlement info and click &quot;Update &amp; Save Invoice&quot; to save.
+              <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                {convertedFromQuoteNumber
+                  ? 'Convert to Proforma Invoice'
+                  : convertedFromProformaNumber
+                    ? 'Convert to Invoice'
+                    : isProforma
+                      ? 'Duplicate Proforma Invoice'
+                      : 'Duplicate Invoice'}
+              </h1>
+              <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5">
+                {convertedFromQuoteNumber
+                  ? `Converted from quotation #${convertedFromQuoteNumber}. Review the details and save to create proforma invoice.`
+                  : convertedFromProformaNumber
+                    ? `Converted from proforma invoice #${convertedFromProformaNumber}. Review the details and save to create invoice.`
+                    : `Copied from #${invoiceToDuplicate.invoiceNumber}. Review the details and save to create a new one.`}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate(isProforma ? '/proforma/invoices' : '/sales/invoices')}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs self-start sm:self-auto"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>{isProforma ? 'Back to Proforma Invoices' : 'Back to Invoices'}</span>
-          </button>
+        </div>
+      )}
+
+      {/* Top Full-Page Navigation Header when in Edit Mode */}
+      {invoiceToEdit && (
+        <div className="bg-[#33077C] rounded-2xl shadow-md p-5 sm:p-6 flex items-center justify-between gap-4 text-white">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => navigate(isProforma ? '/proforma/invoices' : '/sales/invoices')}
+              className="inline-flex items-center justify-center gap-2 h-10 px-4.5 bg-white text-[#33077C] hover:bg-slate-100 rounded-xl text-sm font-bold transition-all cursor-pointer shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <ArrowLeft className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+              <span>Back</span>
+            </button>
+            <span className="text-white/30 text-lg">|</span>
+            <div>
+              <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                {isProforma ? 'Edit Proforma Invoice' : 'Edit Invoice'}
+              </h1>
+              <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5">
+                Update and reconfigure formal {isProforma ? 'proforma invoice' : 'invoice'} #{invoiceToEdit.invoiceNumber}.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -751,9 +939,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       <div className="flex items-center gap-2">
                         <span className="text-slate-700 mr-1">:</span>
                         <img
-                          src="/yaa-creations-logo.png"
-                          alt="Yaa Creations Logo"
-                          className="h-9 sm:h-10 object-contain"
+                          src={companyLogo}
+                          alt="Company Logo"
+                          className="h-9 sm:h-10 object-contain rounded"
                         />
                       </div>
                     </div>
@@ -763,14 +951,12 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">GSTIN / Tax ID</span>
-                      <span className="text-slate-700">: {companyDetails.taxId}</span>
+                      <span className="text-slate-700">: {companyDetails.taxId || '—'}</span>
                     </div>
-                    {(companyDetails as any).pan && (
-                      <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                        <span className="font-bold text-slate-800">PAN Number</span>
-                        <span className="text-slate-700">: {(companyDetails as any).pan}</span>
-                      </div>
-                    )}
+                    <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
+                      <span className="font-bold text-slate-800">PAN Number</span>
+                      <span className="text-slate-700">: {(companyDetails as any).pan || '—'}</span>
+                    </div>
                     <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
                       <span className="font-bold text-slate-800">Phone Number</span>
                       <span className="text-slate-700">: {companyDetails.phone}</span>
@@ -852,33 +1038,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
                     />
                   </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice Number</label>
-                    <input
-                      type="text"
-                      value={invoiceNumber}
-                      onChange={(e) => setInvoiceNumber(e.target.value)}
-                      className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Invoice Date</label>
-                    <input
-                      type="date"
-                      value={invoiceDate}
-                      onChange={(e) => setInvoiceDate(e.target.value)}
-                      className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Reference Number</label>
-                    <input
-                      type="text"
-                      value={referenceNumbers[0] || ''}
-                      onChange={(e) => setReferenceNumbers([e.target.value])}
-                      className="w-full mt-1.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                    />
-                  </div>
+
                 </div>
               )}
             </div>
@@ -887,7 +1047,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             <div className="space-y-4 pt-1">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Invoice Metadata & Fields
+                  {isProforma ? 'Proforma Invoice Metadata & Fields' : 'Invoice Metadata & Fields'}
                 </span>
                 <button
                   type="button"
@@ -911,6 +1071,71 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   <Plus className="w-4 h-4" strokeWidth={2.5} />
                   <span>{isAddFieldModalOpen ? 'Add Item' : 'Add Field'}</span>
                 </button>
+              </div>
+
+              {/* Vertical Form Fields */}
+              <div className="space-y-2">
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    {isProforma ? 'Proforma Number' : 'Invoice Number'} <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    placeholder={isProforma ? 'e.g. PRO-1001' : 'e.g. INV-1001'}
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    {isProforma ? 'Proforma Date' : 'Invoice Date'} <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={invoiceDate}
+                    onChange={(e) => setInvoiceDate(e.target.value)}
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    Created Date <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={createdDate}
+                    onChange={(e) => setCreatedDate(e.target.value)}
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    Due Date <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
+                  <label className="text-[12px] font-bold text-slate-800">
+                    Reference Number <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={referenceNumbers[0] || ''}
+                    onChange={(e) => setReferenceNumbers([e.target.value])}
+                    placeholder="e.g. REF-1001"
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                  />
+                </div>
               </div>
 
               {customInvoiceFields.length > 0 && (
@@ -937,7 +1162,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
               {isAddFieldModalOpen && (
                 <div className="flex items-start gap-3 mt-2">
-                  <div className="flex-1 grid grid-cols-2 gap-3">
+                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <input
                       type="text"
                       value={newFieldLabel}
@@ -1168,153 +1393,61 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             <table className="w-full text-left text-sm table-fixed min-w-[1040px] border-collapse border border-slate-200">
               <colgroup>
                 <col className="w-auto min-w-[250px]" />
-                <col className="w-[110px]" />
+                <col className="w-[100px]" />
                 <col className="w-[75px]" />
                 <col className="w-[90px]" />
                 <col className="w-[115px]" />
-                <col className="w-[125px]" />
+                <col className="w-[85px]" />
+                <col className="w-[115px]" />
                 <col className="w-[115px]" />
                 <col className="w-[75px]" />
               </colgroup>
               <thead>
                 <tr className="bg-[#33077C] border-b border-[#33077C]/30 text-[11px] font-bold uppercase tracking-wider text-white">
-                  <th className="px-5 py-4 text-left border border-[#33077C]/30 bg-[#33077C] text-white">Item / Service Name</th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">HSN Code</th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">Qty</th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">GST (%)</th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">Price</th>
-                  <th ref={discountTypeRef} className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white relative">
-                    <button
-                      type="button"
-                      onClick={() => setIsDiscountTypeOpen(!isDiscountTypeOpen)}
-                      className="inline-flex items-center gap-1 cursor-pointer hover:text-white/80 transition-colors"
-                    >
-                      <span>Discount {discountType === 'percent' ? '(%)' : '(₹)'}</span>
-                      <ChevronDown className={`w-3 h-3 transition-transform duration-150 ${isDiscountTypeOpen ? 'rotate-180 text-white' : 'text-white'}`} />
-                    </button>
-                    {isDiscountTypeOpen && (
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 bg-white rounded-xl border border-slate-200 shadow-xl p-1 w-40 animate-in fade-in zoom-in-95 duration-100 normal-case font-medium tracking-normal text-slate-800">
-                        <button
-                          type="button"
-                          onClick={() => { setDiscountType('amount'); setIsDiscountTypeOpen(false); }}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${discountType === 'amount' ? 'bg-orange-50 text-[#33077C]' : 'hover:bg-slate-50 text-slate-700'}`}
-                        >
-                          $ Amount
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setDiscountType('percent'); setIsDiscountTypeOpen(false); }}
-                          className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${discountType === 'percent' ? 'bg-orange-50 text-[#33077C]' : 'hover:bg-slate-50 text-slate-700'}`}
-                        >
-                          % Percentage
-                        </button>
-                      </div>
-                    )}
+                  <th rowSpan={2} className="px-5 py-3 text-left border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Item / Service Name</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">HSN Code</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Qty</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">GST (%)</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Price</th>
+                  <th colSpan={2} className="px-2 py-1.5 text-center border border-[#33077C]/30 bg-[#33077C] text-white">
+                    <span className="text-[11px] font-bold">DISCOUNT</span>
                   </th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">Total</th>
-                  <th className="px-2 py-4 text-center border border-[#33077C]/30 bg-[#33077C] text-white">Action</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Total</th>
+                  <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Action</th>
+                </tr>
+                <tr className="bg-[#33077C] text-[10px] font-bold text-purple-200 tracking-wider uppercase">
+                  <th className="py-1.5 px-1 text-center border border-[#33077C]/30 bg-[#33077C]">%</th>
+                  <th className="py-1.5 px-2 text-center border border-[#33077C]/30 bg-[#33077C]">AMOUNT</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-sm text-slate-400 font-medium bg-slate-50/20">
+                    <td colSpan={9} className="py-8 text-center text-sm text-slate-400 font-medium bg-slate-50/20">
                       No line items added
                     </td>
                   </tr>
                 ) : (
                   items.map((item) => {
                     const lineSubtotal = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
-                    const lineDiscount = discountType === 'percent'
-                      ? (lineSubtotal * (Number(item.discount) || 0)) / 100
-                      : Number(item.discount) || 0;
+                    const lineDiscount = getItemDiscountAmount(item);
                     const lineTaxable = Math.max(0, lineSubtotal - lineDiscount);
                     const lineTax = (lineTaxable * (Number(item.taxPercent) || 0)) / 100;
                     const lineTotal = lineTaxable + lineTax;
 
                     return (
                       <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                        {/* 1. Item / Service Name (Organization Custom Dropdown) */}
+                        {/* 1. Item / Service Name (free-text title) */}
                         <td className="px-4 py-4 align-top border border-slate-200">
                           <div className="space-y-2">
-                            <div className="relative product-dropdown-container">
-                              <button
-                                type="button"
-                                ref={(el) => { triggerRefs.current[item.id] = el; }}
-                                onClick={() => {
-                                  if (openProductDropdownId === item.id) {
-                                    setOpenProductDropdownId(null);
-                                  } else {
-                                    const rect = triggerRefs.current[item.id]?.getBoundingClientRect();
-                                    if (rect) {
-                                      setDropdownRect({
-                                        top: rect.bottom + window.scrollY,
-                                        left: rect.left + window.scrollX,
-                                        width: rect.width,
-                                      });
-                                    }
-                                    setOpenProductDropdownId(item.id);
-                                  }
-                                }}
-                                className={`w-full h-10 px-3.5 bg-slate-50/70 hover:bg-white focus:bg-white border rounded-xl text-xs font-semibold text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs ${
-                                  openProductDropdownId === item.id
-                                    ? 'border-[#4309A2] ring-3 ring-[#4309A2]/10 bg-white text-slate-900'
-                                    : 'border-slate-200 hover:border-slate-300 text-slate-800'
-                                }`}
-                              >
-                                <span className="truncate block font-semibold text-slate-800">
-                                  {item.name || <span className="text-slate-400 font-normal">Select organization...</span>}
-                                </span>
-                                <ChevronDown
-                                  className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-1.5 ${
-                                    openProductDropdownId === item.id ? 'rotate-180 text-[#4309A2]' : ''
-                                  }`}
-                                />
-                              </button>
-
-                              {/* Custom Dropdown Popup Menu (Floating overlay outside table clipping) */}
-                              {openProductDropdownId === item.id && dropdownRect && (
-                                <div
-                                  style={{
-                                    top: `${dropdownRect.top + 6}px`,
-                                    left: `${dropdownRect.left}px`,
-                                    width: `${Math.max(260, dropdownRect.width)}px`,
-                                  }}
-                                  className="fixed z-[999] bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100"
-                                >
-                                  <div className="max-h-60 overflow-y-auto space-y-0.5">
-                                    {availableCustomers.length === 0 ? (
-                                      <div className="py-3 text-center text-xs text-slate-400">
-                                        No organizations found
-                                      </div>
-                                    ) : (
-                                      availableCustomers.map((org) => {
-                                        const orgName = org.company || org.name;
-                                        const isSelected = item.name === orgName;
-                                        return (
-                                          <button
-                                            key={org.id}
-                                            type="button"
-                                            onClick={() => {
-                                              updateItem(item.id, 'name', orgName);
-                                              setOpenProductDropdownId(null);
-                                            }}
-                                            className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                                              isSelected
-                                                ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                                : 'hover:bg-slate-50 text-slate-700 font-medium'
-                                            }`}
-                                          >
-                                            <span className="truncate">{orgName}</span>
-                                            {isSelected && <Check className="w-3.5 h-3.5 text-[#33077C] stroke-[2.5] shrink-0" />}
-                                          </button>
-                                        );
-                                      })
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => updateItem(item.id, 'name', e.target.value)}
+                              placeholder="Enter item / service title"
+                              maxLength={200}
+                              className="w-full h-10 px-3.5 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 rounded-xl text-xs font-semibold text-slate-800 placeholder:font-normal placeholder:text-slate-400 outline-none transition-all shadow-2xs"
+                            />
 
                             {/* Description Preview & Edit trigger */}
                             <div className="min-h-[22px] flex items-center">
@@ -1404,19 +1537,34 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           />
                         </td>
 
-                        {/* 6. Discount */}
-                        <td className="px-2 py-4 align-top border border-slate-200">
+                        {/* 6. Discount (%) */}
+                        <td className="px-1.5 py-4 align-top border border-slate-200">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="any"
+                            placeholder="0"
+                            value={item.discountPercent === 0 ? '' : (item.discountPercent ?? '')}
+                            onChange={(e) => updateItem(item.id, 'discountPercent', Number(e.target.value))}
+                            className="w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                          />
+                        </td>
+
+                        {/* 7. Discount (Amount) */}
+                        <td className="px-1.5 py-4 align-top border border-slate-200">
                           <input
                             type="number"
                             min="0"
                             step="any"
-                            value={item.discount || 0}
-                            onChange={(e) => updateItem(item.id, 'discount', Math.max(0, parseFloat(e.target.value) || 0))}
+                            placeholder="0.00"
+                            value={item.discount === 0 ? '' : (item.discount ?? '')}
+                            onChange={(e) => updateItem(item.id, 'discount', Number(e.target.value))}
                             className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs font-semibold text-center text-slate-800 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                           />
                         </td>
 
-                        {/* 7. Total (₹) */}
+                        {/* 8. Total (₹) */}
                         <td className="px-2 py-4 align-top border border-slate-200">
                           <div className="h-10 flex items-center justify-center">
                             <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100/90 font-bold text-xs shadow-2xs font-sans min-w-[90px] text-center">
@@ -1425,7 +1573,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           </div>
                         </td>
 
-                        {/* 8. Action */}
+                        {/* 9. Action */}
                         <td className="px-2 py-4 align-top border border-slate-200">
                           <div className="h-10 flex items-center justify-center">
                             <button
@@ -1757,6 +1905,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       showToast('error', 'No Line Items', 'Please add at least one product or service line item.');
                       return;
                     }
+                    if (items.some((it) => !it.name?.trim())) { showToast('error', 'Missing Item Title', 'Please enter a title for every line item.'); return; }
+                    if (!createdDate) { showToast('error', 'Created Date Required', 'Please provide a valid created date.'); return; }
+                    if (!invoiceDate) { showToast('error', isProforma ? 'Proforma Date Required' : 'Invoice Date Required', 'Please provide an invoice date.'); return; }
+                    if (!dueDate) { showToast('error', 'Due Date Required', 'Please provide a due date.'); return; }
 
                     if (isProforma) {
                       try {
@@ -1764,7 +1916,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         if (invoiceToEdit) {
                           const updatePayload: UpdateProformaRequest = {
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
-                            dueDate: invoiceToEdit.dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                            dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             discountTotal: totalDiscount,
                             billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
                             gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
@@ -1772,7 +1924,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
-                              itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                              title: it.name.trim(),
+                              itemDescription: it.description?.trim() || undefined,
                               hsnCode: it.hsnCode || '998314',
                               quantity: Number(it.qty) || 1,
                               unitPrice: Number(it.unitPrice) || 0,
@@ -1784,11 +1937,16 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           navigate('/proforma/invoices');
                         } else {
                           const activeUserOrgId = currentUser?.organizationId || getStoredOrganizationId();
+                          const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+                          const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+
                           const createPayload: CreateProformaRequest = {
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
-                            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                            dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             customerId: selectedCustomer.id,
                             organizationId: (isSuperAdmin && !isOrgSuperAdmin) ? selectedCustomer.id : (activeUserOrgId || selectedCustomer.id),
+                            subOrganizationId: activeSubOrgId || undefined,
+                            branchId: activeBranchId || undefined,
                             discountTotal: totalDiscount,
                             billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
                             gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
@@ -1796,7 +1954,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
                               itemId: it.id || `SKU-${idx + 1}`,
-                              itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                              title: it.name.trim(),
+                              itemDescription: it.description?.trim() || undefined,
                               hsnCode: it.hsnCode || '998314',
                               quantity: Number(it.qty) || 1,
                               unitPrice: Number(it.unitPrice) || 0,
@@ -1804,6 +1963,31 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             })),
                           };
                           const res = await proformaInvoiceApi.createProformaInvoice(createPayload);
+
+                          // If converted from quotation, mark quote as converted and persist
+                          if (convertedFromQuoteId || convertedFromQuoteNumber) {
+                            try {
+                              const convertedQuotes = JSON.parse(localStorage.getItem('yaa_crm_converted_quotes') || '[]');
+                              if (convertedFromQuoteId && !convertedQuotes.includes(convertedFromQuoteId)) {
+                                convertedQuotes.push(convertedFromQuoteId);
+                              }
+                              if (convertedFromQuoteNumber && !convertedQuotes.includes(convertedFromQuoteNumber)) {
+                                convertedQuotes.push(convertedFromQuoteNumber);
+                              }
+                              localStorage.setItem('yaa_crm_converted_quotes', JSON.stringify(convertedQuotes));
+                            } catch (e) {
+                              console.error('Failed to update converted quotes storage:', e);
+                            }
+
+                            if (convertedFromQuoteId) {
+                              try {
+                                await quoteApi.updateQuote(convertedFromQuoteId, { status: 'ACCEPTED' as any });
+                              } catch (e) {
+                                console.warn('Could not update quotation status on server:', e);
+                              }
+                            }
+                          }
+
                           showToast('success', 'Proforma Invoice Created', `Proforma invoice #${res.data?.proformaNumber || ''} created successfully on server!`);
                           navigate('/proforma/invoices');
                         }
@@ -1821,6 +2005,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     try {
                       setIsSubmitting(true);
                       const activeUserOrgId = currentUser?.organizationId || getStoredOrganizationId();
+                      const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+                      const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+
                       let validOrgId = (isSuperAdmin && !isOrgSuperAdmin)
                         ? selectedCustomer.id
                         : (activeUserOrgId || selectedCustomer.id);
@@ -1835,13 +2022,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                       if (invoiceToEdit) {
                         const updatePayload: UpdateInvoiceRequest = {
-                          dueDate: invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined,
+                          dueDate: dueDate || (invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined),
                           notes: invoiceDescription || undefined,
                           discountTotal: totalDiscount,
                           billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
-                            itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                            title: it.name.trim(),
+                            itemDescription: it.description?.trim() || undefined,
                             hsnCode: it.hsnCode || '998314',
                             quantity: Number(it.qty) || 1,
                             unitPrice: Number(it.unitPrice) || 0,
@@ -1854,9 +2042,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                       } else {
                         const createPayload: CreateInvoiceRequest = {
                           invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
-                          dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                          dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                           customerId: selectedCustomer.id,
                           organizationId: validOrgId,
+                          subOrganizationId: activeSubOrgId || undefined,
+                          branchId: activeBranchId || undefined,
                           status: 'Sent',
                           discountTotal: totalDiscount,
                           billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
@@ -1865,7 +2055,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           notes: invoiceDescription || undefined,
                           items: items.map((it, idx) => ({
                             itemId: it.id || `SKU-${idx + 1}`,
-                            itemDescription: it.description?.trim() ? `${it.name} - ${it.description.trim()}` : it.name,
+                            title: it.name.trim(),
+                            itemDescription: it.description?.trim() || undefined,
                             hsnCode: it.hsnCode || '998314',
                             quantity: Number(it.qty) || 1,
                             unitPrice: Number(it.unitPrice) || 0,
@@ -1873,6 +2064,31 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           })),
                         };
                         const res = await invoiceApi.createInvoice(createPayload);
+
+                        // If converted from proforma, mark proforma as Converted and persist
+                        if (convertedFromProformaId || convertedFromProformaNumber) {
+                          try {
+                            const convertedProformas = JSON.parse(localStorage.getItem('yaa_crm_converted_proformas') || '[]');
+                            if (convertedFromProformaId && !convertedProformas.includes(convertedFromProformaId)) {
+                              convertedProformas.push(convertedFromProformaId);
+                            }
+                            if (convertedFromProformaNumber && !convertedProformas.includes(convertedFromProformaNumber)) {
+                              convertedProformas.push(convertedFromProformaNumber);
+                            }
+                            localStorage.setItem('yaa_crm_converted_proformas', JSON.stringify(convertedProformas));
+                          } catch (e) {
+                            console.error('Failed to update converted proformas storage:', e);
+                          }
+
+                          if (convertedFromProformaId) {
+                            try {
+                              await proformaInvoiceApi.updateProformaInvoice(convertedFromProformaId, { status: 'Converted' as any });
+                            } catch (e) {
+                              console.warn('Could not update proforma status on server:', e);
+                            }
+                          }
+                        }
+
                         showToast('success', 'Invoice Created', `Invoice #${res.data?.invoiceNumber || ''} created successfully on server!`);
                         navigate('/sales/invoices');
                       }
@@ -1909,8 +2125,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* MODAL: ASK TO ADD / EDIT PRODUCT DESCRIPTION */}
       {/* ========================================================================= */}
       {descriptionModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-100 shadow-2xl max-w-md w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 space-y-4 my-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-orange-50 text-[#4309A2] flex items-center justify-center border border-orange-100">
@@ -1941,18 +2157,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               autoFocus
             />
 
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setDescriptionModalItem(null)}
-                className="h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer transition-colors flex items-center justify-center"
+                className="w-full sm:w-auto h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer transition-colors flex items-center justify-center"
               >
                 Skip
               </button>
               <button
                 type="button"
                 onClick={handleSaveDescription}
-                className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                className="w-full sm:w-auto h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.98] flex items-center justify-center gap-2"
               >
                 Save Description
               </button>
@@ -1965,9 +2181,9 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* MODAL: EXISTING SALE INVOICES LIST */}
       {/* ========================================================================= */}
       {isExistingInvoiceModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-2xl w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-7 py-5 bg-white border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-100 shadow-2xl max-w-2xl w-full max-h-[92dvh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-4 sm:px-7 py-4 sm:py-5 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
                 <Receipt className="w-5 h-5 text-[#4309A2]" />
                 <h3 className="text-base font-bold text-slate-900">Select Existing Sale Invoice</h3>
@@ -1980,8 +2196,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </button>
             </div>
 
-            <div className="p-7 space-y-4">
-              <p className="text-sm text-slate-400">
+            <div className="p-4 sm:p-7 space-y-4 overflow-y-auto flex-1">
+              <p className="text-xs sm:text-sm text-slate-400">
                 Choose an existing invoice to view or load its billing parties, customer details, and invoice metadata.
               </p>
 
@@ -1999,19 +2215,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                   existingInvoices.map((inv) => (
                     <div
                       key={inv.id}
-                      className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-3.5"
+                      className="p-3.5 sm:p-4 hover:bg-slate-50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                     >
-                      <div>
-                        <div className="flex items-center gap-2.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-sm text-[#33077C]">{inv.invoiceNumber}</span>
                           <span
-                            className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                              inv.status === 'Paid'
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : inv.status === 'Partially Paid'
-                                  ? 'bg-sky-50 text-sky-700'
-                                  : 'bg-amber-50 text-amber-700'
-                            }`}
+                            className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${inv.status === 'Paid'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : inv.status === 'Partially Paid'
+                                ? 'bg-sky-50 text-sky-700'
+                                : 'bg-amber-50 text-amber-700'
+                              }`}
                           >
                             {inv.status}
                           </span>
@@ -2022,7 +2237,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         </p>
                       </div>
 
-                      <div className="text-right flex items-center gap-3.5">
+                      <div className="text-right flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
                         <span className="font-black text-base text-slate-900">₹{inv.grandTotal?.toLocaleString()}</span>
                         <button
                           type="button"
@@ -2038,7 +2253,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             </div>
 
-            <div className="px-7 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+            <div className="px-4 sm:px-7 py-3.5 sm:py-4 bg-slate-50 border-t border-slate-100 flex justify-end shrink-0">
               <button
                 onClick={() => setIsExistingInvoiceModalOpen(false)}
                 className="h-11 px-6 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer flex items-center justify-center"
@@ -2054,11 +2269,11 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* MODAL: ADD NEW BANK ACCOUNT */}
       {/* ========================================================================= */}
       {isAddBankModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-6xl w-full max-h-[92dvh] flex flex-col overflow-hidden">
             {/* Modal Header */}
             <div
-              className="px-6 py-4.5 flex items-center justify-between text-white sticky top-0 z-10 shadow-md"
+              className="px-4 sm:px-6 py-3.5 sm:py-4.5 flex items-center justify-between text-white shrink-0 z-10 shadow-md"
               style={{ background: '#33077C' }}
             >
               <div className="flex items-center gap-3">
@@ -2077,7 +2292,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </div>
             </div>
 
-            <form noValidate onSubmit={handleSaveNewBank} className="p-6 sm:p-8 space-y-6">
+            <form noValidate onSubmit={handleSaveNewBank} className="p-4 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto flex-1">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
@@ -2162,18 +2377,18 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-6 border-t border-slate-100">
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 sm:pt-6 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsAddBankModalOpen(false)}
-                  className="h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center gap-2"
+                  className="w-full sm:w-auto h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center justify-center gap-2"
                 >
                   <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />
                   <span>Cancel</span>
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
+                  className="w-full sm:w-auto h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98]"
                 >
                   <Check className="w-4 h-4 text-white stroke-[2.5]" />
                   <span>Save Bank Account</span>
@@ -2196,8 +2411,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* MODAL: ADD NEW PROJECT TO CLIENT */}
       {/* ========================================================================= */}
       {isAddClientProjectModalOpen && selectedCustomer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-lg w-full overflow-hidden p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-white rounded-xl sm:rounded-2xl border border-slate-100 shadow-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 space-y-4 my-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-orange-50 text-[#4309A2] flex items-center justify-center border border-orange-100">
@@ -2232,7 +2447,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="font-bold text-slate-600 block mb-1.5">HSN / SAC Code</label>
                   <input
@@ -2280,17 +2495,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsAddClientProjectModalOpen(false)}
-                  className="h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl cursor-pointer text-sm flex items-center justify-center"
+                  className="w-full sm:w-auto h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl cursor-pointer text-sm flex items-center justify-center"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold rounded-xl cursor-pointer shadow-md hover:shadow-lg text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                  className="w-full sm:w-auto h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold rounded-xl cursor-pointer shadow-md hover:shadow-lg text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Save & Select Project</span>

@@ -1,14 +1,12 @@
 import { toast } from 'sonner';
 import { Lead, Customer, TaskItem, ContentItem, PaymentItem } from '../types';
 import {
-  useGetDashboardStatsQuery,
   useGetLeadsQuery,
   useGetTasksQuery,
   useGetTodayWorkQuery,
   useGetContentQuery,
   useGetPaymentsQuery,
   useGetSubscriptionsQuery,
-  useGetRemindersQuery,
   useGetEmployeesQuery,
   useGetActivitiesQuery,
   useGetReportsQuery,
@@ -31,7 +29,6 @@ import {
 } from '../api/crm/crmApi';
 
 export const QUERY_KEYS = {
-  dashboardStats: ['dashboard-stats'] as const,
   leads: ['leads'] as const,
   customers: ['customers'] as const,
   customerDetail: (id: string) => ['customers', id] as const,
@@ -44,7 +41,6 @@ export const QUERY_KEYS = {
   content: ['content'] as const,
   payments: ['payments'] as const,
   subscriptions: ['subscriptions'] as const,
-  reminders: ['reminders'] as const,
   employees: ['employees'] as const,
   activities: ['activities'] as const,
   reports: ['reports'] as const,
@@ -54,10 +50,6 @@ export const QUERY_KEYS = {
 // ==========================================
 // QUERIES (RTK Query backed)
 // ==========================================
-
-export function useDashboardStats() {
-  return useGetDashboardStatsQuery();
-}
 
 export function useLeads() {
   return useGetLeadsQuery();
@@ -101,10 +93,6 @@ export function usePayments() {
 
 export function useSubscriptions() {
   return useGetSubscriptionsQuery();
-}
-
-export function useReminders() {
-  return useGetRemindersQuery();
 }
 
 export function useEmployees() {

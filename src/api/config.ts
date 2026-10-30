@@ -20,7 +20,7 @@ export interface ApiErrorResponse {
 }
 
 export const ORGANIZATION_ID_STORAGE_KEY = 'yaa_crm_organization_id';
-export const DEFAULT_ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
+export const DEFAULT_ORGANIZATION_ID = '';
 
 export const getStoredToken = (): string | null => {
   return localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -31,12 +31,17 @@ export const setStoredToken = (token: string): void => {
 };
 
 export const getStoredOrganizationId = (): string => {
-  return (
-    localStorage.getItem(ORGANIZATION_ID_STORAGE_KEY) ||
-    (typeof import.meta !== 'undefined' &&
-      (import.meta as any)?.env?.VITE_ORGANIZATION_ID) ||
-    DEFAULT_ORGANIZATION_ID
-  );
+  const stored = localStorage.getItem(ORGANIZATION_ID_STORAGE_KEY);
+  if (stored && stored !== '11111111-1111-4111-8111-111111111111') {
+    return stored;
+  }
+  const envOrgId =
+    typeof import.meta !== 'undefined' &&
+    (import.meta as any)?.env?.VITE_ORGANIZATION_ID;
+  if (envOrgId && envOrgId !== '11111111-1111-4111-8111-111111111111') {
+    return envOrgId;
+  }
+  return '';
 };
 
 export const setStoredOrganizationId = (orgId: string): void => {

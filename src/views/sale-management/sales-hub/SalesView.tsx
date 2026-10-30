@@ -1,3 +1,5 @@
+import { useDebounce } from 'use-debounce';
+import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
   useMemo,
@@ -48,6 +50,10 @@ import {
   Wifi,
   WifiOff,
   Database,
+  Phone,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
 } from "lucide-react";
 import {
   useSalesManagementStore,
@@ -57,6 +63,7 @@ import {
   SalePaymentStatus,
   PaymentSplitItem,
   SalePaymentRecord,
+  SalePaymentIn,
 } from "../../../store/useSalesManagementStore";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
@@ -66,11 +73,19 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
+import { CustomerSearchableSelect, BatchSearchableSelect } from "../../../components/common/paginated-select";
 import { toast } from "sonner";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { SalesCustomer } from "../../../store/useSalesManagementStore";
+import {
+  printTableReport,
+  printHtmlElement,
+  downloadBusinessDocument,
+  downloadTableReport,
+  DocumentPrintOptions,
+} from "../../../utils/printUtils";
+import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { printTableReport, printHtmlElement } from "../../../utils/printUtils";
 import {
   UniversalShareDropdown,
   formatInvoiceShare,
@@ -90,17 +105,44 @@ import {
   stockApi,
   mapApiStockToInventoryStockItem,
   productApi,
+  unpackProducts,
+  ApiStockBatch,
   commercePaymentInApi,
+  normalizeCommercePaymentType,
+  quotationApi,
+  commerceSaleOrderApi,
+  clientProductApi,
 } from "../../../api";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
-import { initializeWorkflowIntegrity } from "../../../utils/salesDocumentWorkflow";
+import {
+  initializeWorkflowIntegrity,
+  recordDocumentConversion,
+  findDocumentLineage,
+  inferDocType,
+  syncQuotationStatusInStorage,
+  syncOrderStatusInStorage,
+  syncProformaStatusInStorage,
+  resolveDocumentConvertedAt,
+} from "../../../utils/salesDocumentWorkflow";
+import {
+  calculateLineItem,
+  calculateDocumentTotals,
+  determineGstType,
+  parseTaxRate,
+  round2,
+} from "../../../utils/financialCalculations";
 import {
   FormLabel,
   FORM_INPUT_CLS,
   FORM_SELECT_CLS,
   FORM_TEXTAREA_CLS,
+  handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 
+import { AddCustomerModal } from "./AddCustomerModal";
+import { AddItemModal } from "../inventory/AddItemModal";
+
+import { formatDate } from '../utils/dateUtils';
 // Helper functions for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
   if (!iso) return "";
@@ -118,6 +160,38 @@ const ddmmyyyyToIso = (dmy?: string): string => {
     return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
   }
   return dmy;
+};
+
+const formatDateTime = (
+  dateStr?: string | null,
+): { date: string; time: string; full: string } | null => {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  const hh = String(hours).padStart(2, "0");
+
+  return {
+    date: `${dd}/${mm}/${yyyy}`,
+    time: `${hh}:${minutes} ${ampm}`,
+    full: `${dd}/${mm}/${yyyy} ${hh}:${minutes} ${ampm}`,
+  };
+};
+
+const getInitials = (name?: string, fallback: string = "PR"): string => {
+  if (!name) return fallback;
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return fallback;
 };
 
 interface CustomCustomerSelectProps {
@@ -173,72 +247,54 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
     return customers.find((c) => c.id === value);
   }, [customers, value]);
 
-  const displayText = selectedCustomer
-    ? `${selectedCustomer.name}${selectedCustomer.company ? ` (${selectedCustomer.company})` : ""}`
-    : "";
-
   return (
     <div ref={dropdownRef} className="relative w-full">
       {/* Standard Select Box */}
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none flex items-center justify-between cursor-pointer transition-all ${
-          isOpen
-            ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
-            : value
-              ? "border-slate-300 hover:border-slate-400"
-              : "border-slate-200 hover:border-slate-300"
+        className={`relative w-full h-10 px-3.5 bg-white border rounded-xl text-xs font-medium outline-none flex items-center justify-between cursor-pointer transition-all duration-200 ${
+          isOpen || value
+            ? "border-[#33077C] ring-2 ring-[#33077C]/10"
+            : "border-slate-200 hover:border-slate-300"
         }`}
       >
-        {/* Selected value or placeholder */}
-        <span
-          className={`text-xs sm:text-[13px] font-medium truncate ${
-            displayText ? "text-slate-800" : "text-slate-400"
-          }`}
-        >
-          {displayText || "Select or Search Customer..."}
-        </span>
+        <div className="truncate pr-2">
+          {selectedCustomer ? (
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-900">{selectedCustomer.name}</span>
+              {selectedCustomer.company && (
+                <span className="text-slate-500 text-xs">({selectedCustomer.company})</span>
+              )}
+            </div>
+          ) : (
+            <span className="text-slate-400">Select or search customer...</span>
+          )}
+        </div>
 
-        {/* Arrow (Triangle Up / Down) */}
-        <span className="text-[10px] text-slate-400 font-bold ml-2 transition-transform select-none shrink-0">
-          {isOpen ? "▲" : "▼"}
-        </span>
+        <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
       </div>
 
       {/* Floating Dropdown Menu */}
       {isOpen && (
-        <div className="absolute left-0 top-full mt-1.5 w-full min-w-[320px] bg-white rounded-2xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-          {/* 1. Search Pill Input */}
-          <div className="relative mb-2">
-            <div className="flex items-center w-full h-9 px-3 bg-white border border-slate-200 rounded-full focus-within:border-[#33077C] focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all shadow-2xs">
-              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-2xl border border-purple-100 shadow-2xl shadow-purple-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          {/* 1. Search Bar */}
+          <div className="p-2.5 border-b border-slate-100 bg-slate-50/70">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
                 ref={searchInputRef}
                 type="text"
-                placeholder="Search Customer"
+                placeholder="Search Customer by name, phone or code..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (filteredCustomers.length > 0) {
-                      onChange(filteredCustomers[0].id);
-                      setIsOpen(false);
-                    }
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setIsOpen(false);
-                  }
-                }}
-                className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                autoFocus
+                className="w-full pl-8 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/15 text-slate-900 placeholder-slate-400 font-medium"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
-                  className="text-slate-400 hover:text-slate-600 p-0.5 ml-1"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -246,85 +302,136 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
             </div>
           </div>
 
-          {/* 2. Add New Customer Action */}
-          <button
-            type="button"
-            onClick={() => {
-              setIsOpen(false);
-              onAddNewCustomer();
-            }}
-            className="w-full px-3 py-2 text-left text-xs font-bold text-[#33077C] hover:bg-[#33077C]/10 rounded-xl flex items-center gap-2 transition-colors cursor-pointer mb-1"
-          >
-            <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-            <span>Add New Customer</span>
-          </button>
+          {/* 2. Add New Customer Action Button */}
+          <div className="px-2 pt-2 pb-1 border-b border-slate-100">
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false);
+                onAddNewCustomer();
+              }}
+              className="w-full py-1.5 px-2.5 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>+ Add New Customer</span>
+            </button>
+          </div>
 
-          {/* 3. Customer Checkbox List */}
-          <div className="max-h-56 overflow-y-auto space-y-1 p-0.5">
+          {/* 3. Customer List */}
+          <div className="max-h-64 overflow-y-auto p-1.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
+            {/* Clear / None Option */}
+            <div
+              onClick={() => {
+                onChange("");
+                setIsOpen(false);
+              }}
+              className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                !value
+                  ? "bg-purple-50 text-[#33077C] font-bold"
+                  : "hover:bg-slate-50 text-slate-600"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 italic">None / Unassigned</span>
+              </div>
+              {!value && (
+                <Check className="w-4 h-4 text-[#33077C]" />
+              )}
+            </div>
+
             {filteredCustomers.length === 0 ? (
-              <div className="py-4 text-center text-xs text-slate-400 font-medium">
-                No customers found
+              <div className="py-6 px-3 text-center text-slate-400">
+                <p className="text-xs font-semibold text-slate-600">No customers found</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Try searching with a different name, phone or code</p>
+                {searchQuery.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onAddNewCustomer();
+                    }}
+                    className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Add "{searchQuery.trim()}"</span>
+                  </button>
+                )}
               </div>
             ) : (
-              filteredCustomers.map((cust) => {
-                const isSelected = value === cust.id;
+              filteredCustomers.map((c) => {
+                const isSelected = value === c.id;
                 const metrics = getCustomerMetrics
-                  ? getCustomerMetrics(cust.id)
+                  ? getCustomerMetrics(c.id)
                   : null;
-                const out = metrics?.outstandingAmount || 0;
+                const out = metrics?.outstandingAmount ?? c.outstandingAmount ?? c.openingBalance;
 
                 return (
                   <div
-                    key={cust.id}
+                    key={c.id}
                     onClick={() => {
-                      onChange(isSelected ? "" : cust.id);
+                      onChange(isSelected ? "" : c.id);
                       setIsOpen(false);
                     }}
-                    className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2.5 cursor-pointer transition-colors ${
+                    className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer ${
                       isSelected
-                        ? "bg-[#33077C]/10 text-[#33077C] font-bold"
-                        : "text-slate-700 hover:bg-slate-50"
+                        ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
+                        : "hover:bg-slate-50/80 text-slate-800"
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      {/* Checkbox Box */}
-                      <div
-                        className={`w-4 h-4 rounded-[4px] border flex items-center justify-center transition-all shrink-0 ${
-                          isSelected
-                            ? "border-[#33077C] bg-[#33077C] text-white"
-                            : "border-slate-400 bg-white hover:border-[#33077C]"
-                        }`}
-                      >
-                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      {/* Avatar Initials Circle matching SalesRepSearchableSelect */}
+                      <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60">
+                        {getInitials(c.name, "CU")}
                       </div>
-
-                      <div className="min-w-0">
-                        <div className="font-bold text-slate-900 truncate">
-                          {cust.name}{" "}
-                          {cust.company ? (
-                            <span className="font-normal text-slate-600">
-                              ({cust.company})
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 truncate">
+                            {c.name}
+                          </span>
+                          {c.company && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[140px]">
+                              {c.company}
+                            </span>
+                          )}
+                          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                            Active
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2.5 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                          {c.phone ? (
+                            <span className="flex items-center gap-1 font-mono text-slate-600">
+                              <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                              <span>{c.phone}</span>
                             </span>
                           ) : (
-                            ""
+                            <span className="text-slate-400">
+                              No phone
+                            </span>
                           )}
-                        </div>
-                        <div className="text-[11px] text-slate-500 font-normal truncate mt-0.5">
-                          {cust.customerCode} • {cust.phone || "No phone"}
-                          {out > 0 && (
-                            <span className="text-rose-600 font-semibold ml-1.5">
-                              • Outstanding: ₹{out.toLocaleString("en-IN")}
+                          {(c.customerCode || c.code) && (
+                            <span className="text-[10px] font-mono text-slate-400">
+                              #{c.customerCode || c.code}
                             </span>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {cust.customerCode && (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-[#33077C]/10 text-[#33077C] shrink-0">
-                        {cust.customerCode}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {out !== undefined && out !== null && Number(out) > 0 ? (
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 block font-normal leading-tight">
+                            Balance
+                          </span>
+                          <span className="font-bold text-[#33077C] text-xs">
+                            ₹{Number(out).toLocaleString("en-IN")}
+                          </span>
+                        </div>
+                      ) : null}
+                      {isSelected && (
+                        <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+                      )}
+                    </div>
                   </div>
                 );
               })
@@ -337,8 +444,10 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
 };
 
 export const SalesView: React.FC = () => {
+  const companyProfile = useCompanyDocumentProfile();
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const {
     sales,
@@ -354,6 +463,9 @@ export const SalesView: React.FC = () => {
     setSalesList,
     getCustomerMetrics,
     stocks,
+    adjustStock,
+    savePaymentIn,
+    updateQuotationStatus,
   } = useSalesManagementStore();
   const [customerList, setCustomerList] = useState<any[]>([]);
   const [productList, setProductList] = useState<any[]>([]);
@@ -367,8 +479,9 @@ export const SalesView: React.FC = () => {
       const custRes = await customerApi
         .getCustomers({ pagination_required: false, page_size: 100 })
         .catch(() => null);
-      if (custRes?.data && Array.isArray(custRes.data)) {
-        const mapped = custRes.data.map(mapApiCustomerToSalesCustomer);
+      const rawCust = unpackProducts(custRes);
+      if (rawCust.length > 0) {
+        const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
         setCustomerList(mapped);
         setCustomersList(mapped);
       }
@@ -384,6 +497,16 @@ export const SalesView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebounce(pendingSearch, 400);
+
+  // Auto-apply debounced search (min 2 chars or cleared to reset)
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    if (trimmed === "" || trimmed.length >= 2) {
+      setAppliedSearch(trimmed);
+      setCurrentPage(1);
+    }
+  }, [debouncedSearch]);
   const [pendingSaleStatus, setPendingSaleStatus] = useState("All");
   const [appliedSaleStatus, setAppliedSaleStatus] = useState("All");
   const [pendingPaymentStatus, setPendingPaymentStatus] = useState("All");
@@ -393,12 +516,144 @@ export const SalesView: React.FC = () => {
   const [pendingSalesRep, setPendingSalesRep] = useState("All");
   const [appliedSalesRep, setAppliedSalesRep] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [isSalesGraphModalOpen, setIsSalesGraphModalOpen] = useState(false);
 
   useEffect(() => {
     initializeWorkflowIntegrity();
   }, []);
+
+  // Track upstream document conversion source info
+  const convertSourceRef = useRef<{
+    sourceType?: string;
+    sourceId?: string;
+    sourceNo?: string;
+  } | null>(null);
+
+  // Handle conversion navigation from Sale Order, Estimate, Proforma, or Challan
+  useEffect(() => {
+    const convertData = (location.state as any)?.convertFrom;
+    if (convertData) {
+      convertSourceRef.current = {
+        sourceType: convertData.sourceType || "Estimate",
+        sourceId: convertData.sourceId || "",
+        sourceNo: convertData.sourceNo || convertData.referenceNo || "",
+      };
+
+      const nextInvNum = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const resolvedItems: SaleProductItem[] = (convertData.items || []).map(
+        (it: any, idx: number) => {
+          const qty = Number(it.quantity) || 1;
+          const uPrice = Number(it.unitPrice ?? it.price ?? 0);
+          const pPrice = Number(it.purchasePrice ?? it.cost ?? 0);
+          const dPct = Number(it.discountPercent ?? 0);
+          const tPct = Number(it.taxPercent ?? (convertData.withGst !== false ? 18 : 0));
+          const lineRes = calculateLineItem(
+            {
+              quantity: qty,
+              unitPrice: uPrice,
+              discountPercent: dPct,
+              taxPercent: tPct,
+            },
+            {
+              withGst: convertData.withGst !== false,
+              gstType: convertData.gstType || "intra_state",
+            }
+          );
+          return {
+            id: it.id || `s_item_${Date.now()}_${idx}`,
+            productId: it.productId || "",
+            productName: it.productName || it.name || "Product",
+            sku: it.sku || "",
+            batch: it.batch || it.batchNo || "",
+            quantity: qty,
+            purchasePrice: pPrice,
+            salesPrice: uPrice,
+            unitPrice: uPrice,
+            discountPercent: dPct,
+            taxPercent: tPct,
+            total: lineRes.lineTotal,
+          };
+        },
+      );
+
+      if (resolvedItems.length === 0) {
+        resolvedItems.push({
+          id: `s_item_${Date.now()}`,
+          productId: "",
+          productName: "",
+          sku: "",
+          batch: "",
+          quantity: 1,
+          purchasePrice: 0,
+          salesPrice: 0,
+          unitPrice: 0,
+          discountPercent: 0,
+          taxPercent: 18,
+          total: 0,
+        });
+      }
+
+      const initialPaid = Number(convertData.paidAmount ?? convertData.advanceAmount ?? 0);
+      const initialMethod = convertData.paymentMethod || "Bank Transfer";
+
+      setFormData({
+        invoiceNo: nextInvNum,
+        referenceNo:
+          convertData.sourceNo ||
+          convertData.referenceNo ||
+          `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+        saleDate: new Date().toISOString().split("T")[0],
+        dueDate:
+          convertData.dueDate ||
+          new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
+        customerId: convertData.customerId || "",
+        customerName: convertData.customerName || convertData.partyName || "",
+        customerCompany: convertData.customerCompany || "",
+        customerPhone: convertData.customerPhone || "",
+        customerEmail: convertData.customerEmail || "",
+        billingAddress: convertData.billingAddress || "",
+        shippingAddress:
+          convertData.shippingAddress || convertData.billingAddress || "",
+        items: resolvedItems,
+        withGst: convertData.withGst !== false,
+        gstType: convertData.gstType || "intra_state",
+        overallDiscount: Number(
+          convertData.overallDiscount ?? convertData.discount ?? 0,
+        ),
+        shippingCharges: Number(convertData.shippingCharges ?? 0),
+        otherCharges: Number(convertData.otherCharges ?? 0),
+        paymentMethod: initialMethod,
+        paymentSplits: [
+          {
+            id: "ps_1",
+            method: initialMethod,
+            amount: initialPaid,
+            referenceNo: convertData.sourceNo || "",
+          },
+        ],
+        paymentRecords: [],
+        paymentTerms: convertData.paymentTerms || "Net 15 Days",
+        paidAmount: initialPaid,
+        roundMode: (convertData.roundMode as any) || "none",
+        invoiceStatus: "Draft",
+        saleStatus: "Confirmed",
+        salesperson: convertData.salesperson || "",
+        notes:
+          convertData.notes ||
+          `Converted from ${convertData.sourceType || "Document"} ${convertData.sourceNo || ""}`,
+      });
+
+      setEditingSale(null);
+      setIsFormModalOpen(true);
+      toast.info(
+        `Loaded details from ${convertData.sourceType || "document"} ${convertData.sourceNo || ""}. Review payment calculations and confirm invoice.`,
+      );
+
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, navigate, location.pathname]);
 
   useEffect(() => {
     const q = searchParams.get("search");
@@ -408,17 +663,7 @@ export const SalesView: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Debounced Search (600ms) - waits until typing completes before triggering API
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      const trimmed = pendingSearch.trim();
-      if (trimmed !== appliedSearch) {
-        setAppliedSearch(trimmed);
-        setCurrentPage(1);
-      }
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [pendingSearch, appliedSearch]);
+
 
   // 3-Dots Action dropdown
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -433,6 +678,14 @@ export const SalesView: React.FC = () => {
     string | null
   >(null);
   const [shareDropdownPos, setShareDropdownPos] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+  } | null>(null);
+
+  // Next Stage / Convert Dropdown state
+  const [activeConvertDropdownId, setActiveConvertDropdownId] = useState<string | null>(null);
+  const [convertDropdownPos, setConvertDropdownPos] = useState<{
     top?: number;
     bottom?: number;
     right: number;
@@ -454,8 +707,12 @@ export const SalesView: React.FC = () => {
     useState(false);
   const [selectedPaymentRecord, setSelectedPaymentRecord] =
     useState<SalePaymentRecord | null>(null);
-  const [isQuickCustomerModalOpen, setIsQuickCustomerModalOpen] =
-    useState(false);
+  const [isAddCustomerModalOpen, setIsAddCustomerModalOpen] = useState(false);
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [activeItemRowIndex, setActiveItemRowIndex] = useState<number | null>(null);
+  const [openProductDropdownRow, setOpenProductDropdownRow] = useState<number | null>(null);
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const productDropdownRef = useRef<HTMLDivElement>(null);
   const [selectedSale, setSelectedSale] = useState<SaleTransaction | null>(
     null,
   );
@@ -467,79 +724,136 @@ export const SalesView: React.FC = () => {
   const [isDeletingSale, setIsDeletingSale] = useState(false);
   const [deleteSaleError, setDeleteSaleError] = useState<string | null>(null);
 
-  // Load Stocks on demand only when Form Modal is opened (products are searched on demand)
-  const hasLoadedProductsRef = useRef(false);
-  const loadProductAndStockData = useCallback(async () => {
-    if (hasLoadedProductsRef.current) return;
-    hasLoadedProductsRef.current = true;
+  // Live Batches & Products state for Search & Dropdown Popover
+  const [liveBatches, setLiveBatches] = useState<ApiStockBatch[]>([]);
+  const isFetchingProductsRef = useRef(false);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const productSearchTimerRef = useRef<any>(null);
+
+  // Robust live product loader with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
+    if (isFetchingProductsRef.current) return;
+    isFetchingProductsRef.current = true;
+    setIsLoadingProducts(true);
     try {
-      const [stockRes, prodRes] = await Promise.allSettled([
-        stockApi.getStocks({ pagination_required: false }),
-        productApi.getProducts({ page_size: 100, pagination_required: false }),
-      ]);
-      if (
-        stockRes.status === "fulfilled" &&
-        stockRes.value?.data &&
-        Array.isArray(stockRes.value.data)
-      ) {
-        setStocksList(stockRes.value.data.map(mapApiStockToInventoryStockItem));
+      let prods: any[] = [];
+
+      // 1. First attempt: standard pagination_required: true
+      try {
+        const res = await productApi.getProducts({
+          page_no: 1,
+          page_size: 100,
+          pagination_required: true,
+          search: searchQuery?.trim() || undefined,
+          sortOrder: "desc",
+        });
+        const raw = unpackProducts(res);
+        if (raw.length > 0) prods = raw;
+      } catch (err) {
+        console.warn("Product load pagination_required:true error in SalesView:", err);
       }
-      if (
-        prodRes.status === "fulfilled" &&
-        prodRes.value?.data &&
-        Array.isArray(prodRes.value.data)
-      ) {
+
+      // 2. Second attempt: pagination_required: false
+      if (prods.length === 0) {
+        try {
+          const res2 = await productApi.getProducts({
+            search: searchQuery?.trim() || undefined,
+            page_size: 100,
+            pagination_required: false,
+          });
+          const raw2 = unpackProducts(res2);
+          if (raw2.length > 0) prods = raw2;
+        } catch (err2) {
+          console.warn("Product load pagination_required:false error in SalesView:", err2);
+        }
+      }
+
+      // 3. Third attempt: clientProductApi (platform products)
+      if (prods.length === 0) {
+        try {
+          const cRes = await clientProductApi.getProducts({
+            page: 1,
+            limit: 100,
+            search: searchQuery?.trim() || undefined,
+          });
+          const cItems = unpackProducts(cRes);
+          if (cItems.length > 0) {
+            prods = cItems.map((cp: any) => ({
+              id: cp.id,
+              productId: cp.id,
+              productName: cp.name || cp.productName,
+              productCode: cp.code || cp.sku,
+              salePrice: cp.plans?.[0]?.price || cp.price || 0,
+              unit: "PCS",
+              category: cp.tagline || "General",
+            }));
+          }
+        } catch (cErr) {
+          console.warn("clientProductApi load fallback error in SalesView:", cErr);
+        }
+      }
+
+      // 4. Fourth attempt: fallback to stockApi
+      if (prods.length === 0) {
+        try {
+          const sRes = await stockApi.getStocks({ pagination_required: false, page_size: 100 });
+          const rawStocks = unpackProducts(sRes);
+          if (rawStocks.length > 0) {
+            prods = rawStocks.map((s: any) => ({
+              id: s.productId || s.id,
+              productId: s.productId || s.id,
+              productName: s.productName,
+              productCode: s.sku,
+              salePrice: s.unitPrice || 0,
+              unit: s.unit || "PCS",
+              category: s.category || "",
+            }));
+          }
+        } catch (sErr) {
+          console.warn("stockApi load fallback error in SalesView:", sErr);
+        }
+      }
+
+      // 5. Fifth attempt: fallback to local storage
+      if (prods.length === 0) {
+        try {
+          const localSaved = localStorage.getItem("yaa_crm_inventory_stocks");
+          if (localSaved) {
+            const parsed = JSON.parse(localSaved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              prods = parsed;
+            }
+          }
+        } catch (locErr) {
+          console.warn("localStorage stock load fallback error in SalesView:", locErr);
+        }
+      }
+
+      if (prods.length > 0) {
         setProductList((prev) => {
           const map = new Map<string, any>();
-          prev.forEach((p) => map.set(p.id, p));
-          prodRes.value.data.forEach((p: any) => {
-            map.set(p.id, {
-              id: p.id,
-              name: p.productName || p.name,
-              code: p.productCode || p.sku || p.code || p.id,
-              sku: p.productCode || p.sku || p.code || p.id,
-              price: Number(p.salePrice ?? p.sellingPrice ?? p.unitPrice ?? 0),
+          if (searchQuery?.trim()) {
+            prev.forEach((p) => map.set(p.id, p));
+          }
+          prods.forEach((p: any) => {
+            const pId = p.id || p.productId;
+            if (!pId) return;
+            map.set(pId, {
+              id: pId,
+              productId: pId,
+              name: p.productName || p.name || "Unnamed Product",
+              productName: p.productName || p.name || "Unnamed Product",
+              code: p.productCode || p.sku || p.code || pId,
+              sku: p.productCode || p.sku || p.code || pId,
+              price: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
+              salePrice: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
+              unitPrice: Number(p.salePrice ?? p.sellingPrice ?? p.price ?? p.unitPrice ?? 0),
               cost: Number(p.purchasePrice ?? p.costPrice ?? 0),
               unit: p.unit || "PCS",
-              batches: p.batches || [],
+              batches: p.batches || p.stockBatches || [],
               hsnCode: p.hsnCode || "",
-            });
-          });
-          return Array.from(map.values());
-        });
-      }
-    } catch (err) {
-      console.warn("Failed to load stocks/products for form modal:", err);
-    }
-  }, [setStocksList]);
-
-  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
-
-  // On-demand product search: only calls products API when user is actively searching
-  const handleProductSearch = useCallback(async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setIsSearchingProducts(true);
-    try {
-      const res = await productApi.getProducts({
-        search: trimmed,
-        page_size: 30,
-        pagination_required: false,
-      });
-      if (res && res.data && Array.isArray(res.data)) {
-        setProductList((prev) => {
-          const map = new Map<string, any>();
-          prev.forEach((p) => map.set(p.id, p));
-          res.data.forEach((p: any) => {
-            map.set(p.id, {
-              id: p.id,
-              name: p.productName || p.name,
-              code: p.productCode || p.sku || p.code || p.id,
-              sku: p.productCode || p.sku || p.code || p.id,
-              price: Number(p.salePrice || p.unitPrice || 0),
-              cost: Number(p.purchasePrice || p.costPrice || 0),
-              unit: p.unit || "PCS",
-              batches: p.batches || [],
+              category: p.category || "General",
+              imageUrl: (p as any).images?.[0] || (p as any).image || (p as any).imageUrl || "",
             });
           });
           return Array.from(map.values());
@@ -548,15 +862,60 @@ export const SalesView: React.FC = () => {
     } catch (err) {
       console.warn("Failed to search products in SalesView:", err);
     } finally {
-      setIsSearchingProducts(false);
+      setIsLoadingProducts(false);
+      isFetchingProductsRef.current = false;
     }
   }, []);
+
+  // Load Stocks & Products on demand when Form Modal is opened
+  const hasLoadedProductsRef = useRef(false);
+  const loadProductAndStockData = useCallback(async () => {
+    fetchLiveProducts();
+
+    if (hasLoadedProductsRef.current) return;
+    hasLoadedProductsRef.current = true;
+    try {
+      const stockRes = await stockApi
+        .getStocks({ pagination_required: false, page_size: 100 })
+        .catch(() => null);
+      const rawStocks = unpackProducts(stockRes);
+      if (rawStocks.length > 0) {
+        setStocksList(rawStocks.map(mapApiStockToInventoryStockItem));
+      }
+    } catch (err) {
+      console.warn("Failed to load stocks for form modal in SalesView:", err);
+    }
+
+    try {
+      const batchRes = await stockApi
+        .getStockBatches({ pagination_required: false, page_size: 100 })
+        .catch(() => null);
+      const rawBatches = unpackProducts(batchRes);
+      if (rawBatches.length > 0) {
+        setLiveBatches(rawBatches);
+      }
+    } catch (err) {
+      console.warn("Failed to load batches for form modal in SalesView:", err);
+    }
+  }, [fetchLiveProducts, setStocksList]);
+
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+
+  // On-demand product search: calls products API
+  const handleProductSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    fetchLiveProducts(trimmed);
+  }, [fetchLiveProducts]);
 
   useEffect(() => {
     if (isFormModalOpen) {
       loadProductAndStockData();
+      if (!hasLoadedProductsRef.current || productList.length === 0) {
+        fetchLiveProducts();
+      }
     }
-  }, [isFormModalOpen, loadProductAndStockData]);
+  }, [isFormModalOpen, loadProductAndStockData, fetchLiveProducts, productList.length]);
 
   // API States
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -647,8 +1006,8 @@ export const SalesView: React.FC = () => {
 
   // Live Invoices Fetching
   const isFetchingInvoicesRef = useRef(false);
-  const fetchSalesInvoices = useCallback(async () => {
-    if (isFetchingInvoicesRef.current) return;
+  const fetchSalesInvoices = useCallback(async (): Promise<boolean> => {
+    if (isFetchingInvoicesRef.current) return false;
     isFetchingInvoicesRef.current = true;
     setIsApiLoading(true);
     try {
@@ -683,38 +1042,49 @@ export const SalesView: React.FC = () => {
         const mapped = res.data.map((inv) =>
           mapApiInvoiceToSaleTransaction(inv),
         );
-        const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
-        const localSales: SaleTransaction[] = rawLocal
-          ? JSON.parse(rawLocal)
-          : [];
-        const apiInvoiceNos = new Set(mapped.map((m) => m.invoiceNo || m.id));
-        const extraLocals = localSales.filter(
-          (l) => !apiInvoiceNos.has(l.invoiceNo) && !apiInvoiceNos.has(l.id),
-        );
-        const merged = [...extraLocals, ...mapped];
 
-        setSalesList(merged);
+        setSalesList(mapped);
+
+        // Self-heal and record cross-module lineage for all fetched invoices with references
+        mapped.forEach((sale) => {
+          if (!sale.invoiceNo) return;
+          const ref = sale.referenceNo?.trim();
+          if (!ref) return;
+
+          const existing = findDocumentLineage(sale.invoiceNo);
+          if (!existing || !existing.invoiceNo) {
+            const inferredType = inferDocType(ref);
+            if (inferredType) {
+              recordDocumentConversion({
+                fromType: inferredType,
+                fromNo: ref,
+                toType: "Invoice",
+                toNo: sale.invoiceNo,
+                toId: sale.id,
+                partyName: sale.customerName,
+                customerId: sale.customerId,
+              });
+            }
+          }
+        });
         if (res.pagination) {
-          setTotalApiRecords(
-            (res.pagination.totalRecords ?? mapped.length) + extraLocals.length,
-          );
-          setTotalApiPages(Math.max(1, Math.ceil(merged.length / pageSize)));
+          setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
+          setTotalApiPages(Math.max(1, Math.ceil((res.pagination.totalRecords ?? mapped.length) / pageSize)));
         } else {
-          setTotalApiRecords(merged.length);
+          setTotalApiRecords(mapped.length);
           setTotalApiPages(1);
         }
         setIsApiConnected(true);
+        return true;
       }
+      return false;
     } catch (err: any) {
       console.error("Failed to fetch invoices:", err);
-      const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
-      const localSales: SaleTransaction[] = rawLocal
-        ? JSON.parse(rawLocal)
-        : [];
-      if (localSales.length > 0) {
-        setSalesList(localSales);
-      }
+      setSalesList([]);
+      setTotalApiRecords(0);
+      setTotalApiPages(1);
       setIsApiConnected(false);
+      return false;
     } finally {
       setIsApiLoading(false);
       isFetchingInvoicesRef.current = false;
@@ -776,20 +1146,6 @@ export const SalesView: React.FC = () => {
     }
   }, [selectedSale]);
 
-  // Quick Customer Form State
-  const [quickCustomerForm, setQuickCustomerForm] = useState({
-    name: "",
-    company: "",
-    phone: "",
-    email: "",
-    address: "",
-    city: "",
-    state: "",
-    pincode: "",
-    gstNumber: "",
-    creditLimit: "",
-    paymentTerms: "",
-  });
 
   // Payment Recording Modal State
   const [paymentModalSplits, setPaymentModalSplits] = useState<
@@ -833,6 +1189,7 @@ export const SalesView: React.FC = () => {
     paymentRecords: SalePaymentRecord[];
     paymentTerms: string;
     paidAmount: number;
+    roundMode: "none" | "up" | "down";
     saleStatus: SaleStatus;
     salesperson: string;
     notes: string;
@@ -862,8 +1219,9 @@ export const SalesView: React.FC = () => {
     paymentRecords: [],
     paymentTerms: "Net 15 Days",
     paidAmount: 0,
+    roundMode: "none",
     saleStatus: "Confirmed",
-    salesperson: "Alex Rivera",
+    salesperson: "",
     notes: "",
   });
 
@@ -929,53 +1287,123 @@ export const SalesView: React.FC = () => {
     };
   }, [sales]);
 
+  // Helper to extract batches for a product
+  const getBatchesForProduct = useCallback(
+    (
+      productId: string,
+      sku: string,
+      name: string,
+      explicitBatches?: any[]
+    ) => {
+      if (Array.isArray(explicitBatches) && explicitBatches.length > 0) {
+        return explicitBatches;
+      }
+      const matched = liveBatches.filter((b) => {
+        const bPid = String((b as any).productId || (b as any).product_id || "");
+        if (productId && bPid && bPid === productId) return true;
+        if (sku && (b as any).sku && (b as any).sku === sku) return true;
+        if (
+          name &&
+          (b as any).productName &&
+          (b as any).productName.toLowerCase() === name.toLowerCase()
+        )
+          return true;
+        return false;
+      });
+      return matched;
+    },
+    [liveBatches]
+  );
+
   // Product Selection helper with real stock batches and searched products
   const availableProducts = useMemo(() => {
     const map = new Map<string, any>();
 
-    productList.forEach((p) => {
-      map.set(p.id, {
-        id: p.id,
-        name: p.name,
-        price: p.price ?? 0,
-        cost: p.cost ?? 0,
-        sku: p.sku || `SKU-${p.code || "PRD"}`,
-        batches: p.batches || [],
+    // 1. Live Products from /commerce/products
+    productList.forEach((p: any) => {
+      const pId = String(p.id || p.productId || "");
+      if (!pId) return;
+      const sku = p.sku || p.code || p.productCode || "";
+      const name = p.name || p.productName || "Unnamed Product";
+      const batches = getBatchesForProduct(pId, sku, name, p.batches || p.stockBatches);
+      map.set(pId, {
+        id: pId,
+        productId: pId,
+        name,
+        productName: name,
+        price: Number(p.price ?? p.salePrice ?? p.unitPrice ?? 0),
+        salePrice: Number(p.price ?? p.salePrice ?? p.unitPrice ?? 0),
+        unitPrice: Number(p.price ?? p.salePrice ?? p.unitPrice ?? 0),
+        cost: Number(p.cost ?? p.purchasePrice ?? 0),
+        sku,
+        code: sku,
+        category: p.category || "General",
+        unit: p.unit || "PCS",
+        imageUrl: p.imageUrl || p.image || (p as any).images?.[0] || "",
+        batches,
         stock: p.stock ?? 0,
       });
     });
 
-    stocks.forEach((stk) => {
-      if (!map.has(stk.productId)) {
-        map.set(stk.productId, {
-          id: stk.productId,
-          name: stk.productName,
-          price: stk.unitPrice || 0,
-          cost: stk.unitCost || 0,
-          sku: stk.sku,
-          batches: stk.batches || [],
-          stock: stk.inStock,
+    // 2. Stocks from /commerce/stocks
+    stocks.forEach((stk: any) => {
+      const pid = String(stk.productId || stk.id || "");
+      if (pid && !map.has(pid)) {
+        const sku = stk.sku || stk.productCode || "";
+        const name = stk.productName || stk.name || "Unnamed Product";
+        const batches = getBatchesForProduct(pid, sku, name, stk.batches);
+        map.set(pid, {
+          id: pid,
+          productId: pid,
+          name,
+          productName: name,
+          price: Number(stk.unitPrice ?? stk.salePrice ?? 0),
+          salePrice: Number(stk.unitPrice ?? stk.salePrice ?? 0),
+          unitPrice: Number(stk.unitPrice ?? stk.salePrice ?? 0),
+          cost: Number(stk.unitCost ?? stk.purchasePrice ?? 0),
+          sku,
+          code: sku,
+          category: stk.category || "General",
+          unit: stk.unit || "PCS",
+          imageUrl: stk.imageUrl || stk.image || (stk as any).images?.[0] || "",
+          batches,
+          stock: stk.inStock ?? 0,
         });
       }
     });
 
     // Also include line items currently on the invoice so their names are retained
-    formData.items.forEach((it) => {
-      if (it.productId && !map.has(it.productId)) {
-        map.set(it.productId, {
-          id: it.productId,
+    formData.items.forEach((it: any) => {
+      const itPid = String(it.productId || "");
+      if (itPid && !map.has(itPid)) {
+        map.set(itPid, {
+          id: itPid,
+          productId: itPid,
           name: it.productName || "Product",
-          price: it.unitPrice || 0,
-          cost: it.purchasePrice || 0,
-          sku: it.sku,
+          productName: it.productName || "Product",
+          price: Number(it.unitPrice ?? it.salesPrice ?? 0),
+          salePrice: Number(it.unitPrice ?? it.salesPrice ?? 0),
+          unitPrice: Number(it.unitPrice ?? it.salesPrice ?? 0),
+          cost: Number(it.purchasePrice || 0),
+          sku: it.sku || "",
+          code: it.sku || "",
+          category: it.category || "General",
+          unit: it.unit || "PCS",
+          imageUrl: it.imageUrl || it.image || "",
           batches: [],
           stock: 0,
         });
       }
     });
 
-    return Array.from(map.values());
-  }, [stocks, productList, formData.items]);
+    return Array.from(map.values()).filter((s: any) => {
+      const pid = String(s.productId || s.id || "").trim();
+      const name = String(s.name || s.productName || "").trim();
+      if (!pid && !name) return false;
+      if (pid.startsWith("mock_")) return false;
+      return true;
+    });
+  }, [stocks, productList, formData.items, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
     return availableProducts.map((p) => ({
@@ -988,47 +1416,55 @@ export const SalesView: React.FC = () => {
     }));
   }, [availableProducts]);
 
+  const matchingProducts = useMemo(() => {
+    const q = productSearchQuery.toLowerCase().trim();
+    if (!q) return availableProducts;
+    return availableProducts.filter(
+      (p) =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.productName && p.productName.toLowerCase().includes(q)) ||
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.code && p.code.toLowerCase().includes(q)) ||
+        (p.category && p.category.toLowerCase().includes(q))
+    );
+  }, [availableProducts, productSearchQuery]);
+
+  const handleSelectProduct = (index: number, product: any) => {
+    const prodId = product.productId || product.id;
+    handleItemProductChange(index, prodId);
+    setOpenProductDropdownRow(null);
+    setProductSearchQuery("");
+  };
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.si-product-cell') && !target.closest('.si-product-dropdown')) {
+        setOpenProductDropdownRow(null);
+      }
+      if (!target.closest('.invoice-convert-dropdown-container') && !target.closest('.invoice-convert-dropdown-menu')) {
+        setActiveConvertDropdownId(null);
+        setConvertDropdownPos(null);
+      }
+    };
+    const handleScroll = () => {
+      setActiveConvertDropdownId(null);
+      setConvertDropdownPos(null);
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, []);
+
   // Handle opening Create Modal
   const handleOpenCreateModal = () => {
     const nextInvNum = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const defaultProduct = availableProducts[0] || {
-      id: "PROD_1",
-      name: "ERP Business Suite Enterprise",
-      price: 32000,
-      cost: 18000,
-      sku: "SKU-ERP-ENT",
-      batches: [],
-      stock: 145,
-    };
-    const firstActiveBatch =
-      defaultProduct.batches?.find((b: any) => b.quantity > 0) ||
-      defaultProduct.batches?.[0];
 
     const initialItem: SaleProductItem = {
       id: `s_item_${Date.now()}`,
-      productId: defaultProduct.id,
-      productName: defaultProduct.name,
-      sku: defaultProduct.sku,
-      batch: firstActiveBatch?.batchNo || "BAT-ERP-2026A",
-      quantity: 1,
-      purchasePrice:
-        firstActiveBatch?.costPrice ?? defaultProduct.cost ?? 18000,
-      salesPrice:
-        firstActiveBatch?.sellingPrice ?? defaultProduct.price ?? 32000,
-      unitPrice:
-        firstActiveBatch?.sellingPrice ?? defaultProduct.price ?? 32000,
-      discountPercent: 0,
-      taxPercent: 18,
-      total:
-        Math.round(
-          (firstActiveBatch?.sellingPrice ?? defaultProduct.price ?? 32000) *
-            1.18 *
-            100,
-        ) / 100,
-    };
-
-    const secondEmptyItem: SaleProductItem = {
-      id: `s_item_${Date.now()}_empty`,
       productId: "",
       productName: "",
       sku: "",
@@ -1038,7 +1474,7 @@ export const SalesView: React.FC = () => {
       salesPrice: 0,
       unitPrice: 0,
       discountPercent: 0,
-      taxPercent: 0,
+      taxPercent: 18,
       total: 0,
     };
 
@@ -1054,7 +1490,7 @@ export const SalesView: React.FC = () => {
       customerEmail: "",
       billingAddress: "",
       shippingAddress: "",
-      items: [initialItem, secondEmptyItem],
+      items: [initialItem],
       withGst: true,
       gstType: "intra_state",
       overallDiscount: 0,
@@ -1067,6 +1503,7 @@ export const SalesView: React.FC = () => {
       ],
       paymentTerms: "",
       paidAmount: 0,
+      roundMode: "none",
       invoiceStatus: "Draft",
       paymentRecords: [],
       saleStatus: "Confirmed",
@@ -1145,6 +1582,7 @@ export const SalesView: React.FC = () => {
       paymentSplits: existingSplits,
       paymentTerms: sale.paymentTerms,
       paidAmount: sale.paidAmount,
+      roundMode: (sale as any).roundMode || "none",
       invoiceStatus: sale.invoiceStatus || "Generated",
       paymentRecords: sale.paymentRecords || [],
       saleStatus: sale.saleStatus,
@@ -1153,6 +1591,134 @@ export const SalesView: React.FC = () => {
     });
     setEditingSale(sale);
     setIsFormModalOpen(true);
+  };
+
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  const mapSaleToDocumentPrintOptions = (sale: SaleTransaction): DocumentPrintOptions => ({
+    docTypeTitle: "TAX INVOICE",
+    docNo: sale.invoiceNo,
+    docDate: isoToDdmmyyyy(sale.saleDate),
+    dueDate: sale.dueDate ? isoToDdmmyyyy(sale.dueDate) : undefined,
+    status: sale.paymentStatus,
+    statusColor:
+      sale.paymentStatus === "Paid"
+        ? "emerald"
+        : sale.paymentStatus === "Partial"
+        ? "amber"
+        : "rose",
+    referenceNo: sale.referenceNo,
+    companyName: companyProfile.companyName || "YAA SALES & MART",
+    companySubtitle: companyProfile.companySubtitle || "Supermarket & Retail Groceries Distribution",
+    companyAddress: companyProfile.companyAddress || "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
+    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
+    companyPhone: companyProfile.companyPhone || "+91 98765 43210",
+    companyEmail: companyProfile.companyEmail || "billing@yaamart.com",
+    partyTitle: "Billed To",
+    partyName: sale.customerName,
+    partyCompany: sale.customerCompany,
+    partyPhone: sale.customerPhone,
+    partyEmail: sale.customerEmail,
+    partyAddress: sale.billingAddress,
+    extraMeta: [
+      { label: "Payment Status", value: sale.paymentStatus },
+      { label: "Payment Method", value: sale.paymentMethod || "Cash" },
+      { label: "Salesperson", value: sale.salesperson || "Staff" },
+      { label: "Payment Terms", value: sale.paymentTerms || "Net 15 Days" },
+    ],
+    items: (sale.items || []).map((it) => ({
+      name: it.productName,
+      sku: it.sku,
+      batch: it.batch,
+      unit: (it as any).unit || "PCS",
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      discountPercent: it.discountPercent,
+      taxPercent: it.taxPercent,
+      total: it.total,
+    })),
+    subtotal: sale.subtotal,
+    discount: sale.totalDiscount,
+    tax: {
+      taxAmount: sale.totalTax,
+      cgst: sale.cgst,
+      sgst: sale.sgst,
+      igst: sale.igst,
+    },
+    shipping: sale.shippingCharges,
+    otherCharges: sale.otherCharges,
+    roundOff: (sale as any).roundOff,
+    grandTotal: sale.grandTotal,
+    paidAmount: sale.paidAmount,
+    balance: sale.balance,
+    notes: sale.notes,
+    terms: (sale as any).terms || sale.paymentTerms,
+    primarySignatoryLabel: "Authorized Signatory",
+  });
+
+  const handleDownloadSaleInvoice = async (sale: SaleTransaction) => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const toastId = `dl-sale-${sale.id}`;
+    toast.loading(`Preparing PDF for Invoice ${sale.invoiceNo}...`, { id: toastId });
+    try {
+      const options = mapSaleToDocumentPrintOptions(sale);
+      await downloadBusinessDocument(options, `Invoice_${sale.invoiceNo.replace(/[^a-zA-Z0-9_-]/g, "_")}.pdf`);
+      toast.success(`Invoice ${sale.invoiceNo} downloaded successfully!`, { id: toastId });
+    } catch (err: any) {
+      console.error("Invoice PDF download error:", err);
+      toast.error("Failed to generate and download invoice PDF.", { id: toastId });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadPaymentReceipt = async (record: SalePaymentRecord) => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    const toastId = `dl-rcpt-${record.id}`;
+    toast.loading(`Preparing payment receipt...`, { id: toastId });
+    try {
+      const parentSale = sales.find((s) => s.invoiceNo === record.invoiceNo);
+      const receiptOptions: DocumentPrintOptions = {
+        docTypeTitle: "PAYMENT IN RECEIPT",
+        docNo: record.referenceNo || record.id,
+        docDate: record.paymentDate,
+        status: "Received",
+        statusColor: "emerald",
+        companyName: "YAA SALES & MART",
+        companySubtitle: "Enterprise FMCG & Retail Distribution",
+        partyTitle: "Received From (Customer)",
+        partyName: (record as any).customerName || parentSale?.customerName || "Customer",
+        extraMeta: [
+          { label: "Invoice No", value: record.invoiceNo },
+          { label: "Payment Mode", value: (record as any).paymentMode || record.method || "Cash" },
+          { label: "Recorded By", value: record.recordedBy || "Cashier" },
+        ],
+        items: [
+          {
+            name: `Payment towards Invoice #${record.invoiceNo}`,
+            quantity: 1,
+            unitPrice: record.amount,
+            total: record.amount,
+            remarks: record.notes || "Payment received in full/part",
+          },
+        ],
+        grandTotal: record.amount,
+        paidAmount: record.amount,
+        balance: 0,
+        paidAmountLabel: "Amount Received",
+        notes: record.notes || "Thank you for your business!",
+        primarySignatoryLabel: "Cashier / Accounts",
+      };
+      await downloadBusinessDocument(receiptOptions, `Receipt_${record.invoiceNo}_${record.id}.pdf`);
+      toast.success("Payment receipt downloaded successfully!", { id: toastId });
+    } catch (err: any) {
+      console.error("Receipt download error:", err);
+      toast.error("Failed to download payment receipt.", { id: toastId });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Direct Print Invoice
@@ -1414,12 +1980,16 @@ export const SalesView: React.FC = () => {
   const handleToggleWithGst = (enableGst: boolean) => {
     setFormData((prev) => {
       const updatedItems = prev.items.map((it) => {
-        const qty = it.quantity || 0;
-        const price = it.unitPrice || 0;
-        const disc = it.discountPercent || 0;
-        const sub = Math.max(0, qty * price - disc);
-        const tax = enableGst ? sub * ((it.taxPercent || 0) / 100) : 0;
-        return { ...it, total: Math.round((sub + tax) * 100) / 100 };
+        const lineRes = calculateLineItem(
+          {
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            discountPercent: it.discountPercent,
+            taxPercent: it.taxPercent,
+          },
+          { withGst: enableGst, gstType: prev.gstType }
+        );
+        return { ...it, total: lineRes.lineTotal };
       });
       return { ...prev, withGst: enableGst, items: updatedItems };
     });
@@ -1499,58 +2069,6 @@ export const SalesView: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Quick Customer Creation
-  const handleSaveQuickCustomer = () => {
-    if (!quickCustomerForm.name.trim()) {
-      toast.error("Customer name is required.");
-      return;
-    }
-    if (!quickCustomerForm.phone.trim()) {
-      toast.error("Customer phone number is required.");
-      return;
-    }
-    const cleanPhone = quickCustomerForm.phone.replace(/[\s\-()]/g, "");
-    if (!/^(?:(?:\+?91)|0)?[6-9]\d{9}$/.test(cleanPhone)) {
-      toast.error(
-        "Phone number must be a valid 10-digit Indian mobile number (e.g. 9876543210).",
-      );
-      return;
-    }
-    const newCust: SalesCustomer = {
-      id: `cust_${Date.now()}`,
-      customerCode: `CUS-${1000 + (customers?.length || 0) + 1}`,
-      name: quickCustomerForm.name.trim(),
-      company: quickCustomerForm.company.trim() || undefined,
-      customerType: quickCustomerForm.company ? "Business" : "Individual",
-      phone: quickCustomerForm.phone.trim(),
-      email:
-        quickCustomerForm.email.trim() ||
-        `${quickCustomerForm.name.toLowerCase().replace(/\s+/g, "")}@example.com`,
-      address: quickCustomerForm.address.trim(),
-      city: quickCustomerForm.city.trim() || "Chennai",
-      state: quickCustomerForm.state.trim() || "Tamil Nadu",
-      country: "India",
-      pincode: quickCustomerForm.pincode.trim() || "600001",
-      gstNumber: quickCustomerForm.gstNumber.trim() || undefined,
-      billingAddress:
-        quickCustomerForm.address.trim() ||
-        `${quickCustomerForm.city || "Chennai"}, ${quickCustomerForm.state || "Tamil Nadu"}`,
-      shippingAddress:
-        quickCustomerForm.address.trim() ||
-        `${quickCustomerForm.city || "Chennai"}, ${quickCustomerForm.state || "Tamil Nadu"}`,
-      sameAsBilling: true,
-      creditLimit: Number(quickCustomerForm.creditLimit) || 0,
-      paymentTerms: quickCustomerForm.paymentTerms.trim(),
-      openingBalance: 0,
-      status: "Active",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    saveCustomer(newCust);
-    handleCustomerChange(newCust.id);
-    setIsQuickCustomerModalOpen(false);
-    toast.success(`Customer ${newCust.name} registered & selected!`);
-  };
 
   // Customer Select Change
   const handleCustomerChange = (custId: string) => {
@@ -1595,6 +2113,14 @@ export const SalesView: React.FC = () => {
   };
 
   // Line item updates
+  const handleItemProductNameChange = (index: number, val: string) => {
+    setFormData((prev) => {
+      const newItems = [...prev.items];
+      newItems[index] = { ...newItems[index], productName: val };
+      return { ...prev, items: newItems };
+    });
+  };
+
   const handleItemProductChange = (index: number, prodId: string) => {
     const prod = availableProducts.find((p) => p.id === prodId);
     setFormData((prev) => {
@@ -1623,10 +2149,17 @@ export const SalesView: React.FC = () => {
         item.taxPercent =
           item.taxPercent !== undefined && item.taxPercent !== null
             ? item.taxPercent
-            : 18;
-        const sub = (item.quantity || 1) * (item.unitPrice || 0);
-        const tax = prev.withGst ? sub * ((item.taxPercent || 0) / 100) : 0;
-        item.total = Math.round((sub + tax) * 100) / 100;
+            : parseTaxRate(prod.taxRate || (prod as any).taxPercent, 18);
+        const lineRes = calculateLineItem(
+          {
+            quantity: item.quantity || 1,
+            unitPrice: item.unitPrice,
+            discountPercent: item.discountPercent || 0,
+            taxPercent: item.taxPercent,
+          },
+          { withGst: prev.withGst, gstType: prev.gstType },
+        );
+        item.total = lineRes.lineTotal;
       } else {
         item.productId = "";
         item.productName = "";
@@ -1660,13 +2193,16 @@ export const SalesView: React.FC = () => {
         if (selectedBatch.costPrice) {
           item.purchasePrice = selectedBatch.costPrice;
         }
-        const sub = Math.max(
-          0,
-          (item.quantity || 1) * (item.unitPrice || 0) -
-            (item.discountPercent || 0),
+        const lineRes = calculateLineItem(
+          {
+            quantity: item.quantity || 1,
+            unitPrice: item.unitPrice || 0,
+            discountPercent: item.discountPercent || 0,
+            taxPercent: item.taxPercent,
+          },
+          { withGst: prev.withGst, gstType: prev.gstType },
         );
-        const tax = prev.withGst ? sub * ((item.taxPercent || 0) / 100) : 0;
-        item.total = Math.round((sub + tax) * 100) / 100;
+        item.total = lineRes.lineTotal;
       }
       newItems[index] = item;
       return { ...prev, items: newItems };
@@ -1681,17 +2217,50 @@ export const SalesView: React.FC = () => {
     const sanitizedVal = Math.max(0, val);
     setFormData((prev) => {
       const newItems = [...prev.items];
-      const item = { ...newItems[index], [field]: sanitizedVal };
+      const item = { ...newItems[index] };
       const qty = field === "quantity" ? sanitizedVal : item.quantity || 0;
       const unitPrice =
         field === "unitPrice" ? sanitizedVal : item.unitPrice || 0;
-      const discount =
-        field === "discountPercent" ? sanitizedVal : item.discountPercent || 0;
       const taxPercent =
         field === "taxPercent" ? sanitizedVal : item.taxPercent || 0;
-      const sub = Math.max(0, qty * unitPrice - discount);
-      const tax = prev.withGst ? sub * (taxPercent / 100) : 0;
-      item.total = Math.round((sub + tax) * 100) / 100;
+      const gross = qty * unitPrice;
+
+      let discountPercent = item.discountPercent || 0;
+      let discountAmount = item.discountAmount || 0;
+
+      if (field === "discountPercent") {
+        item.discountType = "percent";
+        discountPercent = Math.min(100, sanitizedVal);
+        discountAmount = 0;
+        item.discountPercent = discountPercent;
+        item.discountAmount = 0;
+      } else if (field === "discountAmount") {
+        item.discountType = "amount";
+        discountAmount = Math.min(gross, sanitizedVal);
+        discountPercent = 0;
+        item.discountAmount = discountAmount;
+        item.discountPercent = 0;
+      } else if (field === "quantity" || field === "unitPrice") {
+        item[field] = sanitizedVal;
+      } else {
+        (item as any)[field] = sanitizedVal;
+      }
+
+      item.quantity = qty;
+      item.unitPrice = unitPrice;
+      item.taxPercent = taxPercent;
+
+      const lineRes = calculateLineItem(
+        {
+          quantity: qty,
+          unitPrice,
+          discountPercent,
+          discountAmount,
+          taxPercent,
+        },
+        { withGst: prev.withGst, gstType: prev.gstType },
+      );
+      item.total = lineRes.lineTotal;
       newItems[index] = item;
       return { ...prev, items: newItems };
     });
@@ -1705,11 +2274,11 @@ export const SalesView: React.FC = () => {
       sku: "",
       batch: "",
       quantity: 1,
-      purchasePrice: 0,
-      salesPrice: 0,
       unitPrice: 0,
+      taxPercent: 18,
       discountPercent: 0,
-      taxPercent: 0,
+      discountAmount: 0,
+      discountType: "amount",
       total: 0,
     };
     setFormData((prev) => ({
@@ -1729,65 +2298,80 @@ export const SalesView: React.FC = () => {
     }));
   };
 
-  // Live Totals Calculations
+  // Live Totals Calculations using Centralized Financial Calculation Engine
   const calculatedTotals = useMemo(() => {
-    const subtotal = formData.items.reduce(
-      (acc, it) => acc + (it.quantity || 0) * (it.unitPrice || 0),
-      0,
-    );
-    const lineDiscountTotal = formData.items.reduce(
-      (acc, it) => acc + (it.discountPercent || 0),
-      0,
-    );
-    const overallDiscount = Math.max(0, Number(formData.overallDiscount) || 0);
-    const totalDiscount = lineDiscountTotal + overallDiscount;
-
-    const totalTax = formData.withGst
-      ? formData.items.reduce((acc, it) => {
-          const lineBase = Math.max(
+    const rawPaid =
+      formData.paidAmount !== undefined
+        ? Number(formData.paidAmount) || 0
+        : (formData.paymentSplits || []).reduce(
+            (acc, p) => acc + (Number(p.amount) || 0),
             0,
-            (it.quantity || 0) * (it.unitPrice || 0) -
-              (it.discountPercent || 0),
           );
-          return acc + lineBase * ((it.taxPercent || 0) / 100);
-        }, 0)
-      : 0;
-    const cgst =
-      formData.withGst && formData.gstType === "intra_state"
-        ? Math.round((totalTax / 2) * 100) / 100
-        : 0;
-    const sgst =
-      formData.withGst && formData.gstType === "intra_state"
-        ? Math.round((totalTax / 2) * 100) / 100
-        : 0;
-    const igst =
-      formData.withGst && formData.gstType === "inter_state"
-        ? Math.round(totalTax * 100) / 100
-        : 0;
-    const grandTotal = Math.max(
-      0,
-      Math.round((subtotal - totalDiscount + totalTax) * 100) / 100,
-    );
-    const paid = (formData.paymentSplits || []).reduce(
-      (acc, p) => acc + (Number(p.amount) || 0),
-      0,
-    );
-    const balance = Math.max(0, Math.round((grandTotal - paid) * 100) / 100);
+    const paid = Math.max(0, rawPaid);
+    const docTotals = calculateDocumentTotals({
+      items: formData.items.map((it) => ({
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
+        taxPercent: it.taxPercent,
+      })),
+      withGst: formData.withGst,
+      gstType: formData.gstType,
+      overallDiscount: Number(formData.overallDiscount) || 0,
+      shippingCharges: Number(formData.shippingCharges) || 0,
+      otherCharges: Number(formData.otherCharges) || 0,
+      roundMode: formData.roundMode || "none",
+      paidAmount: paid,
+    });
+
+    const unrounded = docTotals.unroundedTotal;
+    const floorInt = Math.floor(unrounded);
+    const ceilInt = Math.ceil(unrounded);
+    const roundDownDiff = round2(floorInt - unrounded);
+    const roundUpDiff = round2(ceilInt - unrounded);
 
     return {
-      subtotal,
-      lineDiscountTotal,
-      overallDiscount,
-      totalDiscount,
-      totalTax,
-      cgst,
-      sgst,
-      igst,
-      grandTotal,
-      paid,
-      balance,
+      subtotal: docTotals.subtotal,
+      lineDiscountTotal: docTotals.lineDiscountTotal,
+      overallDiscount: docTotals.overallDiscount,
+      totalDiscount: docTotals.totalDiscount,
+      taxableAmount: docTotals.taxableAmount,
+      totalTax: docTotals.totalTax,
+      cgst: docTotals.cgst,
+      sgst: docTotals.sgst,
+      igst: docTotals.igst,
+      shippingCharges: docTotals.shippingCharges,
+      roundOff: docTotals.roundOff,
+      roundDownDiff,
+      roundUpDiff,
+      grandTotal: docTotals.grandTotal,
+      paid: docTotals.paidAmount,
+      balance: docTotals.balance,
+      paymentStatus: docTotals.paymentStatus,
     };
   }, [formData]);
+
+  // Immediately clamp paid amount if invoice grand total is reduced below current paid amount
+  useEffect(() => {
+    const currentPaid = Number(formData.paidAmount) || 0;
+    if (calculatedTotals.grandTotal >= 0 && currentPaid > calculatedTotals.grandTotal) {
+      setFormData((prev) => ({
+        ...prev,
+        paidAmount: calculatedTotals.grandTotal,
+        paymentSplits:
+          prev.paymentSplits.length > 0
+            ? [{ ...prev.paymentSplits[0], amount: calculatedTotals.grandTotal }]
+            : [
+                {
+                  id: "ps_1",
+                  method: prev.paymentMethod || "Bank Transfer",
+                  amount: calculatedTotals.grandTotal,
+                  referenceNo: "",
+                },
+              ],
+      }));
+    }
+  }, [calculatedTotals.grandTotal]);
 
   // Generate Invoice Handler (Creates invoice on backend and local store)
   const handleGenerateInvoice = async () => {
@@ -1809,6 +2393,38 @@ export const SalesView: React.FC = () => {
       toast.error("All products must have a quantity greater than 0.");
       return;
     }
+    const hasInvalidPrice = rawValidItems.some(
+      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
+    );
+    if (hasInvalidPrice) {
+      toast.error("Product unit prices cannot be negative.");
+      return;
+    }
+    const hasInvalidDiscount = rawValidItems.some(
+      (it) =>
+        it.discountPercent !== undefined &&
+        (it.discountPercent < 0 || it.discountPercent > 100),
+    );
+    if (hasInvalidDiscount) {
+      toast.error(
+        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
+      );
+      return;
+    }
+    if (formData.overallDiscount !== undefined && formData.overallDiscount < 0) {
+      toast.error("Overall discount cannot be negative.");
+      return;
+    }
+    if (formData.paidAmount !== undefined && formData.paidAmount < 0) {
+      toast.error("Paid amount cannot be negative.");
+      return;
+    }
+    if (formData.paidAmount > calculatedTotals.grandTotal) {
+      toast.error(
+        `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+      );
+      return;
+    }
 
     setIsActionLoading(true);
     try {
@@ -1828,10 +2444,17 @@ export const SalesView: React.FC = () => {
       );
 
       const grandTotal = calculatedTotals.grandTotal;
-      const currentPaid = editingSale?.paidAmount || formData.paidAmount || 0;
+      const currentPaid =
+        formData.paidAmount !== undefined
+          ? Number(formData.paidAmount) || 0
+          : editingSale?.paidAmount || 0;
       const balance = Math.max(0, grandTotal - currentPaid);
       const paymentStatus: SalePaymentStatus =
-        balance <= 0 ? "Paid" : currentPaid > 0 ? "Partial" : "Unpaid";
+        grandTotal > 0 && balance <= 0
+          ? "Paid"
+          : currentPaid > 0
+            ? "Partial"
+            : "Unpaid";
       const primaryPaymentMethod =
         formData.paymentSplits[0]?.method ||
         formData.paymentMethod ||
@@ -1879,9 +2502,12 @@ export const SalesView: React.FC = () => {
         paymentTerms: formData.paymentTerms || "Net 15 Days",
         paymentStatus: paymentStatus,
         saleStatus: "Confirmed",
-        createdBy: editingSale ? editingSale.createdBy : "James Wilson",
-        salesperson: formData.salesperson || "Alex Rivera",
+        createdBy: editingSale ? editingSale.createdBy : "",
+        salesperson: formData.salesperson || editingSale?.salesperson || "",
         notes: formData.notes || undefined,
+        convertedAt: (convertSourceRef.current || (formData.referenceNo && /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim())))
+          ? (editingSale?.convertedAt || new Date().toISOString())
+          : (editingSale?.convertedAt || undefined),
         createdAt: editingSale
           ? editingSale.createdAt
           : new Date().toISOString(),
@@ -1915,16 +2541,288 @@ export const SalesView: React.FC = () => {
         }
       }
 
+      if ((convertSourceRef.current || (formData.referenceNo && /^(EST|QT|SO|DC|PRO)-/i.test(formData.referenceNo.trim()))) && !savedApiSale.convertedAt) {
+        savedApiSale.convertedAt = salePayload.convertedAt || new Date().toISOString();
+      }
+
       saveSale(savedApiSale);
-      setEditingSale(savedApiSale);
+
+      // Execute inventory stock reduction & payment in recording for new sales
+      if (!isEdit) {
+        // 1. Stock Reduction for every item sold
+        for (const it of validItems) {
+          adjustStock(it.productId, -Number(it.quantity), it.batch, {
+            sku: it.sku,
+            productName: it.productName,
+            sellingPrice: it.unitPrice,
+            costPrice: it.purchasePrice,
+          });
+
+          // The backend deducts invoice stock itself when the invoice is created in a stock-holding status
+          // (syncInvoiceStock); a second OUTWARD adjustment here would deduct the same goods twice.
+        }
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Stock", id: "LIST" },
+            { type: "Product", id: "LIST" },
+          ]),
+        );
+
+        // 2. Payment In entry creation if payment received
+        if (currentPaid > 0) {
+          const newPaymentInRecord: SalePaymentIn = {
+            id: `payin_${Date.now()}`,
+            receiptNo: `REC-${Date.now().toString().slice(-6)}`,
+            date:
+              savedApiSale.saleDate || new Date().toISOString().split("T")[0],
+            paymentDate:
+              savedApiSale.saleDate || new Date().toISOString().split("T")[0],
+            partyName: savedApiSale.customerName,
+            customerId: savedApiSale.customerId,
+            customerPhone: savedApiSale.customerPhone,
+            customerCompany: savedApiSale.customerCompany,
+            paymentType: normalizeCommercePaymentType(primaryPaymentMethod),
+            paymentMethod: primaryPaymentMethod,
+            amount: currentPaid,
+            receivedAmount: currentPaid,
+            invoiceId: savedApiSale.id,
+            invoiceNo: savedApiSale.invoiceNo,
+            referenceNo: savedApiSale.referenceNo || savedApiSale.invoiceNo,
+            notes: `Payment received on creation of Invoice ${savedApiSale.invoiceNo}`,
+            status: "Completed",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          let paymentFailed = false;
+          try {
+            const payInPayload: any = {
+              date:
+                savedApiSale.saleDate || new Date().toISOString().split("T")[0],
+              partyName: savedApiSale.customerName,
+              paymentType: normalizeCommercePaymentType(primaryPaymentMethod),
+              receivedAmount: currentPaid,
+              invoiceNo: savedApiSale.invoiceNo,
+              referenceNo: savedApiSale.referenceNo || savedApiSale.invoiceNo,
+              receiptNo: newPaymentInRecord.receiptNo,
+              notes: `Payment received on creation of Invoice ${savedApiSale.invoiceNo}`,
+            };
+            if (UUID_REGEX.test(savedApiSale.customerId)) {
+              payInPayload.customerId = savedApiSale.customerId;
+            }
+            if (UUID_REGEX.test(savedApiSale.id)) {
+              payInPayload.invoiceId = savedApiSale.id;
+            }
+            await commercePaymentInApi.createPaymentIn(payInPayload);
+          } catch (payInErr) {
+            console.warn("commercePaymentInApi.createPaymentIn notice:", payInErr);
+            paymentFailed = true;
+          }
+
+          savePaymentIn(newPaymentInRecord);
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "PaymentIn", id: "LIST" },
+              { type: "SalesInvoice", id: "LIST" },
+              { type: "Customer", id: "LIST" },
+            ]),
+          );
+
+          if (paymentFailed) {
+            toast.warning(
+              `Invoice ${savedApiSale.invoiceNo} was generated, but recording the initial payment failed. You can retry payment without re-creating the invoice.`,
+              { duration: 8000 }
+            );
+          }
+        }
+
+        // 3. Upstream document lineage synchronization
+        const srcInfo = convertSourceRef.current;
+        const refNo = (formData.referenceNo || srcInfo?.sourceNo || "").trim();
+        const srcType = srcInfo?.sourceType;
+        const srcId = srcInfo?.sourceId;
+
+        // A. Originating from Estimate / Quotation
+        if (
+          srcType === "Estimate" ||
+          srcType === "Quotation" ||
+          refNo.startsWith("EST-") ||
+          refNo.startsWith("QT-")
+        ) {
+          const quotId = srcId || "";
+          const quotNo = srcInfo?.sourceNo || refNo;
+
+          // 1. Update quotation status in backend API
+          if (quotId && UUID_REGEX.test(quotId)) {
+            try {
+              await quotationApi.updateStatus(quotId, { status: "Converted" });
+            } catch (quotErr) {
+              console.warn("Backend quotation status update notice:", quotErr);
+            }
+          }
+
+          // 2. Update quotation in memory store
+          try {
+            updateQuotationStatus(quotId || quotNo, "Converted");
+          } catch (stErr) {
+            console.warn("Store updateQuotationStatus notice:", stErr);
+          }
+
+          // 3. Dispatch storage sync event
+          syncQuotationStatusInStorage(quotId || quotNo, "Converted", {
+            type: "Invoice",
+            documentNo: savedApiSale.invoiceNo,
+            id: savedApiSale.id,
+          });
+
+          // 4. Record cross-module document conversion lineage
+          recordDocumentConversion({
+            fromType: "Estimate",
+            fromId: quotId || undefined,
+            fromNo: quotNo || undefined,
+            toType: "Invoice",
+            toId: savedApiSale.id,
+            toNo: savedApiSale.invoiceNo,
+            partyName: savedApiSale.customerName,
+            customerId: savedApiSale.customerId,
+            grandTotal: savedApiSale.grandTotal,
+          });
+
+          // 5. Invalidate RTK cache
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Quotation", id: "LIST" },
+              ...(quotId && UUID_REGEX.test(quotId)
+                ? [{ type: "Quotation" as const, id: quotId }]
+                : []),
+              { type: "SalesInvoice", id: "LIST" },
+            ]),
+          );
+        }
+
+        // B. Originating from Sale Order
+        if (srcType === "Order" || refNo.startsWith("SO-")) {
+          const orderId = srcId || "";
+          const orderNo = srcInfo?.sourceNo || refNo;
+          if (orderId && UUID_REGEX.test(orderId)) {
+            try {
+              await commerceSaleOrderApi.updateStatus(orderId, "Converted");
+            } catch (soErr) {
+              console.warn("Backend order status update notice:", soErr);
+            }
+          }
+          try {
+            const rawOrders = localStorage.getItem("yaa_crm_sale_orders");
+            if (rawOrders) {
+              const orders = JSON.parse(rawOrders);
+              const convTime = new Date().toISOString();
+              const updatedOrders = orders.map((o: any) =>
+                (orderNo && o.orderNo === orderNo) || (orderId && o.id === orderId)
+                  ? { ...o, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
+                  : o,
+              );
+              localStorage.setItem("yaa_crm_sale_orders", JSON.stringify(updatedOrders));
+            }
+          } catch {}
+          syncOrderStatusInStorage(orderId || orderNo, "Converted", {
+            type: "Invoice",
+            documentNo: savedApiSale.invoiceNo,
+            id: savedApiSale.id,
+          });
+          recordDocumentConversion({
+            fromType: "Order",
+            fromId: orderId || undefined,
+            fromNo: orderNo || undefined,
+            toType: "Invoice",
+            toId: savedApiSale.id,
+            toNo: savedApiSale.invoiceNo,
+            partyName: savedApiSale.customerName,
+            customerId: savedApiSale.customerId,
+            grandTotal: savedApiSale.grandTotal,
+          });
+          dispatch(
+            baseApi.util.invalidateTags([
+              { type: "SalesOrder", id: "LIST" },
+              ...(orderId && UUID_REGEX.test(orderId)
+                ? [{ type: "SalesOrder" as const, id: orderId }]
+                : []),
+            ]),
+          );
+        }
+
+        // C. Originating from Proforma Invoice
+        if (srcType === "Proforma" || refNo.startsWith("PRO-")) {
+          const proformaId = srcId || "";
+          const proformaNo = srcInfo?.sourceNo || refNo;
+          try {
+            const rawPros = localStorage.getItem("yaa_crm_proforma_invoices");
+            if (rawPros) {
+              const pros = JSON.parse(rawPros);
+              const convTime = new Date().toISOString();
+              const updatedPros = pros.map((p: any) =>
+                (proformaNo && p.proformaNo === proformaNo) || (proformaId && p.id === proformaId)
+                  ? { ...p, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
+                  : p,
+              );
+              localStorage.setItem("yaa_crm_proforma_invoices", JSON.stringify(updatedPros));
+            }
+          } catch {}
+          syncProformaStatusInStorage(proformaId || proformaNo, "Converted", {
+            type: "Invoice",
+            documentNo: savedApiSale.invoiceNo,
+            id: savedApiSale.id,
+          });
+          recordDocumentConversion({
+            fromType: "Proforma",
+            fromId: proformaId || undefined,
+            fromNo: proformaNo || undefined,
+            toType: "Invoice",
+            toId: savedApiSale.id,
+            toNo: savedApiSale.invoiceNo,
+            partyName: savedApiSale.customerName,
+            customerId: savedApiSale.customerId,
+            grandTotal: savedApiSale.grandTotal,
+          });
+          dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
+        }
+
+        // D. Originating from Delivery Challan
+        if (srcType === "Challan" || refNo.startsWith("DC-")) {
+          const challanId = srcId || "";
+          const challanNo = srcInfo?.sourceNo || refNo;
+          try {
+            const rawChallans = localStorage.getItem("yaa_crm_delivery_challans");
+            if (rawChallans) {
+              const challans = JSON.parse(rawChallans);
+              const convTime = new Date().toISOString();
+              const updatedChallans = challans.map((c: any) =>
+                (challanNo && c.challanNo === challanNo) || (challanId && c.id === challanId)
+                  ? { ...c, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
+                  : c,
+              );
+              localStorage.setItem("yaa_crm_delivery_challans", JSON.stringify(updatedChallans));
+            }
+          } catch {}
+          recordDocumentConversion({
+            fromType: "Challan",
+            fromId: challanId || undefined,
+            fromNo: challanNo || undefined,
+            toType: "Invoice",
+            toId: savedApiSale.id,
+            toNo: savedApiSale.invoiceNo,
+            partyName: savedApiSale.customerName,
+            customerId: savedApiSale.customerId,
+            grandTotal: savedApiSale.grandTotal,
+          });
+          dispatch(baseApi.util.invalidateTags([{ type: "DeliveryChallan", id: "LIST" }]));
+        }
+
+        // Clear conversion source ref
+        convertSourceRef.current = null;
+      }
+      setIsFormModalOpen(false);
+      setEditingSale(null);
       setSelectedSale(savedApiSale);
-      setFormData((prev) => ({
-        ...prev,
-        invoiceNo: savedApiSale.invoiceNo,
-        invoiceStatus: "Generated",
-        paidAmount: savedApiSale.paidAmount,
-        paymentRecords: savedApiSale.paymentRecords || [],
-      }));
 
       toast.success(
         `Invoice ${savedApiSale.invoiceNo} ${isEdit ? "updated" : "generated"} successfully! Payment Status: ${savedApiSale.paymentStatus.toUpperCase()}`,
@@ -1949,6 +2847,35 @@ export const SalesView: React.FC = () => {
     );
     if (rawValidItems.length === 0) {
       toast.error("Please select at least one valid product.");
+      return;
+    }
+    const hasInvalidQty = rawValidItems.some(
+      (it) => !it.quantity || it.quantity <= 0,
+    );
+    if (hasInvalidQty) {
+      toast.error("All products must have a quantity greater than 0.");
+      return;
+    }
+    const hasInvalidPrice = rawValidItems.some(
+      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
+    );
+    if (hasInvalidPrice) {
+      toast.error("Product unit prices cannot be negative.");
+      return;
+    }
+    const hasInvalidDiscount = rawValidItems.some(
+      (it) =>
+        it.discountPercent !== undefined &&
+        (it.discountPercent < 0 || it.discountPercent > 100),
+    );
+    if (hasInvalidDiscount) {
+      toast.error(
+        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
+      );
+      return;
+    }
+    if (formData.overallDiscount !== undefined && formData.overallDiscount < 0) {
+      toast.error("Overall discount cannot be negative.");
       return;
     }
 
@@ -2020,8 +2947,8 @@ export const SalesView: React.FC = () => {
         paymentTerms: formData.paymentTerms || "Net 15 Days",
         paymentStatus: paymentStatus,
         saleStatus: "Draft",
-        createdBy: editingSale ? editingSale.createdBy : "James Wilson",
-        salesperson: formData.salesperson || "Alex Rivera",
+        createdBy: editingSale ? editingSale.createdBy : "",
+        salesperson: formData.salesperson || editingSale?.salesperson || "",
         notes: formData.notes || undefined,
         createdAt: editingSale
           ? editingSale.createdAt
@@ -2283,8 +3210,8 @@ export const SalesView: React.FC = () => {
         paymentTerms: formData.paymentTerms,
         paymentStatus: paymentStatus,
         saleStatus: "Confirmed",
-        createdBy: "James Wilson",
-        salesperson: formData.salesperson || "Alex Rivera",
+        createdBy: editingSale ? editingSale.createdBy : "",
+        salesperson: formData.salesperson || editingSale?.salesperson || "",
         notes: formData.notes,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -2389,7 +3316,7 @@ export const SalesView: React.FC = () => {
       await commercePaymentInApi.createPaymentIn({
         partyName: selectedSale.customerName || "Customer",
         customerId: isUuidCust ? selectedSale.customerId : undefined,
-        paymentType: primaryMethod,
+        paymentType: normalizeCommercePaymentType(primaryMethod),
         receivedAmount: totalAllocated,
         invoiceId: isUuidInvoice ? selectedSale.id : undefined,
         invoiceNo: selectedSale.invoiceNo,
@@ -2605,29 +3532,36 @@ export const SalesView: React.FC = () => {
       return;
     }
 
-    const excelRows = filteredSales.map((s, idx) => ({
-      srNo: idx + 1,
-      invoiceNo: s.invoiceNo,
-      date: s.saleDate,
-      dueDate: s.dueDate || "-",
-      customerName: s.customerName,
-      customerPhone: s.customerPhone || "-",
-      itemsCount: s.items?.length || 0,
-      itemsList:
-        (s.items || [])
-          .map((it) => `${it.productName} (x${it.quantity})`)
-          .join(", ") || "-",
-      subtotal: Number(s.subtotal || 0),
-      discount: Number(s.totalDiscount || 0),
-      tax: Number(s.totalTax || 0),
-      grandTotal: Number(s.grandTotal || 0),
-      paidAmount: Number(s.paidAmount || 0),
-      balance: Number(s.balance || 0),
-      paymentMethod: s.paymentMethod || "Cash",
-      paymentStatus: s.paymentStatus || "Unpaid",
-      saleStatus: s.saleStatus || "Confirmed",
-      salesperson: s.salesperson || "-",
-    }));
+    const excelRows = filteredSales.map((s, idx) => {
+      const createdDt = formatDateTime(s.createdAt);
+      const convertedAt = resolveDocumentConvertedAt("Invoice", s);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        srNo: idx + 1,
+        invoiceNo: s.invoiceNo,
+        date: s.saleDate,
+        dueDate: s.dueDate || "-",
+        createdDt: createdDt ? createdDt.full : "—",
+        convertedDt: convertedDt ? convertedDt.full : "—",
+        customerName: s.customerName,
+        customerPhone: s.customerPhone || "-",
+        itemsCount: s.items?.length || 0,
+        itemsList:
+          (s.items || [])
+            .map((it) => `${it.productName} (x${it.quantity})`)
+            .join(", ") || "-",
+        subtotal: Number(s.subtotal || 0),
+        discount: Number(s.totalDiscount || 0),
+        tax: Number(s.totalTax || 0),
+        grandTotal: Number(s.grandTotal || 0),
+        paidAmount: Number(s.paidAmount || 0),
+        balance: Number(s.balance || 0),
+        paymentMethod: s.paymentMethod || "Cash",
+        paymentStatus: s.paymentStatus || "Unpaid",
+        saleStatus: s.saleStatus || "Confirmed",
+        salesperson: s.salesperson || "-",
+      };
+    });
 
     exportTableToExcel({
       filename: `Sales_Invoices_Report_${new Date().toISOString().split("T")[0]}`,
@@ -2639,6 +3573,8 @@ export const SalesView: React.FC = () => {
         { header: "Invoice No", key: "invoiceNo", align: "center", width: 16 },
         { header: "Sale Date", key: "date", align: "center", width: 14 },
         { header: "Due Date", key: "dueDate", align: "center", width: 14 },
+        { header: "Created Date & Time", key: "createdDt", align: "center", width: 22 },
+        { header: "Converted Date & Time", key: "convertedDt", align: "center", width: 22 },
         { header: "Customer", key: "customerName", align: "left", width: 26 },
         { header: "Contact", key: "customerPhone", align: "left", width: 16 },
         { header: "Items", key: "itemsList", align: "left", width: 32 },
@@ -2706,26 +3642,33 @@ export const SalesView: React.FC = () => {
       return;
     }
 
-    const printRows = filteredSales.map((s, idx) => ({
-      srNo: idx + 1,
-      invoiceNo: s.invoiceNo,
-      date: s.saleDate,
-      dueDate: s.dueDate || "-",
-      customerName:
-        s.customerName + (s.customerCompany ? ` (${s.customerCompany})` : ""),
-      customerPhone: s.customerPhone || "-",
-      itemsList:
-        (s.items || [])
-          .map((it) => `${it.productName} (x${it.quantity})`)
-          .join(", ") || "-",
-      grandTotal: Number(s.grandTotal || 0),
-      paidAmount: Number(s.paidAmount || 0),
-      balance: Number(s.balance || 0),
-      paymentMethod: s.paymentMethod || "Cash",
-      paymentStatus: s.paymentStatus || "Unpaid",
-      saleStatus: s.saleStatus || "Confirmed",
-      salesperson: s.salesperson || "-",
-    }));
+    const printRows = filteredSales.map((s, idx) => {
+      const createdDt = formatDateTime(s.createdAt);
+      const convertedAt = resolveDocumentConvertedAt("Invoice", s);
+      const convertedDt = formatDateTime(convertedAt);
+      return {
+        srNo: idx + 1,
+        invoiceNo: s.invoiceNo,
+        date: s.saleDate,
+        dueDate: s.dueDate || "-",
+        createdDt: createdDt ? createdDt.full : "—",
+        convertedDt: convertedDt ? convertedDt.full : "—",
+        customerName:
+          s.customerName + (s.customerCompany ? ` (${s.customerCompany})` : ""),
+        customerPhone: s.customerPhone || "-",
+        itemsList:
+          (s.items || [])
+            .map((it) => `${it.productName} (x${it.quantity})`)
+            .join(", ") || "-",
+        grandTotal: Number(s.grandTotal || 0),
+        paidAmount: Number(s.paidAmount || 0),
+        balance: Number(s.balance || 0),
+        paymentMethod: s.paymentMethod || "Cash",
+        paymentStatus: s.paymentStatus || "Unpaid",
+        saleStatus: s.saleStatus || "Confirmed",
+        salesperson: s.salesperson || "-",
+      };
+    });
 
     printTableReport({
       title: "Sales Invoices & Transactions Ledger",
@@ -2753,6 +3696,8 @@ export const SalesView: React.FC = () => {
           width: "105px",
         },
         { header: "Date", key: "date", align: "center", width: "85px" },
+        { header: "Created At", key: "createdDt", align: "center", width: "110px" },
+        { header: "Converted At", key: "convertedDt", align: "center", width: "110px" },
         {
           header: "Customer",
           key: "customerName",
@@ -2923,11 +3868,16 @@ export const SalesView: React.FC = () => {
           {/* Top Full-Page Navigation Header with Back button on the RIGHT */}
           <div className="bg-[#33077C] rounded-2xl shadow-md p-5 sm:p-6 flex items-center justify-between gap-4 text-white">
             <div>
-              <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-                {editingSale
-                  ? `Edit Sale: ${editingSale.invoiceNo}`
-                  : "New Sale"}
-              </h1>
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                  {editingSale ? "Edit Sale" : "New Sale"}
+                </h1>
+                {formData.invoiceNo && (
+                  <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-white px-2.5 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
+                    #{formData.invoiceNo}
+                  </span>
+                )}
+              </div>
               <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5">
                 Create, configure, and issue a formal sale transaction.
               </p>
@@ -2959,31 +3909,34 @@ export const SalesView: React.FC = () => {
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                     Customer / Client <span className="text-slate-500">*</span>
                   </label>
-                  <CustomCustomerSelect
+                  <CustomerSearchableSelect
                     value={formData.customerId}
-                    onChange={(val) => handleCustomerChange(val)}
-                    customers={
-                      customers && customers.length > 0
-                        ? customers
-                        : (customerList as any[])
+                    onChange={(val, cust) => {
+                      handleCustomerChange(val);
+                      if (cust) {
+                        setFormData((prev) => ({
+                          ...prev,
+                          customerName: cust.name,
+                          customerCompany: cust.company || "",
+                          customerPhone: cust.phone || "",
+                          customerEmail: cust.email || "",
+                          billingAddress: cust.billingAddress || cust.address || "",
+                        }));
+                      }
+                    }}
+                    selectedCustomer={
+                      formData.customerId
+                        ? {
+                            id: formData.customerId,
+                            name: formData.customerName,
+                            company: formData.customerCompany,
+                            phone: formData.customerPhone,
+                          }
+                        : null
                     }
                     onAddNewCustomer={() => {
-                      setQuickCustomerForm({
-                        name: "",
-                        company: "",
-                        phone: "",
-                        email: "",
-                        address: "",
-                        city: "",
-                        state: "",
-                        pincode: "",
-                        gstNumber: "",
-                        creditLimit: "",
-                        paymentTerms: "",
-                      });
-                      setIsQuickCustomerModalOpen(true);
+                      setIsAddCustomerModalOpen(true);
                     }}
-                    getCustomerMetrics={getCustomerMetrics}
                   />
                 </div>
 
@@ -3367,51 +4320,56 @@ export const SalesView: React.FC = () => {
 
                 {/* Table with Purple Header matching application theme */}
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto min-h-[380px] pb-36">
                     <table className="w-full text-left text-xs table-fixed min-w-[1060px] border-collapse border border-slate-200">
                       <colgroup>
                         <col className="w-auto min-w-[240px]" />
                         <col className="w-[160px]" />
                         <col className="w-[85px]" />
                         <col className="w-[95px]" />
+                        <col className="w-[110px]" />
+                        <col className="w-[80px]" />
+                        <col className="w-[110px]" />
                         <col className="w-[120px]" />
-                        <col className="w-[120px]" />
-                        <col className="w-[130px]" />
-                        <col className="w-[75px]" />
+                        <col className="w-[70px]" />
                       </colgroup>
                       <thead>
                         <tr className="bg-[#33077C] text-[11px] font-bold text-white tracking-wider uppercase">
-                          <th className="py-4 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-5 text-left border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             PROJECTS
                           </th>
-                          <th className="py-4 px-3 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-3 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             BATCH NO
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             QTY
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             {formData.withGst ? "GST (%)" : "GST (0%)"}
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             PRICE
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
-                            DISCOUNT (₹)
+                          <th colSpan={2} className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                            <span className="text-[11px] font-bold">DISCOUNT</span>
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             TOTAL
                           </th>
-                          <th className="py-4 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white">
+                          <th rowSpan={2} className="py-3 px-2 text-center border border-[#33077C]/40 bg-[#33077C] text-white align-middle">
                             ACTION
                           </th>
+                        </tr>
+                        <tr className="bg-[#33077C] text-[10px] font-bold text-purple-200 tracking-wider uppercase">
+                          <th className="py-1.5 px-1 text-center border border-[#33077C]/40 bg-[#33077C]">%</th>
+                          <th className="py-1.5 px-2 text-center border border-[#33077C]/40 bg-[#33077C]">AMOUNT</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 text-sm">
                         {formData.items.length === 0 ? (
                           <tr>
                             <td
-                              colSpan={8}
+                              colSpan={9}
                               className="py-12 text-center bg-slate-50/40 border border-slate-200"
                             >
                               <p className="text-xs sm:text-[13px] text-slate-400 font-medium">
@@ -3426,26 +4384,261 @@ export const SalesView: React.FC = () => {
                               key={item.id || idx}
                               className={`hover:bg-slate-50/70 transition-colors ${idx % 2 === 1 ? "bg-slate-50/40" : "bg-white"}`}
                             >
-                              {/* 1. Projects / Product Selection */}
-                              <td className="px-5 py-3.5 align-top border border-slate-200">
-                                <div className="space-y-1.5">
-                                  <SearchableSelect
-                                    value={item.productId}
-                                    onChange={(val) =>
-                                      handleItemProductChange(idx, val)
-                                    }
-                                    onSearch={handleProductSearch}
-                                    isLoading={isSearchingProducts}
-                                    options={productOptions}
-                                    placeholder="Select Product..."
-                                    searchPlaceholder="Search product by name or SKU..."
-                                    emptyText="Type to search products..."
-                                    allowClear
-                                    size="md"
-                                  />
-                                  {item.productId && item.sku && (
-                                    <div className="px-1 text-[11px] text-slate-400 font-medium">
-                                      SKU: {item.sku}
+                              {/* 1. Product Selection */}
+                              <td className="px-4 py-3 align-top border border-slate-200 relative si-product-cell">
+                                <div className="relative" ref={openProductDropdownRow === idx ? productDropdownRef : undefined}>
+                                  <div
+                                    className={`w-full min-h-[38px] px-3 py-1.5 bg-white border rounded-xl flex items-center justify-between text-xs cursor-pointer transition-all ${
+                                      openProductDropdownRow === idx
+                                        ? "border-[#33077C] ring-2 ring-[#33077C]/10 bg-white"
+                                        : item.productName
+                                        ? "border-slate-300 hover:border-slate-400"
+                                        : "border-slate-200 hover:border-slate-300"
+                                    }`}
+                                  >
+                                    <input
+                                      type="text"
+                                      placeholder="Type or select product item..."
+                                      value={item.productName || ""}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setOpenProductDropdownRow(idx);
+                                        setProductSearchQuery(item.productName || "");
+                                        if (productList.length === 0) {
+                                          fetchLiveProducts();
+                                        }
+                                      }}
+                                      onFocus={() => {
+                                        setOpenProductDropdownRow(idx);
+                                        setProductSearchQuery(item.productName || "");
+                                        if (productList.length === 0) {
+                                          fetchLiveProducts();
+                                        }
+                                      }}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        handleItemProductNameChange(idx, val);
+                                        setProductSearchQuery(val);
+                                        setOpenProductDropdownRow(idx);
+                                        if (productSearchTimerRef.current) {
+                                          clearTimeout(productSearchTimerRef.current);
+                                        }
+                                        if (val.trim()) {
+                                          productSearchTimerRef.current = setTimeout(() => {
+                                            fetchLiveProducts(val.trim());
+                                          }, 300);
+                                        }
+                                      }}
+                                      className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none cursor-pointer"
+                                    />
+                                    {isLoadingProducts ? (
+                                      <Loader2 className="w-3.5 h-3.5 text-[#33077C] animate-spin shrink-0 ml-1" />
+                                    ) : (
+                                      <div
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (openProductDropdownRow === idx) {
+                                            setOpenProductDropdownRow(null);
+                                          } else {
+                                            setOpenProductDropdownRow(idx);
+                                            setProductSearchQuery(item.productName || "");
+                                            if (productList.length === 0) {
+                                              fetchLiveProducts();
+                                            }
+                                          }
+                                        }}
+                                        className="p-0.5 hover:bg-slate-100 rounded cursor-pointer shrink-0 ml-1"
+                                      >
+                                        <ChevronDown
+                                          className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                                            openProductDropdownRow === idx
+                                              ? "rotate-180 text-[#33077C]"
+                                              : ""
+                                          }`}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Dropdown Menu for Product Selection */}
+                                  {openProductDropdownRow === idx && (
+                                    <div
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="si-product-dropdown absolute left-0 top-full mt-1.5 w-[360px] sm:w-[420px] max-w-[90vw] bg-white rounded-2xl shadow-2xl border border-purple-100 p-2.5 z-50 animate-in fade-in zoom-in-95 duration-100"
+                                    >
+                                      {/* Search Bar matching Customer Dropdown */}
+                                      <div className="relative mb-2">
+                                        <div className="flex items-center w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-xl focus-within:border-[#33077C] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#33077C]/10 transition-all">
+                                          <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-2" />
+                                          <input
+                                            type="text"
+                                            placeholder="Search product by name, SKU or category..."
+                                            value={productSearchQuery}
+                                            onChange={(e) => {
+                                              const val = e.target.value;
+                                              setProductSearchQuery(val);
+                                              if (productSearchTimerRef.current) {
+                                                clearTimeout(productSearchTimerRef.current);
+                                              }
+                                              if (val.trim().length >= 1) {
+                                                productSearchTimerRef.current = setTimeout(() => {
+                                                  fetchLiveProducts(val.trim());
+                                                }, 300);
+                                              }
+                                            }}
+                                            autoFocus
+                                            className="w-full bg-transparent text-xs font-medium text-slate-800 placeholder:text-slate-400 outline-none"
+                                          />
+                                          {productSearchQuery && (
+                                            <button
+                                              type="button"
+                                              onClick={() => setProductSearchQuery('')}
+                                              className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                                            >
+                                              <X className="w-3.5 h-3.5" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* 1. Add New Product Button */}
+                                      <div className="pb-2 mb-1.5 border-b border-slate-100">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveItemRowIndex(idx);
+                                            setOpenProductDropdownRow(null);
+                                            setIsAddItemModalOpen(true);
+                                          }}
+                                          className="w-full py-2 px-3 rounded-xl bg-purple-50 hover:bg-purple-100/80 text-[#33077C] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors border border-purple-200/80 cursor-pointer"
+                                        >
+                                          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                                          <span>Add New Product</span>
+                                        </button>
+                                      </div>
+
+                                      {/* 2. Options List */}
+                                      <div className="max-h-64 overflow-y-auto p-0.5 space-y-0.5 divide-y divide-slate-100/60 custom-scrollbar">
+                                        {/* Option: Clear / None */}
+                                        <div
+                                          onClick={() => {
+                                            handleItemProductChange(idx, "");
+                                            setOpenProductDropdownRow(null);
+                                          }}
+                                          className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                            !item.productName
+                                              ? "bg-purple-50 text-[#33077C] font-bold"
+                                              : "hover:bg-slate-50 text-slate-600"
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-slate-400 italic">None / Clear Product</span>
+                                          </div>
+                                          {!item.productName && (
+                                            <Check className="w-4 h-4 text-[#33077C]" />
+                                          )}
+                                        </div>
+
+                                        {isLoadingProducts && matchingProducts.length === 0 ? (
+                                          <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                                            <Loader2 className="w-4 h-4 animate-spin text-[#33077C]" />
+                                            <span>Loading products...</span>
+                                          </div>
+                                        ) : matchingProducts.length === 0 ? (
+                                          <div className="py-6 px-3 text-center text-slate-400">
+                                            <p className="text-xs font-semibold text-slate-600">No products found</p>
+                                            <p className="text-[11px] text-slate-400 mt-0.5">Try typing a different name, category, or SKU</p>
+                                            {productSearchQuery.trim() && (
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setActiveItemRowIndex(idx);
+                                                  setOpenProductDropdownRow(null);
+                                                  setIsAddItemModalOpen(true);
+                                                }}
+                                                className="mt-2.5 inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#33077C] text-white text-[11px] font-bold hover:bg-[#4309A2] transition-colors"
+                                              >
+                                                <Plus className="w-3 h-3" />
+                                                <span>Add "{productSearchQuery.trim()}"</span>
+                                              </button>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          matchingProducts.map((p: any) => {
+                                            const isSelected = item.productId === p.id || (item.productName && item.productName === p.name);
+                                            const imgUrl = p.imageUrl || p.image;
+                                            const pName = p.name || p.productName || "";
+                                            const pSku = p.sku || p.code || "PRD";
+                                            const pCategory = p.category;
+                                            const pUnit = p.unit || "Pcs";
+                                            const pPrice = Number(p.price || p.unitPrice || 0);
+
+                                            return (
+                                              <div
+                                                key={p.id}
+                                                onClick={() => handleSelectProduct(idx, p)}
+                                                className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors cursor-pointer text-left ${
+                                                  isSelected
+                                                    ? "bg-purple-50 text-[#33077C] font-semibold border border-purple-200/60"
+                                                    : "hover:bg-slate-50/80 text-slate-800"
+                                                }`}
+                                              >
+                                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                                  <div className="w-8 h-8 rounded-full bg-purple-100 text-[#33077C] font-bold text-xs flex items-center justify-center shrink-0 border border-purple-200/60 overflow-hidden">
+                                                    {imgUrl ? (
+                                                      <img
+                                                        src={imgUrl}
+                                                        alt={pName}
+                                                        className="w-full h-full object-cover"
+                                                      />
+                                                    ) : (
+                                                      <span>{getInitials(pName, "PR")}</span>
+                                                    )}
+                                                  </div>
+
+                                                  <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                      <span className="font-bold text-slate-900 truncate">
+                                                        {pName}
+                                                      </span>
+                                                      {pCategory && (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium truncate max-w-[120px]">
+                                                          {pCategory}
+                                                        </span>
+                                                      )}
+                                                      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                                        Active
+                                                      </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                                                      <span className="font-mono text-slate-600">
+                                                        SKU: {pSku}
+                                                      </span>
+                                                      {pUnit && <span>• {pUnit}</span>}
+                                                      {p.hsnCode && (
+                                                        <span className="text-slate-400 font-mono text-[10px]">
+                                                          • HSN: {p.hsnCode}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                  <span className="font-bold text-[#33077C] text-xs">
+                                                    ₹{pPrice.toLocaleString("en-IN")}
+                                                  </span>
+                                                  {isSelected && (
+                                                    <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })
+                                        )}
+                                      </div>
                                     </div>
                                   )}
                                 </div>
@@ -3515,6 +4708,7 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="1"
                                   value={item.quantity}
+                                  onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
                                       idx,
@@ -3534,6 +4728,7 @@ export const SalesView: React.FC = () => {
                                   max="100"
                                   disabled={!formData.withGst}
                                   value={formData.withGst ? item.taxPercent : 0}
+                                  onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
                                       idx,
@@ -3555,6 +4750,7 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="0"
                                   value={item.unitPrice}
+                                  onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
                                       idx,
@@ -3566,12 +4762,14 @@ export const SalesView: React.FC = () => {
                                 />
                               </td>
 
-                              {/* 5. DISCOUNT (₹) */}
-                              <td className="px-2 py-3.5 align-top border border-slate-200">
+                              {/* 5. DISCOUNT (%) */}
+                              <td className="px-1.5 py-3.5 align-top border border-slate-200">
                                 <input
                                   type="number"
                                   min="0"
-                                  value={item.discountPercent || 0}
+                                  max="100"
+                                  value={item.discountPercent === 0 ? "" : (item.discountPercent || "")}
+                                  onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
                                       idx,
@@ -3580,6 +4778,26 @@ export const SalesView: React.FC = () => {
                                     )
                                   }
                                   placeholder="0"
+                                  className="w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                                />
+                              </td>
+
+                              {/* 6. DISCOUNT (AMOUNT) */}
+                              <td className="px-1.5 py-3.5 align-top border border-slate-200">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={item.discountAmount === 0 ? "" : (item.discountAmount || "")}
+                                  onKeyDown={handleNonNegativeKeyDown}
+                                  onChange={(e) =>
+                                    handleItemFieldChange(
+                                      idx,
+                                      "discountAmount",
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  placeholder="0.00"
                                   className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
                                 />
                               </td>
@@ -3632,122 +4850,32 @@ export const SalesView: React.FC = () => {
               </div>
 
               {/* BOTTOM SECTION: INVOICE SUMMARY & ACTION AREA */}
-              <div className="pt-6 border-t border-slate-200/80 flex flex-col xl:flex-row items-start justify-between gap-6">
-                {/* Left Column: Terms, Notes & Navigation */}
-                <div className="w-full xl:flex-1 space-y-4 order-2 xl:order-1">
-                  {/* 1. Payment Terms & Settlement Breakdown */}
-                  <div className="p-4 sm:p-5 bg-slate-50 border border-slate-200/90 rounded-2xl sm:rounded-3xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Receipt className="w-4 h-4 text-[#33077C]" />
-                        <h4 className="text-xs sm:text-sm font-bold text-slate-800">
-                          Payment Terms &amp; Settlement Overview
-                        </h4>
-                      </div>
-                      <span className="text-xs font-semibold text-[#33077C] bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200/60">
-                        {formData.paymentTerms || "Net 15 Days"}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Grand Total
-                        </span>
-                        <div className="text-sm sm:text-base font-black text-slate-800 mt-0.5">
-                          ₹
-                          {calculatedTotals.grandTotal.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                          })}
-                        </div>
-                      </div>
-                      <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                          Paid Amount
-                        </span>
-                        <div className="text-sm sm:text-base font-black text-emerald-600 mt-0.5">
-                          ₹
-                          {(
-                            editingSale?.paidAmount ||
-                            formData.paidAmount ||
-                            0
-                          ).toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                          })}
-                        </div>
-                      </div>
-                      <div className="p-3 bg-white rounded-xl border border-amber-200 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600">
-                          Balance Due
-                        </span>
-                        <div className="text-sm sm:text-base font-black text-amber-600 mt-0.5">
-                          ₹
-                          {Math.max(
-                            0,
-                            calculatedTotals.grandTotal -
-                              (editingSale?.paidAmount ||
-                                formData.paidAmount ||
-                                0),
-                          ).toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {formData.notes && (
-                      <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-xs">
-                        <span className="font-semibold text-slate-600">
-                          Notes:{" "}
-                        </span>
-                        <span className="text-slate-700">{formData.notes}</span>
-                      </div>
-                    )}
+              <div className="pt-6 border-t border-slate-200/80 flex flex-col md:flex-row items-start justify-between gap-6">
+                {/* LEFT CARD: Notes / Instructions & Details */}
+                <div className="w-full md:w-1/2 space-y-4">
+                  <div className="p-4 sm:p-5 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                    <label className="text-xs sm:text-sm font-bold text-slate-800 block">
+                      Notes / Instructions
+                    </label>
+                    <textarea
+                      rows={6}
+                      value={formData.notes || ""}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          notes: e.target.value,
+                        }))
+                      }
+                      placeholder="Carrier instructions, delivery address, customer notes..."
+                      className="w-full p-3.5 bg-slate-50/50 hover:bg-white focus:bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none focus:border-[#33077C] focus:ring-4 focus:ring-[#33077C]/10 transition-all resize-none"
+                    />
                   </div>
 
-                  {/* 2. ERP Workflow Guidance Box */}
-                  <div className="p-4 bg-purple-50/60 border border-purple-100/90 rounded-2xl text-xs space-y-2">
-                    <div className="flex items-center gap-2 text-[#33077C] font-bold">
-                      <Sparkles className="w-4 h-4 text-[#33077C]" />
-                      <span>Accounting Workflow Guide</span>
-                    </div>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      1. Click <strong>Generate Invoice</strong> to create and
-                      lock the official invoice (Payment Status:{" "}
-                      <strong>UNPAID</strong>).
-                      <br />
-                      2. Use <strong>+ Add Payment</strong> to record single or
-                      split customer payment transactions against the same
-                      invoice.
-                      <br />
-                      3. The invoice number remains the same throughout the
-                      lifecycle as payment status updates to{" "}
-                      <strong>PARTIALLY PAID</strong> or <strong>PAID</strong>.
-                    </p>
-                  </div>
-
-                  {/* Cancel Button on Left */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsFormModalOpen(false)}
-                      className="h-11 px-6 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center gap-2"
-                    >
-                      <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />
-                      <span>Cancel &amp; Return to List</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Right Column: CoreCentral Expanded Purple Summary & Workflow Action Card */}
-                <div className="w-full xl:w-[580px] 2xl:w-[640px] shrink-0 bg-[#33077C] rounded-2xl sm:rounded-3xl p-6 sm:p-7 text-white shadow-2xl border border-purple-900/40 space-y-4 order-1 xl:order-2">
-                  {/* 1. Header: GST Mode & Invoice Status Badge */}
-                  <div className="flex items-center justify-between p-3 bg-white/10 border border-white/20 rounded-xl">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${formData.withGst ? "bg-emerald-400" : "bg-amber-400"}`}
-                      />
-                      <span className="text-xs sm:text-sm font-bold text-white truncate">
+                  {/* Payment Terms & Tax Mode Info */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl text-xs space-y-2">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-semibold">Taxation Mode:</span>
+                      <span className="font-bold text-slate-800">
                         {formData.withGst
                           ? formData.gstType === "inter_state"
                             ? "With GST • Inter-State (IGST)"
@@ -3755,434 +4883,422 @@ export const SalesView: React.FC = () => {
                           : "Without GST (Exempt)"}
                       </span>
                     </div>
-                    <span
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold shrink-0 ${
-                        formData.invoiceStatus === "Generated"
-                          ? "bg-purple-300 text-purple-950 shadow-2xs"
-                          : "bg-white/15 text-purple-200"
-                      }`}
-                    >
-                      {formData.invoiceStatus === "Generated"
-                        ? `Invoice: ${formData.invoiceNo}`
-                        : "Draft Status"}
-                    </span>
-                  </div>
-
-                  {/* 2. Subtotal */}
-                  <div className="flex justify-between items-center text-sm sm:text-base text-purple-200 font-medium pb-2 border-b border-white/15">
-                    <span>
-                      Subtotal (
-                      {
-                        formData.items.filter(
-                          (it) => it.productId || it.productName,
-                        ).length
-                      }{" "}
-                      items)
-                    </span>
-                    <span className="text-white font-bold text-sm sm:text-base">
-                      ₹
-                      {calculatedTotals.subtotal.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
-
-                  {/* 3. Embedded Discount (₹) Section */}
-                  <div className="p-3.5 bg-white/10 rounded-xl border border-white/15 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs sm:text-[13px] font-semibold text-purple-200 flex items-center gap-1.5">
-                        <Percent className="w-3.5 h-3.5 text-purple-300" />
-                        <span>Discount (₹)</span>
-                      </label>
-                      {formData.overallDiscount > 0 && (
-                        <span className="text-xs font-bold text-emerald-300">
-                          -₹{formData.overallDiscount.toLocaleString("en-IN")}{" "}
-                          applied
-                        </span>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-purple-300 text-xs font-bold">
-                        ₹
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-semibold">Payment Terms:</span>
+                      <span className="font-bold text-[#33077C]">
+                        {formData.paymentTerms || "Net 15 Days"}
                       </span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={formData.overallDiscount || ""}
-                        placeholder="0"
-                        onChange={(e) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            overallDiscount: Math.max(
-                              0,
-                              Number(e.target.value),
-                            ),
-                          }))
-                        }
-                        className="w-full h-10 pl-7 pr-3 bg-white/10 hover:bg-white/15 focus:bg-white/20 border border-white/20 focus:border-white rounded-lg text-xs sm:text-sm font-bold text-white placeholder:text-purple-300 outline-none transition-all"
-                      />
                     </div>
                   </div>
+                </div>
 
-                  {/* 4. GST Taxes Breakdown */}
-                  {!formData.withGst ? (
-                    <div className="flex justify-between items-center text-xs sm:text-sm text-amber-300 py-1.5 border-b border-white/15">
-                      <span>GST (Without GST)</span>
-                      <span className="text-amber-200 font-medium">
-                        ₹0.00 (Exempt)
-                      </span>
+                {/* RIGHT CARD: Billing Summary (Exact layout matching Image 1) */}
+                <div className="w-full md:w-1/2 flex justify-end">
+                  <div className="w-full max-w-[495px] bg-white rounded-[4px] border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+                    {/* Header */}
+                    <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40">
+                      <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+                        Billing Summary
+                      </h2>
                     </div>
-                  ) : formData.gstType === "intra_state" ? (
-                    <div className="space-y-2 py-1.5 text-xs sm:text-sm border-b border-white/15">
-                      <div className="flex justify-between items-center text-purple-200">
-                        <span>CGST (Central Tax - 50%)</span>
-                        <span className="text-white font-semibold">
-                          +₹
-                          {calculatedTotals.cgst.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center text-purple-200">
-                        <span>SGST (State Tax - 50%)</span>
-                        <span className="text-white font-semibold">
-                          +₹
-                          {calculatedTotals.sgst.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center text-purple-300 text-xs pt-0.5">
-                        <span>Total GST Amount</span>
-                        <span className="text-white font-bold">
-                          +₹
-                          {calculatedTotals.totalTax.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2 py-1.5 text-xs sm:text-sm border-b border-white/15">
-                      <div className="flex justify-between items-center text-purple-200">
-                        <span>IGST (Integrated Tax - 100%)</span>
-                        <span className="text-white font-semibold">
-                          +₹
-                          {calculatedTotals.igst.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center text-purple-300 text-xs pt-0.5">
-                        <span>Total GST Amount</span>
-                        <span className="text-white font-bold">
-                          +₹
-                          {calculatedTotals.totalTax.toLocaleString("en-IN", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                    </div>
-                  )}
 
-                  {/* 5. Grand Total */}
-                  <div className="flex justify-between items-center text-base sm:text-lg font-bold text-white pt-1">
-                    <span>Grand Total</span>
-                    <span className="text-lg sm:text-2xl font-black text-white">
-                      ₹
-                      {calculatedTotals.grandTotal.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </span>
-                  </div>
-
-                  {/* 6. Paid Amount & Balance Due & Payment Status */}
-                  <div className="p-3.5 bg-white/10 rounded-xl border border-white/15 space-y-2">
-                    <div className="flex justify-between items-center text-xs sm:text-sm text-purple-200">
-                      <span>Paid Amount</span>
-                      <span className="text-cyan-300 font-bold">
-                        ₹
-                        {(
-                          editingSale?.paidAmount ||
-                          formData.paidAmount ||
-                          0
-                        ).toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm sm:text-base font-bold text-white pt-1 border-t border-white/10">
-                      <span>Balance Due</span>
-                      <span
-                        className={`font-black ${Math.max(0, calculatedTotals.grandTotal - (editingSale?.paidAmount || formData.paidAmount || 0)) <= 0 ? "text-emerald-300" : "text-amber-300"}`}
-                      >
-                        ₹
-                        {Math.max(
-                          0,
-                          calculatedTotals.grandTotal -
-                            (editingSale?.paidAmount ||
-                              formData.paidAmount ||
-                              0),
-                        ).toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1">
-                      <span className="text-xs text-purple-200 font-medium">
-                        Payment Status:
-                      </span>
-                      {(() => {
-                        const curPaid =
-                          editingSale?.paidAmount || formData.paidAmount || 0;
-                        const curBal = Math.max(
-                          0,
-                          calculatedTotals.grandTotal - curPaid,
-                        );
-                        if (formData.invoiceStatus !== "Generated") {
-                          return (
-                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-200/20 text-purple-100 border border-white/20">
-                              UNPAID (Draft)
-                            </span>
-                          );
-                        }
-                        if (curBal <= 0) {
-                          return (
-                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>PAID</span>
-                            </span>
-                          );
-                        }
-                        if (curPaid > 0) {
-                          return (
-                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30 flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              <span>PARTIALLY PAID</span>
-                            </span>
-                          );
-                        }
-                        return (
-                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-400/20 text-rose-300 border border-rose-400/30 flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3" />
-                            <span>UNPAID</span>
+                    {/* Body */}
+                    <div className="p-5 space-y-3.5 flex-1">
+                      {/* 1. Sub Total & Discount & Amount (After Discount) */}
+                      <div className="space-y-2.5 text-sm">
+                        <div className="flex items-center justify-between text-slate-600 font-medium">
+                          <span>Sub Total:</span>
+                          <span className="font-bold text-slate-900 text-sm">
+                            ₹
+                            {calculatedTotals.subtotal.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
                           </span>
-                        );
-                      })()}
-                    </div>
-                  </div>
-
-                  {/* 7. DYNAMIC WORKFLOW ACTION BUTTONS */}
-                  <div className="pt-2">
-                    {formData.invoiceStatus !== "Generated" ? (
-                      /* STATE 1: SALE NOT INVOICED (Draft Mode) */
-                      <div className="space-y-2.5">
-                        <button
-                          type="submit"
-                          onClick={handleGenerateInvoice}
-                          className="w-full py-3.5 px-4 bg-white hover:bg-slate-100 text-[#33077C] font-black text-sm sm:text-base rounded-xl transition-all shadow-md hover:shadow-xl active:scale-[0.98] cursor-pointer text-center flex items-center justify-center gap-2"
-                        >
-                          <Sparkles className="w-4.5 h-4.5 text-[#33077C]" />
-                          <span>Generate Invoice</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSaveDraft}
-                          className="w-full py-2.5 px-4 bg-white/15 hover:bg-white/25 text-white font-bold text-xs sm:text-sm rounded-xl transition-all border border-white/20 active:scale-[0.98] cursor-pointer text-center flex items-center justify-center gap-2"
-                        >
-                          <FileText className="w-4 h-4 text-white" />
-                          <span>Save Draft</span>
-                        </button>
-                      </div>
-                    ) : (
-                      /* STATES 2, 3, 4: INVOICE GENERATED (Unpaid, Partially Paid, Paid) */
-                      <div className="space-y-2.5">
-                        <div className="flex flex-col sm:flex-row gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const targetSale = editingSale ||
-                                selectedSale || {
-                                  id: `sale_${Date.now()}`,
-                                  invoiceNo: formData.invoiceNo,
-                                  invoiceStatus: "Generated",
-                                  referenceNo: formData.referenceNo,
-                                  saleDate: formData.saleDate,
-                                  dueDate: formData.dueDate,
-                                  customerId: formData.customerId,
-                                  customerName: formData.customerName,
-                                  customerCompany: formData.customerCompany,
-                                  customerPhone: formData.customerPhone,
-                                  customerEmail: formData.customerEmail,
-                                  billingAddress: formData.billingAddress,
-                                  shippingAddress: formData.shippingAddress,
-                                  items: formData.items.filter(
-                                    (it) => it.productId || it.productName,
-                                  ),
-                                  subtotal: calculatedTotals.subtotal,
-                                  withGst: formData.withGst,
-                                  gstType: formData.gstType,
-                                  cgst: calculatedTotals.cgst,
-                                  sgst: calculatedTotals.sgst,
-                                  igst: calculatedTotals.igst,
-                                  overallDiscount:
-                                    calculatedTotals.overallDiscount,
-                                  totalDiscount: calculatedTotals.totalDiscount,
-                                  totalTax: calculatedTotals.totalTax,
-                                  shippingCharges:
-                                    Number(formData.shippingCharges) || 0,
-                                  otherCharges:
-                                    Number(formData.otherCharges) || 0,
-                                  grandTotal: calculatedTotals.grandTotal,
-                                  paidAmount: formData.paidAmount || 0,
-                                  balance: Math.max(
-                                    0,
-                                    calculatedTotals.grandTotal -
-                                      (formData.paidAmount || 0),
-                                  ),
-                                  paymentMethod: "Bank Transfer",
-                                  paymentSplits: formData.paymentSplits,
-                                  paymentRecords: formData.paymentRecords,
-                                  paymentTerms: formData.paymentTerms,
-                                  paymentStatus:
-                                    (formData.paidAmount || 0) <= 0
-                                      ? "Unpaid"
-                                      : (formData.paidAmount || 0) >=
-                                          calculatedTotals.grandTotal
-                                        ? "Paid"
-                                        : "Partial",
-                                  saleStatus: "Confirmed",
-                                  createdBy: "James Wilson",
-                                  salesperson:
-                                    formData.salesperson || "Alex Rivera",
-                                  notes: formData.notes,
-                                  createdAt: new Date().toISOString(),
-                                  updatedAt: new Date().toISOString(),
-                                };
-                              setSelectedSale(targetSale);
-                              setIsInvoiceModalOpen(true);
-                            }}
-                            className="flex-1 py-3 px-3 bg-white/20 hover:bg-white/30 text-white font-bold text-xs sm:text-sm rounded-xl transition-all border border-white/30 active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-                          >
-                            <Eye className="w-4 h-4 text-white" />
-                            <span>View Invoice</span>
-                          </button>
-
-                          {Math.max(
-                            0,
-                            calculatedTotals.grandTotal -
-                              (editingSale?.paidAmount ||
-                                formData.paidAmount ||
-                                0),
-                          ) > 0 ? (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenAddPayment()}
-                              className="flex-1 py-3 px-3 bg-white hover:bg-slate-100 text-[#33077C] font-black text-xs sm:text-sm rounded-xl transition-all shadow-md hover:shadow-xl active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-                            >
-                              <Plus className="w-4 h-4 text-[#33077C] stroke-[2.5]" />
-                              <span>+ Add Payment</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const histEl = document.getElementById(
-                                  "new-sale-payment-history",
-                                );
-                                if (histEl)
-                                  histEl.scrollIntoView({ behavior: "smooth" });
-                              }}
-                              className="flex-1 py-3 px-3 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-xl transition-all shadow-md active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-                            >
-                              <History className="w-4 h-4 text-white" />
-                              <span>View History</span>
-                            </button>
-                          )}
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const targetSale = editingSale ||
-                              selectedSale || {
-                                id: `sale_${Date.now()}`,
-                                invoiceNo: formData.invoiceNo,
-                                invoiceStatus: "Generated",
-                                referenceNo: formData.referenceNo,
-                                saleDate: formData.saleDate,
-                                dueDate: formData.dueDate,
-                                customerId: formData.customerId,
-                                customerName: formData.customerName,
-                                customerCompany: formData.customerCompany,
-                                customerPhone: formData.customerPhone,
-                                customerEmail: formData.customerEmail,
-                                billingAddress: formData.billingAddress,
-                                shippingAddress: formData.shippingAddress,
-                                items: formData.items.filter(
-                                  (it) => it.productId || it.productName,
-                                ),
-                                subtotal: calculatedTotals.subtotal,
-                                withGst: formData.withGst,
-                                gstType: formData.gstType,
-                                cgst: calculatedTotals.cgst,
-                                sgst: calculatedTotals.sgst,
-                                igst: calculatedTotals.igst,
-                                overallDiscount:
-                                  calculatedTotals.overallDiscount,
-                                totalDiscount: calculatedTotals.totalDiscount,
-                                totalTax: calculatedTotals.totalTax,
-                                shippingCharges:
-                                  Number(formData.shippingCharges) || 0,
-                                otherCharges:
-                                  Number(formData.otherCharges) || 0,
-                                grandTotal: calculatedTotals.grandTotal,
-                                paidAmount: formData.paidAmount || 0,
-                                balance: Math.max(
-                                  0,
-                                  calculatedTotals.grandTotal -
-                                    (formData.paidAmount || 0),
-                                ),
-                                paymentMethod: "Bank Transfer",
-                                paymentSplits: formData.paymentSplits,
-                                paymentRecords: formData.paymentRecords,
-                                paymentTerms: formData.paymentTerms,
-                                paymentStatus:
-                                  (formData.paidAmount || 0) <= 0
-                                    ? "Unpaid"
-                                    : (formData.paidAmount || 0) >=
-                                        calculatedTotals.grandTotal
-                                      ? "Paid"
-                                      : "Partial",
-                                saleStatus: "Confirmed",
-                                createdBy: "James Wilson",
-                                salesperson:
-                                  formData.salesperson || "Alex Rivera",
-                                notes: formData.notes,
-                                createdAt: new Date().toISOString(),
-                                updatedAt: new Date().toISOString(),
-                              };
-                            setSelectedSale(targetSale);
-                            setIsInvoiceModalOpen(true);
-                            handlePrintSaleInvoice(targetSale);
-                          }}
-                          className="w-full py-2.5 px-3 bg-white/10 hover:bg-white/20 text-purple-200 hover:text-white font-semibold text-xs rounded-xl transition-all border border-white/15 flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                          <span>Download / Print Invoice</span>
-                        </button>
+                        <div className="flex items-center justify-between text-slate-600 font-medium">
+                          <span>Discount:</span>
+                          <span
+                            className={`font-bold text-sm ${
+                              calculatedTotals.totalDiscount > 0
+                                ? "text-rose-600"
+                                : "text-slate-900"
+                            }`}
+                          >
+                            {calculatedTotals.totalDiscount > 0
+                              ? `-₹${calculatedTotals.totalDiscount.toLocaleString("en-IN", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}`
+                              : "₹0.00"}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-slate-700 font-semibold pt-2 border-t border-slate-100">
+                          <span>Amount (After Discount):</span>
+                          <span className="font-bold text-slate-900 text-sm">
+                            ₹
+                            {calculatedTotals.taxableAmount.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </span>
+                        </div>
                       </div>
-                    )}
+
+                      {/* 2. CGST & SGST (or IGST) & Total GST */}
+                      {formData.withGst ? (
+                        <div className="pt-3 pb-1 border-t border-slate-100 space-y-2.5 text-sm">
+                          {formData.gstType === "intra_state" ? (
+                            <>
+                              <div className="flex items-center justify-between text-slate-600 font-medium">
+                                <span>CGST:</span>
+                                <span className="font-bold text-slate-900">
+                                  ₹
+                                  {calculatedTotals.cgst.toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-slate-600 font-medium">
+                                <span>SGST:</span>
+                                <span className="font-bold text-slate-900">
+                                  ₹
+                                  {calculatedTotals.sgst.toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-between text-slate-600 font-medium">
+                              <span>IGST:</span>
+                              <span className="font-bold text-slate-900">
+                                ₹
+                                {calculatedTotals.igst.toLocaleString("en-IN", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between text-slate-800 font-bold pt-2 border-t border-dashed border-slate-200/80">
+                            <span>Total GST:</span>
+                            <span className="font-bold text-slate-900">
+                              ₹
+                              {calculatedTotals.totalTax.toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="pt-3 pb-1 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
+                          <span>GST (Without GST):</span>
+                          <span className="font-medium text-slate-500">₹0.00 (Exempt)</span>
+                        </div>
+                      )}
+
+                      {/* Freight / Shipping */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
+                        <span className="text-slate-600 font-medium">Freight / Shipping:</span>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#33077C] font-bold text-xs sm:text-sm">
+                            ₹
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={formData.shippingCharges === 0 ? "" : formData.shippingCharges}
+                            placeholder="0"
+                            onKeyDown={handleNonNegativeKeyDown}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/[^0-9.]/g, "");
+                              if (raw === "") {
+                                setFormData((prev) => ({ ...prev, shippingCharges: 0 }));
+                                return;
+                              }
+                              const parts = raw.split(".");
+                              const clean =
+                                parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : raw;
+                              const num = Math.max(0, parseFloat(clean) || 0);
+                              setFormData((prev) => ({ ...prev, shippingCharges: num }));
+                            }}
+                            className="w-28 h-9 text-right pl-6 pr-2.5 bg-white border-2 border-[#33077C] rounded-[6px] text-xs sm:text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#33077C]/20 shadow-2xs transition-all"
+                          />
+                        </div>
+                      </div>
+
+                      {/* 3. Rounding Adjustment */}
+                      <div className="pt-3 border-t border-slate-100 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            Rounding Adjustment
+                          </label>
+                          <span className="text-[11px] text-slate-400">click to apply</span>
+                        </div>
+
+                        <div className="space-y-2">
+                          {/* Round Down */}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                roundMode: prev.roundMode === "down" ? "none" : "down",
+                              }))
+                            }
+                            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
+                              formData.roundMode === "down"
+                                ? "bg-amber-50 border-amber-300 text-amber-900 font-bold shadow-2xs"
+                                : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+                                  formData.roundMode === "down"
+                                    ? "border-amber-600 bg-amber-600"
+                                    : "border-slate-300 bg-white"
+                                }`}
+                              >
+                                {formData.roundMode === "down" && (
+                                  <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                                )}
+                              </div>
+                              <span className="text-xs">Round Down</span>
+                            </div>
+                            <span className="font-bold text-xs">
+                              {calculatedTotals.roundDownDiff === 0
+                                ? "₹0.00"
+                                : `-₹${Math.abs(calculatedTotals.roundDownDiff).toFixed(2)}`}
+                            </span>
+                          </button>
+
+                          {/* Round Up */}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                roundMode: prev.roundMode === "up" ? "none" : "up",
+                              }))
+                            }
+                            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border transition-all cursor-pointer ${
+                              formData.roundMode === "up"
+                                ? "bg-emerald-50 border-emerald-300 text-emerald-900 font-bold shadow-2xs"
+                                : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700 font-medium"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+                                  formData.roundMode === "up"
+                                    ? "border-emerald-600 bg-emerald-600"
+                                    : "border-slate-300 bg-white"
+                                }`}
+                              >
+                                {formData.roundMode === "up" && (
+                                  <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                                )}
+                              </div>
+                              <span className="text-xs">Round Up</span>
+                            </div>
+                            <span className="font-bold text-xs">
+                              {calculatedTotals.roundUpDiff === 0
+                                ? "₹0.00"
+                                : `+₹${calculatedTotals.roundUpDiff.toFixed(2)}`}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 4. Grand Total Banner */}
+                      <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-[11px] text-blue-600 block uppercase tracking-wider">
+                            Grand Total
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-medium">Net payable amount</span>
+                        </div>
+                        <span className="font-bold text-base sm:text-lg text-blue-600">
+                          ₹
+                          {calculatedTotals.grandTotal.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+
+                      {/* 5. Paid Amount & Balance Due */}
+                      <div className="pt-2 border-t border-slate-100 space-y-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-emerald-700">
+                            Paid Amount:
+                          </span>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-600 font-bold text-xs">
+                              ₹
+                            </span>
+                            <input
+                              id="sales-invoice-paid-amount"
+                              type="text"
+                              inputMode="decimal"
+                              value={formData.paidAmount === 0 ? "" : formData.paidAmount}
+                              placeholder="0"
+                              onKeyDown={handleNonNegativeKeyDown}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/[^0-9.]/g, "");
+                                if (raw === "") {
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    paidAmount: 0,
+                                    paymentSplits:
+                                      prev.paymentSplits.length > 0
+                                        ? [{ ...prev.paymentSplits[0], amount: 0 }]
+                                        : [
+                                            {
+                                              id: "ps_1",
+                                              method: prev.paymentMethod || "Bank Transfer",
+                                              amount: 0,
+                                              referenceNo: "",
+                                            },
+                                          ],
+                                  }));
+                                  return;
+                                }
+                                const parts = raw.split(".");
+                                const clean = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : raw;
+                                const cleanDecimals =
+                                  parts.length === 2 && parts[1].length > 2
+                                    ? `${parts[0]}.${parts[1].slice(0, 2)}`
+                                    : clean;
+                                let newAmount = parseFloat(cleanDecimals);
+                                if (isNaN(newAmount) || newAmount < 0) {
+                                  newAmount = 0;
+                                }
+                                if (newAmount > calculatedTotals.grandTotal) {
+                                  newAmount = calculatedTotals.grandTotal;
+                                  toast.warning(
+                                    `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                                  );
+                                }
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  paidAmount: cleanDecimals.endsWith(".") ? (cleanDecimals as any) : newAmount,
+                                  paymentSplits:
+                                    prev.paymentSplits.length > 0
+                                      ? [{ ...prev.paymentSplits[0], amount: newAmount }]
+                                      : [
+                                          {
+                                            id: "ps_1",
+                                            method: prev.paymentMethod || "Bank Transfer",
+                                            amount: newAmount,
+                                            referenceNo: "",
+                                          },
+                                        ],
+                                }));
+                              }}
+                              onBlur={() => {
+                                const num = Math.max(0, parseFloat(String(formData.paidAmount)) || 0);
+                                const clamped = Math.min(calculatedTotals.grandTotal, num);
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  paidAmount: clamped,
+                                  paymentSplits:
+                                    prev.paymentSplits.length > 0
+                                      ? [{ ...prev.paymentSplits[0], amount: clamped }]
+                                      : [
+                                          {
+                                            id: "ps_1",
+                                            method: prev.paymentMethod || "Bank Transfer",
+                                            amount: clamped,
+                                            referenceNo: "",
+                                          },
+                                        ],
+                                }));
+                              }}
+                              className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
+                          <span className="font-bold text-slate-800">Total Balance:</span>
+                          <span
+                            className={`font-bold text-sm ${
+                              calculatedTotals.balance > 0 ? "text-amber-600" : "text-emerald-600"
+                            }`}
+                          >
+                            ₹{calculatedTotals.balance.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
+                </div>
+              </div>
+
+              {/* Bottom Actions Bar (with Cancel and Generate Invoice button ONLY - 3 buttons removed) */}
+              <div className="pt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4 border-t border-slate-200">
+                {/* Left side: Payment Status */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Payment Status:
+                  </span>
+                  {calculatedTotals.grandTotal === 0 ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                      UNPAID
+                    </span>
+                  ) : calculatedTotals.paid >= calculatedTotals.grandTotal || calculatedTotals.balance <= 0 ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>PAID</span>
+                    </span>
+                  ) : calculatedTotals.paid > 0 ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>PARTIALLY PAID</span>
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>UNPAID</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Right side: ONLY Cancel and Generate Invoice buttons! */}
+                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsFormModalOpen(false)}
+                    className="h-11 px-5 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
+                  >
+                    <X className="w-4 h-4 text-slate-500" />
+                    <span>Cancel</span>
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isActionLoading}
+                    onClick={handleGenerateInvoice}
+                    className="h-11 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isActionLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    ) : (
+                      <Check className="w-4 h-4 stroke-[2.5] text-white" />
+                    )}
+                    <span>Generate Invoice</span>
+                  </button>
                 </div>
               </div>
 
@@ -4588,14 +5704,41 @@ export const SalesView: React.FC = () => {
             onChange={(val) => setPendingSearch(val)}
             placeholder="Search by invoice #, customer, rep, product..."
             onSubmit={() => {
-              setAppliedSearch(pendingSearch);
+              const trimmed = pendingSearch.trim();
+              const isSame =
+                appliedSearch === trimmed &&
+                appliedSaleStatus === pendingSaleStatus &&
+                appliedPaymentStatus === pendingPaymentStatus &&
+                appliedCustomer === pendingCustomer &&
+                appliedSalesRep === pendingSalesRep &&
+                currentPage === 1;
+
+              setAppliedSearch(trimmed);
               setAppliedSaleStatus(pendingSaleStatus);
               setAppliedPaymentStatus(pendingPaymentStatus);
               setAppliedCustomer(pendingCustomer);
               setAppliedSalesRep(pendingSalesRep);
               setCurrentPage(1);
+
+              if (isSame) {
+                isFetchingInvoicesRef.current = false;
+                fetchSalesInvoices();
+              }
             }}
             onReset={() => {
+              const isSame =
+                appliedSearch === "" &&
+                pendingSearch === "" &&
+                appliedSaleStatus === "All" &&
+                pendingSaleStatus === "All" &&
+                appliedPaymentStatus === "All" &&
+                pendingPaymentStatus === "All" &&
+                appliedCustomer === "All" &&
+                pendingCustomer === "All" &&
+                appliedSalesRep === "All" &&
+                pendingSalesRep === "All" &&
+                currentPage === 1;
+
               setPendingSearch("");
               setAppliedSearch("");
               setPendingSaleStatus("All");
@@ -4607,16 +5750,19 @@ export const SalesView: React.FC = () => {
               setPendingSalesRep("All");
               setAppliedSalesRep("All");
               setCurrentPage(1);
+
+              if (isSame) {
+                isFetchingInvoicesRef.current = false;
+                fetchSalesInvoices();
+              }
             }}
             filterSlot={
               <div className="flex items-center gap-2.5 flex-wrap">
                 <FilterDropdown
                   placeholder="Sale Status : All"
-                  value={appliedSaleStatus}
+                  value={pendingSaleStatus}
                   onChange={(val) => {
                     setPendingSaleStatus(val);
-                    setAppliedSaleStatus(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: "Sale Status : All", value: "All" },
@@ -4641,11 +5787,9 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Payment : All"
-                  value={appliedPaymentStatus}
+                  value={pendingPaymentStatus}
                   onChange={(val) => {
                     setPendingPaymentStatus(val);
-                    setAppliedPaymentStatus(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: "Payment : All", value: "All" },
@@ -4658,11 +5802,9 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Customer : All"
-                  value={appliedCustomer}
+                  value={pendingCustomer}
                   onChange={(val) => {
                     setPendingCustomer(val);
-                    setAppliedCustomer(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: "Customer : All", value: "All" },
@@ -4675,11 +5817,9 @@ export const SalesView: React.FC = () => {
 
                 <FilterDropdown
                   placeholder="Sales Rep : All"
-                  value={appliedSalesRep}
+                  value={pendingSalesRep}
                   onChange={(val) => {
                     setPendingSalesRep(val);
-                    setAppliedSalesRep(val);
-                    setCurrentPage(1);
                   }}
                   options={[
                     { label: "Sales Rep : All", value: "All" },
@@ -4754,43 +5894,20 @@ export const SalesView: React.FC = () => {
 
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse border border-slate-200 min-w-[1050px]">
-                <thead>
-                  <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      CUSTOMER
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      INVOICE NO.
-                    </th>
-                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <span>DATE</span>
-                        <Calendar className="w-3.5 h-3.5 text-purple-200 opacity-80" />
-                      </div>
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      ITEMS
-                    </th>
-                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                      TOTAL AMOUNT
-                    </th>
-                    <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-right">
-                      PAID / BALANCE
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                      PAYMENT
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                      STATUS
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">
-                      SALES REP
-                    </th>
-                    <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">
-                      ACTIONS
-                    </th>
-                  </tr>
-                </thead>
+                <CommonTableHead
+                  columns={[
+                    { label: "INVOICE NO.", align: "left", minWidth: "150px" },
+                    { label: "CUSTOMER", align: "left", minWidth: "180px" },
+                    { label: "CREATED DATE & TIME", align: "left", minWidth: "150px" },
+                    { label: "CONVERTED DATE & TIME", align: "left", minWidth: "150px" },
+                    { label: "ITEMS", align: "left", minWidth: "150px" },
+                    { label: "TOTAL AMOUNT", align: "right", minWidth: "130px" },
+                    { label: "PAID / BALANCE", align: "right", minWidth: "140px" },
+                    { label: "PAYMENT", align: "center", minWidth: "110px" },
+                    { label: "STATUS", align: "center", minWidth: "110px" },
+                    { label: "ACTIONS", align: "center", minWidth: "130px" },
+                  ]}
+                />
                 <tbody className="text-sm">
                   {paginatedSales.length === 0 ? (
                     <tr>
@@ -4813,30 +5930,33 @@ export const SalesView: React.FC = () => {
                       const isPaid = sale.paymentStatus === "Paid";
                       const isCancelled = sale.saleStatus === "Cancelled";
                       const initials = getCustomerInitials(sale.customerName);
+                      const createdDt = formatDateTime(sale.createdAt);
+                      const convertedAt = resolveDocumentConvertedAt("Invoice", sale);
+                      const convertedDt = formatDateTime(convertedAt);
+                      const resolvedCustomerCode =
+                        sale.customerCode ||
+                        customers.find(
+                          (c) =>
+                            (sale.customerId && c.id === sale.customerId) ||
+                            (c.phone && sale.customerPhone && c.phone === sale.customerPhone) ||
+                            (c.name && sale.customerName && c.name.trim().toLowerCase() === sale.customerName.trim().toLowerCase())
+                        )?.customerCode ||
+                        customerList.find(
+                          (c) =>
+                            (sale.customerId && c.id === sale.customerId) ||
+                            (c.phone && sale.customerPhone && c.phone === sale.customerPhone) ||
+                            (c.name && sale.customerName && c.name.trim().toLowerCase() === sale.customerName.trim().toLowerCase())
+                        )?.customerCode ||
+                        findDocumentLineage(sale.invoiceNo)?.customerCode ||
+                        (sale.referenceNo ? findDocumentLineage(sale.referenceNo)?.customerCode : '') ||
+                        '';
 
                       return (
                         <tr
                           key={sale.id}
                           className="hover:bg-slate-50/80 transition-colors border-b border-slate-200 font-sans"
                         >
-                          {/* 1. Customer */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
-                                <User className="w-4 h-4 text-[#33077C]" />
-                              </div>
-                              <div>
-                                <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
-                                  {sale.customerName}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-medium block">
-                                  {sale.customerCompany || "Direct Customer"}
-                                </span>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* 2. Invoice No. */}
+                          {/* 1. Invoice No. */}
                           <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-xs tracking-wider shadow-xs shrink-0 select-none">
@@ -4855,7 +5975,8 @@ export const SalesView: React.FC = () => {
                                   </span>
                                 )}
                                 <DocumentLineageBadges
-                                  docRef={sale.invoiceNo || sale.referenceNo}
+                                  docRef={sale.invoiceNo}
+                                  sourceDocNo={sale.referenceNo}
                                   currentType="Invoice"
                                   className="justify-start mt-1"
                                 />
@@ -4863,15 +5984,62 @@ export const SalesView: React.FC = () => {
                             </div>
                           </td>
 
-                          {/* 3. Date */}
-                          <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle font-medium text-slate-700">
-                            <div className="font-semibold text-slate-800">
-                              {sale.saleDate}
-                            </div>
-                            {sale.dueDate && (
-                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">
-                                Due: {sale.dueDate}
+                          {/* 2. Customer */}
+                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                                <User className="w-4 h-4 text-[#33077C]" />
                               </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
+                                    {sale.customerName}
+                                  </span>
+                                  {resolvedCustomerCode && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-50 text-[#33077C] border border-purple-200/80">
+                                      {resolvedCustomerCode}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-medium block">
+                                  {sale.customerCompany || "Direct Customer"}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+
+                          {/* CREATED DATE & TIME */}
+                          <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle">
+                            {createdDt ? (
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-slate-800 text-xs sm:text-[13px]">
+                                  {createdDt.date}
+                                </span>
+                                <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                                  <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                                  <span>{createdDt.time}</span>
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">—</span>
+                            )}
+                          </td>
+
+                          {/* CONVERTED DATE & TIME */}
+                          <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle">
+                            {convertedDt ? (
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-emerald-800 text-xs sm:text-[13px]">
+                                  {convertedDt.date}
+                                </span>
+                                <span className="text-[11px] text-emerald-600 font-mono flex items-center gap-1 mt-0.5">
+                                  <Clock className="w-3 h-3 text-emerald-500 shrink-0" />
+                                  <span>{convertedDt.time}</span>
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-xs">—</span>
                             )}
                           </td>
 
@@ -4918,7 +6086,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 6. Payment Status */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                             {sale.paymentStatus === "Paid" ? (
                               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
@@ -4938,7 +6106,7 @@ export const SalesView: React.FC = () => {
                           </td>
 
                           {/* 7. Sale Status */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                             {sale.saleStatus === "Completed" ? (
                               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
@@ -4962,32 +6130,9 @@ export const SalesView: React.FC = () => {
                             )}
                           </td>
 
-                          {/* 8. Sales Rep */}
-                          <td className="py-4 px-5 border border-slate-200 whitespace-nowrap align-middle">
-                            <div className="flex flex-col gap-0.5">
-                              {sale.salesRepresentativeName ||
-                              sale.salesperson ? (
-                                <span className="font-bold text-slate-900 text-xs sm:text-[13px] block">
-                                  {sale.salesRepresentativeName ||
-                                    sale.salesperson}
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenAssignInvoiceModal(sale);
-                                  }}
-                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#33077C] hover:underline cursor-pointer"
-                                >
-                                  + Assign Rep
-                                </button>
-                              )}
-                            </div>
-                          </td>
 
                           {/* 9. Actions */}
-                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle">
+                          <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap align-middle min-w-[130px] w-36">
                             <div className="flex items-center justify-center gap-1.5 action-dropdown-container">
                               {/* 1. Share Action Button with Floating Popover */}
                               <UniversalShareDropdown
@@ -5013,30 +6158,30 @@ export const SalesView: React.FC = () => {
                                     variant: "assign",
                                     onClick: () => handleOpenAssignInvoiceModal(sale),
                                   },
-                                  {
-                                    label: "Generate e-Invoice",
-                                    variant: "invoice",
-                                    onClick: () => {
-                                      const irn = `IRN${Date.now().toString(36).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
-                                      toast.success(
-                                        `e-Invoice generated for ${sale.invoiceNo}!`,
-                                        {
-                                          description: `Ack No: ${Date.now()} | IRN: ${irn}`,
-                                        },
-                                      );
-                                    },
-                                  },
+
                                   {
                                     label: "Receive Payment",
                                     variant: "payment",
+                                    disabled: sale.paymentStatus === "Paid" || sale.balance <= 0,
                                     onClick: () => handleOpenAddPayment(sale),
                                   },
                                   {
                                     label: "Convert To Return",
                                     variant: "return",
+                                    disabled: sale.saleStatus === "Cancelled",
                                     onClick: () => {
                                       navigate(
                                         "/sale-management/sales/return",
+                                        {
+                                          state: {
+                                            invoiceNo: sale.invoiceNo,
+                                            saleId: sale.id,
+                                            customerName: sale.customerName,
+                                            customerPhone: sale.customerPhone,
+                                            amount: sale.grandTotal,
+                                            items: sale.items,
+                                          },
+                                        }
                                       );
                                       toast.info(
                                         `Converting invoice ${sale.invoiceNo} to Sales Return / Credit Note`,
@@ -5059,6 +6204,11 @@ export const SalesView: React.FC = () => {
                                     label: "Print Invoice",
                                     variant: "print",
                                     onClick: () => handlePrintSaleInvoice(sale),
+                                  },
+                                  {
+                                    label: "Download Invoice",
+                                    variant: "download",
+                                    onClick: () => handleDownloadSaleInvoice(sale),
                                   },
                                   {
                                     label: "Duplicate",
@@ -5264,19 +6414,19 @@ export const SalesView: React.FC = () => {
             {/* Table of Payment Logs */}
             <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
               <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">
-                    <th className="py-3 px-3.5">#</th>
-                    <th className="py-3 px-3.5">Invoice #</th>
-                    <th className="py-3 px-3.5">Customer Name</th>
-                    <th className="py-3 px-3.5">Date</th>
-                    <th className="py-3 px-3.5">Payment Method</th>
-                    <th className="py-3 px-3.5">Reference / Txn ID</th>
-                    <th className="py-3 px-3.5 text-right">Amount Paid</th>
-                    <th className="py-3 px-3.5 text-center">Status</th>
-                    <th className="py-3 px-3.5 text-center">Actions</th>
-                  </tr>
-                </thead>
+                <CommonTableHead
+                  columns={[
+                    { label: "#", align: "center", width: "45px" },
+                    { label: "INVOICE #", align: "left", minWidth: "140px" },
+                    { label: "CUSTOMER NAME", align: "left", minWidth: "160px" },
+                    { label: "DATE", align: "left", minWidth: "120px" },
+                    { label: "PAYMENT METHOD", align: "center", minWidth: "140px" },
+                    { label: "REFERENCE / TXN ID", align: "left", minWidth: "150px" },
+                    { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
+                    { label: "STATUS", align: "center", minWidth: "110px" },
+                    { label: "ACTIONS", align: "center", minWidth: "90px" },
+                  ]}
+                />
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {paginatedPaymentLogs.length === 0 ? (
                     <tr>
@@ -5321,7 +6471,7 @@ export const SalesView: React.FC = () => {
                             {log.customerName}
                           </td>
                           <td className="py-3 px-3.5 text-slate-500 font-medium">
-                            {log.date}
+                            {formatDate(log.date)}
                           </td>
                           <td className="py-3 px-3.5">
                             <span
@@ -5394,53 +6544,18 @@ export const SalesView: React.FC = () => {
             </div>
 
             {/* Bottom Pagination for Logs */}
-            {filteredPaymentLogs.length > paymentLogPageSize && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-                <span className="text-xs text-slate-500">
-                  Showing{" "}
-                  <strong className="text-slate-700">
-                    {(paymentLogPage - 1) * paymentLogPageSize + 1}
-                  </strong>{" "}
-                  to{" "}
-                  <strong className="text-slate-700">
-                    {Math.min(
-                      paymentLogPage * paymentLogPageSize,
-                      filteredPaymentLogs.length,
-                    )}
-                  </strong>{" "}
-                  of{" "}
-                  <strong className="text-slate-700">
-                    {filteredPaymentLogs.length}
-                  </strong>{" "}
-                  logs
-                </span>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={paymentLogPage === 1}
-                    onClick={() => setPaymentLogPage((p) => Math.max(1, p - 1))}
-                    className="h-8 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-xs font-bold text-slate-700 px-2">
-                    Page {paymentLogPage} of {totalPaymentLogPages}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={paymentLogPage >= totalPaymentLogPages}
-                    onClick={() =>
-                      setPaymentLogPage((p) =>
-                        Math.min(totalPaymentLogPages, p + 1),
-                      )
-                    }
-                    className="h-8 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-2xs"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
+            {filteredPaymentLogs.length > 0 && (
+              <Pagination
+                total={filteredPaymentLogs.length}
+                currentPage={paymentLogPage}
+                pageSize={paymentLogPageSize}
+                pageSizeOptions={[5, 10, 20, 50]}
+                onPageChange={(p) => setPaymentLogPage(p)}
+                onPageSizeChange={(newSize) => {
+                  setPaymentLogPageSize(newSize);
+                  setPaymentLogPage(1);
+                }}
+              />
             )}
           </div>
         </div>
@@ -5499,6 +6614,19 @@ export const SalesView: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  disabled={isDownloadingPdf}
+                  onClick={() => {
+                    if (selectedSale) {
+                      handleDownloadSaleInvoice(selectedSale);
+                    }
+                  }}
+                  className="h-9 px-3.5 rounded-xl border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#EA580C]" />
+                  <span>Download Invoice</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     setIsInvoiceModalOpen(false);
                     navigate("/sale-management/sales/return");
@@ -5528,16 +6656,16 @@ export const SalesView: React.FC = () => {
                   {selectedSale.invoiceNo}
                 </div>
                 <div className="text-xs text-slate-500 mt-1 font-medium">
-                  Date: {selectedSale.saleDate}
+                  Date: {formatDate(selectedSale.saleDate)}
                 </div>
                 <div className="text-xs text-slate-500">
-                  Due: {selectedSale.dueDate}
+                  Due: {formatDate(selectedSale.dueDate)}
                 </div>
               </div>
             </div>
 
             {/* Bill To & Ship To */}
-            <div className="grid grid-cols-2 gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs">
               <div>
                 <span className="font-bold text-slate-400 uppercase text-[10px] tracking-wider block mb-1">
                   Billed To:
@@ -5824,7 +6952,7 @@ export const SalesView: React.FC = () => {
                             {split.referenceNo || "—"}
                           </td>
                           <td className="py-2.5 px-3 text-slate-500 font-medium">
-                            {selectedSale.saleDate}
+                            {formatDate(selectedSale.saleDate)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-emerald-600">
                             ₹
@@ -5857,7 +6985,7 @@ export const SalesView: React.FC = () => {
                     <span className="text-slate-500">
                       Date:{" "}
                       <strong className="text-slate-700 font-semibold">
-                        {selectedSale.saleDate}
+                        {formatDate(selectedSale.saleDate)}
                       </strong>
                     </span>
                     <div className="flex items-center gap-1.5">
@@ -6195,10 +7323,7 @@ export const SalesView: React.FC = () => {
                             <option value="UPI">UPI</option>
                             <option value="Card">Card</option>
                             <option value="Cheque">Cheque</option>
-                            <option value="Online Payment">
-                              Online Payment
-                            </option>
-                            <option value="Other">Other</option>
+                            <option value="Online Payment">Online Payment</option>
                           </select>
                         </div>
 
@@ -6379,7 +7504,7 @@ export const SalesView: React.FC = () => {
                     <div className="flex justify-between text-slate-600">
                       <span>Invoice Date:</span>
                       <span className="font-medium text-slate-800">
-                        {selectedSale.saleDate}
+                        {formatDate(selectedSale.saleDate)}
                       </span>
                     </div>
                     <div className="flex justify-between text-slate-600">
@@ -6533,166 +7658,55 @@ export const SalesView: React.FC = () => {
       )}
 
       {/* ==========================================
-          MODAL 4: QUICK CUSTOMER ADD MODAL
+          ADD CUSTOMER & ADD ITEM MODALS
          ========================================== */}
-      <Modal
-        isOpen={isQuickCustomerModalOpen}
-        onClose={() => setIsQuickCustomerModalOpen(false)}
-        title="Quick Register Customer"
-        subtitle="Add a new customer profile without losing your current sale progress"
-        maxWidth="lg"
-      >
-        <form
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSaveQuickCustomer();
-          }}
-          className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150"
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-            <div className="sm:col-span-2">
-              <FormLabel required>Customer / Client Name</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.name}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    name: e.target.value,
-                  })
-                }
-                placeholder="e.g. Acme Corp / Sarah Connor"
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel>Company Name (Optional)</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.company}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    company: e.target.value,
-                  })
-                }
-                placeholder="e.g. Acme Enterprises"
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel required>Phone Number</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.phone}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    phone: e.target.value,
-                  })
-                }
-                placeholder="e.g. +91 98765 43210"
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel>Email Address</FormLabel>
-              <input
-                type="email"
-                value={quickCustomerForm.email}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    email: e.target.value,
-                  })
-                }
-                placeholder="e.g. info@acme.com"
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel>GSTIN / Tax ID</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.gstNumber}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    gstNumber: e.target.value,
-                  })
-                }
-                placeholder="e.g. 33AABCZ9876K1Z2"
-                className={`${FORM_INPUT_CLS} font-mono uppercase`}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <FormLabel>Billing Address</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.address}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    address: e.target.value,
-                  })
-                }
-                placeholder="Street address..."
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel>Credit Limit (₹)</FormLabel>
-              <input
-                type="number"
-                min="0"
-                value={quickCustomerForm.creditLimit}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    creditLimit: e.target.value,
-                  })
-                }
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-            <div>
-              <FormLabel>Payment Terms</FormLabel>
-              <input
-                type="text"
-                value={quickCustomerForm.paymentTerms}
-                onChange={(e) =>
-                  setQuickCustomerForm({
-                    ...quickCustomerForm,
-                    paymentTerms: e.target.value,
-                  })
-                }
-                placeholder="e.g. Net 30 Days"
-                className={FORM_INPUT_CLS}
-              />
-            </div>
-          </div>
+      <AddCustomerModal
+        isOpen={isAddCustomerModalOpen}
+        onClose={() => setIsAddCustomerModalOpen(false)}
+        onCustomerCreated={(newCust) => {
+          dispatch(baseApi.util.invalidateTags(['CommerceCustomer', 'Customer'] as any));
+          hasLoadedCustomersRef.current = false;
+          loadCustomersData();
+          handleCustomerChange(newCust.id);
+        }}
+      />
 
-          <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setIsQuickCustomerModalOpen(false)}
-              className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
-            >
-              <X className="w-4 h-4 text-slate-500" />
-              <span>Cancel</span>
-            </button>
-            <button
-              type="submit"
-              onClick={handleSaveQuickCustomer}
-              className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
-            >
-              <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>Register &amp; Select</span>
-            </button>
-          </div>
-        </form>
-      </Modal>
+      <AddItemModal
+        isOpen={isAddItemModalOpen}
+        onClose={() => {
+          setIsAddItemModalOpen(false);
+          setActiveItemRowIndex(null);
+        }}
+        onProductCreated={(newProd) => {
+          dispatch(baseApi.util.invalidateTags(['Product', 'InventoryStock'] as any));
+          const pId = newProd.id || (newProd as any).productId;
+          const mapped = {
+            id: pId,
+            productId: pId,
+            name: newProd.productName || (newProd as any).name || "Unnamed Product",
+            productName: newProd.productName || (newProd as any).name || "Unnamed Product",
+            code: newProd.productCode || (newProd as any).sku || pId,
+            sku: newProd.productCode || (newProd as any).sku || pId,
+            price: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
+            salePrice: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
+            unitPrice: Number(newProd.salePrice ?? (newProd as any).unitPrice ?? 0),
+            cost: Number(newProd.purchasePrice ?? 0),
+            unit: newProd.unit || "PCS",
+            batches: newProd.batches || [],
+            hsnCode: newProd.hsnCode || "",
+            category: newProd.category || "General",
+            imageUrl: (newProd as any).imageUrl || (newProd as any).image || "",
+          };
+          setProductList((prev) => [mapped, ...prev.filter((p) => p.id !== pId)]);
+          hasLoadedProductsRef.current = false;
+          loadProductAndStockData();
+          if (activeItemRowIndex !== null) {
+            handleItemProductChange(activeItemRowIndex, pId);
+          }
+          setIsAddItemModalOpen(false);
+          setActiveItemRowIndex(null);
+        }}
+      />
 
       {/* ==========================================
           MODAL 5: PAYMENT HISTORY MODAL (GLOBAL VIEW)
@@ -6853,7 +7867,7 @@ export const SalesView: React.FC = () => {
                             )}
                           </td>
                           <td className="py-3 px-3.5 text-slate-500 font-medium">
-                            {rec.paymentDate}{" "}
+                            {formatDate(rec.paymentDate)}{" "}
                             {rec.paymentTime ? `• ${rec.paymentTime}` : ""}
                           </td>
                           <td className="py-3 px-3.5 text-right font-bold text-emerald-600 text-[13px]">
@@ -6905,7 +7919,7 @@ export const SalesView: React.FC = () => {
                             )}
                           </td>
                           <td className="py-3 px-3.5 text-slate-500 font-medium">
-                            {selectedSale.saleDate}
+                            {formatDate(selectedSale.saleDate)}
                           </td>
                           <td className="py-3 px-3.5 text-right font-bold text-emerald-600 text-[13px]">
                             ₹
@@ -6938,7 +7952,7 @@ export const SalesView: React.FC = () => {
                           Standard Receipt
                         </td>
                         <td className="py-3 px-3.5 text-slate-500 font-medium">
-                          {selectedSale.saleDate}
+                          {formatDate(selectedSale.saleDate)}
                         </td>
                         <td className="py-3 px-3.5 text-right font-bold text-emerald-600 text-[13px]">
                           ₹
@@ -7068,7 +8082,7 @@ export const SalesView: React.FC = () => {
 
             {/* Grid of Payment Attributes */}
             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-3">
-              <div className="grid grid-cols-2 gap-3.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                     Payment ID
@@ -7159,10 +8173,20 @@ export const SalesView: React.FC = () => {
                     `Payment Receipt - ${selectedPaymentRecord.invoiceNo}`,
                   )
                 }
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs sm:text-[13px] font-bold shadow-2xs transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                <span>Print Receipt</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isDownloadingPdf}
+                onClick={() => handleDownloadPaymentReceipt(selectedPaymentRecord)}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
-                <Printer className="w-4 h-4" />
-                <span>Download / Print Receipt</span>
+                <Download className="w-4 h-4" />
+                <span>Download Receipt</span>
               </button>
             </div>
           </div>

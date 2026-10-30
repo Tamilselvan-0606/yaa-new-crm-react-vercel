@@ -1,6 +1,11 @@
+import React from 'react';
+import { pdf } from '@react-pdf/renderer';
+import { BusinessPDFDocument } from '../components/common/pdf/BusinessPDFDocument';
+import { TableReportPDF } from '../components/common/pdf/TableReportPDF';
+
 /**
- * Universal Printing Utility for YAA CRM
- * Provides dedicated printing functions for Tables, Ledgers, Reports, and Document Receipts.
+ * Universal Printing & PDF Export Utility for YAA CRM
+ * Provides dedicated printing and PDF downloading functions for Tables, Ledgers, Reports, and Document Receipts.
  */
 
 export interface PrintColumn {
@@ -373,26 +378,43 @@ export function numberToWordsIndian(num: number): string {
     return b[Math.floor(n / 10)] + (digit ? ' ' + a[digit] : '');
   }
 
-  const rounded = Math.floor(Math.abs(num));
-  if (rounded === 0) return 'Zero Rupees Only';
+  const absNum = Math.abs(num);
+  const rupees = Math.floor(absNum);
+  const paise = Math.round((absNum - rupees) * 100);
 
-  let str = '';
-  const crore = Math.floor(rounded / 10000000);
-  let rem = rounded % 10000000;
-  const lakh = Math.floor(rem / 100000);
-  rem = rem % 100000;
-  const thousand = Math.floor(rem / 1000);
-  rem = rem % 1000;
-  const hundred = Math.floor(rem / 100);
-  const tens = rem % 100;
+  if (rupees === 0 && paise === 0) return 'Zero Rupees Only';
 
-  if (crore > 0) str += inWords(crore) + ' Crore ';
-  if (lakh > 0) str += inWords(lakh) + ' Lakh ';
-  if (thousand > 0) str += inWords(thousand) + ' Thousand ';
-  if (hundred > 0) str += inWords(hundred) + ' Hundred ';
-  if (tens > 0) str += inWords(tens) + ' ';
+  let rupeeStr = '';
+  if (rupees > 0) {
+    const crore = Math.floor(rupees / 10000000);
+    let rem = rupees % 10000000;
+    const lakh = Math.floor(rem / 100000);
+    rem = rem % 100000;
+    const thousand = Math.floor(rem / 1000);
+    rem = rem % 1000;
+    const hundred = Math.floor(rem / 100);
+    const tens = rem % 100;
 
-  return str.trim() + ' Rupees Only';
+    if (crore > 0) rupeeStr += inWords(crore) + ' Crore ';
+    if (lakh > 0) rupeeStr += inWords(lakh) + ' Lakh ';
+    if (thousand > 0) rupeeStr += inWords(thousand) + ' Thousand ';
+    if (hundred > 0) rupeeStr += inWords(hundred) + ' Hundred ';
+    if (tens > 0) rupeeStr += inWords(tens) + ' ';
+    rupeeStr = rupeeStr.trim();
+  }
+
+  let paiseStr = '';
+  if (paise > 0) {
+    paiseStr = inWords(paise).trim() + ' Paise';
+  }
+
+  if (rupeeStr && paiseStr) {
+    return `${rupeeStr} Rupees and ${paiseStr} Only`;
+  }
+  if (rupeeStr) {
+    return `${rupeeStr} Rupees Only`;
+  }
+  return `${paiseStr} Only`;
 }
 
 export interface DocumentItemRow {
@@ -800,4 +822,44 @@ export function printBusinessDocument(options: DocumentPrintOptions): void {
   printWindow.document.write(html);
   printWindow.document.close();
 }
+
+/**
+ * Direct PDF Document Downloader (Does NOT open print dialog)
+ * Generates an authentic binary PDF blob and triggers automatic download.
+ */
+export async function downloadBusinessDocument(
+  options: DocumentPrintOptions,
+  filename?: string
+): Promise<void> {
+  const blob = await pdf(React.createElement(BusinessPDFDocument, { options }) as any).toBlob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  const safeDocNo = (options.docNo || options.docTypeTitle).replace(/[^a-zA-Z0-9_-]/g, '_');
+  link.download = filename || `${safeDocNo}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+/**
+ * Direct Table Report PDF Downloader (Does NOT open print dialog)
+ */
+export async function downloadTableReport(
+  options: PrintTableOptions,
+  filename?: string
+): Promise<void> {
+  const blob = await pdf(React.createElement(TableReportPDF, { options }) as any).toBlob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  const safeTitle = (options.title || 'Report').replace(/[^a-zA-Z0-9_-]/g, '_');
+  link.download = filename || `${safeTitle}_${new Date().toISOString().split('T')[0]}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
 

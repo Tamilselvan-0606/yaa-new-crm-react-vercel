@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   findDocumentLineage,
+  inferDocType,
   SalesDocumentLineage,
   SalesDocType,
 } from '../../utils/salesDocumentWorkflow';
@@ -25,29 +26,51 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
   compact = false,
 }) => {
   const navigate = useNavigate();
-  const [lineage, setLineage] = useState<SalesDocumentLineage | undefined>(() =>
-    findDocumentLineage(docRef || sourceDocNo)
-  );
+
+  const resolveLineage = useCallback((): SalesDocumentLineage | undefined => {
+    return (
+      findDocumentLineage(docRef, currentType) ||
+      (sourceDocNo ? findDocumentLineage(sourceDocNo, sourceDocType) : undefined)
+    );
+  }, [docRef, currentType, sourceDocNo, sourceDocType]);
+
+  const [lineage, setLineage] = useState<SalesDocumentLineage | undefined>(resolveLineage);
 
   useEffect(() => {
     const handleUpdate = () => {
-      setLineage(findDocumentLineage(docRef || sourceDocNo));
+      setLineage(resolveLineage());
     };
     window.addEventListener('yaa_crm_lineage_updated', handleUpdate);
     handleUpdate();
     return () => {
       window.removeEventListener('yaa_crm_lineage_updated', handleUpdate);
     };
-  }, [docRef, sourceDocNo]);
+  }, [resolveLineage]);
 
   // If no lineage and no explicit sourceDocNo, return null
   if (!lineage && !sourceDocNo) return null;
 
-  const est = lineage?.estimateNo || (sourceDocType === 'Estimate' ? sourceDocNo : undefined);
-  const pi = lineage?.proformaNo || (sourceDocType === 'Proforma' ? sourceDocNo : undefined);
-  const so = lineage?.orderNo || (sourceDocType === 'Order' ? sourceDocNo : undefined);
-  const dc = lineage?.challanNo || (sourceDocType === 'Challan' ? sourceDocNo : undefined);
-  const inv = lineage?.invoiceNo || (sourceDocType === 'Invoice' ? sourceDocNo : undefined);
+  // For Estimate, ensure the lineage actually belongs to this estimate
+  if (currentType === 'Estimate' && lineage && docRef) {
+    const cleanRef = docRef.trim().toLowerCase();
+    const matchesEstimate = Boolean(
+      (lineage.estimateNo && lineage.estimateNo.toLowerCase() === cleanRef) ||
+      (lineage.estimateId && lineage.estimateId.toLowerCase() === cleanRef)
+    );
+    if (!matchesEstimate) {
+      return null;
+    }
+  }
+
+  const resolvedSourceDocNo = sourceDocNo?.trim();
+  const effectiveSourceType = sourceDocType || inferDocType(resolvedSourceDocNo);
+  const effectiveSourceDocNo = resolvedSourceDocNo;
+
+  const est = lineage?.estimateNo || (effectiveSourceType === 'Estimate' ? effectiveSourceDocNo : undefined);
+  const pi = lineage?.proformaNo || (effectiveSourceType === 'Proforma' ? effectiveSourceDocNo : undefined);
+  const so = lineage?.orderNo || (effectiveSourceType === 'Order' ? effectiveSourceDocNo : undefined);
+  const dc = lineage?.challanNo || (effectiveSourceType === 'Challan' ? effectiveSourceDocNo : undefined);
+  const inv = lineage?.invoiceNo || (effectiveSourceType === 'Invoice' ? effectiveSourceDocNo : undefined);
 
   const items: Array<{
     type: SalesDocType;

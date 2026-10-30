@@ -33,12 +33,10 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
         if (p.organizationId) queryParams.organizationId = p.organizationId;
         const subId = p.subOrganizationId || p.sub_organization_id;
         if (subId) {
-          queryParams.sub_organization_id = subId;
           queryParams.subOrganizationId = subId;
         }
         const bId = p.branchId || p.branch_id;
         if (bId) {
-          queryParams.branch_id = bId;
           queryParams.branchId = bId;
         }
 
@@ -57,9 +55,9 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'ClientProduct' as const, id })),
-              { type: 'ClientProduct', id: 'LIST' },
-            ]
+            ...result.data.map(({ id }) => ({ type: 'ClientProduct' as const, id })),
+            { type: 'ClientProduct', id: 'LIST' },
+          ]
           : [{ type: 'ClientProduct', id: 'LIST' }],
     }),
 
@@ -128,7 +126,6 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
           params: {
             ...(organizationId ? { organizationId } : {}),
             ...(subOrganizationId ? { subOrganizationId } : {}),
-            ...(branchId ? { branchId } : {}),
           },
           headers,
         };
@@ -250,12 +247,10 @@ export const clientProductApi = {
     if (params?.organizationId) queryParams.organizationId = params.organizationId;
     const subId = params?.subOrganizationId || params?.sub_organization_id;
     if (subId) {
-      queryParams.sub_organization_id = subId;
       queryParams.subOrganizationId = subId;
     }
     const bId = params?.branchId || params?.branch_id;
     if (bId) {
-      queryParams.branch_id = bId;
       queryParams.branchId = bId;
     }
 
@@ -299,8 +294,12 @@ export const clientProductApi = {
       headers['x-organization-id'] = activeOrgId;
     }
 
-    // Backend rejects unrecognized keys in POST body: "organizationId", "subOrganizationId", "branchId"
-    const { organizationId, subOrganizationId, branchId, ...bodyPayload } = payload as any;
+    const { organizationId, subOrganizationId, branchId, ...rest } = payload as any;
+    const bodyPayload = {
+      ...rest,
+      ...(subOrganizationId ? { subOrganizationId } : {}),
+      ...(branchId ? { branchId } : {}),
+    };
 
     const response = await baseClient.post<ClientProductSingleResponse>(
       '/products',
@@ -309,8 +308,7 @@ export const clientProductApi = {
         headers,
         params: {
           ...(organizationId ? { organizationId } : {}),
-          ...(subOrganizationId ? { subOrganizationId, sub_organization_id: subOrganizationId } : {}),
-          ...(branchId ? { branchId, branch_id: branchId } : {}),
+          ...(subOrganizationId ? { subOrganizationId } : {}),
         },
       }
     );
@@ -346,7 +344,6 @@ export const clientProductApi = {
         params: {
           ...(organizationId ? { organizationId } : {}),
           ...(subOrganizationId ? { subOrganizationId } : {}),
-          ...(branchId ? { branchId } : {}),
         },
       }
     );

@@ -53,7 +53,7 @@ import {
 } from "../../api/platform/leadApi";
 import {
   useGetPlatformClientsQuery,
-  useUpdatePlatformClientMutation,
+  useUpdatePlatformClientStatusMutation,
   useDeletePlatformClientMutation,
   PlatformClientItem,
 } from "../../api/platform/clientApi";
@@ -161,6 +161,67 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [clientPage, setClientPage] = useState(1);
   const [clientLimit, setClientLimit] = useState(10);
 
+  // Header Sub-Organization and Branch Filter State
+  const [activeSubOrgId, setActiveSubOrgId] = useState<string | undefined>(() => {
+    return (
+      localStorage.getItem("active_sub_organization_id") ||
+      localStorage.getItem("active_sub_organization_id_sales") ||
+      undefined
+    );
+  });
+  const [activeSubOrgName, setActiveSubOrgName] = useState<string>(() => {
+    return (
+      localStorage.getItem("active_sub_organization") ||
+      localStorage.getItem("active_sub_organization_client") ||
+      "All"
+    );
+  });
+  const [activeBranchId, setActiveBranchId] = useState<string | undefined>(() => {
+    return (
+      localStorage.getItem("active_branch_id") ||
+      localStorage.getItem("active_branch_id_sales") ||
+      undefined
+    );
+  });
+  const [activeBranchName, setActiveBranchName] = useState<string>(() => {
+    return (
+      localStorage.getItem("active_branch") ||
+      localStorage.getItem("active_branch_client") ||
+      "All"
+    );
+  });
+
+  // Listen to Header Sub-Org & Branch filter changes
+  useEffect(() => {
+    const handleSubOrgChanged = (e: any) => {
+      const name = e?.detail?.name || localStorage.getItem("active_sub_organization") || "All";
+      const id = e?.detail?.subOrganizationId || e?.detail?.id || localStorage.getItem("active_sub_organization_id");
+      setActiveSubOrgName(name);
+      setActiveSubOrgId(id && id !== "all" ? id : undefined);
+      setLeadPage(1);
+      setClientPage(1);
+    };
+
+    const handleBranchChanged = (e: any) => {
+      const name = e?.detail?.branch || e?.detail?.name || localStorage.getItem("active_branch") || "All";
+      const id = e?.detail?.branchId || e?.detail?.id || localStorage.getItem("active_branch_id");
+      setActiveBranchName(name);
+      setActiveBranchId(id && id !== "all" ? id : undefined);
+      setLeadPage(1);
+      setClientPage(1);
+    };
+
+    window.addEventListener("subOrgChanged", handleSubOrgChanged);
+    window.addEventListener("branchChanged", handleBranchChanged);
+    return () => {
+      window.removeEventListener("subOrgChanged", handleSubOrgChanged);
+      window.removeEventListener("branchChanged", handleBranchChanged);
+    };
+  }, []);
+
+  const effectiveSubOrgId = activeSubOrgName !== "All" ? activeSubOrgId : undefined;
+  const effectiveBranchId = activeBranchName !== "All" ? activeBranchId : undefined;
+
   // Active Organization ID
   const activeOrgId = getStoredOrganizationId();
 
@@ -176,9 +237,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     status: appliedClientStatus !== "All" ? (appliedClientStatus as any) : undefined,
     organizationType: "All",
     organization_id: activeOrgId || undefined,
+    sub_organization_id: effectiveSubOrgId,
+    branch_id: effectiveBranchId,
   });
 
-  const [updatePlatformClient] = useUpdatePlatformClientMutation();
+  const [updatePlatformClientStatus] = useUpdatePlatformClientStatusMutation();
   const [deletePlatformClient] = useDeletePlatformClientMutation();
 
   const clientsPagination = platformClientsResponse?.pagination;
@@ -195,6 +258,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     limit: leadLimit,
     search: appliedLeadSearch || undefined,
     status: appliedLeadStatus !== "All" ? appliedLeadStatus : undefined,
+    organization_id: activeOrgId || undefined,
+    sub_organization_id: effectiveSubOrgId,
+    branch_id: effectiveBranchId,
   });
 
   const [updatePlatformLeadStatus] = useUpdatePlatformLeadStatusMutation();
@@ -207,13 +273,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   const handleUpdateClientStatus = async (id: string, newStatus: string) => {
     try {
-      await updatePlatformClient({
-        id,
-        payload: {
-          status: newStatus as any,
-          active: newStatus === 'Active',
-        },
-      }).unwrap();
+      await updatePlatformClientStatus({ id, status: newStatus }).unwrap();
     } catch {
       try {
         await customerApi.patchCustomer(id, { status: newStatus as any });
@@ -272,8 +332,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   };
 
   const handleConvertLeadToCustomer = (lead: Lead) => {
-    const prefill: Customer = {
+    const prefill: Customer & { sourceLeadId?: string } = {
       id: "",
+      sourceLeadId: lead.id,
       clientId: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
       name: lead.name,
       company: lead.company || lead.name,
@@ -382,14 +443,35 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       membersCount: pc.membersCount,
       linkedProducts: rawProds,
       documents: [],
+      organizationId: (pc as any).organizationId || "",
+      subOrganizationId: (pc as any).subOrganizationId || "",
+      subOrganizationName: (pc as any).subOrganizationName || (pc as any).subOrganization?.name || "",
+      branchId: (pc as any).branchId || "",
+      branchName: (pc as any).branchName || (pc as any).branch?.name || "",
       createdAt: pc.createdAt,
       updatedAt: pc.updatedAt,
     };
   });
 
-  // Filtered Clients (incorporating live API clients + fallback)
+  // Filtered Clients (incorporating live API clients + fallback + client safeguard for subOrg and branch)
   const allCustomerSource = clientsFromApi.length > 0 ? clientsFromApi : customers;
   const filteredCustomers = allCustomerSource.filter((c: any) => {
+    // Sub-org safeguard filter if selected
+    if (effectiveSubOrgId) {
+      const clientSubId = c.subOrganizationId || c.sub_organization_id;
+      if (clientSubId && clientSubId !== effectiveSubOrgId) {
+        return false;
+      }
+    }
+
+    // Branch safeguard filter if selected
+    if (effectiveBranchId) {
+      const clientBranchId = c.branchId || c.branch_id;
+      if (clientBranchId && clientBranchId !== effectiveBranchId) {
+        return false;
+      }
+    }
+
     // If backend already filtered search and status, respect it, but apply client dropdown filters if any
     const prods = (c.linkedProducts || []).map((p: any) =>
       p.productName.toLowerCase(),
@@ -421,7 +503,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       leadDate: pl.createdAt ? pl.createdAt.split("T")[0] : "",
       name: pl.name,
       company: pl.company,
-      designation: "",
+      designation: pl.designation || (pl as any).designation || "",
       phone: pl.phone,
       whatsapp: pl.whatsapp || pl.phone,
       email: pl.email,
@@ -437,7 +519,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       interestedProductOrService: pl.planInterest || "YaaConnect",
       assignedStaffId: pl.assignedTo || "",
       assignedStaffName: pl.assignedTo ? "Assigned Agent" : undefined,
-      status: pl.status || "New",
+      // A lead that produced a client is Converted to Client, whatever stored status the API keeps for it.
+      status: pl.convertedOrganizationId ? "Converted to Client" : pl.status || "Open",
       priority: pl.priority || "Medium",
       interest: "High",
       tags: [],
@@ -452,13 +535,33 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       nextAction: pl.planInterest ? `Interest: ${pl.planInterest}` : "",
       nextFollowUpDate: pl.followUpDate || "",
       notes: pl.notes || "",
+      feedback: pl.notes || "",
+      organizationId: (pl as any).organizationId || (pl as any).organization_id || "",
+      subOrganizationId: (pl as any).subOrganizationId || (pl as any).sub_organization_id || "",
+      branchId: (pl as any).branchId || (pl as any).branch_id || "",
+      subOrganizationName: (pl as any).subOrganizationName || (pl as any).subOrganization?.name || "",
+      branchName: (pl as any).branchName || (pl as any).branch?.name || "",
       createdAt: pl.createdAt,
       updatedAt: pl.updatedAt,
     };
   });
 
-  // Filtered Leads (server-side params already applied, with client safeguard)
-  const filteredLeads = leads;
+  // Filtered Leads (server-side params already applied, with client safeguard for subOrg and branch)
+  const filteredLeads = leads.filter((l) => {
+    if (effectiveSubOrgId) {
+      const leadSubId = l.subOrganizationId || (l as any).sub_organization_id;
+      if (leadSubId && leadSubId !== effectiveSubOrgId) {
+        return false;
+      }
+    }
+    if (effectiveBranchId) {
+      const leadBranchId = l.branchId || (l as any).branch_id;
+      if (leadBranchId && leadBranchId !== effectiveBranchId) {
+        return false;
+      }
+    }
+    return true;
+  });
 
   // Clean ID Formatter (e.g. PLD-2026-0001 or LD-101)
   const formatDisplayId = (
@@ -537,6 +640,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   const getStatusBadge = (status: string) => {
     switch (status) {
+      case "Open":
       case "New":
         return "bg-blue-50 text-blue-600 font-bold";
       case "Contacted":
@@ -556,9 +660,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       case "Onboarding":
         return "bg-cyan-50 text-cyan-600 font-bold";
       case "Converted":
+      case "Converted to Client":
       case "Active":
         return "bg-emerald-50 text-emerald-600 font-bold";
       case "Not Interested":
+      case "Inactive":
       case "Lost":
         return "bg-rose-50 text-rose-600 font-bold";
       default:
@@ -574,7 +680,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             Clients & Leads Center
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+          <p className="text-sm text-slate-500 font-medium mt-0.5">
             Streamline client intake, convert prospective leads, and manage
             directory details.
           </p>
@@ -588,7 +694,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               setEditingLead(null);
               setIsAddLeadOpen(true);
             }}
-            className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
+            className="h-10 sm:h-11 px-5 sm:px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-xs sm:text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98] whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4 text-white stroke-[2.5]" />
             <span>Add Lead</span>
@@ -600,7 +706,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               setEditingCustomer(null);
               setIsAddClientOpen(true);
             }}
-            className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98]"
+            className="h-10 sm:h-11 px-5 sm:px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold text-xs sm:text-sm rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.98] whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4 text-white stroke-[2.5]" />
             <span>Add Client</span>
@@ -719,9 +825,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       STATUS
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
-                      RENEWAL
-                    </th>
-                    <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white">
                       PAYMENT
                     </th>
                     <th className="py-4 px-4 border border-[#3e0b96] bg-[#33077C] text-white text-center">
@@ -733,7 +836,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   {isClientsLoading ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={7}
                         className="py-16 text-center text-slate-400 border border-slate-200"
                       >
                         <div className="w-7 h-7 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
@@ -743,7 +846,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   ) : filteredCustomers.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={7}
                         className="py-16 text-center text-slate-400 border border-slate-200"
                       >
                         <Building2 className="w-9 h-9 mx-auto mb-2 opacity-30 text-purple-400" />
@@ -844,7 +947,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                                           className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 whitespace-nowrap"
                                         >
                                           <span
-                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${getProductDotColor(pName)}`}
+                                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${getProductDotColor(pName as string)}`}
                                           ></span>
                                           <span>{pName}</span>
                                         </div>
@@ -971,15 +1074,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                             </span>
                           </td>
 
-                          {/* 6. Renewal */}
-                          <td className="py-4 px-4 border border-slate-200 text-xs sm:text-[13px] text-slate-700 font-medium">
-                            <div className="flex items-center gap-1.5">
-                              <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <span>{renewalDate}</span>
-                            </div>
-                          </td>
-
-                          {/* 7. Payment */}
+                          {/* 6. Payment */}
                           <td className="py-4 px-4 border border-slate-200">
                             {paymentStatus && paymentStatus !== "-" ? (
                               <span
@@ -1087,32 +1182,11 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <FilterDropdown
                   options={[
                     { label: "Status : All", value: "All" },
-                    { label: "New", value: "New", dotColor: "#3b82f6" },
-                    {
-                      label: "Contacted",
-                      value: "Contacted",
-                      dotColor: "#f59e0b",
-                    },
-                    {
-                      label: "Qualified",
-                      value: "Qualified",
-                      dotColor: "#6366f1",
-                    },
-                    {
-                      label: "Proposal",
-                      value: "Proposal",
-                      dotColor: "#0284c7",
-                    },
-                    {
-                      label: "Negotiation",
-                      value: "Negotiation",
-                      dotColor: "#ea580c",
-                    },
-                    {
-                      label: "Won",
-                      value: "Won",
-                      dotColor: "#10b981",
-                    },
+                    { label: "Open", value: "Open", dotColor: "#3b82f6" },
+                    { label: "Contacted", value: "Contacted", dotColor: "#f59e0b" },
+                    { label: "Qualified", value: "Qualified", dotColor: "#6366f1" },
+                    { label: "Converted to Client", value: "Converted to Client", dotColor: "#10b981" },
+                    { label: "Inactive", value: "Inactive", dotColor: "#94a3b8" },
                     { label: "Lost", value: "Lost", dotColor: "#64748b" },
                   ]}
                   value={pendingLeadStatus}
@@ -1942,7 +2016,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                               className="flex items-center gap-1.5 text-xs font-bold text-slate-900"
                             >
                               <span
-                                className={`w-2 h-2 rounded-full ${getProductDotColor(pName)}`}
+                                className={`w-2 h-2 rounded-full ${getProductDotColor(String(pName))}`}
                               ></span>
                               <span>{pName}</span>
                             </div>
@@ -2144,12 +2218,14 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   ...(dropdownPos.bottom !== undefined
                     ? { bottom: `${dropdownPos.bottom}px` }
                     : { top: `${dropdownPos.top}px` }),
-                  right: `${dropdownPos.right}px`,
+                  right: `${Math.min(Math.max(8, dropdownPos.right), Math.max(8, window.innerWidth - 181))}px`,
                 }}
-                className="lead-action-dropdown-menu w-[165px] bg-white rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.08)] border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left flex flex-col gap-1 font-sans"
+                className="lead-action-dropdown-menu w-[165px] max-w-[calc(100vw-1rem)] bg-white rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.08)] border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left flex flex-col gap-1 font-sans"
               >
                 {currentLead && (
                   <>
+                    {currentLead.status !== "Converted to Client" && (
+                      <>
                     {/* 1. Edit Lead (Blue circle) */}
                     <button
                       type="button"
@@ -2167,6 +2243,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                         Edit Lead
                       </span>
                     </button>
+                      </>
+                    )}
 
                     {/* 2. View Details (Deep purple circle) */}
                     <button
@@ -2186,18 +2264,34 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       </span>
                     </button>
 
-                    {/* 3. Inactive (Slate circle) */}
+                    {currentLead.status !== "Converted to Client" && (
+                      <>
+                    {/* 3. Lost / 4. Converted - Lost is a valid lead status; Converted goes through the client conversion flow, so it is hidden once the lead is Won/converted */}
+                    {currentLead.status !== 'Inactive' && (
                     <button
                       type="button"
                       onClick={() => {
                         setActiveDropdownId(null);
                         setDropdownPos(null);
-                        setConfirmAction({
-                          type: 'Inactive',
-                          category: 'lead',
-                          id: currentLead.id,
-                          name: currentLead.name,
-                        });
+                        handleUpdateLeadStatus(currentLead.id, 'Inactive');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <div className="w-[26px] h-[26px] rounded-full bg-[#94A3B8] text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
+                      </div>
+                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                        Inactive
+                      </span>
+                    </button>
+                    )}
+                    {currentLead.status !== 'Lost' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        handleUpdateLeadStatus(currentLead.id, 'Lost');
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
                     >
@@ -2205,9 +2299,28 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                         <Ban className="w-3.5 h-3.5 stroke-[2.2]" />
                       </div>
                       <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
-                        Inactive
+                        Lost
                       </span>
                     </button>
+                    )}
+                    {!(currentLead as any).convertedOrganizationId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveDropdownId(null);
+                        setDropdownPos(null);
+                        handleConvertLeadToCustomer(currentLead);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      <div className="w-[26px] h-[26px] rounded-full bg-[#16A34A] text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.2]" />
+                      </div>
+                      <span className="text-[13px] font-bold text-[#1E293B] tracking-tight">
+                        Converted to Client
+                      </span>
+                    </button>
+                    )}
 
                     {/* Subtle divider before Delete */}
                     <div className="h-px bg-slate-100 my-0.5" />
@@ -2234,6 +2347,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                         Delete
                       </span>
                     </button>
+                      </>
+                    )}
                   </>
                 )}
 

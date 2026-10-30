@@ -166,10 +166,10 @@ export const SalesGraphModal: React.FC<SalesGraphModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-white w-full max-w-6xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="bg-white w-full max-w-6xl rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[93dvh]">
         {/* Top Control Bar: Date Range (From - To) & Excel Export Icon & Close */}
-        <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-white">
+        <div className="px-3.5 sm:px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 bg-white shrink-0">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 text-xs sm:text-[13px] font-semibold text-slate-700">
               <span className="text-slate-500 font-medium">From</span>
@@ -217,14 +217,14 @@ export const SalesGraphModal: React.FC<SalesGraphModalProps> = ({
         </div>
 
         {/* Graph Card Section */}
-        <div className="p-5 sm:p-6 overflow-y-auto flex-1 bg-white">
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1 bg-white">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-2 border-b border-slate-100">
             <h2 className="text-base sm:text-lg font-bold text-slate-800 tracking-tight">
               Sales Graph
             </h2>
 
             {/* Interval Tabs: Daily | Weekly | Monthly | Yearly */}
-            <div className="flex items-center gap-6 text-xs sm:text-[13px] font-semibold">
+            <div className="flex items-center gap-3 sm:gap-6 flex-wrap text-xs sm:text-[13px] font-semibold">
               {(['Daily', 'Weekly', 'Monthly', 'Yearly'] as IntervalType[]).map((tab) => {
                 const isActive = interval === tab;
                 return (
@@ -246,7 +246,7 @@ export const SalesGraphModal: React.FC<SalesGraphModalProps> = ({
           </div>
 
           {/* Line / Area Chart */}
-          <div className="w-full h-[450px] mt-2">
+          <div className="w-full h-[280px] sm:h-[420px] mt-2">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={chartData}

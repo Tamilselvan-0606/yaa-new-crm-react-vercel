@@ -1,22 +1,11 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, Plugin } from 'vite';
-import { createApiApp } from './server';
-
-function expressApiPlugin(): Plugin {
-  return {
-    name: 'express-api-middleware',
-    configureServer(server) {
-      server.middlewares.use(createApiApp());
-    },
-  };
-}
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
     plugins: [
-      expressApiPlugin(),
       react(),
       tailwindcss(),
     ],
@@ -40,7 +29,7 @@ export default defineConfig(() => {
         '.ngrok-free.dev',
       ],
 
-      hmr: false,
+      hmr: process.env.DISABLE_HMR !== 'true',
 
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

@@ -140,6 +140,7 @@ export interface ApiExpense {
   paymentMethod: string;
   referenceNo?: string | null;
   notes?: string | null;
+  receiptImage?: string | null;
   createdAt: string;
   updatedAt: string;
   category?: ApiExpenseCategorySummary | null;
@@ -182,6 +183,7 @@ export interface CreateExpensePayload {
   paymentMethod: string;
   referenceNo?: string;
   notes?: string;
+  receiptImage?: string | null;
 }
 
 export interface UpdateExpensePayload {
@@ -195,6 +197,7 @@ export interface UpdateExpensePayload {
   paymentMethod?: string;
   referenceNo?: string;
   notes?: string;
+  receiptImage?: string | null;
 }
 
 export interface PatchExpensePayload {
@@ -208,6 +211,7 @@ export interface PatchExpensePayload {
   paymentMethod?: string;
   referenceNo?: string;
   notes?: string;
+  receiptImage?: string | null;
 }
 
 export interface ExpensePagination {

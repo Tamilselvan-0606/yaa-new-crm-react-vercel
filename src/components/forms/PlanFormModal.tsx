@@ -573,7 +573,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
       showBackIcon={true}
       hideCloseButton={true}
     >
-      <form noValidate onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-4.5 p-2 sm:p-4 animate-in fade-in duration-150">
+      <form noValidate onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-4.5 p-0.5 sm:p-2 animate-in fade-in duration-150">
         {submitError && (
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between">
             <span>{submitError}</span>
@@ -1299,11 +1299,11 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
           </>
         )}
 
-        <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+        <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
           <button
             type="button"
             onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+            className="w-full sm:w-auto h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-2"
           >
             <X className="w-4 h-4 text-slate-500" />
             <span>Cancel</span>
@@ -1311,7 +1311,7 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-50"
+            className="w-full sm:w-auto h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {isSubmitting ? (
               <span>Saving...</span>

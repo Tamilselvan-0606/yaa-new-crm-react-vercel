@@ -46,7 +46,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       className={`bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 shadow-xs flex flex-wrap items-center gap-2.5 sm:gap-3 ${className}`}
     >
       {/* Search input &mdash; responsive fluid width */}
-      <div className="relative flex-1 min-w-[200px] max-w-full">
+      <div className="relative w-full sm:w-auto flex-1 min-w-0 sm:min-w-[200px] max-w-full">
         <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
         <input
           type="text"
@@ -60,11 +60,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
       {/* Filter slot &mdash; wrapped flex row */}
       {filterSlot && (
-        <div className="flex items-center gap-2 flex-wrap">{filterSlot}</div>
+        <div className="flex items-center gap-2 flex-wrap max-w-full">{filterSlot}</div>
       )}
 
       {/* Action Buttons */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 flex-wrap">
         {onSubmit && (
           <Button
             variant="primary"
