@@ -2,7 +2,7 @@ import React, { useState, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import { store } from './store/store';
-import { Toaster } from 'sonner';
+import { SnackbarHost } from './utils/toast';
 import { CustomThemeProvider } from './theme/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Sidebar } from './components/layout/Sidebar';
@@ -418,7 +418,7 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter>
             <AppRoutes />
-            <Toaster position="top-right" richColors closeButton />
+            <SnackbarHost />
           </BrowserRouter>
         </AuthProvider>
       </CustomThemeProvider>

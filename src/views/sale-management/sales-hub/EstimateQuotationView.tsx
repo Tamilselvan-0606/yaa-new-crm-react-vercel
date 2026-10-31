@@ -68,7 +68,7 @@ import { DeleteConfirmationModal } from "../../../components/common/DeleteConfir
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { useNavigate } from "react-router-dom";
 import { useCompanyDocumentProfile } from '../../../hooks/useCompanyDocumentProfile';
 import { exportTableToExcel } from "../../../utils/excelExport";
@@ -2309,338 +2309,7 @@ export const EstimateQuotationView: React.FC = () => {
     const quot = convertTargetQuotation;
 
     try {
-      let apiConvertedDocNo = "";
-      try {
-        const res = await quotationApi.convertQuotation(quot.id, {
-          targetType:
-            convertType === "Challan"
-              ? ("DeliveryChallan" as any)
-              : convertType,
-          dueDate: convertDueDate || undefined,
-        });
-        apiConvertedDocNo =
-          res.data?.convertedTo?.documentNo ||
-          (res.data as any)?.document?.challanNo ||
-          "";
-      } catch (apiErr) {
-        console.warn("Backend convertQuotation returned notice:", apiErr);
-      }
-
-      if (convertType === "Proforma") {
-        const year = new Date().getFullYear();
-        const finalDocNo =
-          apiConvertedDocNo || `PRO-${year}-${String(Date.now()).slice(-4)}`;
-        const newProforma: SaleProformaInvoice = {
-          id: `pro_conv_${Date.now()}`,
-          proformaNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          date: new Date().toISOString().split("T")[0],
-          validUntil:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
-          customerId: quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find((c) => c.id === quot.customerId)?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        try {
-          const payload = mapSaleProformaToPayload(newProforma, true);
-          const pRes = await commerceProformaApi.createProforma(payload);
-          if (pRes?.data?.id) newProforma.id = pRes.data.id;
-          const backendNo =
-            pRes?.data?.proformaNo || (pRes?.data as any)?.documentNo;
-          if (backendNo) newProforma.proformaNo = backendNo;
-        } catch (createErr) {
-          console.warn("createProforma fallback:", createErr);
-        }
-
-        syncConvertedProformaToStorage(newProforma);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Proforma",
-          toId: newProforma.id,
-          toNo: newProforma.proformaNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newProforma.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Proforma",
-          documentNo: newProforma.proformaNo,
-          id: newProforma.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
-            { type: "Proforma", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice ${newProforma.proformaNo}!`,
-        );
-      } else if (convertType === "Order") {
-        const year = new Date().getFullYear();
-        const finalDocNo =
-          apiConvertedDocNo || `SO-${year}-${String(Date.now()).slice(-4)}`;
-        const newOrder: SaleOrderRecord = {
-          id: `order_conv_${Date.now()}`,
-          orderNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          orderDate: new Date().toISOString().split("T")[0],
-          dueDate:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
-          customerId: quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find((c) => c.id === quot.customerId)?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          paymentType: "Credit",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          advanceAmount: 0,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        try {
-          const payload = mapSaleOrderRecordToPayload(newOrder, true);
-          const oRes = await commerceSaleOrderApi.createOrder(payload);
-          if (oRes?.data?.id) newOrder.id = oRes.data.id;
-          const backendNo =
-            oRes?.data?.orderNo || (oRes?.data as any)?.documentNo;
-          if (backendNo) newOrder.orderNo = backendNo;
-        } catch (createErr) {
-          console.warn("createOrder fallback:", createErr);
-        }
-
-        syncConvertedOrderToStorage(newOrder);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Order",
-          toId: newOrder.id,
-          toNo: newOrder.orderNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newOrder.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Order",
-          documentNo: newOrder.orderNo,
-          id: newOrder.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
-            { type: "SalesOrder", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Sale Order ${newOrder.orderNo}!`,
-        );
-      } else if (convertType === "Challan") {
-        const currentLineage = findDocumentLineage(quot.quotationNo);
-        const existingChallans: DeliveryChallanRecord[] = JSON.parse(
-          localStorage.getItem("yaa_crm_delivery_challans") || "[]",
-        ).filter((c: any) => !isMockChallan(c));
-        const finalDocNo =
-          apiConvertedDocNo ||
-          currentLineage?.challanNo ||
-          `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
-
-        let resolvedCustomerId = quot.customerId;
-        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
-          const found = customers.find(
-            (c) =>
-              c.id === quot.customerId ||
-              c.name.toLowerCase() === quot.partyName.trim().toLowerCase(),
-          );
-          if (found && UUID_REGEX.test(found.id)) {
-            resolvedCustomerId = found.id;
-          } else if (customers.length > 0 && UUID_REGEX.test(customers[0].id)) {
-            resolvedCustomerId = customers[0].id;
-          }
-        }
-
-        const newChallan: DeliveryChallanRecord = {
-          id: `dc_conv_${Date.now()}`,
-          challanNo: finalDocNo,
-          referenceNo: quot.quotationNo,
-          invoiceDate: new Date().toISOString().split("T")[0],
-          dueDate:
-            convertDueDate ||
-            quot.validUntil ||
-            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
-          customerId: resolvedCustomerId || quot.customerId,
-          customerCode:
-            quot.customerCode ||
-            customers.find(
-              (c) => c.id === (resolvedCustomerId || quot.customerId),
-            )?.customerCode ||
-            undefined,
-          partyName: quot.partyName,
-          customerCompany: quot.customerCompany,
-          customerPhone: quot.customerPhone,
-          customerEmail: quot.customerEmail,
-          billingAddress: quot.billingAddress,
-          shippingAddress: quot.shippingAddress || quot.billingAddress,
-          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
-          items: quot.items.map((it, idx) => ({
-            id: `row_${idx}_${Date.now()}`,
-            productId: it.productId,
-            productName: it.productName,
-            sku: it.sku,
-            quantity: it.quantity,
-            unitPrice: it.unitPrice,
-            taxPercent: it.taxPercent || 0,
-            discountPercent: it.discountPercent || 0,
-            total: it.total,
-            unit: (it as any).unit || "PCS",
-          })),
-          subtotal: quot.subtotal,
-          withGst: quot.withGst,
-          gstType: quot.gstType,
-          cgst: quot.cgst,
-          sgst: quot.sgst,
-          igst: quot.igst,
-          discount: quot.discount || 0,
-          taxAmount: quot.taxAmount || 0,
-          roundOff: quot.roundOff || 0,
-          amount: quot.amount,
-          balance: quot.amount,
-          status: "Open",
-          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        if (
-          resolvedCustomerId &&
-          newChallan.items &&
-          newChallan.items.length > 0
-        ) {
-          try {
-            const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
-            payload.customerId = resolvedCustomerId;
-            const cRes =
-              await commerceDeliveryChallanApi.createChallan(payload);
-            if (cRes?.data?.id) newChallan.id = cRes.data.id;
-            const backendNo =
-              cRes?.data?.challanNo || (cRes?.data as any)?.documentNo;
-            if (backendNo) newChallan.challanNo = backendNo;
-          } catch (createErr) {
-            console.warn("createChallan fallback:", createErr);
-          }
-        }
-
-        syncConvertedChallanToStorage(newChallan);
-        recordDocumentConversion({
-          fromType: "Estimate",
-          fromId: quot.id,
-          fromNo: quot.quotationNo,
-          toType: "Challan",
-          toId: newChallan.id,
-          toNo: newChallan.challanNo,
-          partyName: quot.partyName,
-          customerId: quot.customerId,
-          customerCode: newChallan.customerCode,
-          grandTotal: quot.amount,
-        });
-
-        syncQuotationStatusInStorage(quot.id, "Converted", {
-          type: "Challan",
-          documentNo: newChallan.challanNo,
-          id: newChallan.id,
-        });
-        updateQuotationStatus(quot.id, "Converted");
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
-            { type: "DeliveryChallan", id: "LIST" },
-          ]),
-        );
-        toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Delivery Challan ${newChallan.challanNo}!`,
-        );
-      } else if (convertType === "Invoice") {
+      if (convertType === "Invoice") {
         setIsConvertModalOpen(false);
         setConvertTargetQuotation(null);
         navigate("/sale-management/sales/sale", {
@@ -2697,6 +2366,403 @@ export const EstimateQuotationView: React.FC = () => {
           },
         });
         return;
+      }
+
+      let apiConvertedDocNo = "";
+      let apiConvertedDocId = "";
+      let didBackendConvertCreateDoc = false;
+      try {
+        const res = await quotationApi.convertQuotation(quot.id, {
+          targetType:
+            convertType === "Challan"
+              ? ("DeliveryChallan" as any)
+              : convertType,
+          dueDate: convertDueDate || undefined,
+        });
+        apiConvertedDocNo =
+          res.data?.convertedTo?.documentNo ||
+          (res.data as any)?.convertedTo?.proformaNo ||
+          (res.data as any)?.convertedTo?.orderNo ||
+          (res.data as any)?.convertedTo?.challanNo ||
+          (res.data as any)?.document?.proformaNo ||
+          (res.data as any)?.document?.orderNo ||
+          (res.data as any)?.document?.challanNo ||
+          (res.data as any)?.document?.documentNo ||
+          (res.data as any)?.proforma?.proformaNo ||
+          (res.data as any)?.order?.orderNo ||
+          (res.data as any)?.challan?.challanNo ||
+          (res.data as any)?.source?.convertedToInvoiceNo ||
+          (res.data as any)?.proformaNo ||
+          (res.data as any)?.orderNo ||
+          (res.data as any)?.challanNo ||
+          (res.data as any)?.documentNo ||
+          "";
+        apiConvertedDocId =
+          res.data?.convertedTo?.id ||
+          (res.data as any)?.document?.id ||
+          (res.data as any)?.proforma?.id ||
+          (res.data as any)?.order?.id ||
+          (res.data as any)?.challan?.id ||
+          (res.data as any)?.source?.convertedToId ||
+          (res.data as any)?.id ||
+          "";
+        if (apiConvertedDocNo || apiConvertedDocId || res?.success) {
+          didBackendConvertCreateDoc = true;
+        }
+      } catch (apiErr) {
+        console.warn("Backend convertQuotation returned notice:", apiErr);
+      }
+
+      if (convertType === "Proforma") {
+        if (didBackendConvertCreateDoc && !apiConvertedDocNo) {
+          try {
+            const latestRes = await commerceProformaApi.getProformas({
+              page_no: 1,
+              page_size: 5,
+              sortOrder: "desc",
+            });
+            const latestList = Array.isArray(latestRes?.data)
+              ? latestRes.data
+              : [];
+            const matched = latestList.find(
+              (p) =>
+                (p.sourceId && p.sourceId === quot.id) ||
+                (p.referenceNo && p.referenceNo === quot.quotationNo) ||
+                ((p.customerId === quot.customerId ||
+                  p.partyName === quot.partyName) &&
+                  Math.abs(Number(p.amount ?? p.grandTotal ?? 0) - quot.amount) <
+                    1),
+            );
+            if (matched) {
+              apiConvertedDocNo =
+                matched.proformaNo || (matched as any).documentNo || "";
+              apiConvertedDocId = matched.id || apiConvertedDocId;
+            }
+          } catch (lookupErr) {
+            console.warn("Proforma lookup after convert notice:", lookupErr);
+          }
+        }
+        const year = new Date().getFullYear();
+        const finalDocNo =
+          apiConvertedDocNo || `PRO-${year}-${String(Date.now()).slice(-4)}`;
+        const newProforma: SaleProformaInvoice = {
+          id: apiConvertedDocId || `pro_conv_${Date.now()}`,
+          proformaNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          date: new Date().toISOString().split("T")[0],
+          validUntil:
+            convertDueDate ||
+            quot.validUntil ||
+            new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
+          customerId: quot.customerId,
+          customerCode:
+            quot.customerCode ||
+            customers.find((c) => c.id === quot.customerId)?.customerCode ||
+            undefined,
+          partyName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+          items: quot.items.map((it, idx) => ({
+            id: `row_${idx}_${Date.now()}`,
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            taxPercent: it.taxPercent || 0,
+            discountPercent: it.discountPercent || 0,
+            total: it.total,
+            unit: (it as any).unit || "PCS",
+          })),
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          discount: quot.discount || 0,
+          taxAmount: quot.taxAmount || 0,
+          roundOff: quot.roundOff || 0,
+          amount: quot.amount,
+          balance: quot.amount,
+          status: "Open",
+          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Only call createProforma if convertQuotation did NOT already create the Proforma on the backend
+        if (!didBackendConvertCreateDoc) {
+          try {
+            const payload = mapSaleProformaToPayload(newProforma, true);
+            const pRes = await commerceProformaApi.createProforma(payload);
+            if (pRes?.data?.id) newProforma.id = pRes.data.id;
+            const backendNo =
+              pRes?.data?.proformaNo || (pRes?.data as any)?.documentNo;
+            if (backendNo) newProforma.proformaNo = backendNo;
+          } catch (createErr) {
+            console.warn("createProforma fallback:", createErr);
+          }
+        }
+
+        syncConvertedProformaToStorage(newProforma);
+        recordDocumentConversion({
+          fromType: "Estimate",
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: "Proforma",
+          toId: newProforma.id,
+          toNo: newProforma.proformaNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          customerCode: newProforma.customerCode,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, "Converted", {
+          type: "Proforma",
+          documentNo: newProforma.proformaNo,
+          id: newProforma.id,
+        });
+        updateQuotationStatus(quot.id, "Converted");
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Quotation", id: "LIST" },
+            { type: "Proforma", id: "LIST" },
+          ]),
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice ${newProforma.proformaNo}!`,
+        );
+      } else if (convertType === "Order") {
+        const year = new Date().getFullYear();
+        const finalDocNo =
+          apiConvertedDocNo || `SO-${year}-${String(Date.now()).slice(-4)}`;
+        const newOrder: SaleOrderRecord = {
+          id: apiConvertedDocId || `order_conv_${Date.now()}`,
+          orderNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          orderDate: new Date().toISOString().split("T")[0],
+          dueDate:
+            convertDueDate ||
+            quot.validUntil ||
+            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
+          customerId: quot.customerId,
+          customerCode:
+            quot.customerCode ||
+            customers.find((c) => c.id === quot.customerId)?.customerCode ||
+            undefined,
+          partyName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+          paymentType: "Credit",
+          items: quot.items.map((it, idx) => ({
+            id: `row_${idx}_${Date.now()}`,
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            taxPercent: it.taxPercent || 0,
+            discountPercent: it.discountPercent || 0,
+            total: it.total,
+            unit: (it as any).unit || "PCS",
+          })),
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          discount: quot.discount || 0,
+          taxAmount: quot.taxAmount || 0,
+          roundOff: quot.roundOff || 0,
+          amount: quot.amount,
+          balance: quot.amount,
+          advanceAmount: 0,
+          status: "Open",
+          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Only call createOrder if convertQuotation did NOT already create the Sale Order on the backend
+        if (!didBackendConvertCreateDoc) {
+          try {
+            const payload = mapSaleOrderRecordToPayload(newOrder, true);
+            const oRes = await commerceSaleOrderApi.createOrder(payload);
+            if (oRes?.data?.id) newOrder.id = oRes.data.id;
+            const backendNo =
+              oRes?.data?.orderNo || (oRes?.data as any)?.documentNo;
+            if (backendNo) newOrder.orderNo = backendNo;
+          } catch (createErr) {
+            console.warn("createOrder fallback:", createErr);
+          }
+        }
+
+        syncConvertedOrderToStorage(newOrder);
+        recordDocumentConversion({
+          fromType: "Estimate",
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: "Order",
+          toId: newOrder.id,
+          toNo: newOrder.orderNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          customerCode: newOrder.customerCode,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, "Converted", {
+          type: "Order",
+          documentNo: newOrder.orderNo,
+          id: newOrder.id,
+        });
+        updateQuotationStatus(quot.id, "Converted");
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Quotation", id: "LIST" },
+            { type: "SalesOrder", id: "LIST" },
+          ]),
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Sale Order ${newOrder.orderNo}!`,
+        );
+      } else if (convertType === "Challan") {
+        const currentLineage = findDocumentLineage(quot.quotationNo);
+        const existingChallans: DeliveryChallanRecord[] = JSON.parse(
+          localStorage.getItem("yaa_crm_delivery_challans") || "[]",
+        ).filter((c: any) => !isMockChallan(c));
+        const finalDocNo =
+          apiConvertedDocNo ||
+          currentLineage?.challanNo ||
+          `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
+
+        let resolvedCustomerId = quot.customerId;
+        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+          const found = customers.find(
+            (c) =>
+              c.id === quot.customerId ||
+              c.name.toLowerCase() === quot.partyName.trim().toLowerCase(),
+          );
+          if (found && UUID_REGEX.test(found.id)) {
+            resolvedCustomerId = found.id;
+          } else if (customers.length > 0 && UUID_REGEX.test(customers[0].id)) {
+            resolvedCustomerId = customers[0].id;
+          }
+        }
+
+        const newChallan: DeliveryChallanRecord = {
+          id: apiConvertedDocId || `dc_conv_${Date.now()}`,
+          challanNo: finalDocNo,
+          referenceNo: quot.quotationNo,
+          invoiceDate: new Date().toISOString().split("T")[0],
+          dueDate:
+            convertDueDate ||
+            quot.validUntil ||
+            new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
+          customerId: resolvedCustomerId || quot.customerId,
+          customerCode:
+            quot.customerCode ||
+            customers.find(
+              (c) => c.id === (resolvedCustomerId || quot.customerId),
+            )?.customerCode ||
+            undefined,
+          partyName: quot.partyName,
+          customerCompany: quot.customerCompany,
+          customerPhone: quot.customerPhone,
+          customerEmail: quot.customerEmail,
+          billingAddress: quot.billingAddress,
+          shippingAddress: quot.shippingAddress || quot.billingAddress,
+          stateOfSupply: quot.stateOfSupply || "33-Tamil Nadu",
+          items: quot.items.map((it, idx) => ({
+            id: `row_${idx}_${Date.now()}`,
+            productId: it.productId,
+            productName: it.productName,
+            sku: it.sku,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            taxPercent: it.taxPercent || 0,
+            discountPercent: it.discountPercent || 0,
+            total: it.total,
+            unit: (it as any).unit || "PCS",
+          })),
+          subtotal: quot.subtotal,
+          withGst: quot.withGst,
+          gstType: quot.gstType,
+          cgst: quot.cgst,
+          sgst: quot.sgst,
+          igst: quot.igst,
+          discount: quot.discount || 0,
+          taxAmount: quot.taxAmount || 0,
+          roundOff: quot.roundOff || 0,
+          amount: quot.amount,
+          balance: quot.amount,
+          status: "Open",
+          notes: `Converted from Estimate ${quot.quotationNo}. ${quot.notes || ""}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Only call createChallan if convertQuotation did NOT already create the Delivery Challan on the backend
+        if (
+          !didBackendConvertCreateDoc &&
+          resolvedCustomerId &&
+          newChallan.items &&
+          newChallan.items.length > 0
+        ) {
+          try {
+            const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
+            payload.customerId = resolvedCustomerId;
+            const cRes =
+              await commerceDeliveryChallanApi.createChallan(payload);
+            if (cRes?.data?.id) newChallan.id = cRes.data.id;
+            const backendNo =
+              cRes?.data?.challanNo || (cRes?.data as any)?.documentNo;
+            if (backendNo) newChallan.challanNo = backendNo;
+          } catch (createErr) {
+            console.warn("createChallan fallback:", createErr);
+          }
+        }
+
+        syncConvertedChallanToStorage(newChallan);
+        recordDocumentConversion({
+          fromType: "Estimate",
+          fromId: quot.id,
+          fromNo: quot.quotationNo,
+          toType: "Challan",
+          toId: newChallan.id,
+          toNo: newChallan.challanNo,
+          partyName: quot.partyName,
+          customerId: quot.customerId,
+          customerCode: newChallan.customerCode,
+          grandTotal: quot.amount,
+        });
+
+        syncQuotationStatusInStorage(quot.id, "Converted", {
+          type: "Challan",
+          documentNo: newChallan.challanNo,
+          id: newChallan.id,
+        });
+        updateQuotationStatus(quot.id, "Converted");
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Quotation", id: "LIST" },
+            { type: "DeliveryChallan", id: "LIST" },
+          ]),
+        );
+        toast.success(
+          `Quotation ${quot.quotationNo} successfully converted to Delivery Challan ${newChallan.challanNo}!`,
+        );
       }
 
       setIsConvertModalOpen(false);
@@ -5066,6 +5132,7 @@ export const EstimateQuotationView: React.FC = () => {
                 { label: "CREATED DATE & TIME", align: "left", minWidth: "140px" },
                 { label: "CONVERTED DATE & TIME", align: "left", minWidth: "140px" },
                 { label: "AMOUNT", align: "right", minWidth: "120px" },
+                { label: "BALANCE", align: "right", minWidth: "120px" },
                 { label: "STATUS", align: "center", minWidth: "110px" },
                 { label: "ACTIONS", align: "center", minWidth: "190px" },
               ]}

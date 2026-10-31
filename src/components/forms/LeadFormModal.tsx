@@ -199,7 +199,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
       '';
 
     reset({
-      leadId: initialLead.leadId || `LD-${initialLead.id}`,
+      leadId: initialLead.leadId || '',
       leadDate:
         initialLead.leadDate ||
         (initialLead.createdAt ? initialLead.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),
@@ -644,25 +644,17 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
           </div>
         </div>
 
-        {/* Row 1: Lead ID | Lead Name | Date */}
+        {/* Row 1: Lead Code (generated) | Lead Name | Date */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>
-              Lead ID <span className="text-rose-500 font-bold">*</span>
-            </label>
+            <label className={labelClass}>Lead Code</label>
             <input
               {...register('leadId')}
               type="text"
-              placeholder="e.g. LD-2026-001"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.leadId
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
+              readOnly
+              placeholder="Auto-generated"
+              className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
             />
-            {errors.leadId && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.leadId.message}</p>
-            )}
           </div>
 
           <div>

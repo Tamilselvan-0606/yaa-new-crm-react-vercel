@@ -62,7 +62,7 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { downloadBusinessDocument } from '../../../utils/printUtils';
 import { UniversalShareDropdown, formatCreditNoteShare } from '../../../utils/shareUtils';
 import { SaleActionDropdown } from '../utils/SaleActionDropdown';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import { useAppDispatch } from '../../../hooks/redux';
 import { baseApi } from '../../../api/baseApi';
 import {

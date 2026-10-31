@@ -682,8 +682,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   };
 
   // New estimate modal form states linked to actual application entities
-  const [newEstimateNumber, setNewEstimateNumber] = useState(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-  const [newReferenceNumber, setNewReferenceNumber] = useState(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+  const [newEstimateNumber, setNewEstimateNumber] = useState('');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [isCompanyProductDropdownOpen, setIsCompanyProductDropdownOpen] = useState(false);
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
@@ -842,7 +841,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     d.setDate(d.getDate() + 30);
     return formatDateToDDMMYYYY(d);
   });
-  const [createdDate, setCreatedDate] = useState(() => (isSuperAdmin ? '' : formatDateToDDMMYYYY(new Date())));
+  const [createdDate, setCreatedDate] = useState(() => formatDateToDDMMYYYY(new Date()));
   const [projectName, setProjectName] = useState(() => (isSuperAdmin ? '' : 'Yaa connect'));
 
   // File upload state
@@ -1013,12 +1012,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       setEditingQuoteId(quote.id);
       setDuplicatedFromEstimateNo(null);
       setNewEstimateNumber(quote.estimateNumber);
-      setNewReferenceNumber(quote.referenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`);
     } else {
       setEditingQuoteId(null);
       setDuplicatedFromEstimateNo(quote.estimateNumber || null);
-      setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-      setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+      setNewEstimateNumber('');
     }
 
     if (quote.customerId) {
@@ -1133,12 +1130,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (!customerName.trim()) {
         errors.customerName = 'Customer Name is required';
       }
-      if (!newEstimateNumber.trim()) {
-        errors.estimateNumber = 'Quotation Number is required';
-      }
-      if (!newReferenceNumber.trim()) {
-        errors.referenceNumber = 'Reference Number is required';
-      }
       if (!estimateDate.trim()) {
         errors.estimateDate = 'Date is required';
       }
@@ -1146,7 +1137,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         errors.createdDate = 'Created Date is required';
       }
       if (!expiryDate.trim()) {
-        errors.expiryDate = 'Expiry Date is required';
+        errors.expiryDate = 'Due Date is required';
       }
       if (!customerEmail.trim()) {
         errors.customerEmail = 'Email Communications is required';
@@ -1235,7 +1226,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (editingQuoteId) {
         // Edit existing quote
         const updatePayload = {
-          referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+          createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
           expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
           productName: (projectName || selectedProductSuiteName || 'Quotation').trim(),
@@ -1252,8 +1243,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
           // Reset Form
           setEditingQuoteId(null);
-          setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-          setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+          setNewEstimateNumber('');
           setSelectedClientId('');
           setCustomerName('');
           setCustomerCompany('');
@@ -1276,7 +1266,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       } else {
         // Create new quote (or duplicate)
         const payload: CreateQuoteRequest = {
-          referenceNumber: (newReferenceNumber || `REF-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+          createdDate: createdDate ? ddmmyyyyToIso(createdDate) : undefined,
           date: estimateDate ? ddmmyyyyToIso(estimateDate) : new Date().toISOString().split('T')[0],
           expiryDate: expiryDate ? ddmmyyyyToIso(expiryDate) : new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
           organizationId: orgId || undefined,
@@ -1297,8 +1287,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
           // Reset Form
           setEditingQuoteId(null);
-          setNewEstimateNumber(`EST-${Math.floor(10000 + Math.random() * 90000)}`);
-          setNewReferenceNumber(`REF-${Math.floor(1000 + Math.random() * 9000)}`);
+          setNewEstimateNumber('');
           setSelectedClientId('');
           setCustomerName('');
           setCustomerCompany('');
@@ -1496,12 +1485,8 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 <span className="font-semibold text-slate-800">{activeQuote.date}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-36">Valid Until:</span>
+                <span className="text-slate-500 font-medium w-36">Due Date:</span>
                 <span className="font-semibold text-slate-800">{activeQuote.expiryDate}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-36">Reference:</span>
-                <span className="font-bold text-slate-800">{activeQuote.referenceNumber}</span>
               </div>
             </div>
 
@@ -1932,58 +1917,22 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   )}
                 </div>
 
-                {/* Row 1, Col 3: Quotation Number */}
+                {/* Row 1, Col 3: Quotation Number (generated by the server) */}
                 <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    {singularTerm} Number <span className="text-rose-500 font-bold">*</span>
-                  </label>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">{singularTerm} Number</label>
                   <input
                     type="text"
                     value={newEstimateNumber}
-                    onChange={(e) => {
-                      setNewEstimateNumber(e.target.value);
-                      if (formErrors.estimateNumber) setFormErrors((prev) => ({ ...prev, estimateNumber: '' }));
-                    }}
-                    placeholder="e.g. EST-12345"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      formErrors.estimateNumber
-                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
+                    readOnly
+                    placeholder="Auto-generated"
+                    className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
                   />
-                  {formErrors.estimateNumber && (
-                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.estimateNumber}</p>
-                  )}
                 </div>
 
-                {/* Row 2, Col 1: Reference Number */}
+                {/* Row 2, Col 2: Quotation Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Reference Number <span className="text-rose-500 font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newReferenceNumber}
-                    onChange={(e) => {
-                      setNewReferenceNumber(e.target.value);
-                      if (formErrors.referenceNumber) setFormErrors((prev) => ({ ...prev, referenceNumber: '' }));
-                    }}
-                    placeholder="e.g. REF-1234"
-                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                      formErrors.referenceNumber
-                        ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                        : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                  />
-                  {formErrors.referenceNumber && (
-                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.referenceNumber}</p>
-                  )}
-                </div>
-
-                {/* Row 2, Col 2: Date */}
-                <div>
-                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Date <span className="text-rose-500 font-bold">*</span>
+                    Quotation Date <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <div className="relative flex items-center">
                     <input
@@ -2020,10 +1969,50 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                   )}
                 </div>
 
-                {/* Row 2, Col 3: Expiry Date */}
+                {/* Row 2, Col 3: Created Date */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Expiry Date <span className="text-rose-500 font-bold">*</span>
+                    Created Date <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      type="text"
+                      placeholder="dd/mm/yyyy"
+                      value={createdDate}
+                      onChange={(e) => {
+                        setCreatedDate(e.target.value);
+                        if (formErrors.createdDate) setFormErrors((prev) => ({ ...prev, createdDate: '' }));
+                      }}
+                      className={`w-full h-11 pl-4 pr-11 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                        formErrors.createdDate
+                          ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                          : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                      }`}
+                    />
+                    <label className="absolute right-3 text-slate-400 hover:text-[#33077C] cursor-pointer transition-colors p-1">
+                      <Calendar className="w-4 h-4" />
+                      <input
+                        type="date"
+                        value={ddmmyyyyToIso(createdDate)}
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setCreatedDate(isoToDdmmyyyy(e.target.value));
+                            if (formErrors.createdDate) setFormErrors((prev) => ({ ...prev, createdDate: '' }));
+                          }
+                        }}
+                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                      />
+                    </label>
+                  </div>
+                  {formErrors.createdDate && (
+                    <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.createdDate}</p>
+                  )}
+                </div>
+
+                {/* Row 2, Col 4: Due Date */}
+                <div>
+                  <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                    Due Date <span className="text-rose-500 font-bold">*</span>
                   </label>
                   <div className="relative flex items-center">
                     <input
@@ -2326,15 +2315,13 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
                       <div className="space-y-2">
                         <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">
-                            Quotation Number <span className="text-rose-500 font-bold">*</span>
-                          </label>
+                          <label className="text-[12px] font-bold text-slate-800">Quotation Number</label>
                           <input
                             type="text"
                             value={newEstimateNumber}
-                            onChange={(e) => setNewEstimateNumber(e.target.value)}
-                            placeholder="e.g. EST-19087"
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                            readOnly
+                            placeholder="Auto-generated"
+                            className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 outline-none cursor-not-allowed shadow-2xs"
                           />
                         </div>
 
@@ -2374,19 +2361,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                           />
                         </div>
 
-                        <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                          <label className="text-[12px] font-bold text-slate-800">
-                            Reference Number <span className="text-rose-500 font-bold">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            value={newReferenceNumber}
-                            onChange={(e) => setNewReferenceNumber(e.target.value)}
-                            placeholder="e.g. REF-7121"
-                            className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
-                          />
                         </div>
-                      </div>
                       <div className="space-y-3.5 text-[13px]">
                         {newNotes && (
                           <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
@@ -3106,9 +3081,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                             >
                               {quote.estimateNumber}
                             </button>
-                            <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                              Ref: {quote.referenceNumber}
-                            </div>
                           </div>
                         </td>
 
@@ -3276,7 +3248,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               {quote.customerName}
                             </div>
                             <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                              {quote.customerName} &bull; Ref: {quote.referenceNumber}
+                              {quote.customerName}
                             </div>
                           </div>
                         </td>

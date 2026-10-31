@@ -37,7 +37,7 @@ import {
   CustomerStatus,
   SalesRepresentative,
 } from "../../../store/useSalesManagementStore";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 

@@ -135,7 +135,9 @@ export interface CreateQuoteItemPayload {
 }
 
 export interface CreateQuoteRequest {
-  referenceNumber: string;
+  /** Shown as the created date; defaults to now on the server. */
+  createdDate?: string;
+  referenceNumber?: string;
   date: string; // YYYY-MM-DD
   expiryDate: string; // YYYY-MM-DD
   organizationId?: string;

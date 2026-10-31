@@ -30,7 +30,7 @@ import {
 import { categoryApi, ApiCategory } from "../../../api/commerce/categoryApi";
 import { subcategoryApi } from "../../../api/commerce/subcategoryApi";
 import { unitApi, ApiUnit } from "../../../api/commerce/unitApi";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { AddCategoryModal } from "./AddCategoryModal";
@@ -753,55 +753,80 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   const onSubmit = async (data: ItemModalFormData) => {
     setIsSubmitting(true);
     try {
-      const salePriceNum = Number(data.salePrice) || 0;
-      const purchasePriceNum =
-        data.purchasePrice !== "" && data.purchasePrice !== undefined
-          ? Number(data.purchasePrice)
-          : undefined;
-      const wholesalePriceNum =
-        data.hasWholesale && data.wholesalePrice !== ""
-          ? Number(data.wholesalePrice)
-          : undefined;
-
-      const payload: CreateProductPayload = {
-        itemType: data.itemType || "Product",
+      const payload: Record<string, any> = {
         productName: data.productName.trim(),
-        category: data.category?.trim() || undefined,
-        subcategory: data.subcategory?.trim() || undefined,
-        hsnCode: data.hsnCode?.trim() || undefined,
         unit: data.unit || "PCS",
-        baseUnitId: data.baseUnitId || undefined,
-        secondaryUnitId: data.secondaryUnitId || undefined,
-        itemImage: itemImageState || data.itemImage || undefined,
-        image: itemImageState || data.itemImage || undefined,
-        imageBase64: itemImageState || data.itemImage || undefined,
-
-        // Pricing
-        salePrice: salePriceNum,
-        salePriceTaxType: data.salePriceTaxType || "Excluded",
-        discountValue: Number(data.discountValue) || 0,
-        discountType: data.discountType || "Percentage",
-        hasWholesale: Boolean(data.hasWholesale),
-        wholesalePrice: wholesalePriceNum,
-        wholesaleTaxType: data.wholesaleTaxType || "Excluded",
-        minWholesaleQty: Number(data.minWholesaleQty) || undefined,
-        purchasePrice: purchasePriceNum,
-        purchasePriceTaxType: data.purchasePriceTaxType || "Excluded",
-        taxRate: data.taxRate || "None",
-
-        // Stock
-        openingStock: Number(data.openingStock) || 0,
-        atPrice: Number(data.atPrice) || salePriceNum || purchasePriceNum || 0,
-        minStockAlert: Number(data.minStockAlert) || 10,
-        location: data.location?.trim() || undefined,
-        batchNo: data.batchNo?.trim() || undefined,
-        isBatchTracking: Boolean(data.batchNo?.trim()),
-        mfgDate: data.mfgDate || undefined,
-        expDate: data.expDate || undefined,
-        status: "Active",
       };
 
-      const res = await productApi.createProduct(payload);
+      if (data.itemType) payload.itemType = data.itemType;
+      if (data.category && data.category.trim()) payload.category = data.category.trim();
+      if (data.subcategory && data.subcategory.trim()) payload.subcategory = data.subcategory.trim();
+      if (data.hsnCode && data.hsnCode.trim()) payload.hsnCode = data.hsnCode.trim();
+      if (data.baseUnitId) payload.baseUnitId = data.baseUnitId;
+      if (data.secondaryUnitId) payload.secondaryUnitId = data.secondaryUnitId;
+
+      const effImg = itemImageState || data.itemImage;
+      if (effImg && effImg.trim()) {
+        payload.itemImage = effImg;
+        payload.image = effImg;
+        payload.imageBase64 = effImg;
+      }
+
+      if (data.salePrice !== "" && data.salePrice !== undefined) {
+        payload.salePrice = Number(data.salePrice) || 0;
+        if (data.salePriceTaxType) payload.salePriceTaxType = data.salePriceTaxType;
+      }
+
+      if (data.discountValue !== "" && data.discountValue !== undefined && Number(data.discountValue) > 0) {
+        payload.discountValue = Number(data.discountValue);
+        if (data.discountType) payload.discountType = data.discountType;
+      }
+
+      if (data.hasWholesale) {
+        payload.hasWholesale = true;
+        if (data.wholesalePrice !== "" && data.wholesalePrice !== undefined) {
+          payload.wholesalePrice = Number(data.wholesalePrice) || 0;
+        }
+        if (data.wholesaleTaxType) payload.wholesaleTaxType = data.wholesaleTaxType;
+        if (data.minWholesaleQty !== "" && data.minWholesaleQty !== undefined) {
+          payload.minWholesaleQty = Number(data.minWholesaleQty) || 0;
+        }
+      }
+
+      if (data.purchasePrice !== "" && data.purchasePrice !== undefined) {
+        payload.purchasePrice = Number(data.purchasePrice) || 0;
+        if (data.purchasePriceTaxType) payload.purchasePriceTaxType = data.purchasePriceTaxType;
+      }
+
+      if (data.taxRate && data.taxRate !== "None" && data.taxRate.trim()) {
+        payload.taxRate = data.taxRate;
+      }
+
+      if (data.openingStock !== "" && data.openingStock !== undefined) {
+        payload.openingStock = Number(data.openingStock) || 0;
+        if (data.atPrice !== "" && data.atPrice !== undefined) {
+          payload.atPrice = Number(data.atPrice) || 0;
+        }
+      }
+
+      if (data.minStockAlert !== "" && data.minStockAlert !== undefined && Number(data.minStockAlert) > 0) {
+        payload.minStockAlert = Number(data.minStockAlert);
+      }
+
+      if (data.location && data.location.trim()) {
+        payload.location = data.location.trim();
+      }
+
+      if (data.batchNo && data.batchNo.trim()) {
+        payload.isBatchTracking = true;
+        payload.batchNo = data.batchNo.trim();
+        if (data.mfgDate && data.mfgDate.trim()) payload.mfgDate = data.mfgDate.trim();
+        if (data.expDate && data.expDate.trim()) payload.expDate = data.expDate.trim();
+      }
+
+      payload.status = "Active";
+
+      const res = await productApi.createProduct(payload as unknown as CreateProductPayload);
       if (res?.success && res.data) {
         const createdItem = mapApiProductToProductItem(res.data);
         store.dispatch(

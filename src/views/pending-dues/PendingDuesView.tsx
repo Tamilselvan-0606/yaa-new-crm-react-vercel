@@ -36,7 +36,7 @@ import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { exportTableToExcel } from '../../utils/excelExport';
-import { toast } from 'sonner';
+import { toast } from "../../utils/toast";
 
 export interface PendingDueItem {
   id: string;

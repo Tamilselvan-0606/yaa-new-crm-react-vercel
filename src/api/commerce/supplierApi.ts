@@ -8,7 +8,9 @@ import {
   SupplierDeleteResponse,
   CreateSupplierPayload,
   UpdateSupplierPayload,
+  SupplierPurchaseSummary,
 } from './supplierTypes';
+import type { ApiPurchaseOrder } from '../work/purchaseOrderTypes';
 
 export * from './supplierTypes';
 
@@ -38,9 +40,9 @@ export const mapApiSupplierToSupplier = (apiSup: ApiSupplier): Supplier => {
     branchName: apiSup.branchName || '',
     status: (apiSup.status as SupplierStatus) || 'Active',
     notes: apiSup.notes || '',
-    totalPurchase: Number(apiSup.totalPurchase) || 0,
-    paid: Number(apiSup.paid) || 0,
-    payable: Number(apiSup.payable) || 0,
+    totalPurchase: Number(apiSup.purchaseSummary?.totalPurchases ?? apiSup.totalPurchase) || 0,
+    paid: Number(apiSup.purchaseSummary?.totalPaid ?? apiSup.paid) || 0,
+    payable: Number(apiSup.purchaseSummary?.balance ?? apiSup.payable) || 0,
     createdAt: apiSup.createdAt || new Date().toISOString(),
     updatedAt: apiSup.updatedAt || new Date().toISOString(),
   };
@@ -206,6 +208,16 @@ export const supplierApi = {
 
   getSupplierById: async (id: string): Promise<SupplierSingleResponse> => {
     const response = await baseClient.get<SupplierSingleResponse>(`/work/suppliers/${encodeURIComponent(id)}`);
+    return response.data;
+  },
+
+  /** The supplier's purchase bills with paid amount and balance, plus the totals over all of them. */
+  getSupplierPurchaseBills: async (id: string, params: { page?: number; limit?: number; search?: string; status?: string } = {}) => {
+    const response = await baseClient.get<{
+      data: ApiPurchaseOrder[];
+      summary?: SupplierPurchaseSummary;
+      pagination?: { page: number; limit: number; totalRecords: number; totalPages: number };
+    }>(`/work/suppliers/${encodeURIComponent(id)}/purchase-orders`, { params });
     return response.data;
   },
 

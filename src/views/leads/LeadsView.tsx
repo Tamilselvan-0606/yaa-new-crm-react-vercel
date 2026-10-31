@@ -35,6 +35,9 @@ import {
   Check,
   AlertCircle,
   Loader2,
+  Users,
+  CreditCard,
+  Briefcase,
 } from "lucide-react";
 import { CustomerFormModal } from "../../components/forms/CustomerFormModal";
 import { LeadFormModal } from "../../components/forms/LeadFormModal";
@@ -59,6 +62,28 @@ import {
 } from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
 import { getStoredOrganizationId } from "../../api/config";
+
+// Format ISO/Date string to DD/MM/YYYY
+const formatDateDMY = (dateStr?: string | null): string => {
+  if (!dateStr) return "-";
+  try {
+    const raw = dateStr.includes("T") ? dateStr.split("T")[0] : dateStr;
+    const parts = raw.split("-");
+    if (parts.length === 3 && parts[0].length === 4) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+    return dateStr;
+  } catch {
+    return dateStr || "-";
+  }
+};
 
 interface LeadsViewProps {
   initialCreateOpen?: boolean;
@@ -1214,7 +1239,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <thead>
                   <tr className="bg-[#33077C] text-[12px] font-bold text-white tracking-wider uppercase">
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      LEAD ID & PROSPECT
+                      LEAD CODE & PROSPECT
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
                       CONTACT INFO
@@ -1260,7 +1285,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                           key={lead.id}
                           className="hover:bg-slate-50/70 transition-colors"
                         >
-                          {/* Lead ID & Business */}
+                          {/* Lead Code & Business */}
                           <td className="py-4 px-5 border border-slate-200">
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -1453,7 +1478,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                               <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                               <span>
                                 {lead.nextFollowUpDate
-                                  ? lead.nextFollowUpDate.split("T")[0]
+                                  ? formatDateDMY(lead.nextFollowUpDate)
                                   : "Not Scheduled"}
                               </span>
                             </div>
@@ -1536,327 +1561,165 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           isOpen={!!selectedClientDetail}
           onClose={() => setSelectedClientDetail(null)}
           title="Corporate Client Profile"
-          maxWidth="2xl"
+          subtitle="View client contact specifications, address details, and linked products"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          maxWidth="4xl"
         >
           <div className="space-y-6">
-            {/* Top Overview Header Card */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200/80">
-              <div>
-                <h3 className="text-xl font-bold text-slate-900 tracking-tight">
-                  {selectedClientDetail.company || selectedClientDetail.name}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium mt-1">
-                  Client ID:{" "}
-                  <span className="font-bold text-[#33077C]">
-                    {formatDisplayId(
-                      "CL",
-                      selectedClientDetail.clientId || selectedClientDetail.id,
-                    )}
-                  </span>
-                </p>
+            {/* Top Overview / Profile Header Card matching reference standard */}
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs">
+                  {((selectedClientDetail.company || selectedClientDetail.name) || "CL").substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">
+                      {selectedClientDetail.company || selectedClientDetail.name}
+                    </h3>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                      {formatDisplayId(
+                        "CL",
+                        selectedClientDetail.clientId || selectedClientDetail.id,
+                      )}
+                    </span>
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border bg-indigo-50 text-indigo-700 border-indigo-200">
+                      Corporate Client
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500 font-medium">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span>
+                      {selectedClientDetail.city ||
+                        selectedClientDetail.address ||
+                        selectedClientDetail.location ||
+                        "N/A"}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <span className="px-4 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 shadow-2xs">
-                {selectedClientDetail.status || "Active Client"}
-              </span>
+
+              {/* Status Badge */}
+              <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  {selectedClientDetail.status || "Active"}
+                </span>
+              </div>
             </div>
 
-            {/* 2-Column Grid Layout matching Lead View */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-              {/* LEFT COLUMN */}
-              <div className="space-y-6">
-                {/* 1. CLIENT INFORMATION */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>CLIENT INFORMATION</span>
+            {/* Exactly 2 Columns: Client Information & Location Details */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+              {/* COLUMN 1: Client Information */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Users className="w-3.5 h-3.5" />
                   </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">
-                        Contact Person
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.contactPerson ||
-                          selectedClientDetail.name}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Phone Number
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.phone || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        WhatsApp Number
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.whatsapp ||
-                          selectedClientDetail.phone ||
-                          "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Email Address
-                      </span>
-                      <span className="font-bold text-slate-900 text-right truncate max-w-[200px]">
-                        {selectedClientDetail.email || "-"}
-                      </span>
-                    </div>
-                    {selectedClientDetail.alternatePhone && (
-                      <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-semibold">
-                          Alternate Phone
-                        </span>
-                        <span className="font-bold text-slate-900 text-right">
-                          {selectedClientDetail.alternatePhone}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                  <span>Client Information</span>
                 </div>
 
-                {/* 2. SUBSCRIBED PRODUCTS & PLANS */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>SUBSCRIBED PRODUCTS & PLANS</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-2.5">
-                    {selectedClientDetail.linkedProducts &&
-                    selectedClientDetail.linkedProducts.length > 0 ? (
-                      selectedClientDetail.linkedProducts.map((p, idx) => {
-                        const normName = normalizeProductName(p.productName);
-                        return (
-                          <div
-                            key={idx}
-                            className="flex items-center justify-between p-3 bg-slate-50/80 rounded-xl border border-slate-200/70"
-                          >
-                            <div>
-                              <div className="flex items-center gap-1.5 font-bold text-slate-900 text-sm">
-                                <span
-                                  className={`w-2 h-2 rounded-full ${getProductDotColor(normName)}`}
-                                ></span>
-                                <span>{normName}</span>
-                              </div>
-                              <div className="text-[11px] text-slate-500 mt-0.5">
-                                Plan: {p.planName} - Active since{" "}
-                                {p.since || "2026"}
-                              </div>
-                            </div>
-                            <div className="font-bold text-emerald-600 text-sm">
-                              &#8377;{p.amount || "0"}/mo
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="text-xs text-slate-400 py-3 text-center">
-                        No active product subscriptions
-                      </div>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px]">
+                  <span className="text-slate-400 font-medium shrink-0">Client Name</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.name || "-"}
+                  </span>
                 </div>
 
-                {/* 3. DOCUMENTS SHARED TO CLIENT */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-purple-50 text-[#33077C] font-bold text-xs uppercase tracking-wider mb-3 border border-purple-200/60">
-                    <FolderUp className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                    <span>DOCUMENTS SHARED TO CLIENT</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-2.5">
-                    {(() => {
-                      const sharedDocs = (
-                        selectedClientDetail.documents || []
-                      ).filter(
-                        (d) =>
-                          (d.type || "shared_by_company") ===
-                          "shared_by_company",
-                      );
-                      if (sharedDocs.length === 0) {
-                        return (
-                          <div className="text-xs text-slate-400 py-3 text-center flex items-center justify-center gap-1.5">
-                            <Paperclip className="w-3.5 h-3.5" />
-                            <span>No company documents shared yet</span>
-                          </div>
-                        );
-                      }
-                      return sharedDocs.map((doc, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between p-2.5 bg-slate-50/80 hover:bg-slate-100/70 rounded-xl border border-slate-200/70 transition-all"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-purple-100/80 text-[#33077C] flex items-center justify-center shrink-0">
-                              <FileText className="w-4 h-4" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs font-bold text-slate-900 truncate max-w-[190px]">
-                                {doc.title}
-                              </div>
-                              <div className="text-[10px] text-slate-400 mt-0.5">
-                                {doc.category} - {doc.fileSize || "PDF"} -{" "}
-                                {doc.uploadedAt}
-                              </div>
-                            </div>
-                          </div>
-                          <a
-                            href={doc.url || "#"}
-                            download
-                            title="Download / View"
-                            className="w-7 h-7 rounded-lg bg-white hover:bg-purple-600 text-slate-600 hover:text-white border border-slate-200 hover:border-purple-600 flex items-center justify-center transition-all cursor-pointer shadow-2xs shrink-0"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                      ));
-                    })()}
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Client Business</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.company || selectedClientDetail.name || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Contact Person</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.contactPerson || selectedClientDetail.name || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Phone Number</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.phone || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.whatsapp || selectedClientDetail.phone || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Email</span>
+                  <span className="font-bold text-slate-800 text-right truncate max-w-[200px]">
+                    {selectedClientDetail.email || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">GST Number</span>
+                  <span className="font-bold text-slate-800 text-right uppercase">
+                    {selectedClientDetail.gstin || (selectedClientDetail as any).gstNumber || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">PAN Number</span>
+                  <span className="font-bold text-slate-800 text-right uppercase">
+                    {selectedClientDetail.pan || (selectedClientDetail as any).panNumber || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Product</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.linkedProducts?.[0]?.productName || (selectedClientDetail as any).productName || "-"}
+                  </span>
                 </div>
               </div>
 
-              {/* RIGHT COLUMN */}
-              <div className="space-y-6">
-                {/* 4. LOCATION DETAILS */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>LOCATION DETAILS</span>
+              {/* COLUMN 2: Location Details */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <MapPin className="w-3.5 h-3.5" />
                   </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">City</span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.city || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Full Address
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.address ||
-                          selectedClientDetail.location ||
-                          "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        State
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.state || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Pincode
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.pincode || "-"}
-                      </span>
-                    </div>
-                  </div>
+                  <span>Location Details</span>
                 </div>
 
-                {/* 5. ACCOUNT & BILLING SUMMARY */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>ACCOUNT & BILLING</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">
-                        Client Status
-                      </span>
-                      <span className="font-bold text-emerald-600 text-right">
-                        {selectedClientDetail.status || "Active"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Industry / Domain
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.industry ||
-                          "Technology & Logistics"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Billing Frequency
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        Monthly Retainer
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Customer Since
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedClientDetail.createdAt
-                          ? selectedClientDetail.createdAt.split("T")[0]
-                          : "2026-01-15"}
-                      </span>
-                    </div>
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px]">
+                  <span className="text-slate-400 font-medium shrink-0">Organization</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {(selectedClientDetail as any).organizationName || "Yaa Creations"}
+                  </span>
                 </div>
 
-                {/* 6. DOCUMENTS RECEIVED FROM CLIENT */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <FolderDown className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>DOCUMENTS RECEIVED FROM CLIENT</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-2.5">
-                    {(() => {
-                      const clientDocs = (
-                        selectedClientDetail.documents || []
-                      ).filter((d) => d.type === "shared_by_client");
-                      if (clientDocs.length === 0) {
-                        return (
-                          <div className="text-xs text-slate-400 py-3 text-center flex items-center justify-center gap-1.5">
-                            <Paperclip className="w-3.5 h-3.5" />
-                            <span>No client-submitted documents on file</span>
-                          </div>
-                        );
-                      }
-                      return clientDocs.map((doc, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between p-2.5 bg-slate-50/80 hover:bg-slate-100/70 rounded-xl border border-slate-200/70 transition-all"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-emerald-100/80 text-emerald-700 flex items-center justify-center shrink-0">
-                              <FileText className="w-4 h-4" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-xs font-bold text-slate-900 truncate max-w-[190px]">
-                                {doc.title}
-                              </div>
-                              <div className="text-[10px] text-slate-400 mt-0.5">
-                                {doc.category} - {doc.fileSize || "PDF"} -{" "}
-                                {doc.uploadedAt}
-                              </div>
-                            </div>
-                          </div>
-                          <a
-                            href={doc.url || "#"}
-                            download
-                            title="Download / View"
-                            className="w-7 h-7 rounded-lg bg-white hover:bg-emerald-600 text-slate-600 hover:text-white border border-slate-200 hover:border-emerald-600 flex items-center justify-center transition-all cursor-pointer shadow-2xs shrink-0"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                      ));
-                    })()}
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Sub-Organization</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {(selectedClientDetail as any).subOrganizationName || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Branch</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {(selectedClientDetail as any).branchName || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Address</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedClientDetail.address || selectedClientDetail.location || "-"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1866,7 +1729,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedClientDetail(null)}
-                className="h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors cursor-pointer flex items-center justify-center"
+                className="h-10 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs sm:text-sm transition-colors cursor-pointer flex items-center justify-center"
               >
                 Close
               </button>
@@ -1877,8 +1740,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   setSelectedClientDetail(null);
                   handleEditCustomer(c);
                 }}
-                className="h-11 px-6 bg-[#33077C] hover:bg-[#432eb5] text-white font-bold rounded-xl text-sm shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                className="h-10 px-6 bg-[#33077C] hover:bg-[#4309A2] text-white font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
+                <Edit3 className="w-3.5 h-3.5" />
                 Edit Client Profile
               </button>
             </div>
@@ -1892,258 +1756,185 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
           isOpen={!!selectedLeadDetail}
           onClose={() => setSelectedLeadDetail(null)}
           title="Prospect Lead Information"
-          maxWidth="2xl"
+          subtitle="View prospective lead details, contact specifications, and requirements"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          maxWidth="4xl"
         >
           <div className="space-y-6">
-            {/* Top Overview Header Card */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200/80">
-              <div>
-                <h3 className="text-xl font-bold text-slate-900 tracking-tight">
-                  {selectedLeadDetail.company || selectedLeadDetail.name}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium mt-1">
-                  Lead ID:{" "}
-                  <span className="font-bold text-orange-600">
-                    {formatDisplayId(
-                      "LD",
-                      selectedLeadDetail.leadId || selectedLeadDetail.id,
+            {/* Top Overview / Profile Header Card matching reference standard */}
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs">
+                  {((selectedLeadDetail.company || selectedLeadDetail.name) || "LD").substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">
+                      {selectedLeadDetail.company || selectedLeadDetail.name}
+                    </h3>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                      {formatDisplayId(
+                        "LD",
+                        selectedLeadDetail.leadId || selectedLeadDetail.id,
+                      )}
+                    </span>
+                    {selectedLeadDetail.designation && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border bg-indigo-50 text-indigo-700 border-indigo-200">
+                        {selectedLeadDetail.designation}
+                      </span>
                     )}
-                  </span>
-                </p>
+                  </div>
+                  {selectedLeadDetail.company && selectedLeadDetail.name && (
+                    <p className="text-xs font-medium text-slate-500 mt-0.5">{selectedLeadDetail.name}</p>
+                  )}
+                  <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500 font-medium">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span>
+                      {selectedLeadDetail.city ||
+                        selectedLeadDetail.address ||
+                        selectedLeadDetail.location ||
+                        "N/A"}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <span
-                className={`px-4 py-1.5 rounded-full text-xs font-bold shadow-2xs ${getStatusBadge(selectedLeadDetail.status)}`}
-              >
-                {selectedLeadDetail.status}
-              </span>
+
+              {/* Status Badge */}
+              <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  {selectedLeadDetail.status || "Open"}
+                </span>
+              </div>
             </div>
 
-            {/* 2-Column Grid Layout matching Reference Design */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-              {/* LEFT COLUMN */}
-              <div className="space-y-6">
-                {/* 1. LEAD INFORMATION */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>LEAD INFORMATION</span>
+            {/* Exactly 2 Columns: Lead Information & Location Details */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+              {/* COLUMN 1: Lead Information */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Users className="w-3.5 h-3.5" />
                   </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">
-                        Contact Person
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.name}{" "}
-                        {selectedLeadDetail.designation
-                          ? `(${selectedLeadDetail.designation})`
-                          : ""}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Phone Number
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.phone || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        WhatsApp Number
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.whatsapp ||
-                          selectedLeadDetail.phone ||
-                          "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Email Address
-                      </span>
-                      <span className="font-bold text-slate-900 text-right truncate max-w-[200px]">
-                        {selectedLeadDetail.email || "-"}
-                      </span>
-                    </div>
-                    {selectedLeadDetail.alternatePhone && (
-                      <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-semibold">
-                          Alternate Phone
-                        </span>
-                        <span className="font-bold text-slate-900 text-right">
-                          {selectedLeadDetail.alternatePhone}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Lead Source
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.leadSource ||
-                          selectedLeadDetail.source ||
-                          "Website"}
-                      </span>
-                    </div>
-                  </div>
+                  <span>Lead Information</span>
                 </div>
 
-                {/* 2. REQUIREMENTS & ENQUIRY */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>REQUIREMENT & OFFERINGS</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">
-                        Interested Products
-                      </span>
-                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                        {(() => {
-                          const prods = (
-                            selectedLeadDetail.interestedProducts || [
-                              selectedLeadDetail.interestedProductOrService,
-                            ]
-                          )
-                            .filter(Boolean)
-                            .map((p) => normalizeProductName(p));
-                          const unique = Array.from(new Set(prods));
-                          return unique.map((pName, idx) => (
-                            <div
-                              key={idx}
-                              className="flex items-center gap-1.5 text-xs font-bold text-slate-900"
-                            >
-                              <span
-                                className={`w-2 h-2 rounded-full ${getProductDotColor(String(pName))}`}
-                              ></span>
-                              <span>{pName}</span>
-                            </div>
-                          ));
-                        })()}
-                      </div>
-                    </div>
-                    {selectedLeadDetail.requirements && (
-                      <div className="pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-semibold text-xs block mb-2">
-                          Requirement / Enquiry
-                        </span>
-                        <div className="p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/70 text-slate-800 font-medium text-xs leading-relaxed">
-                          {selectedLeadDetail.requirements}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px]">
+                  <span className="text-slate-400 font-medium shrink-0">Lead Name</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.company || selectedLeadDetail.name || "-"}
+                  </span>
                 </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Contact Person Name</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.name || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Designation</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.designation || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.whatsapp || selectedLeadDetail.phone || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Email</span>
+                  <span className="font-bold text-slate-800 text-right truncate max-w-[200px]">
+                    {selectedLeadDetail.email || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Lead Source</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.leadSource || selectedLeadDetail.source || "Website"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Product Interest</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.interestedProductOrService ||
+                      (selectedLeadDetail.interestedProducts && selectedLeadDetail.interestedProducts[0]) ||
+                      "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Current Status</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.status || "Open"}
+                  </span>
+                </div>
+
+                {selectedLeadDetail.feedback && (
+                  <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Feedback</span>
+                    <span className="font-bold text-slate-800 text-right max-w-[220px] truncate">
+                      {selectedLeadDetail.feedback}
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* RIGHT COLUMN */}
-              <div className="space-y-6">
-                {/* 3. LOCATION DETAILS */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>LOCATION DETAILS</span>
+              {/* COLUMN 2: Location Details */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <MapPin className="w-3.5 h-3.5" />
                   </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">City</span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.city || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Full Address
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.address ||
-                          selectedLeadDetail.location ||
-                          "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        State
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.state || "-"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Pincode
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.pincode || "-"}
-                      </span>
-                    </div>
-                  </div>
+                  <span>Location Details</span>
                 </div>
 
-                {/* 4. MANAGEMENT & FOLLOW-UP */}
-                <div>
-                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs uppercase tracking-wider mb-3 border border-emerald-200/60">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-                    <span>MANAGEMENT & TIMELINE</span>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-2xs space-y-3.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-400 font-semibold">
-                        Assigned Staff
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.assignedStaffName || "Unassigned"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Priority
-                      </span>
-                      <span
-                        className={`font-bold text-right ${
-                          selectedLeadDetail.priority === "High"
-                            ? "text-rose-600"
-                            : selectedLeadDetail.priority === "Low"
-                              ? "text-slate-600"
-                              : "text-amber-600"
-                        }`}
-                      >
-                        {selectedLeadDetail.priority || "Medium"}
-                      </span>
-                    </div>
-                    {selectedLeadDetail.expectedBudget && (
-                      <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-semibold">
-                          Expected Budget
-                        </span>
-                        <span className="font-bold text-slate-900 text-right">
-                          &#8377;{selectedLeadDetail.expectedBudget}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between text-sm pt-2.5 border-t border-slate-100">
-                      <span className="text-slate-400 font-semibold">
-                        Next Follow-Up
-                      </span>
-                      <span className="font-bold text-slate-900 text-right">
-                        {selectedLeadDetail.nextFollowUpDate
-                          ? selectedLeadDetail.nextFollowUpDate.split("T")[0]
-                          : "Not Scheduled"}
-                      </span>
-                    </div>
-                    {selectedLeadDetail.feedback && (
-                      <div className="pt-2.5 border-t border-slate-100">
-                        <span className="text-slate-400 font-semibold text-xs block mb-2">
-                          Feedback / Follow-up Notes
-                        </span>
-                        <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/60 text-slate-800 font-medium text-xs leading-relaxed">
-                          {selectedLeadDetail.feedback}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px]">
+                  <span className="text-slate-400 font-medium shrink-0">Organization</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {(selectedLeadDetail as any).organizationName || "Yaa Creations"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Sub-Organization</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.subOrganizationName || (selectedLeadDetail as any).subOrgName || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Branch</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.branchName || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Date</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.leadDate
+                      ? formatDateDMY(selectedLeadDetail.leadDate)
+                      : selectedLeadDetail.createdAt
+                        ? formatDateDMY(selectedLeadDetail.createdAt)
+                        : "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Address</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {selectedLeadDetail.address || selectedLeadDetail.location || "-"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -2153,7 +1944,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedLeadDetail(null)}
-                className="h-11 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors cursor-pointer flex items-center justify-center"
+                className="h-10 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs sm:text-sm transition-colors cursor-pointer flex items-center justify-center"
               >
                 Close
               </button>
@@ -2164,8 +1955,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   setSelectedLeadDetail(null);
                   handleConvertLeadToCustomer(l);
                 }}
-                className="h-11 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                className="h-10 px-6 bg-[#33077C] hover:bg-[#4309A2] text-white font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
+                <UserCheck className="w-3.5 h-3.5" />
                 Convert to Active Client
               </button>
             </div>

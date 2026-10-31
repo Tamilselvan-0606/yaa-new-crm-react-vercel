@@ -74,7 +74,7 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
 import { CustomerSearchableSelect, BatchSearchableSelect } from "../../../components/common/paginated-select";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { SalesCustomer } from "../../../store/useSalesManagementStore";
 import {

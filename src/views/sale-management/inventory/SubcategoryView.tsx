@@ -19,7 +19,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import { SearchBar } from '../../../components/common/SearchBar';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { Button } from '../../../components/common/Button';
@@ -1050,7 +1050,7 @@ export const SubcategoryView: React.FC = () => {
                 </div>
 
                 {/* Key Statistics / Attributes Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/80 text-xs">
+                <div className="grid grid-cols-2 gap-4 p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/80 text-xs">
                   <div>
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Category</span>
                     <span className="font-bold text-slate-800 text-xs">
@@ -1061,12 +1061,6 @@ export const SubcategoryView: React.FC = () => {
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Linked Products</span>
                     <span className="font-bold text-slate-800 text-xs">
                       {selectedSubcategoryDetail.productCount ?? 0}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Record ID</span>
-                    <span className="font-mono text-[11px] text-slate-700 font-semibold truncate block" title={selectedSubcategoryDetail.id}>
-                      {selectedSubcategoryDetail.id.slice(0, 8)}...
                     </span>
                   </div>
                 </div>

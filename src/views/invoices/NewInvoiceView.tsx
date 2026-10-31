@@ -612,7 +612,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
         setDueDate(src.dueDate.split('T')[0]);
       }
       if (src.description) setInvoiceDescription(src.description);
-      if (src.referenceNumbers?.length) setReferenceNumbers(src.referenceNumbers);
+      if (invoiceToEdit?.referenceNumbers?.length) setReferenceNumbers(invoiceToEdit.referenceNumbers);
       if (src.roundMode) setRoundMode(src.roundMode);
       if (src.items?.length) {
         setItems(
@@ -1049,42 +1049,20 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                   {isProforma ? 'Proforma Invoice Metadata & Fields' : 'Invoice Metadata & Fields'}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isAddFieldModalOpen) {
-                      if (newFieldLabel.trim()) {
-                        setCustomInvoiceFields([
-                          ...customInvoiceFields,
-                          { id: `custom_${Date.now()}`, label: newFieldLabel.trim(), value: newFieldValue, type: 'text' }
-                        ]);
-                        setNewFieldLabel('');
-                        setNewFieldValue('');
-                        setIsAddFieldModalOpen(false);
-                      }
-                    } else {
-                      setIsAddFieldModalOpen(true);
-                    }
-                  }}
-                  className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl bg-[#33077C] hover:bg-[#432eb5] text-white text-sm font-bold shadow-md hover:shadow-lg active:scale-[0.98] transition-all duration-200 cursor-pointer select-none"
-                >
-                  <Plus className="w-4 h-4" strokeWidth={2.5} />
-                  <span>{isAddFieldModalOpen ? 'Add Item' : 'Add Field'}</span>
-                </button>
               </div>
 
               {/* Vertical Form Fields */}
               <div className="space-y-2">
                 <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
                   <label className="text-[12px] font-bold text-slate-800">
-                    {isProforma ? 'Proforma Number' : 'Invoice Number'} <span className="text-rose-500 font-bold">*</span>
+                    {isProforma ? 'Proforma Number' : 'Invoice Number'}
                   </label>
                   <input
                     type="text"
                     value={invoiceNumber}
-                    onChange={(e) => setInvoiceNumber(e.target.value)}
-                    placeholder={isProforma ? 'e.g. PRO-1001' : 'e.g. INV-1001'}
-                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                    readOnly
+                    placeholder="Auto-generated"
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 outline-none cursor-not-allowed shadow-2xs"
                   />
                 </div>
 
@@ -1125,15 +1103,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 </div>
 
                 <div className="grid grid-cols-[140px_1fr] gap-3 items-center">
-                  <label className="text-[12px] font-bold text-slate-800">
-                    Reference Number <span className="text-rose-500 font-bold">*</span>
-                  </label>
+                  <label className="text-[12px] font-bold text-slate-800">Reference Number</label>
                   <input
                     type="text"
                     value={referenceNumbers[0] || ''}
-                    onChange={(e) => setReferenceNumbers([e.target.value])}
-                    placeholder="e.g. REF-1001"
-                    className="w-full max-w-[240px] h-8 px-2.5 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-2 focus:ring-[#4309A2]/10 rounded-lg text-xs font-semibold text-slate-800 outline-none transition-all shadow-2xs"
+                    readOnly
+                    placeholder="Auto-generated"
+                    className="w-full max-w-[240px] h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 outline-none cursor-not-allowed shadow-2xs"
                   />
                 </div>
               </div>
@@ -1915,6 +1891,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         setIsSubmitting(true);
                         if (invoiceToEdit) {
                           const updatePayload: UpdateProformaRequest = {
+                            createdDate: createdDate || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             discountTotal: totalDiscount,
@@ -1941,6 +1918,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
 
                           const createPayload: CreateProformaRequest = {
+                            createdDate: createdDate || undefined,
+                            sourceQuoteId: convertedFromQuoteId || undefined,
                             invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             customerId: selectedCustomer.id,
@@ -1964,7 +1943,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           };
                           const res = await proformaInvoiceApi.createProformaInvoice(createPayload);
 
-                          // If converted from quotation, mark quote as converted and persist
+                          // If converted from quotation, the server marks it converted (sourceQuoteId); remember it locally too
                           if (convertedFromQuoteId || convertedFromQuoteNumber) {
                             try {
                               const convertedQuotes = JSON.parse(localStorage.getItem('yaa_crm_converted_quotes') || '[]');
@@ -1979,13 +1958,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                               console.error('Failed to update converted quotes storage:', e);
                             }
 
-                            if (convertedFromQuoteId) {
-                              try {
-                                await quoteApi.updateQuote(convertedFromQuoteId, { status: 'ACCEPTED' as any });
-                              } catch (e) {
-                                console.warn('Could not update quotation status on server:', e);
-                              }
-                            }
                           }
 
                           showToast('success', 'Proforma Invoice Created', `Proforma invoice #${res.data?.proformaNumber || ''} created successfully on server!`);
@@ -2022,6 +1994,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
                       if (invoiceToEdit) {
                         const updatePayload: UpdateInvoiceRequest = {
+                          createdDate: createdDate || undefined,
                           dueDate: dueDate || (invoiceDate ? new Date(new Date(invoiceDate).getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : undefined),
                           notes: invoiceDescription || undefined,
                           discountTotal: totalDiscount,
@@ -2041,6 +2014,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         navigate('/sales/invoices');
                       } else {
                         const createPayload: CreateInvoiceRequest = {
+                          createdDate: createdDate || undefined,
+                          sourceProformaId: convertedFromProformaId || undefined,
                           invoiceDate: invoiceDate || new Date().toISOString().split('T')[0],
                           dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                           customerId: selectedCustomer.id,
@@ -2065,7 +2040,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                         };
                         const res = await invoiceApi.createInvoice(createPayload);
 
-                        // If converted from proforma, mark proforma as Converted and persist
+                        // If converted from proforma, the server marks it Converted (sourceProformaId); remember it locally too
                         if (convertedFromProformaId || convertedFromProformaNumber) {
                           try {
                             const convertedProformas = JSON.parse(localStorage.getItem('yaa_crm_converted_proformas') || '[]');
@@ -2080,13 +2055,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             console.error('Failed to update converted proformas storage:', e);
                           }
 
-                          if (convertedFromProformaId) {
-                            try {
-                              await proformaInvoiceApi.updateProformaInvoice(convertedFromProformaId, { status: 'Converted' as any });
-                            } catch (e) {
-                              console.warn('Could not update proforma status on server:', e);
-                            }
-                          }
                         }
 
                         showToast('success', 'Invoice Created', `Invoice #${res.data?.invoiceNumber || ''} created successfully on server!`);

@@ -1,5 +1,6 @@
 import React from 'react';
 import { pdf } from '@react-pdf/renderer';
+import { toast } from './toast';
 import { BusinessPDFDocument } from '../components/common/pdf/BusinessPDFDocument';
 import { TableReportPDF } from '../components/common/pdf/TableReportPDF';
 
@@ -51,7 +52,7 @@ export function printTableReport({
 }: PrintTableOptions): void {
   const printWindow = window.open('', '_blank', 'width=1100,height=850');
   if (!printWindow) {
-    alert('Please allow popups in your browser to print reports.');
+    toast.warning('Please allow popups in your browser to print reports.');
     return;
   }
 
@@ -502,7 +503,7 @@ export interface DocumentPrintOptions {
 export function printBusinessDocument(options: DocumentPrintOptions): void {
   const printWindow = window.open('', '_blank', 'width=850,height=900');
   if (!printWindow) {
-    alert('Please allow popups in your browser to view the printable document.');
+    toast.warning('Please allow popups in your browser to view the printable document.');
     return;
   }
 

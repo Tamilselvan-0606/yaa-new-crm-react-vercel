@@ -4,7 +4,7 @@ import {
   ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarDays, FilePlus2, GitBranch, History, IndianRupee, Loader2, Mail, MessageSquare,
   MessageSquarePlus, PackagePlus, Search, ShieldCheck, Sparkles, Trash2, TrendingUp, User, UserPlus, Wallet, X, type LucideIcon,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from "../../utils/toast";
 import { aiApi, AiChatError } from '../../api/ai/aiApi';
 import type { AiBlock, AiCapabilities, AiConversation, AiMessage } from '../../api/ai/aiTypes';
 import { AiBlockView, AssistantText, type ActionState } from './AiBlocks';

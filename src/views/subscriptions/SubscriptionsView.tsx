@@ -1,4 +1,3 @@
-import { CommonTableHead } from '../../components/common/CommonTableHead';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
@@ -1505,38 +1504,38 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         )}
       </div>
 
-      {/* Standalone Centered View Switcher (Pill Segmented Control) */}
+      {/* Standalone Centered View Switcher */}
       {!lockMode && (
         <div className="flex justify-center items-center w-full">
-          <div className="inline-flex p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200/80 shadow-xs backdrop-blur-sm gap-1.5">
+          <div className="flex flex-wrap items-center justify-center gap-2.5">
             <button
               type="button"
               onClick={() => setViewMode('plans')}
-              className={`px-5 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 ${viewMode === 'plans'
-                ? 'bg-gradient-to-r from-[#33077C] to-[#4309A2] text-white shadow-md shadow-[#33077C]/20'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                }`}
+              className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                viewMode === 'plans'
+                  ? 'bg-[#33077C] text-white shadow-sm'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
+              }`}
             >
-              <Boxes className={`w-4 h-4 ${viewMode === 'plans' ? 'text-white' : 'text-slate-500'}`} />
-              <span>Product Subscription Plans</span>
               {viewMode === 'plans' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />
+                <Check className="w-3.5 h-3.5 stroke-[3] text-white" />
               )}
+              <span>Product Subscription Plans</span>
             </button>
 
             <button
               type="button"
               onClick={() => setViewMode('subscriptions')}
-              className={`px-5 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 ${viewMode === 'subscriptions'
-                ? 'bg-gradient-to-r from-[#33077C] to-[#4309A2] text-white shadow-md shadow-[#33077C]/20'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
-                }`}
+              className={`px-4 py-2.5 rounded-xl text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                viewMode === 'subscriptions'
+                  ? 'bg-[#33077C] text-white shadow-sm'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
+              }`}
             >
-              <Repeat className={`w-4 h-4 ${viewMode === 'subscriptions' ? 'text-white' : 'text-slate-500'}`} />
-              <span>Client Subscriptions List</span>
               {viewMode === 'subscriptions' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5 animate-pulse" />
+                <Check className="w-3.5 h-3.5 stroke-[3] text-white" />
               )}
+              <span>Client Subscriptions List</span>
             </button>
           </div>
         </div>
@@ -1905,17 +1904,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-                    <CommonTableHead
-              columns={[
-                { label: "SUBSCRIPTION & CLIENT", align: "left", minWidth: "180px" },
-                { label: "CONTACT INFO", align: "center", minWidth: "140px" },
-                { label: "PRODUCT & OFFERING", align: "left", minWidth: "160px" },
-                { label: "PLAN & PRICING", align: "left", minWidth: "150px" },
-                { label: "STATUS & CYCLE", align: "center", minWidth: "130px" },
-                { label: "NEXT RENEWAL", align: "left", minWidth: "130px" },
-                { label: "ACTION", align: "center", minWidth: "110px" },
-              ]}
-            />
+<thead>
+                      <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUBSCRIPTION & CLIENT</th>
+                        <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRODUCT & OFFERING</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN & PRICING</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS & CYCLE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">NEXT RENEWAL</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
+                      </tr>
+                    </thead>
                     <tbody className="text-sm">
                       {isClientSubsLoading ? (
                         <tr>
@@ -2242,17 +2241,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-                    <CommonTableHead
-              columns={[
-                { label: "PLAN NAME", align: "left", minWidth: "160px" },
-                { label: "PRICE", align: "right", minWidth: "120px" },
-                { label: "TOTAL PRICE WITH GST", align: "right", minWidth: "140px" },
-                { label: "BILLING CYCLE", align: "center", minWidth: "130px" },
-                { label: "PLAN TYPE", align: "center", minWidth: "120px" },
-                { label: "STATUS", align: "center", minWidth: "110px" },
-                { label: "ACTION", align: "center", minWidth: "110px" },
-              ]}
-            />
+<thead>
+                      <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN NAME</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PRICE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL PRICE WITH GST</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">BILLING CYCLE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PLAN TYPE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
+                      </tr>
+                    </thead>
                     <tbody className="text-sm">
                       {isPlansLoading ? (
                         <tr>
@@ -2547,17 +2546,17 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
-                    <CommonTableHead
-              columns={[
-                { label: "PRODUCT NAME", align: "left", minWidth: "160px" },
-                { label: "PLAN NAME", align: "left", minWidth: "150px" },
-                { label: "PRICE", align: "right", minWidth: "120px" },
-                { label: "TOTAL PRICE WITH GST", align: "right", minWidth: "140px" },
-                { label: "BILLING CYCLE", align: "center", minWidth: "130px" },
-                { label: "STATUS", align: "center", minWidth: "110px" },
-                { label: "ACTION", align: "center", minWidth: "110px" },
-              ]}
-            />
+<thead>
+                      <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PRODUCT NAME</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">PLAN NAME</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">PRICE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-right">TOTAL PRICE WITH GST</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">BILLING CYCLE</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                        <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
+                      </tr>
+                    </thead>
                     <tbody className="text-sm">
                       {loading || isProductPlansLoading ? (
                         <tr>

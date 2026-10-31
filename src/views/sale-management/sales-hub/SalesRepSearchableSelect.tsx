@@ -22,7 +22,7 @@ import {
   SalesRepresentative,
 } from "../../../store/useSalesManagementStore";
 import { Modal } from "../../../components/common/Modal";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { baseApi } from "../../../api/baseApi";
 import { store } from "../../../store/store";
 import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";

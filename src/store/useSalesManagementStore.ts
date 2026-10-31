@@ -509,6 +509,7 @@ export interface PurchaseOrder {
   hasManualPayment?: boolean;
   purchaseStatus: PurchaseStatus;
   status?: string;
+  stockReceived?: boolean;
   notes?: string;
   createdBy?: string;
   organizationId?: string;
@@ -1558,7 +1559,7 @@ export const useSalesManagementStore = () => {
     let updated: PurchaseOrder[];
 
     const isInwardStatus = (status?: string) =>
-      status === 'Completed' || status === 'Received' || status === 'Approved';
+      status === 'Completed' || status === 'Received';
 
     const wasAlreadyInwarded = exists && ((exists as any).stockInwarded || isInwardStatus(exists.purchaseStatus));
     const shouldInward = isInwardStatus(po.purchaseStatus) && !wasAlreadyInwarded;
@@ -1861,9 +1862,51 @@ export const useSalesManagementStore = () => {
   // Payment Out Actions
   // ----------------------------------------
   const setPaymentOutsList = useCallback((list: PaymentOut[]) => {
-    setStorage(KEYS.PAYMENTS_OUT, list);
-    setPaymentOuts(list);
-    return list;
+    const current = getStorage<PaymentOut[]>(KEYS.PAYMENTS_OUT, INITIAL_PAYMENTS_OUT);
+    const apiIds = new Set(list.map((p) => p.id));
+
+    // Enrich API records with any local purchaseId / purchaseNo / receiptImage metadata
+    const enrichedApiList = list.map((apiItem) => {
+      const localMatch = current.find(
+        (c) =>
+          c.id === apiItem.id ||
+          (c.purchaseNo &&
+            (apiItem.referenceNo === c.purchaseNo ||
+              apiItem.notes?.includes(c.purchaseNo)) &&
+            Math.abs(Number(c.amount || 0) - Number(apiItem.amount || 0)) < 0.01)
+      );
+      if (!localMatch) return apiItem;
+      return {
+        ...apiItem,
+        purchaseId: apiItem.purchaseId || localMatch.purchaseId,
+        purchaseNo: apiItem.purchaseNo || localMatch.purchaseNo,
+        receiptImage: apiItem.receiptImage || localMatch.receiptImage,
+        supplierName:
+          apiItem.supplierName && apiItem.supplierName !== 'Unknown Supplier'
+            ? apiItem.supplierName
+            : localMatch.supplierName,
+      };
+    });
+
+    // Retain local purchase-bill vouchers (e.g. po_pm_*) that haven't been synced to an API voucher yet
+    const unsyncedLocal = current.filter((c) => {
+      if (apiIds.has(c.id)) return false;
+      if (!String(c.id).startsWith('po_pm_')) return false;
+      const alreadyInApi = enrichedApiList.some(
+        (apiItem) =>
+          (c.purchaseNo &&
+            (apiItem.purchaseNo === c.purchaseNo ||
+              apiItem.referenceNo === c.purchaseNo ||
+              apiItem.notes?.includes(c.purchaseNo))) &&
+          Math.abs(Number(apiItem.amount || 0) - Number(c.amount || 0)) < 0.01
+      );
+      return !alreadyInApi;
+    });
+
+    const merged = [...enrichedApiList, ...unsyncedLocal];
+    setStorage(KEYS.PAYMENTS_OUT, merged);
+    setPaymentOuts(merged);
+    return merged;
   }, []);
 
   const savePaymentOut = (po: PaymentOut) => {

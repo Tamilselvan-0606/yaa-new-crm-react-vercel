@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import SendIcon from '@mui/icons-material/Send';
 import Popover from '@mui/material/Popover';
-import { toast } from 'sonner';
+import { toast } from "./toast";
 
 /**
  * Universal Share Options Payload

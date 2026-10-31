@@ -67,7 +67,7 @@ import { DeleteConfirmationModal } from "../../../components/common/DeleteConfir
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   printBusinessDocument,
@@ -122,6 +122,7 @@ import {
   syncProformaStatusInStorage,
   recordDocumentConversion,
   findDocumentLineage,
+  inferDocType,
   initializeWorkflowIntegrity,
   resolveDocumentConvertedAt,
 } from "../../../utils/salesDocumentWorkflow";
@@ -579,9 +580,75 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         if (response && (response.success || response.data)) {
           const list = Array.isArray(response.data) ? response.data : [];
           const mapped = list.map(mapApiProformaToSaleProforma);
-          setLiveProformas(mapped);
+
+          // Deduplicate any twin Proforma records created within 15s for the same customer & amount during Estimate conversion
+          const duplicateIdsToDelete: string[] = [];
+          const deduped = mapped.filter((item, idx, arr) => {
+            const itemLineage = findDocumentLineage(item.proformaNo, "Proforma");
+            const itemHasLineage = Boolean(itemLineage?.estimateNo);
+            if (itemHasLineage) return true;
+
+            const itemTime = new Date(item.createdAt || item.date).getTime();
+            const twinWithLineage = arr.find((other, otherIdx) => {
+              if (otherIdx === idx) return false;
+              const sameCustomer =
+                (item.customerId &&
+                  other.customerId &&
+                  item.customerId === other.customerId) ||
+                (item.partyName &&
+                  other.partyName &&
+                  item.partyName.trim().toLowerCase() ===
+                    other.partyName.trim().toLowerCase());
+              if (!sameCustomer) return false;
+              if (Math.abs((item.amount || 0) - (other.amount || 0)) > 0.01)
+                return false;
+              const otherTime = new Date(
+                other.createdAt || other.date,
+              ).getTime();
+              if (
+                isNaN(itemTime) ||
+                isNaN(otherTime) ||
+                Math.abs(itemTime - otherTime) > 15000
+              ) {
+                return false;
+              }
+              const otherLineage = findDocumentLineage(
+                other.proformaNo,
+                "Proforma",
+              );
+              return Boolean(
+                otherLineage?.estimateNo ||
+                  String(other.notes || "").includes(
+                    "Converted from Estimate",
+                  ) ||
+                  String(other.referenceNo || "")
+                    .toUpperCase()
+                    .startsWith("EST-"),
+              );
+            });
+
+            if (twinWithLineage) {
+              if (item.id && UUID_REGEX.test(item.id)) {
+                duplicateIdsToDelete.push(item.id);
+              }
+              return false;
+            }
+            return true;
+          });
+
+          if (duplicateIdsToDelete.length > 0) {
+            duplicateIdsToDelete.forEach((dupId) => {
+              commerceProformaApi.deleteProforma(dupId).catch(() => {});
+            });
+          }
+
+          setLiveProformas(deduped);
           setTotalApiRecords(
-            response.pagination?.totalRecords ?? mapped.length,
+            Math.max(
+              deduped.length,
+              (response.pagination?.totalRecords ?? deduped.length) -
+                duplicateIdsToDelete.length,
+            ),
           );
           setTotalApiPages(response.pagination?.totalPages ?? 1);
           setIsApiConnected(true);
@@ -4830,6 +4897,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           <DocumentLineageBadges
                             docRef={item.proformaNo}
                             currentType="Proforma"
+                            sourceDocNo={
+                              item.referenceNo &&
+                              inferDocType(item.referenceNo)
+                                ? item.referenceNo
+                                : undefined
+                            }
                             className="justify-center"
                           />
                         </div>

@@ -50,7 +50,7 @@ import { DeleteConfirmationModal } from "../../../components/common/DeleteConfir
 import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FormError } from "../../../components/common/FormError";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import {
   useSalesManagementStore,
   SalesCustomer,

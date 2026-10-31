@@ -28,6 +28,7 @@ import { api } from '../../services/api';
 import { Branch } from '../../types';
 import { subOrganizationApi, branchApi, clientProductApi, getStoredOrganizationId } from '../../api';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { formatDateTimeAmPm } from '../../api/platform/adminNotificationApi';
 
 // Helper to safely extract a normalized string from primitive or object values (e.g. organizationType)
 const normalizeTypeString = (val: any): string => {
@@ -149,6 +150,7 @@ export const Header: React.FC<HeaderProps> = ({
     reminders,
     unreadRemindersCount,
     markReminderCompleted,
+    refreshReminders,
     logout,
     showToast,
   } = useAuth();
@@ -199,6 +201,14 @@ export const Header: React.FC<HeaderProps> = ({
     isClientOnly,
   } = useActiveOrgType();
 
+  // The bell and the Reminders page list the notifications of the active management type.
+  const notificationType = isSaleManagement ? 'SALES' : 'CLIENT';
+  useEffect(() => {
+    refreshReminders(notificationType);
+    const timer = setInterval(() => refreshReminders(notificationType), 60000);
+    return () => clearInterval(timer);
+  }, [notificationType, currentUser?.id]);
+
   const selectedOrgType = activeOrgType;
   const orgCaps = {
     isAll: isOrgAll,
@@ -246,7 +256,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, []);
 
   // 2. Fetch API Sub-Organizations (Real API only)
-  const [apiSubOrgs, setApiSubOrgs] = useState<{ id: string; name: string; organizationType?: string }[]>([]);
+  const [apiSubOrgs, setApiSubOrgs] = useState<{ id: string; name: string; organizationType?: string; subOrganizationType?: any }[]>([]);
 
   useEffect(() => {
     if (isSuperAdmin) return;
@@ -269,6 +279,7 @@ export const Header: React.FC<HeaderProps> = ({
           const mapped = res.data.map((item: any) => ({
             id: item.id,
             name: typeof item.name === 'string' ? item.name : String(item.name || ''),
+            subOrganizationType: item.subOrganizationType ?? item.sub_organization_type,
             organizationType: normalizeTypeString(item.organizationType || item.organizationTypeName),
           }));
           setApiSubOrgs(mapped);
@@ -291,8 +302,13 @@ export const Header: React.FC<HeaderProps> = ({
     const isSales = isSalesMode;
     const seenNames = new Set<string>(['all']);
 
-    const isMatch = (typeStr?: any) => {
-      const t = String(normalizeTypeString(typeStr) || '').toLowerCase();
+    const isMatch = (sub: { subOrganizationType?: any; organizationType?: any }) => {
+      const code = Number(sub.subOrganizationType);
+      if (code === 3) return true;
+      if (code === 1) return !isSales;
+      if (code === 2) return isSales;
+      const t = String(normalizeTypeString(sub.organizationType) || '').toLowerCase();
+      if (t.includes('both') || t.includes('all')) return true;
       if (isSales) {
         return t.includes('sale');
       } else {
@@ -303,7 +319,7 @@ export const Header: React.FC<HeaderProps> = ({
     apiSubOrgs.forEach((s) => {
       const sName = typeof s.name === 'string' ? s.name : String(s.name || '');
       const lower = sName.toLowerCase().trim();
-      if (isMatch(s.organizationType) && lower && !seenNames.has(lower)) {
+      if (isMatch(s) && lower && !seenNames.has(lower)) {
         seenNames.add(lower);
         list.push({
           id: s.id,
@@ -1265,13 +1281,13 @@ export const Header: React.FC<HeaderProps> = ({
                           <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{rem.description}</p>
                           <div className="flex items-center justify-between mt-2">
                             <span className="text-[10px] text-slate-400 font-mono">
-                              Due: {rem.dueDate.replace('T', ' ')}
+                              {formatDateTimeAmPm(rem.dueDate)}
                             </span>
                             <button
                               onClick={() => markReminderCompleted(rem.id)}
                               className="text-[10px] font-semibold text-[#4309A2] hover:underline flex items-center gap-1 cursor-pointer"
                             >
-                              <CheckCircle2 className="w-3 h-3" /> Done
+                              <CheckCircle2 className="w-3 h-3" /> Mark as read
                             </button>
                           </div>
                         </div>

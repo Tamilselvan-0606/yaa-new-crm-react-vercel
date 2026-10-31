@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { useActiveOrgType } from '../../hooks/useActiveOrgType';
+import { formatDateTimeAmPm } from '../../api/platform/adminNotificationApi';
+import { CATEGORIES } from '../../utils/notificationCategories';
 import { ReminderItem, ReminderType } from '../../types';
 import {
   Bell,
@@ -29,6 +32,9 @@ export const RemindersView: React.FC = () => {
     showToast,
   } = useAuth();
 
+  const { isSaleManagement } = useActiveOrgType();
+  const notificationType = isSaleManagement ? 'SALES' : 'CLIENT';
+
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -42,15 +48,15 @@ export const RemindersView: React.FC = () => {
   const [isMarkingAll, setIsMarkingAll] = useState(false);
 
   useEffect(() => {
-    refreshReminders();
-  }, []);
+    refreshReminders(notificationType);
+  }, [notificationType]);
 
   const handleMarkAllRead = async () => {
     try {
       setIsMarkingAll(true);
       await markAllRemindersRead();
-      await refreshReminders();
-      showToast?.('success', 'All Reminders Marked as Read', 'All operational alerts have been marked as resolved');
+      await refreshReminders(notificationType);
+      showToast?.('success', 'All Marked as Read', 'All notifications have been marked as read');
     } catch (e: any) {
       showToast?.('error', 'Failed to mark read', e.message || 'An error occurred');
     } finally {
@@ -62,8 +68,8 @@ export const RemindersView: React.FC = () => {
     try {
       setMarkingId(id);
       await markReminderCompleted(id);
-      await refreshReminders();
-      showToast?.('success', 'Reminder Resolved', 'The reminder has been marked as completed');
+      await refreshReminders(notificationType);
+      showToast?.('success', 'Marked as Read', 'The notification has been marked as read');
     } catch (e: any) {
       showToast?.('error', 'Failed to resolve', e.message || 'An error occurred');
     } finally {
@@ -106,7 +112,7 @@ export const RemindersView: React.FC = () => {
         !appliedSearch.trim() ||
         rem.title.toLowerCase().includes(appliedSearch.toLowerCase()) ||
         rem.description.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-        rem.type.toLowerCase().includes(appliedSearch.toLowerCase());
+        (rem.category || rem.type).toLowerCase().includes(appliedSearch.toLowerCase());
 
       const matchesStatus =
         appliedStatus === 'ALL' ||
@@ -114,11 +120,24 @@ export const RemindersView: React.FC = () => {
         (appliedStatus === 'COMPLETED' && rem.isCompleted);
 
       const matchesCategory =
-        appliedCategory === 'ALL' || rem.type === appliedCategory;
+        appliedCategory === 'ALL' || (rem.category || rem.type) === appliedCategory;
 
       return matchesSearch && matchesStatus && matchesCategory;
     });
   }, [reminders, appliedSearch, appliedStatus, appliedCategory]);
+
+  // Category filter lists the areas of the active management type
+  const categoryOptions = useMemo(
+    () => [{ label: 'Category : All', value: 'ALL' }, ...CATEGORIES[notificationType].map((n) => ({ label: n, value: n }))],
+    [notificationType],
+  );
+
+  // A category of the other management type no longer applies after switching
+  useEffect(() => {
+    setPendingCategory('ALL');
+    setAppliedCategory('ALL');
+    setPage(1);
+  }, [notificationType]);
 
   // Pagination Logic
   const pagedReminders = useMemo(() => {
@@ -132,7 +151,7 @@ export const RemindersView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-            Reminders & Automated Alerts Engine
+            Reminders & Notifications
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-0.5">
             {isAdmin
@@ -181,8 +200,8 @@ export const RemindersView: React.FC = () => {
             <FilterDropdown
               options={[
                 { label: 'Status : All', value: 'ALL' },
-                { label: 'Pending / Active', value: 'UNCOMPLETED', dotColor: '#f59e0b' },
-                { label: 'Completed', value: 'COMPLETED', dotColor: '#10b981' },
+                { label: 'Unread', value: 'UNCOMPLETED', dotColor: '#f59e0b' },
+                { label: 'Read', value: 'COMPLETED', dotColor: '#10b981' },
               ]}
               value={pendingStatus}
               onChange={(val) => setPendingStatus(val)}
@@ -191,15 +210,8 @@ export const RemindersView: React.FC = () => {
 
             {/* Category Dropdown */}
             <FilterDropdown
-              options={[
-                { label: 'Category : All', value: 'ALL' },
-                { label: 'Lead Follow-ups', value: 'Lead Follow-up' },
-                { label: 'Overdue Follow-ups', value: 'Overdue Follow-up' },
-                { label: 'Task Deadlines', value: 'Task Deadline' },
-                { label: 'Payment Dues', value: 'Payment Due' },
-                { label: 'Payment Overdues', value: 'Payment Overdue' },
-                { label: 'Subscription Expirations', value: 'Subscription Expiry' },
-              ]}
+              options={categoryOptions}
+              maxHeightClass="max-h-[70vh]"
               value={pendingCategory}
               onChange={(val) => setPendingCategory(val)}
               placeholder="Category : All"
@@ -222,10 +234,10 @@ export const RemindersView: React.FC = () => {
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <thead>
               <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">REMINDER & DETAILS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">NOTIFICATION</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CATEGORY</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PRIORITY</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DUE DATE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DATE & TIME</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
               </tr>
@@ -275,7 +287,7 @@ export const RemindersView: React.FC = () => {
                       {/* 2. CATEGORY */}
                       <td className="py-4 px-4 border border-slate-200 text-center">
                         <Badge variant="purple" size="sm">
-                          {rem.type}
+                          {rem.category || rem.type}
                         </Badge>
                       </td>
 
@@ -288,7 +300,7 @@ export const RemindersView: React.FC = () => {
                       <td className="py-4 px-5 border border-slate-200 text-center">
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{rem.dueDate?.replace('T', ' ')}</span>
+                          <span>{formatDateTimeAmPm(rem.dueDate)}</span>
                         </div>
                       </td>
 
@@ -296,11 +308,11 @@ export const RemindersView: React.FC = () => {
                       <td className="py-4 px-5 border border-slate-200 text-center">
                         {isResolved ? (
                           <Badge variant="success" size="sm" dot>
-                            Completed
+                            Read
                           </Badge>
                         ) : (
                           <Badge variant="warning" size="sm" dot>
-                            Pending
+                            Unread
                           </Badge>
                         )}
                       </td>
@@ -310,7 +322,7 @@ export const RemindersView: React.FC = () => {
                         {isResolved ? (
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
                             <CheckCircle2 className="w-4 h-4" />
-                            Resolved
+                            Read
                           </span>
                         ) : (
                           <button
@@ -319,7 +331,7 @@ export const RemindersView: React.FC = () => {
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#33077C] hover:bg-[#4309A2] active:scale-[0.98] text-white text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>{markingId === rem.id ? 'Resolving...' : 'Mark Resolved'}</span>
+                            <span>{markingId === rem.id ? 'Marking...' : 'Mark as Read'}</span>
                           </button>
                         )}
                       </td>

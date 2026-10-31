@@ -51,7 +51,7 @@ import {
 } from 'recharts';
 import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
 import { Modal } from '../../../components/common/Modal';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import { downloadTableReport } from '../../../utils/printUtils';
 
 type ReportCategory = 'transaction' | 'sales' | 'collections' | 'inventory' | 'purchase' | 'expense' | 'tax';

@@ -1,5 +1,6 @@
 import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
+import { SupplierSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
   useState,
   useMemo,
@@ -115,7 +116,7 @@ import {
   parseTaxRate,
   round2,
 } from "../../../utils/financialCalculations";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { useNavigate, useLocation } from "react-router-dom";
 
 import { formatDate } from "../utils/dateUtils";
@@ -289,7 +290,7 @@ export const PurchaseOrderView: React.FC = () => {
     setAddProductTargetRowIdx(targetRowIndex);
     setQuickProductForm({
       productName: "",
-      productCode: `PRD-${Date.now().toString().slice(-6)}`,
+      productCode: "",
       category: "General",
       unit: "PCS",
       purchasePrice: "",
@@ -324,9 +325,7 @@ export const PurchaseOrderView: React.FC = () => {
       const payload: CreateProductPayload = {
         itemType: "Product",
         productName: quickProductForm.productName.trim(),
-        productCode:
-          quickProductForm.productCode.trim() ||
-          `PRD-${Date.now().toString().slice(-6)}`,
+        productCode: quickProductForm.productCode.trim() || undefined,
         category: quickProductForm.category.trim() || "General",
         unit: quickProductForm.unit || "PCS",
         purchasePrice: purchasePriceNum,
@@ -2454,39 +2453,31 @@ export const PurchaseOrderView: React.FC = () => {
 
         if (finalPaid > basePaidBenchmark) {
           const deltaAmount = finalPaid - basePaidBenchmark;
-          const paymentVoucher: PaymentOut = {
-            id: `po_pm_${Date.now()}`,
-            paymentNo: `PV-${Date.now().toString().slice(-5)}`,
-            paymentDate:
-              formData.purchaseDate || new Date().toISOString().split("T")[0],
-            supplierId: updatedPo.supplierId,
-            supplierName: updatedPo.supplierName,
-            purchaseId: updatedPo.id,
-            purchaseNo: updatedPo.purchaseNo,
-            amount: deltaAmount,
-            paymentMode: (formData.paymentMethod as any) || "Bank Transfer",
-            paymentType: (formData.paymentMethod as any) || "Bank Transfer",
-            referenceNo: formData.purchaseInvoiceNo || updatedPo.purchaseNo,
-            status: "Completed",
-            notes: `Payment recorded on update of purchase bill ${updatedPo.purchaseNo}`,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          savePaymentOut(paymentVoucher);
+          let apiVoucherId = `po_pm_${Date.now()}`;
+          let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
 
           if (UUID_REGEX.test(updatedPo.supplierId)) {
             try {
-              await workPaymentOutApi.createPaymentOut(
+              const pRes = await workPaymentOutApi.createPaymentOut(
                 mapUiToCreatePaymentOutPayload({
                   supplierId: updatedPo.supplierId,
+                  purchaseOrderId: updatedPo.id,
                   paymentType: formData.paymentMethod || "Bank Transfer",
                   paymentMode: formData.paymentMethod || "Bank Transfer",
                   amount: deltaAmount,
                   referenceNo:
-                    formData.purchaseInvoiceNo || updatedPo.purchaseNo,
-                  notes: `Payment for ${updatedPo.purchaseNo}`,
+                    formPaymentDetails.transactionId ||
+                    formData.purchaseInvoiceNo ||
+                    updatedPo.purchaseNo,
+                  notes:
+                    formPaymentDetails.remarks ||
+                    `Payment for ${updatedPo.purchaseNo}`,
                 }),
               );
+              if (pRes?.data?.id) {
+                apiVoucherId = pRes.data.id;
+                apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
+              }
             } catch (pErr) {
               console.warn(
                 "API Payment Out creation on purchase bill edit warning:",
@@ -2494,6 +2485,33 @@ export const PurchaseOrderView: React.FC = () => {
               );
             }
           }
+
+          const paymentVoucher: PaymentOut = {
+            id: apiVoucherId,
+            paymentNo: apiVoucherNo,
+            paymentDate:
+              formPaymentDetails.date ||
+              formData.purchaseDate ||
+              new Date().toISOString().split("T")[0],
+            supplierId: updatedPo.supplierId,
+            supplierName: updatedPo.supplierName,
+            purchaseId: updatedPo.id,
+            purchaseNo: updatedPo.purchaseNo,
+            amount: deltaAmount,
+            paymentMode: (formData.paymentMethod as any) || "Bank Transfer",
+            paymentType: (formData.paymentMethod as any) || "Bank Transfer",
+            referenceNo:
+              formPaymentDetails.transactionId ||
+              formData.purchaseInvoiceNo ||
+              updatedPo.purchaseNo,
+            status: "Completed",
+            notes:
+              formPaymentDetails.remarks ||
+              `Payment recorded on update of purchase bill ${updatedPo.purchaseNo}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          savePaymentOut(paymentVoucher);
         }
 
         savePurchase(updatedPo);
@@ -2513,6 +2531,7 @@ export const PurchaseOrderView: React.FC = () => {
             dueDate: formData.dueDate,
             expectedDeliveryDate: formData.dueDate,
             discount: calculatedTotals.discount,
+            paidAmount: finalPaid,
             notes: formData.notes,
           },
           formData.items,
@@ -2552,13 +2571,47 @@ export const PurchaseOrderView: React.FC = () => {
           otherCharges: formData.otherCharges,
         };
 
-        // Record local payment voucher if initial payment was specified (no external Payment Out API call during PO creation)
+        // Record payment voucher in Work Payment Out API & local store if initial payment was specified
         if (finalPaid > 0) {
+          let apiVoucherId = `po_pm_${Date.now()}`;
+          let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
+
+          if (UUID_REGEX.test(createdPo.supplierId)) {
+            try {
+              const pRes = await workPaymentOutApi.createPaymentOut(
+                mapUiToCreatePaymentOutPayload({
+                  supplierId: createdPo.supplierId,
+                  paymentType: formData.paymentMethod || "Bank Transfer",
+                  paymentMode: formData.paymentMethod || "Bank Transfer",
+                  amount: finalPaid,
+                  referenceNo:
+                    formPaymentDetails.transactionId ||
+                    formData.purchaseInvoiceNo ||
+                    createdPo.purchaseNo,
+                  notes:
+                    formPaymentDetails.remarks ||
+                    `Initial payment for ${createdPo.purchaseNo}`,
+                }),
+              );
+              if (pRes?.data?.id) {
+                apiVoucherId = pRes.data.id;
+                apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
+              }
+            } catch (pErr) {
+              console.warn(
+                "API Payment Out creation on purchase bill create warning:",
+                pErr,
+              );
+            }
+          }
+
           const paymentVoucher: PaymentOut = {
-            id: `po_pm_${Date.now()}`,
-            paymentNo: `PV-${Date.now().toString().slice(-5)}`,
+            id: apiVoucherId,
+            paymentNo: apiVoucherNo,
             paymentDate:
-              formData.purchaseDate || new Date().toISOString().split("T")[0],
+              formPaymentDetails.date ||
+              formData.purchaseDate ||
+              new Date().toISOString().split("T")[0],
             supplierId: createdPo.supplierId,
             supplierName: createdPo.supplierName,
             purchaseId: createdPo.id,
@@ -2566,9 +2619,14 @@ export const PurchaseOrderView: React.FC = () => {
             amount: finalPaid,
             paymentMode: (formData.paymentMethod as any) || "Bank Transfer",
             paymentType: (formData.paymentMethod as any) || "Bank Transfer",
-            referenceNo: formData.purchaseInvoiceNo || createdPo.purchaseNo,
+            referenceNo:
+              formPaymentDetails.transactionId ||
+              formData.purchaseInvoiceNo ||
+              createdPo.purchaseNo,
             status: "Completed",
-            notes: `Initial payment recorded on creation of purchase bill ${createdPo.purchaseNo}`,
+            notes:
+              formPaymentDetails.remarks ||
+              `Initial payment recorded on creation of purchase bill ${createdPo.purchaseNo}`,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -2580,9 +2638,9 @@ export const PurchaseOrderView: React.FC = () => {
 
         // If created directly in an inwarded state (Approved or Received), inward stock into Commerce API
         if (
-          createdPo.purchaseStatus === "Approved" ||
-          createdPo.purchaseStatus === "Received" ||
-          createdPo.purchaseStatus === "Completed"
+          !createdPo.stockReceived &&
+          (createdPo.purchaseStatus === "Received" ||
+            createdPo.purchaseStatus === "Completed")
         ) {
           for (const item of createdPo.items) {
             if (!item.productId || !item.quantity) continue;
@@ -2672,6 +2730,17 @@ export const PurchaseOrderView: React.FC = () => {
   ) => {
     // Helper to perform live stock inward to Commerce API
     const inwardStockViaApi = async (targetPo: PurchaseOrder) => {
+      if (targetPo.stockReceived) {
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Stock", id: "LIST" },
+            { type: "Stock", id: "BATCHES" },
+            { type: "Stock", id: "LEDGER" },
+            { type: "Product", id: "LIST" },
+          ]),
+        );
+        return;
+      }
       let inwardedCount = 0;
       for (const item of targetPo.items) {
         if (!item.productId || !item.quantity) continue;
@@ -2730,7 +2799,7 @@ export const PurchaseOrderView: React.FC = () => {
       setLivePurchases((prev) =>
         prev.map((p) => (p.id === po.id ? updated : p)),
       );
-      if (newStatus === "Approved" || newStatus === "Received") {
+      if (newStatus === "Received") {
         await inwardStockViaApi(updated);
         toast.success(
           `Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`,
@@ -2791,7 +2860,7 @@ export const PurchaseOrderView: React.FC = () => {
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === po.id ? mapped : p)),
         );
-        if (newStatus === "Approved" || newStatus === "Received") {
+        if (newStatus === "Received") {
           await inwardStockViaApi(mapped);
           toast.success(
             `Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`,
@@ -2810,7 +2879,7 @@ export const PurchaseOrderView: React.FC = () => {
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === po.id ? updated : p)),
         );
-        if (newStatus === "Approved" || newStatus === "Received") {
+        if (newStatus === "Received") {
           await inwardStockViaApi(updated);
           toast.success(
             `Purchase order ${po.purchaseNo} marked as ${newStatus} & inventory stock inwarded!`,
@@ -2911,11 +2980,14 @@ export const PurchaseOrderView: React.FC = () => {
 
     try {
       // 1. If backend supplier ID is valid UUID, create live Payment Out in Work API
+      let apiVoucherId = `po_pm_${Date.now()}`;
+      let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
       if (UUID_REGEX.test(selectedPurchase.supplierId)) {
         try {
-          await workPaymentOutApi.createPaymentOut(
+          const pRes = await workPaymentOutApi.createPaymentOut(
             mapUiToCreatePaymentOutPayload({
               supplierId: selectedPurchase.supplierId,
+              purchaseOrderId: selectedPurchase.id,
               paymentType: recordMethod,
               paymentMode: recordMethod,
               amount: recordAmount,
@@ -2924,6 +2996,10 @@ export const PurchaseOrderView: React.FC = () => {
                 `Payment for ${selectedPurchase.purchaseNo}. ${recordNotes || ""}`.trim(),
             }),
           );
+          if (pRes?.data?.id) {
+            apiVoucherId = pRes.data.id;
+            apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
+          }
         } catch (apiErr) {
           console.warn("API Payment Out creation warning:", apiErr);
         }
@@ -2931,8 +3007,8 @@ export const PurchaseOrderView: React.FC = () => {
 
       // 2. Record payment voucher in store for accounts payable ledger and audit history
       const paymentVoucher: PaymentOut = {
-        id: `po_pm_${Date.now()}`,
-        paymentNo: `PV-${Date.now().toString().slice(-5)}`,
+        id: apiVoucherId,
+        paymentNo: apiVoucherNo,
         paymentDate: new Date().toISOString().split("T")[0],
         supplierId: selectedPurchase.supplierId,
         supplierName: selectedPurchase.supplierName,
@@ -2941,9 +3017,9 @@ export const PurchaseOrderView: React.FC = () => {
         amount: recordAmount,
         paymentMode: recordMethod as any,
         paymentType: recordMethod as any,
-        referenceNo: recordNotes,
+        referenceNo: recordNotes || selectedPurchase.purchaseNo,
         status: "Completed",
-        notes: recordNotes,
+        notes: recordNotes || `Payment for ${selectedPurchase.purchaseNo}`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -3359,14 +3435,13 @@ export const PurchaseOrderView: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div>
                   <FormLabel required>Select Supplier</FormLabel>
-                  <CustomSelect
+                  <SupplierSearchableSelect
                     value={formData.supplierId}
                     onChange={(val, sup) => {
                       handleSupplierChange(val);
                       if (sup?.supplierCode) {
                         setFormData((prev) => ({
                           ...prev,
-
                           supplierName: sup.name,
                         }));
                       }
@@ -3376,7 +3451,6 @@ export const PurchaseOrderView: React.FC = () => {
                         ? {
                             id: formData.supplierId,
                             name: formData.supplierName,
-
                           }
                         : null
                     }
@@ -5033,35 +5107,6 @@ export const PurchaseOrderView: React.FC = () => {
                             calculatedTotals.grandTotal,
                             currentPaid + enteredAmount,
                           );
-                          const newVoucher: PaymentOut = {
-                            id: `po_pm_${Date.now()}`,
-                            paymentNo: `PV-${Date.now().toString().slice(-5)}`,
-                            paymentDate:
-                              formPaymentDetails.date ||
-                              new Date().toISOString().split("T")[0],
-                            supplierId: editingPurchase.supplierId,
-                            supplierName: editingPurchase.supplierName,
-                            purchaseId: editingPurchase.id,
-                            purchaseNo: editingPurchase.purchaseNo,
-                            amount: enteredAmount,
-                            paymentMode:
-                              (formPaymentDetails.paymentType as any) ||
-                              "Bank Transfer",
-                            paymentType:
-                              (formPaymentDetails.paymentType as any) ||
-                              "Bank Transfer",
-                            referenceNo:
-                              formPaymentDetails.transactionId ||
-                              editingPurchase.purchaseInvoiceNo ||
-                              editingPurchase.purchaseNo,
-                            status: "Completed",
-                            notes:
-                              formPaymentDetails.remarks ||
-                              `Payment recorded against purchase bill ${editingPurchase.purchaseNo}`,
-                            createdAt: new Date().toISOString(),
-                            updatedAt: new Date().toISOString(),
-                          };
-                          savePaymentOut(newVoucher);
 
                           setFormData((prev) => ({
                             ...prev,
@@ -5072,7 +5117,7 @@ export const PurchaseOrderView: React.FC = () => {
                           }));
                           setIsFormPaymentModalOpen(false);
                           toast.success(
-                            `Payment of ₹${enteredAmount.toLocaleString("en-IN")} recorded! Total paid is now ₹${newTotalPaid.toLocaleString("en-IN")}`,
+                            `Payment of ₹${enteredAmount.toLocaleString("en-IN")} applied! Click Update Purchase Bill to save.`,
                           );
                         } else {
                           if (enteredAmount > calculatedTotals.grandTotal) {
@@ -5140,18 +5185,13 @@ export const PurchaseOrderView: React.FC = () => {
                   {/* Row 2: Product Code / SKU & Category */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <FormLabel>Product Code / SKU</FormLabel>
+                      <FormLabel>Product Code</FormLabel>
                       <input
                         type="text"
-                        placeholder="e.g. PRD-001"
+                        readOnly
+                        placeholder="Auto-generated"
                         value={quickProductForm.productCode}
-                        onChange={(e) =>
-                          setQuickProductForm((prev) => ({
-                            ...prev,
-                            productCode: e.target.value,
-                          }))
-                        }
-                        className={FORM_INPUT_CLS}
+                        className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
                       />
                     </div>
                     <div>

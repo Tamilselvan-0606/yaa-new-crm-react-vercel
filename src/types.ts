@@ -438,7 +438,8 @@ export type ReminderType =
   | 'Task Deadline'
   | 'Payment Due'
   | 'Payment Overdue'
-  | 'Subscription Expiry';
+  | 'Subscription Expiry'
+  | 'Notification';
 
 export interface ReminderItem {
   id: string;
@@ -447,6 +448,14 @@ export interface ReminderItem {
   description: string;
   relatedId?: string;
   relatedType?: string;
+  /** Readable name of the area the notification is about, e.g. "Purchase Requests". */
+  category?: string;
+  /** Backend service that recorded the event (platform, commerce, crm, work). */
+  service?: string;
+  /** Backend notification target type (SALES, CLIENT, BOTH, SUPER_ADMIN, ALL). */
+  notificationType?: string;
+  /** Backend request path that triggered the notification (e.g. /commerce/products, /platform/invoices). */
+  path?: string;
   dueDate: string;
   isRead: boolean;
   isCompleted: boolean;

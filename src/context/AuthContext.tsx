@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 import { User, Role, ReminderItem } from '../types';
-import { toast } from 'sonner';
+import { toast } from "../utils/toast";
 
 interface AuthContextType {
   currentUser: User | null;
@@ -18,7 +18,7 @@ interface AuthContextType {
   login: (email: string, password?: string) => Promise<boolean>;
   switchUser: (userId: string) => Promise<void>;
   refreshAuth: () => Promise<void>;
-  refreshReminders: () => Promise<void>;
+  refreshReminders: (type?: 'SALES' | 'CLIENT') => Promise<void>;
   showToast: (type: 'success' | 'error' | 'info' | 'warning', title: string, message?: string) => void;
   removeToast: (id: string) => void;
   markReminderCompleted: (id: string) => Promise<void>;

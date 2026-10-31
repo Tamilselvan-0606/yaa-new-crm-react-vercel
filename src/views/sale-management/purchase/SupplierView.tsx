@@ -47,14 +47,19 @@ import {
   useSalesManagementStore,
   Supplier,
   SupplierStatus,
+  PurchaseOrder,
 } from "../../../store/useSalesManagementStore";
 import {
   supplierApi,
+  mapApiPurchaseOrderToUi,
   mapApiSupplierToSupplier,
   mapSupplierToPayload,
   ApiSupplier,
   CreateSupplierPayload,
   UpdateSupplierPayload,
+  workPurchaseOrderApi,
+  workPaymentOutApi,
+  mapApiPaymentOutToUi,
 } from "../../../api";
 import { SupplierSchema, SupplierFormData } from "../../../validations";
 import { FormError } from "../../../components/common/FormError";
@@ -76,7 +81,7 @@ import {
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 
 import { formatDate } from '../utils/dateUtils';
 export const SupplierView: React.FC = () => {
@@ -88,6 +93,9 @@ export const SupplierView: React.FC = () => {
     deleteSupplier,
     setSuppliersList,
   } = useSalesManagementStore();
+
+  // The selected supplier's purchase bills as the API reports them (with paid amount and balance)
+  const [apiSupplierBills, setApiSupplierBills] = useState<PurchaseOrder[] | null>(null);
 
   // API State
   const [apiSuppliers, setApiSuppliers] = useState<Supplier[]>([]);
@@ -425,13 +433,20 @@ export const SupplierView: React.FC = () => {
   ) => {
     setSelectedSupplier(sup);
     setActiveTab(tab);
+    setApiSupplierBills(null);
     setIsDetailModalOpen(true);
 
     try {
       setIsDetailLoading(true);
-      const res = await supplierApi.getSupplierById(sup.id);
+      const [res, bills] = await Promise.all([
+        supplierApi.getSupplierById(sup.id),
+        supplierApi.getSupplierPurchaseBills(sup.id, { limit: 100 }).catch(() => null),
+      ]);
       if (res && res.data) {
         setSelectedSupplier(mapApiSupplierToSupplier(res.data));
+      }
+      if (bills && Array.isArray(bills.data)) {
+        setApiSupplierBills(bills.data.map(mapApiPurchaseOrderToUi));
       }
     } catch {
       // Use cached sup
@@ -601,8 +616,8 @@ export const SupplierView: React.FC = () => {
   // Supplier Details Data Links
   const supplierPurchases = useMemo(() => {
     if (!selectedSupplier) return [];
-    return purchases.filter((p) => p.supplierId === selectedSupplier.id);
-  }, [purchases, selectedSupplier]);
+    return apiSupplierBills ?? purchases.filter((p) => p.supplierId === selectedSupplier.id);
+  }, [apiSupplierBills, purchases, selectedSupplier]);
 
   const supplierReturns = useMemo(() => {
     if (!selectedSupplier) return [];
@@ -1043,7 +1058,7 @@ export const SupplierView: React.FC = () => {
                 columns={[
                   { label: "SUPPLIER & CODE", align: "left", minWidth: "180px" },
                   { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
-                  { label: "CONTACT INFO", align: "center", minWidth: "140px" },
+                  { label: "CONTACT INFO", align: "left", minWidth: "160px" },
                   { label: "LOCATION", align: "left", minWidth: "150px" },
                   { label: "TOTAL PURCHASE", align: "right", minWidth: "130px" },
                   { label: "PAID / PAYABLE", align: "right", minWidth: "140px" },
@@ -1129,26 +1144,45 @@ export const SupplierView: React.FC = () => {
                       </td>
 
                       {/* 3. Contact Info */}
-                      <td className="py-4 px-4 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-2">
+                      <td className="py-4 px-4 border border-slate-200 whitespace-nowrap align-middle">
+                        <div className="space-y-1 text-xs text-left">
                           {sup.phone ? (
-                            <a
-                              href={`tel:${sup.phone}`}
-                              className="w-8 h-8 rounded-lg bg-[#EBF3FF] hover:bg-[#dbeafe] flex items-center justify-center text-[#2563EB] hover:scale-110 transition-all shadow-2xs"
-                              title={`Call ${sup.phone}`}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (sup.phone) {
+                                  navigator.clipboard.writeText(sup.phone);
+                                  toast.success(`Copied phone: ${sup.phone}`);
+                                }
+                              }}
+                              className="flex items-center gap-1.5 text-slate-700 hover:text-[#33077C] transition-colors cursor-pointer group text-left"
+                              title={`Click to copy phone: ${sup.phone}`}
                             >
-                              <Phone className="w-3.5 h-3.5" />
-                            </a>
+                              <Phone className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#33077C] shrink-0" />
+                              <span className="font-medium">{sup.phone}</span>
+                            </button>
                           ) : null}
                           {sup.email ? (
-                            <a
-                              href={`mailto:${sup.email}`}
-                              className="w-8 h-8 rounded-lg bg-[#FEEFEE] hover:bg-[#fee2e2] flex items-center justify-center text-[#EF4444] hover:scale-110 transition-all shadow-2xs"
-                              title={`Email ${sup.email}`}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (sup.email) {
+                                  navigator.clipboard.writeText(sup.email);
+                                  toast.success(`Copied email: ${sup.email}`);
+                                }
+                              }}
+                              className="flex items-center gap-1.5 text-slate-500 hover:text-[#33077C] transition-colors truncate max-w-[170px] cursor-pointer group text-left"
+                              title={`Click to copy email: ${sup.email}`}
                             >
-                              <Mail className="w-3.5 h-3.5" />
-                            </a>
+                              <Mail className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#33077C] shrink-0" />
+                              <span className="truncate">{sup.email}</span>
+                            </button>
                           ) : null}
+                          {!sup.phone && !sup.email && (
+                            <span className="text-slate-400 text-xs">N/A</span>
+                          )}
                         </div>
                       </td>
 

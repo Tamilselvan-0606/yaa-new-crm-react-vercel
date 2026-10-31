@@ -42,7 +42,7 @@ export interface SearchableSelectProps {
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   value,
   onChange,
-  options,
+  options = [],
   placeholder = 'Select Product...',
   className = '',
   triggerClassName = '',
@@ -79,7 +79,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
 
   // Normalize options
   const normalizedOptions: SearchableOption[] = useMemo(() => {
-    return options.map((opt) =>
+    return (Array.isArray(options) ? options : []).map((opt) =>
       typeof opt === 'string' ? { value: opt, label: opt } : opt
     );
   }, [options]);

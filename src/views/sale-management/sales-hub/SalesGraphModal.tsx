@@ -19,7 +19,7 @@ import {
 } from 'recharts';
 import { SaleTransaction } from '../../../store/useSalesManagementStore';
 import { exportTableToExcel } from '../../../utils/excelExport';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 
 interface SalesGraphModalProps {
   isOpen: boolean;

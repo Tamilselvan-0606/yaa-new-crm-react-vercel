@@ -48,7 +48,7 @@ import { exportTableToExcel } from '../../../utils/excelExport';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import {
   workExpenseApi,
   workExpenseCategoryApi,
@@ -376,6 +376,7 @@ export const ExpenseView: React.FC = () => {
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [receiptImageState, setReceiptImageState] = useState<string>('');
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
+  const [failedBillImageSrc, setFailedBillImageSrc] = useState<string | null>(null);
   const [selectedBillExpense, setSelectedBillExpense] = useState<ExpenseItem | null>(null);
   const [isLoadingBillReceipt, setIsLoadingBillReceipt] = useState(false);
 
@@ -744,6 +745,7 @@ export const ExpenseView: React.FC = () => {
             uploadRes.data?.imageUrl ||
             uploadRes.data?.location;
 
+          console.info('Expense receipt upload response:', uploadRes.data, '→ saved as:', returnedUrl);
           if (returnedUrl && typeof returnedUrl === 'string') {
             finalReceiptImage = returnedUrl;
           } else {
@@ -2217,10 +2219,22 @@ export const ExpenseView: React.FC = () => {
                       title="Attached Bill PDF"
                       className="w-full h-[450px] rounded-lg border border-slate-200 bg-white"
                     />
+                  ) : failedBillImageSrc === selectedBillExpense.receiptImage ? (
+                    <div className="text-center space-y-2 p-6">
+                      <Receipt className="w-10 h-10 text-slate-300 mx-auto stroke-[1.5]" />
+                      <p className="text-sm font-bold text-slate-700">Could not load the attached bill</p>
+                      <p className="text-xs text-slate-500 max-w-sm break-all">
+                        The file link is broken or not accessible. Try "Open in New Tab", or re-upload the bill by editing this expense.
+                      </p>
+                    </div>
                   ) : (
                     <img
                       src={selectedBillExpense.receiptImage}
                       alt={`Receipt for ${selectedBillExpense.expenseNo}`}
+                      onError={() => {
+                        console.warn('Expense bill failed to load:', selectedBillExpense.receiptImage);
+                        setFailedBillImageSrc(selectedBillExpense.receiptImage || null);
+                      }}
                       className="max-h-[460px] max-w-full object-contain rounded-lg shadow-sm border border-slate-200 bg-white"
                     />
                   )}

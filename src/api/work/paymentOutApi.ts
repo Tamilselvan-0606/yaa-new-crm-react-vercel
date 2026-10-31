@@ -27,6 +27,32 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
     ? apiPout.createdAt.split('T')[0]
     : new Date().toISOString().split('T')[0];
 
+  const rawRef = apiPout.referenceNo || '';
+  const rawNotes = apiPout.notes || '';
+  const poMatch =
+    rawRef.match(/\bPO-\d{4}-\d+\b/i) ||
+    rawNotes.match(/\bPO-\d{4}-\d+\b/i);
+  let inferredPurchaseNo: string | undefined = poMatch ? poMatch[0].toUpperCase() : undefined;
+  let inferredPurchaseId: string | undefined = undefined;
+
+  try {
+    const rawStoredPos = localStorage.getItem('yaa_crm_purchase_orders');
+    if (rawStoredPos) {
+      const parsedPos = JSON.parse(rawStoredPos);
+      if (Array.isArray(parsedPos)) {
+        const matchedPo = parsedPos.find(
+          (p: any) =>
+            (inferredPurchaseNo && (p.purchaseNo === inferredPurchaseNo || p.poNo === inferredPurchaseNo)) ||
+            (rawRef && (p.purchaseNo === rawRef || p.poNo === rawRef || p.purchaseInvoiceNo === rawRef))
+        );
+        if (matchedPo) {
+          inferredPurchaseId = matchedPo.id;
+          inferredPurchaseNo = matchedPo.purchaseNo || matchedPo.poNo || inferredPurchaseNo;
+        }
+      }
+    }
+  } catch {}
+
   return {
     id: apiPout.id,
     paymentNo: apiPout.paymentNo || `PAY-${apiPout.id.slice(0, 8).toUpperCase()}`,
@@ -34,12 +60,12 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
     supplierId: apiPout.supplierId,
     supplierName: apiPout.supplier?.name || 'Unknown Supplier',
     supplierCode: '',
-    purchaseId: undefined,
-    purchaseNo: undefined,
+    purchaseId: apiPout.purchaseOrderId || undefined,
+    purchaseNo: apiPout.purchaseOrder?.poNo || undefined,
     amount: Number(apiPout.amount || 0),
     paymentMode: (apiPout.paymentType as PaymentOutMode) || 'Bank Transfer',
-    referenceNo: apiPout.referenceNo || '',
-    notes: apiPout.notes || '',
+    referenceNo: rawRef,
+    notes: rawNotes,
     status: (apiPout.status as any) || 'Completed',
     organizationId: apiPout.organizationId,
     paymentType: apiPout.paymentType,
@@ -55,6 +81,7 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
  */
 export const mapUiToCreatePaymentOutPayload = (formData: {
   supplierId: string;
+  purchaseOrderId?: string;
   paymentMode?: string;
   paymentType?: string;
   amount: number | string;
@@ -66,6 +93,10 @@ export const mapUiToCreatePaymentOutPayload = (formData: {
     paymentType: formData.paymentType || formData.paymentMode || 'Bank Transfer',
     amount: Math.max(0.01, Number(formData.amount) || 0),
   };
+
+  if (formData.purchaseOrderId && UUID_REGEX.test(formData.purchaseOrderId)) {
+    payload.purchaseOrderId = formData.purchaseOrderId;
+  }
 
   const ref = formData.referenceNo?.trim();
   if (ref) {

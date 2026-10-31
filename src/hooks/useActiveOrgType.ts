@@ -47,7 +47,8 @@ export function useActiveOrgType() {
     if (
       rawTypeStr === '1' ||
       normalizedTypeName === 'CLIENT MANAGEMENT' ||
-      rawTypeName === 'CLIENT_MANAGEMENT'
+      rawTypeName === 'CLIENT_MANAGEMENT' ||
+      rawTypeName === 'CLIENT'
     ) {
       isClientOnly = true;
     } else if (
@@ -55,13 +56,18 @@ export function useActiveOrgType() {
       normalizedTypeName === 'SALE MANAGEMENT' ||
       normalizedTypeName === 'SALES MANAGEMENT' ||
       rawTypeName === 'SALE_MANAGEMENT' ||
-      rawTypeName === 'SALES_MANAGEMENT'
+      rawTypeName === 'SALES_MANAGEMENT' ||
+      rawTypeName === 'SALE' ||
+      rawTypeName === 'SALES'
     ) {
       isSaleOnly = true;
     } else if (
       rawTypeStr === '0' ||
+      rawTypeStr === '3' ||
       rawTypeName === 'ALL' ||
-      normalizedTypeName === 'ALL'
+      normalizedTypeName === 'ALL' ||
+      rawTypeName === 'BOTH' ||
+      normalizedTypeName === 'BOTH'
     ) {
       isAll = true;
     } else {

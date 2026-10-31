@@ -13,6 +13,8 @@ export interface ApiPaymentOut {
   organizationId: string;
   paymentNo: string;
   supplierId: string;
+  purchaseOrderId?: string | null;
+  purchaseOrder?: { id: string; poNo: string } | null;
   paymentDate: string;
   paymentType: string;
   amount: number;
@@ -50,6 +52,8 @@ export interface PaymentOutFilterParams {
 
 export interface CreatePaymentOutPayload {
   supplierId: string;
+  /** The purchase bill this payment settles; the bill's paid amount and balance follow. */
+  purchaseOrderId?: string;
   paymentType: string;
   amount: number;
   referenceNo?: string;

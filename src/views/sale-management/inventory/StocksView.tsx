@@ -55,7 +55,7 @@ import { ProductSearchableSelect, BatchSearchableSelect } from "../../../compone
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, downloadTableReport, DocumentPrintOptions } from "../../../utils/printUtils";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   stockApi,
@@ -439,7 +439,7 @@ export const StocksView: React.FC = () => {
               storeItem.inStock >= 0 &&
               storeItem.inStock < effectiveInStock
             ) {
-              effectiveInStock = storeItem.inStock;
+              // Keep authoritative API stock count without stale localStorage override
             }
 
             // If no batches exist for this item, create at most one single fallback batch representing the available stock

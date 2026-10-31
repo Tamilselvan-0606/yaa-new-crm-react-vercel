@@ -158,7 +158,7 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
     invoiceNumber: api.proformaNumber || 'PI-0000',
     invoiceDate: formatDate(rawInvoiceDate),
     dueDate: rawDueDate ? formatDate(rawDueDate) : '',
-    referenceNumbers: api.sourceQuoteId ? [`QUOTE-${api.sourceQuoteId.slice(0, 8)}`] : ['REF-PI'],
+    referenceNumbers: api.referenceNumber ? [api.referenceNumber] : [],
     description: api.notes || 'Proforma Invoice',
     status: (api.status as any) || 'Draft',
     client: {
@@ -251,7 +251,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     invoiceNumber: api.invoiceNumber || 'INV-0000',
     invoiceDate: formatDate(rawInvoiceDate),
     dueDate: rawDueDate ? formatDate(rawDueDate) : '',
-    referenceNumbers: api.sourceId ? [`REF-${api.sourceId.slice(0, 8)}`] : [],
+    referenceNumbers: api.referenceNumber ? [api.referenceNumber] : [],
     description: api.notes || 'Sales Invoice',
     status: (api.status as any) || (api.amountPaid >= api.grandTotal - 0.001 ? 'Paid' : api.amountPaid > 0 ? 'Partially Paid' : 'Pending'),
     client: {
@@ -1642,7 +1642,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
             onClick={() => navigate(isProforma ? '/proforma/new' : '/sales/new')}
           >
-            {isProforma ? 'Create Proforma Invoice' : 'Create New Sale'}
+            {isProforma ? 'Create Proforma Invoice' : 'Create Invoice'}
           </Button>
         </div>
       </div>

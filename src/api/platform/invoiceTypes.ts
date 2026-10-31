@@ -26,6 +26,7 @@ export interface InvoicePaymentApiItem {
 }
 
 export interface InvoiceApiItem {
+  referenceNumber?: string | null;
   id: string;
   invoiceNumber: string;
   invoiceDate: string;
@@ -165,6 +166,10 @@ export interface CreateInvoiceItemPayload {
 }
 
 export interface CreateInvoiceRequest {
+  /** Shown as the created date; defaults to now on the server. */
+  createdDate?: string;
+  /** Proforma invoice this invoice is created from; the server marks it Converted. */
+  sourceProformaId?: string;
   invoiceDate: string; // YYYY-MM-DD
   dueDate: string; // YYYY-MM-DD
   customerId: string; // UUID
@@ -184,6 +189,7 @@ export interface CreateInvoiceRequest {
 }
 
 export interface UpdateInvoiceRequest {
+  createdDate?: string;
   dueDate?: string;
   notes?: string;
   termsAndConditions?: string;

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { FilterDropdown } from '../../../components/common/FilterDropdown';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import {
   ResponsiveContainer,
   BarChart,

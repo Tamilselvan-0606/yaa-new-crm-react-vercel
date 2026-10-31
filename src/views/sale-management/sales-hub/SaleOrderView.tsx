@@ -1,6 +1,6 @@
-import { useDebounce } from 'use-debounce';
-import { CommonTableHead } from '../../../components/common/CommonTableHead';
-import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
+import { useDebounce } from "use-debounce";
+import { CommonTableHead } from "../../../components/common/CommonTableHead";
+import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
   useState,
   useMemo,
@@ -54,7 +54,7 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { SearchableSelect } from "../../../components/common/SearchableSelect";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { exportTableToExcel } from "../../../utils/excelExport";
@@ -66,7 +66,10 @@ import {
 } from "../../../utils/printUtils";
 import { FileSpreadsheet, Download } from "lucide-react";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
-import { DocumentSharePopover, formatSaleOrderShare } from "../../../utils/shareUtils";
+import {
+  DocumentSharePopover,
+  formatSaleOrderShare,
+} from "../../../utils/shareUtils";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
 import {
@@ -1684,6 +1687,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         currentLineage?.challanNo ||
         `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
 
+      let didBackendConvertCreateChallan = false;
+      let apiChallanId = "";
       if (UUID_REGEX.test(order.id)) {
         try {
           const res = await commerceSaleOrderApi.convertOrder(order.id, {
@@ -1693,7 +1698,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           const apiChallanNo =
             res?.data?.convertedTo?.documentNo ||
             res?.data?.document?.challanNo;
+          apiChallanId =
+            res?.data?.convertedTo?.id ||
+            res?.data?.document?.id ||
+            "";
           if (apiChallanNo) challanNo = apiChallanNo;
+          if (apiChallanNo || apiChallanId || res?.success) {
+            didBackendConvertCreateChallan = true;
+          }
         } catch (apiErr) {
           console.warn("API convertOrder to challan notice:", apiErr);
         }
@@ -1717,7 +1729,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
 
       const newChallan: DeliveryChallanRecord = {
-        id: `dc_${Date.now()}`,
+        id: apiChallanId || `dc_${Date.now()}`,
         challanNo,
         referenceNo: order.orderNo,
         invoiceDate: new Date().toISOString().split("T")[0],
@@ -1746,8 +1758,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         updatedAt: new Date().toISOString(),
       };
 
-      // Attempt persisting to backend Commerce Delivery Challan API
+      // Only call createChallan if convertOrder did NOT already create the Delivery Challan on the backend
       if (
+        !didBackendConvertCreateChallan &&
         resolvedCustomerId &&
         newChallan.items &&
         newChallan.items.length > 0
@@ -2477,11 +2490,27 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     updateActiveTabFormData((prev) => ({
                       ...prev,
                       customerId: val,
-                      partyName: cust ? cust.name : (val ? prev.partyName : ""),
-                      customerCompany: cust ? (cust.company || "") : (val ? prev.customerCompany : ""),
-                      customerPhone: cust ? (cust.phone || "") : (val ? prev.customerPhone : ""),
-                      customerEmail: cust ? (cust.email || "") : (val ? prev.customerEmail : ""),
-                      billingAddress: cust ? (cust.billingAddress || cust.address || "") : (val ? prev.billingAddress : ""),
+                      partyName: cust ? cust.name : val ? prev.partyName : "",
+                      customerCompany: cust
+                        ? cust.company || ""
+                        : val
+                          ? prev.customerCompany
+                          : "",
+                      customerPhone: cust
+                        ? cust.phone || ""
+                        : val
+                          ? prev.customerPhone
+                          : "",
+                      customerEmail: cust
+                        ? cust.email || ""
+                        : val
+                          ? prev.customerEmail
+                          : "",
+                      billingAddress: cust
+                        ? cust.billingAddress || cust.address || ""
+                        : val
+                          ? prev.billingAddress
+                          : "",
                     }));
                   }}
                   selectedCustomer={
@@ -2497,8 +2526,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
                   placeholder="Select or search customer..."
                 />
-
-                
 
                 {/* Party Details Preview Pill */}
                 {activeTab.formData.partyName && (
@@ -4123,10 +4150,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               {/* Royal Purple Header with Standard Icons */}
               <CommonTableHead
                 columns={[
-                  { label: "SALE ORDER NO.", align: "center", minWidth: "140px" },
+                  {
+                    label: "SALE ORDER NO.",
+                    align: "center",
+                    minWidth: "140px",
+                  },
                   { label: "CUSTOMER NAME", align: "left", minWidth: "180px" },
-                  { label: "CREATED DATE & TIME", align: "left", minWidth: "140px" },
-                  { label: "CONVERTED DATE & TIME", align: "left", minWidth: "140px" },
+                  {
+                    label: "CREATED DATE & TIME",
+                    align: "left",
+                    minWidth: "140px",
+                  },
+                  {
+                    label: "CONVERTED DATE & TIME",
+                    align: "left",
+                    minWidth: "140px",
+                  },
                   { label: "TOTAL AMOUNT", align: "right", minWidth: "120px" },
                   { label: "BALANCE", align: "right", minWidth: "120px" },
                   { label: "TYPE", align: "left", minWidth: "100px" },
@@ -4311,95 +4350,98 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           <div className="flex items-center justify-center gap-1.5">
                             {/* Convert ⌄ Dropdown Button slot with fixed width */}
                             <div className="w-[104px] shrink-0 flex items-center justify-center">
-                            {orderStages.isFullyConverted ||
-                            orderStages.availableCount === 0 ? (
-                              <button
-                                type="button"
-                                disabled
-                                aria-disabled="true"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }}
-                                title={`Sale Order has been converted (${item.convertedToInvoiceNo || "Converted"})`}
-                                className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
-                              >
-                                <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
-                                <span>Converted</span>
-                              </button>
-                            ) : (
-                              <div className="relative inline-block text-left order-convert-dropdown-container">
+                              {orderStages.isFullyConverted ||
+                              orderStages.availableCount === 0 ? (
                                 <button
                                   type="button"
+                                  disabled
+                                  aria-disabled="true"
                                   onClick={(e) => {
+                                    e.preventDefault();
                                     e.stopPropagation();
-                                    if (isConvertOpen) {
-                                      setActiveConvertDropdownId(null);
-                                      setConvertDropdownPos(null);
-                                    } else {
-                                      const rect =
-                                        e.currentTarget.getBoundingClientRect();
-                                      setConvertDropdownPos({
-                                        top: rect.bottom + 4,
-                                        right: window.innerWidth - rect.right,
-                                      });
-                                      setActiveConvertDropdownId(item.id);
-                                      setActiveDropdownId(null);
-                                      setDropdownPos(null);
-                                    }
                                   }}
-                                  className="order-convert-btn text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none"
-                                  title="Convert to next sales stage"
+                                  title={`Sale Order has been converted (${item.convertedToInvoiceNo || "Converted"})`}
+                                  className="text-xs sm:text-[13px] font-semibold text-emerald-700 bg-emerald-50/90 border border-emerald-200/90 px-2 py-1 rounded cursor-not-allowed select-none flex items-center justify-center gap-1 opacity-80"
                                 >
-                                  <span>Convert</span>
-                                  <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  <Check className="w-3 h-3 text-emerald-600 stroke-[2.5]" />
+                                  <span>Converted</span>
                                 </button>
-
-                                {/* Convert Floating Dropdown Menu */}
-                                {isConvertOpen && convertDropdownPos && (
-                                  <div
-                                    style={{
-                                      position: "fixed",
-                                      top: `${convertDropdownPos.top}px`,
-                                      right: `${convertDropdownPos.right}px`,
-                                      zIndex: 9999,
+                              ) : (
+                                <div className="relative inline-block text-left order-convert-dropdown-container">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isConvertOpen) {
+                                        setActiveConvertDropdownId(null);
+                                        setConvertDropdownPos(null);
+                                      } else {
+                                        const rect =
+                                          e.currentTarget.getBoundingClientRect();
+                                        setConvertDropdownPos({
+                                          top: rect.bottom + 4,
+                                          right: window.innerWidth - rect.right,
+                                        });
+                                        setActiveConvertDropdownId(item.id);
+                                        setActiveDropdownId(null);
+                                        setDropdownPos(null);
+                                      }
                                     }}
-                                    className="order-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
-                                    onClick={(e) => e.stopPropagation()}
+                                    className="order-convert-btn text-xs sm:text-[13px] font-semibold text-[#2563EB] hover:text-[#1D4ED8] bg-transparent hover:bg-blue-50/60 flex items-center justify-center gap-1 px-1.5 py-1 rounded transition-colors cursor-pointer select-none"
+                                    title="Convert to next sales stage"
                                   >
-                                    {!orderStages.isChallanConverted && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveConvertDropdownId(null);
-                                          setConvertDropdownPos(null);
-                                          handleConvertExistingToChallan(item);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
-                                      >
-                                        <Truck className="w-3.5 h-3.5 text-slate-500" />
-                                        <span>Convert to Delivery Challan</span>
-                                      </button>
-                                    )}
-                                    {!orderStages.isInvoiceConverted && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setActiveConvertDropdownId(null);
-                                          setConvertDropdownPos(null);
-                                          handleConvertExistingToSale(item);
-                                        }}
-                                        className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
-                                      >
-                                        <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
-                                        <span>Convert to Sale Invoice</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                    <span>Convert</span>
+                                    <ChevronDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                  </button>
 
+                                  {/* Convert Floating Dropdown Menu */}
+                                  {isConvertOpen && convertDropdownPos && (
+                                    <div
+                                      style={{
+                                        position: "fixed",
+                                        top: `${convertDropdownPos.top}px`,
+                                        right: `${convertDropdownPos.right}px`,
+                                        zIndex: 9999,
+                                      }}
+                                      className="order-convert-dropdown-menu w-56 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1.5 animate-in fade-in zoom-in-95 duration-100 text-left font-sans overflow-hidden"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      {!orderStages.isChallanConverted && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveConvertDropdownId(null);
+                                            setConvertDropdownPos(null);
+                                            handleConvertExistingToChallan(
+                                              item,
+                                            );
+                                          }}
+                                          className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        >
+                                          <Truck className="w-3.5 h-3.5 text-slate-500" />
+                                          <span>
+                                            Convert to Delivery Challan
+                                          </span>
+                                        </button>
+                                      )}
+                                      {!orderStages.isInvoiceConverted && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setActiveConvertDropdownId(null);
+                                            setConvertDropdownPos(null);
+                                            handleConvertExistingToSale(item);
+                                          }}
+                                          className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-purple-50 hover:text-[#33077C] transition-colors cursor-pointer flex items-center gap-2.5"
+                                        >
+                                          <ShoppingCart className="w-3.5 h-3.5 text-slate-500" />
+                                          <span>Convert to Sale Invoice</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             {/* Send / Share Popover Button */}

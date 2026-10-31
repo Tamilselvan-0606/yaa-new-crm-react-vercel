@@ -46,7 +46,7 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 import { useNavigate } from 'react-router-dom';
 import {
   commercePurchaseRequestApi,
@@ -521,11 +521,9 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
-    const nextReqNo = `PR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
     setEditingRequest(null);
     reset({
-      requestNo: nextReqNo,
+      requestNo: '',
       requestedBy: getLoggedInUserName(),
       department: '',
       priority: 'Medium',
@@ -574,11 +572,9 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Duplicate Request: Populates the form with existing fields & items so the user can review/edit before saving
   const handleDuplicateRequest = (req: PurchaseRequest) => {
-    const dupNo = `PR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
     setEditingRequest(null);
     reset({
-      requestNo: dupNo,
+      requestNo: '',
       requestedBy: req.requestedBy || getLoggedInUserName(),
       department: req.department || 'Warehouse / Production',
       priority: (req.priority as 'Low' | 'Medium' | 'High' | 'Urgent') || 'Medium',
@@ -1699,13 +1695,14 @@ export const PurchaseRequestView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Request Number <span className="text-rose-500">*</span>
+                Request Number
               </label>
               <input
                 type="text"
                 {...register('requestNo')}
-                className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                placeholder="REQ-2026-..."
+                readOnly
+                className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
+                placeholder="Auto-generated"
               />
               <FormError message={errors.requestNo?.message} />
             </div>

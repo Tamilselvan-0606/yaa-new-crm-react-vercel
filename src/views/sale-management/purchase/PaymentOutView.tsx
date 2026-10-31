@@ -61,7 +61,7 @@ import { UniversalShareDropdown, formatPaymentOutShare } from '../../../utils/sh
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, DocumentPrintOptions } from '../../../utils/printUtils';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, FORM_SELECT_CLS, getFormInputCls, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
-import { toast } from 'sonner';
+import { toast } from "../../../utils/toast";
 
 import { formatDate } from '../utils/dateUtils';
 const PERIOD_FILTER_OPTIONS = [
@@ -390,8 +390,82 @@ export const PaymentOutView: React.FC = () => {
   const watchPurchaseId = watch('purchaseId');
   const watchReceiptImage = watch('receiptImage');
 
-  // Active pool of records: API live list if connected, otherwise local store
-  const activePool = isApiConnected ? livePayments : paymentOuts;
+  // Active pool of records: merges live API payments, local store payment vouchers,
+  // and any purchase bills with recorded paidAmount not yet represented by a voucher
+  const activePool = useMemo(() => {
+    const baseList = isApiConnected ? livePayments : paymentOuts;
+    const map = new Map<string, PaymentOut>();
+
+    baseList.forEach((p) => map.set(p.id, p));
+
+    // Include local store vouchers (e.g. recorded from Purchase Bills) if not already in baseList
+    if (isApiConnected) {
+      paymentOuts.forEach((localPm) => {
+        if (map.has(localPm.id)) return;
+        const duplicateInApi = baseList.some(
+          (apiPm) =>
+            (localPm.purchaseNo &&
+              (apiPm.purchaseNo === localPm.purchaseNo ||
+                apiPm.referenceNo === localPm.purchaseNo ||
+                apiPm.notes?.includes(localPm.purchaseNo))) &&
+            Math.abs(Number(apiPm.amount || 0) - Number(localPm.amount || 0)) < 0.01
+        );
+        if (!duplicateInApi) {
+          map.set(localPm.id, localPm);
+        }
+      });
+    }
+
+    // Ensure every Purchase Bill with a paidAmount > 0 is reflected in Payment Out
+    const currentVouchers = Array.from(map.values());
+    mergedPurchases.forEach((po) => {
+      const paidAmt = Number(po.paidAmount || 0);
+      if (paidAmt <= 0 || po.purchaseStatus === 'Cancelled') return;
+
+      const linkedVouchersSum = currentVouchers
+        .filter((pm) => {
+          if (pm.status === 'Cancelled') return false;
+          const matchId = po.id && pm.purchaseId === po.id;
+          const matchNo =
+            po.purchaseNo &&
+            (pm.purchaseNo === po.purchaseNo ||
+              pm.referenceNo === po.purchaseNo ||
+              pm.notes?.includes(po.purchaseNo));
+          const matchInv =
+            po.purchaseInvoiceNo &&
+            (pm.referenceNo === po.purchaseInvoiceNo ||
+              pm.purchaseNo === po.purchaseInvoiceNo);
+          return Boolean(matchId || matchNo || matchInv);
+        })
+        .reduce((sum, pm) => sum + (Number(pm.amount) || 0), 0);
+
+      if (paidAmt > linkedVouchersSum + 0.01) {
+        const delta = Math.round((paidAmt - linkedVouchersSum) * 100) / 100;
+        const synthId = `po_pm_bill_${po.id}`;
+        const cleanNo = (po.purchaseNo || po.id || 'BILL').replace(/[^a-zA-Z0-9_-]/g, '');
+        map.set(synthId, {
+          id: synthId,
+          paymentNo: `PV-${cleanNo.slice(-8).toUpperCase()}`,
+          paymentDate: po.purchaseDate || new Date().toISOString().split('T')[0],
+          supplierId: po.supplierId,
+          supplierName: po.supplierName || 'Supplier',
+          supplierCode: po.supplierCode || '',
+          purchaseId: po.id,
+          purchaseNo: po.purchaseNo,
+          amount: delta,
+          paymentMode: (po.paymentMethod as PaymentOutMode) || 'Bank Transfer',
+          paymentType: po.paymentMethod || 'Bank Transfer',
+          referenceNo: po.purchaseInvoiceNo || po.purchaseNo,
+          notes: `Payment recorded on purchase bill ${po.purchaseNo}`,
+          status: 'Completed',
+          createdAt: po.createdAt || new Date().toISOString(),
+          updatedAt: po.updatedAt || new Date().toISOString(),
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [isApiConnected, livePayments, paymentOuts, mergedPurchases]);
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   const handleOpenEditModal = (po: PaymentOut) => {
@@ -596,6 +670,7 @@ export const PaymentOutView: React.FC = () => {
         // POST /work/payments-out
         const createPayload = mapUiToCreatePaymentOutPayload({
           supplierId: supId,
+          purchaseOrderId: data.purchaseId,
           paymentType: data.paymentMode,
           paymentMode: data.paymentMode,
           amount: numAmount,
@@ -792,7 +867,7 @@ export const PaymentOutView: React.FC = () => {
       totalApiRecords !== null &&
       appliedPeriod === 'All Payment-Out Invoices' &&
       appliedPaymentMode === 'All'
-        ? totalApiRecords
+        ? Math.max(totalApiRecords, filteredPayments.length)
         : filteredPayments.length;
     const bankPayments = filteredPayments
       .filter(

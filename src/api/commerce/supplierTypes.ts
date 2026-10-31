@@ -1,3 +1,12 @@
+export interface SupplierPurchaseSummary {
+  totalBills: number;
+  /** Sum of the bills' grand totals. */
+  totalPurchases: number;
+  totalPaid: number;
+  /** Still payable to the supplier. */
+  balance: number;
+}
+
 export interface ApiSupplier {
   id: string;
   organizationId?: string;
@@ -25,6 +34,8 @@ export interface ApiSupplier {
   totalPurchase?: number;
   paid?: number;
   payable?: number;
+  /** Totals over the supplier's purchase bills, computed by the API. */
+  purchaseSummary?: SupplierPurchaseSummary;
   createdAt?: string;
   updatedAt?: string;
   deletedAt?: string | null;

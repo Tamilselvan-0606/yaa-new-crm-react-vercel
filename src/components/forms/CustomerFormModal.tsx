@@ -24,7 +24,7 @@ import {
 } from '../../api';
 import { useAppDispatch } from '../../hooks/redux';
 import { baseApi } from '../../api/baseApi';
-import { toast } from 'sonner';
+import { toast } from "../../utils/toast";
 import {
   Upload,
   Trash2,
@@ -213,8 +213,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   // Documents: shared_by_company (our documents) & shared_by_client (client documents)
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
 
-  const generateClientId = () => `CLI-${Math.floor(1000 + Math.random() * 9000)}`;
-
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const {
@@ -227,7 +225,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   } = useForm<CustomerFormData>({
     resolver: zodResolver(CustomerSchema),
     defaultValues: {
-      clientId: generateClientId(),
+      clientId: '',
       clientName: '',
       businessName: '',
       contactPerson: '',
@@ -298,7 +296,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     if (isOpen) {
       if (initialCustomer) {
         reset({
-          clientId: (initialCustomer as any).code || initialCustomer.clientId || `CLI-${initialCustomer.id}`,
+          clientId: (initialCustomer as any).code || initialCustomer.clientId || '',
           clientName: initialCustomer.clientName || initialCustomer.name || '',
           businessName: initialCustomer.businessName || initialCustomer.company || '',
           contactPerson: initialCustomer.contactPerson || initialCustomer.name || '',
@@ -326,7 +324,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         );
       } else {
         reset({
-          clientId: generateClientId(),
+          clientId: '',
           clientName: '',
           businessName: '',
           contactPerson: '',
@@ -456,7 +454,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
       if (isEditing) {
         await platformClientApi.updateClient(initialCustomer.id, {
-          code: data.clientId,
           name: data.businessName || data.clientName,
           legalName: data.businessName || data.clientName,
           contactPerson: data.contactPerson || data.clientName,
@@ -478,7 +475,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
         toast.success('Client updated successfully');
       } else {
         await platformClientApi.createClient({
-          code: data.clientId,
           name: data.businessName || data.clientName,
           legalName: data.businessName || `${data.clientName} Private Limited`,
           contactPerson: data.contactPerson || data.clientName,
@@ -707,24 +703,17 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           </div>
         </div>
 
-        {/* Row 1: Client ID | Client Name | Client Business */}
+        {/* Row 1: Client Code (generated) | Client Name | Client Business */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>
-              Client ID <span className="text-rose-500 font-bold">*</span>
-            </label>
+            <label className={labelClass}>Client Code</label>
             <input
               {...register('clientId')}
               type="text"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.clientId
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
+              readOnly
+              placeholder="Auto-generated"
+              className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
             />
-            {errors.clientId && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.clientId.message}</p>
-            )}
           </div>
 
           <div>

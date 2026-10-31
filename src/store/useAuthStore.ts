@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { User, Role, ReminderItem } from '../types';
 import { api } from '../services/api';
 import { SESSION_EXPIRED_EVENT } from '../api/tokenRefresh';
-import { toast } from 'sonner';
+import { adminNotificationApi, mapNotificationToReminder, type AdminNotificationType } from '../api/platform/adminNotificationApi';
+import { isRelevantTo } from '../utils/notificationCategories';
+import { toast } from "../utils/toast";
 
 interface AuthState {
   token: string | null;
@@ -15,17 +17,26 @@ interface AuthState {
   isLoading: boolean;
   reminders: ReminderItem[];
   unreadRemindersCount: number;
+  /** Which notifications the reminders show: Sales Management or Client Management. */
+  reminderType: 'SALES' | 'CLIENT';
 
   // Actions
   initAuth: () => Promise<void>;
   login: (email: string, password?: string) => Promise<boolean>;
   switchUser: (userId: string) => Promise<void>;
   logout: () => Promise<void>;
-  refreshReminders: () => Promise<void>;
+  refreshReminders: (type?: 'SALES' | 'CLIENT') => Promise<void>;
   markReminderCompleted: (id: string) => Promise<void>;
   markAllRemindersRead: () => Promise<void>;
   setUsers: (users: User[]) => void;
 }
+
+/**
+ * Notification types to read for the active management type. "ALL" and "SALES" / "CLIENT" leave out what a
+ * platform admin did (those rows are SUPER_ADMIN), so a platform admin reads their own rows as well.
+ */
+const notificationTypesFor = (type: 'SALES' | 'CLIENT', platformAdmin: boolean): AdminNotificationType[] =>
+  platformAdmin ? ['SUPER_ADMIN', type] : [type];
 
 const getRoleFlags = (role: Role | string | undefined) => {
   const normalized = (role || '').toString().toUpperCase();
@@ -56,6 +67,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: true,
   reminders: [],
   unreadRemindersCount: 0,
+  reminderType: 'CLIENT',
 
   initAuth: async () => {
     set({ isLoading: true });
@@ -175,23 +187,50 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  refreshReminders: async () => {
-    // Retain state without calling unintegrated /api/reminders
+  refreshReminders: async (type) => {
+    const reminderType = type ?? get().reminderType;
+    set({ reminderType });
+    if (!get().token) return;
+    try {
+      const { isSuperAdmin, isOrgSuperAdmin } = get();
+      const types = notificationTypesFor(reminderType, isSuperAdmin && !isOrgSuperAdmin);
+      const results = await Promise.all(types.map((t) => adminNotificationApi.list({ type: t, page_size: 100, sortOrder: 'desc' })));
+      const byId = new Map<string, ReminderItem>();
+      for (const res of results) for (const n of res.data || []) byId.set(n.id, mapNotificationToReminder(n));
+      // Shared (BOTH) rows are kept only where they belong, so Sales and Client Management each see their own.
+      const reminders = [...byId.values()]
+        .filter((r) => isRelevantTo(reminderType, r))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 100);
+      set({ reminders, unreadRemindersCount: reminders.filter((r) => !r.isRead).length });
+    } catch (error) {
+      console.warn('Failed to load notifications:', error);
+    }
   },
 
   markReminderCompleted: async (id: string) => {
+    try {
+      await adminNotificationApi.markRead(id);
+    } catch (error: any) {
+      toast.error('Could not mark the notification as read', {
+        description: error?.response?.data?.error?.message || error?.message,
+      });
+      return;
+    }
     const updated = get().reminders.map((r) =>
       r.id === id ? { ...r, isCompleted: true, isRead: true } : r
     );
-    const unreadCount = updated.filter((r) => !r.isCompleted && !r.isRead).length;
-    set({ reminders: updated, unreadRemindersCount: unreadCount });
-    toast.success('Reminder marked as completed');
+    set({ reminders: updated, unreadRemindersCount: updated.filter((r) => !r.isRead).length });
+    toast.success('Marked as read');
   },
 
   markAllRemindersRead: async () => {
-    const updated = get().reminders.map((r) => ({ ...r, isRead: true }));
+    const { isSuperAdmin, isOrgSuperAdmin, reminderType } = get();
+    const types = notificationTypesFor(reminderType, isSuperAdmin && !isOrgSuperAdmin);
+    await Promise.all(types.map((type) => adminNotificationApi.markAllRead({ type })));
+    const updated = get().reminders.map((r) => ({ ...r, isRead: true, isCompleted: true }));
     set({ reminders: updated, unreadRemindersCount: 0 });
-    toast.success('All reminders marked as read');
+    toast.success('All notifications marked as read');
   },
 
   setUsers: (users: User[]) => set({ users }),

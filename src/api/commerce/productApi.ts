@@ -241,6 +241,43 @@ export const mapProductItemToPayload = (item: Partial<ProductItemModel>): Create
   };
 };
 
+/**
+ * Sanitizes product creation/update payload by omitting empty strings, null, undefined,
+ * and unused optional fields before sending to the backend API.
+ */
+export const sanitizeProductPayload = <T extends Record<string, any>>(raw: T): Record<string, any> => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const cleaned: Record<string, any> = {};
+
+  for (const [key, val] of Object.entries(raw)) {
+    if (val === undefined || val === null) continue;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed === '') continue;
+      if (key === 'taxRate' && trimmed === 'None') continue;
+      cleaned[key] = trimmed;
+    } else {
+      cleaned[key] = val;
+    }
+  }
+
+  if (!cleaned.hasWholesale) {
+    delete cleaned.wholesalePrice;
+    delete cleaned.wholesaleTaxType;
+    delete cleaned.minWholesaleQty;
+  }
+
+  if (!cleaned.batchNo) {
+    delete cleaned.batchNo;
+    delete cleaned.mfgDate;
+    delete cleaned.expDate;
+    delete cleaned.isBatchTracking;
+    delete cleaned.is_batch_tracking;
+  }
+
+  return cleaned;
+};
+
 // =========================================================================
 // RTK Query Injected Endpoints for Commerce Product
 // =========================================================================
@@ -296,7 +333,7 @@ export const productEndpoints = baseApi.injectEndpoints({
       query: (payload) => ({
         url: '/commerce/products',
         method: 'POST',
-        body: payload,
+        body: sanitizeProductPayload(payload as any),
       }),
       invalidatesTags: [{ type: 'Product', id: 'LIST' }, { type: 'Stock', id: 'LIST' }],
     }),
@@ -305,7 +342,7 @@ export const productEndpoints = baseApi.injectEndpoints({
       query: ({ id, payload }) => ({
         url: `/commerce/products/${encodeURIComponent(id)}`,
         method: 'PUT',
-        body: payload,
+        body: sanitizeProductPayload(payload as any),
       }),
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Product', id },
@@ -425,7 +462,7 @@ export const productApi = {
    * POST /commerce/products
    */
   createProduct: async (payload: CreateProductPayload): Promise<ProductSingleResponse> => {
-    const response = await baseClient.post<ProductSingleResponse>('/commerce/products', payload);
+    const response = await baseClient.post<ProductSingleResponse>('/commerce/products', sanitizeProductPayload(payload as any));
     return response.data;
   },
 
@@ -439,7 +476,7 @@ export const productApi = {
   ): Promise<ProductSingleResponse> => {
     const response = await baseClient.put<ProductSingleResponse>(
       `/commerce/products/${encodeURIComponent(id)}`,
-      payload
+      sanitizeProductPayload(payload as any)
     );
     return response.data;
   },

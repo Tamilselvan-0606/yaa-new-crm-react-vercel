@@ -374,7 +374,8 @@ input, select, textarea, button, optgroup, table {
   .navbar,
   .print-hidden,
   [data-no-print],
-  [data-sonner-toaster] {
+  [data-sonner-toaster],
+  .MuiSnackbar-root {
     display: none !important;
   }
 

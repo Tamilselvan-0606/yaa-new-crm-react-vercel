@@ -69,7 +69,7 @@ import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
 import { printTableReport } from "../../../utils/printUtils";
-import { toast } from "sonner";
+import { toast } from "../../../utils/toast";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import {
   customerApi,

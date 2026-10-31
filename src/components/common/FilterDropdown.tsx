@@ -15,6 +15,8 @@ interface FilterDropdownProps<T extends string = string> {
   onChange: (value: T) => void;
   placeholder?: string;
   className?: string;
+  /** Tailwind max-height class of the open list (default shows about six options before scrolling). */
+  maxHeightClass?: string;
 }
 
 export function FilterDropdown<T extends string = string>({
@@ -23,6 +25,7 @@ export function FilterDropdown<T extends string = string>({
   onChange,
   placeholder = 'Filter',
   className = '',
+  maxHeightClass = 'max-h-60',
 }: FilterDropdownProps<T>) {
   const [open, setOpen] = useState(false);
   const [alignRight, setAlignRight] = useState(false);
@@ -76,7 +79,7 @@ export function FilterDropdown<T extends string = string>({
       {/* Dropdown panel */}
       {open && (
         <div
-          className={`absolute top-full mt-1.5 ${alignRight ? 'right-0' : 'left-0'} min-w-[170px] max-w-[calc(100vw-1.5rem)] max-h-60 overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 space-y-0.5`}
+          className={`absolute top-full mt-1.5 ${alignRight ? 'right-0' : 'left-0'} min-w-[170px] max-w-[calc(100vw-1.5rem)] ${maxHeightClass} overflow-y-auto bg-white shadow-xl border border-slate-200 p-1 z-50 space-y-0.5`}
           style={{ borderRadius: '4px' }}
         >
           {options.map((option) => {

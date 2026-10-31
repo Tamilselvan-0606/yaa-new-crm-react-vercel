@@ -29,6 +29,7 @@ import {
   Building2,
   MapPin,
   UserRound,
+  Users,
   Check,
   AlertCircle,
   Loader2,
@@ -195,16 +196,17 @@ export const BranchesView: React.FC = () => {
         console.warn('API getSubOrganizations notice:', err);
       }
 
-      const isSubForSuite = (name: string, type?: string) => {
-        const t = (type || '').toLowerCase();
-        if (isSaleManagement) {
-          return t.includes('sale');
-        } else {
-          return t.includes('client') || !t.includes('sale');
-        }
+      // subOrganizationType: 1 = client, 2 = sales, 3 = both (older records may carry a text organizationType instead)
+      const isSubForSuite = (s: SubOrganizationApiItem) => {
+        const code = Number(s.subOrganizationType);
+        if (code === 3) return true;
+        if (code === 1) return !isSaleManagement;
+        if (code === 2) return isSaleManagement;
+        const t = (s.organizationType || '').toLowerCase();
+        return isSaleManagement ? t.includes('sale') : !t.includes('sale');
       };
 
-      const loadedSubsFromApi = apiSubs.filter((s) => isSubForSuite(s.name, (s as any).organizationType));
+      const loadedSubsFromApi = apiSubs.filter(isSubForSuite);
       const subMap = new Map<string, SubOrganizationApiItem>();
       loadedSubsFromApi.forEach((s) => {
         subMap.set(s.name.toLowerCase(), s);
@@ -489,9 +491,6 @@ export const BranchesView: React.FC = () => {
     if (!formData.name.trim()) {
       errors.name = 'Branch Name is required';
     }
-    if (!formData.code.trim()) {
-      errors.code = 'Branch Code is required';
-    }
     if (!formData.organizationId && !defaultOrgName.trim()) {
       errors.organizationId = 'Select Organization is required';
     }
@@ -540,7 +539,6 @@ export const BranchesView: React.FC = () => {
       if (editingBranch) {
         await branchApi.updateBranch(editingBranch.id, {
           name: formData.name.trim(),
-          code: formData.code.trim(),
           organizationId: activeOrgId || undefined,
           subOrganizationId: formData.subOrganizationId || undefined,
           contactPerson: formData.contactPerson.trim(),
@@ -594,7 +592,6 @@ export const BranchesView: React.FC = () => {
         const trimmedName = formData.name.trim();
 
         await branchApi.createBranch({
-          code: trimmedCode,
           name: trimmedName,
           email: trimmedEmail,
           password: trimmedPassword,
@@ -835,18 +832,18 @@ export const BranchesView: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[1100px]">
-            <CommonTableHead
-              columns={[
-                { label: "BRANCH & CODE", align: "left", minWidth: "160px" },
-                { label: "SUB-ORGANIZATION & TYPE", align: "left", minWidth: "180px" },
-                { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
-                { label: "CONTACT INFO", align: "center", minWidth: "140px" },
-                { label: "LOCATION", align: "left", minWidth: "140px" },
-                { label: "STATUS", align: "center", minWidth: "110px" },
-                { label: "CREATED DATE", align: "left", minWidth: "130px" },
-                { label: "ACTIONS", align: "center", minWidth: "120px" },
-              ]}
-            />
+<thead>
+              <tr className="bg-[#33077C] text-[11px] sm:text-[12px] font-bold text-white tracking-wider uppercase">
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">BRANCH & CODE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION & TYPE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
+                <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
+              </tr>
+            </thead>
             <tbody className="text-sm">
               {loading ? (
                 <tr>
@@ -1229,9 +1226,9 @@ export const BranchesView: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         title={editingBranch ? 'Edit Branch' : 'Add New Branch'}
         subtitle={
-          <span className="text-white/80 text-xs font-normal">
-            {editingBranch ? 'Update branch location and contact specifications' : 'Create a regional branch under your organization'}
-          </span>
+          editingBranch
+            ? 'Update branch location and contact specifications'
+            : 'Create a regional branch under your organization'
         }
         maxWidth="4xl"
         headerGradient={true}
@@ -1321,27 +1318,15 @@ export const BranchesView: React.FC = () => {
           {/* Row 2: Branch Code | Contact Person Name | Mobile Number */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Branch Code <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.code}
-                onChange={(e) => {
-                  setFormData({ ...formData, code: e.target.value.toUpperCase() });
-                  if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
-                }}
-                placeholder="e.g. BR-001"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                  formErrors.code
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.code && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
-              )}
-            </div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">Branch Code</label>
+                <input
+                  type="text"
+                  value={formData.code}
+                  readOnly
+                  placeholder="Auto-generated"
+                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
+                />
+              </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Contact Person Name <span className="text-rose-500 font-bold">*</span>
@@ -1558,7 +1543,7 @@ export const BranchesView: React.FC = () => {
           }}
           title={viewBranch.name}
           subtitle={
-            <div className="flex items-center gap-2 text-white/80 text-xs font-normal">
+            <div className="flex items-center gap-2 text-white/90 text-sm font-medium">
               <span>Branch Details & Overview</span>
               <span>•</span>
               <span className="font-semibold text-white">{viewBranch.code}</span>
@@ -1573,128 +1558,129 @@ export const BranchesView: React.FC = () => {
             setViewBranch(null);
           }}
         >
-          <div className="p-4 sm:p-6 space-y-6 font-sans">
-            {/* Top Profile Card */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="space-y-5">
+            {/* Top Overview / Profile Header Card (Matching Reference Design) */}
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-[#33077C] text-white flex items-center justify-center font-semibold text-lg tracking-wider shrink-0 shadow-md select-none">
+                <div className="w-14 h-14 rounded-full bg-[#33077C] text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs">
                   {getBranchInitials(viewBranch.name)}
                 </div>
                 <div>
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <h2 className="text-base sm:text-lg font-bold text-slate-900">
-                      {viewBranch.name}
-                    </h2>
-                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#EFEBFF] text-[#33077C] border border-[#33077C]/20">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{viewBranch.name}</h3>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
                       {viewBranch.code}
                     </span>
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border bg-indigo-50 text-indigo-700 border-indigo-200">
+                      {viewBranch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                    {viewBranch.location && (
-                      <span className="flex items-center gap-1 text-slate-500">
-                        <MapPin className="w-3.5 h-3.5 text-[#33077C]" />
-                        {viewBranch.location}
-                      </span>
-                    )}
+                  <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500 font-medium">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span>{viewBranch.location || viewBranch.city || viewBranch.address || 'N/A'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Status Badge */}
-              <div className="shrink-0">
+              {/* Status Pill */}
+              <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
                 {viewBranch.status === 'Inactive' ? (
-                  <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold shadow-2xs">
-                    <span className="w-2 h-2 rounded-full bg-slate-400" />
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                     Inactive
                   </span>
                 ) : viewBranch.status === 'Suspended' ? (
-                  <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300 text-xs font-bold shadow-2xs">
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-bold text-xs border border-amber-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                     Suspended
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold shadow-2xs">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    Active Branch
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Active
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Detail Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Card 1: Branch Info */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3.5">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-[#33077C]" />
-                  Branch Overview
-                </h3>
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Branch Name</span>
-                    <span className="font-bold text-slate-900">{viewBranch.name}</span>
+            {/* Two Column Layout Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+              {/* Left Column: Branch Overview */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Building2 className="w-3.5 h-3.5" />
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Branch Code</span>
-                    <span className="font-bold text-[#33077C]">{viewBranch.code}</span>
+                  <span>Branch Overview</span>
+                </div>
+
+                <div className="space-y-3 text-xs sm:text-[13px]">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-slate-400 font-medium shrink-0">Branch Name</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.name}</span>
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Suite Type</span>
-                    <span className="font-bold text-[#33077C]">
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Branch Code</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.code}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Suite Type</span>
+                    <span className="font-bold text-slate-800 text-right">
                       {viewBranch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
                     </span>
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Organization</span>
-                    <span className="font-bold text-slate-900">{defaultOrgName}</span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Organization</span>
+                    <span className="font-bold text-slate-800 text-right">{defaultOrgName}</span>
                   </div>
                   {viewBranch.subOrganizationId && (
-                    <div className="flex justify-between py-1.5 border-b border-slate-100">
-                      <span className="text-slate-500 font-medium">Sub-Organization</span>
-                      <span className="font-bold text-[#33077C]">
+                    <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                      <span className="text-slate-400 font-medium shrink-0">Sub-Organization</span>
+                      <span className="font-bold text-slate-800 text-right">
                         {subOrganizations.find((s) => s.id === viewBranch.subOrganizationId)?.name || 'Linked Sub-Org'}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">GST Number</span>
-                    <span className="font-bold text-slate-900">{viewBranch.gstNumber || 'N/A'}</span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">GST Number</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.gstNumber || '-'}</span>
                   </div>
-                  <div className="flex justify-between py-1.5">
-                    <span className="text-slate-500 font-medium">Created Date</span>
-                    <span className="font-bold text-slate-900">{formatCreatedDate(viewBranch.createdAt)}</span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Created Date</span>
+                    <span className="font-bold text-slate-800 text-right">{formatCreatedDate(viewBranch.createdAt)}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Card 2: Contact & Location */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3.5">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                  <UserRound className="w-4 h-4 text-[#33077C]" />
-                  Contact & Location
-                </h3>
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Contact Person</span>
-                    <span className="font-bold text-slate-900">{viewBranch.contactPerson || 'N/A'}</span>
+              {/* Right Column: Contact & Location */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Users className="w-3.5 h-3.5" />
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Mobile Number</span>
-                    <span className="font-bold text-slate-900">{viewBranch.mobileNumber || 'N/A'}</span>
+                  <span>Contact & Location</span>
+                </div>
+
+                <div className="space-y-3 text-xs sm:text-[13px]">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-slate-400 font-medium shrink-0">Contact Person</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.contactPerson || '-'}</span>
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">WhatsApp Number</span>
-                    <span className="font-bold text-slate-900">{viewBranch.whatsapp || 'N/A'}</span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Mobile Number</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.mobileNumber || '-'}</span>
                   </div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-slate-500 font-medium">Email</span>
-                    <span className="font-bold text-slate-900">{viewBranch.email || 'N/A'}</span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">WhatsApp Number</span>
+                    <span className="font-bold text-slate-800 text-right">{viewBranch.whatsapp || '-'}</span>
                   </div>
-                  <div className="flex justify-between py-1.5">
-                    <span className="text-slate-500 font-medium">Location</span>
-                    <span className="font-bold text-slate-900 text-right max-w-[200px] truncate" title={viewBranch.location || viewBranch.city || viewBranch.address}>
-                      {viewBranch.location || viewBranch.city || viewBranch.address || 'N/A'}
-                    </span>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Official Email</span>
+                    <span className="font-bold text-slate-800 text-right break-all">{viewBranch.email || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Location</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.location || viewBranch.city || viewBranch.address || '-'}</span>
                   </div>
                 </div>
               </div>

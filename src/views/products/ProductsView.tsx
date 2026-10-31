@@ -11,6 +11,8 @@ import {
   BranchApiItem,
   organizationApi,
   getStoredOrganizationId,
+  platformClientApi,
+  platformLeadApi,
 } from '../../api';
 import {
   Boxes,
@@ -64,6 +66,8 @@ export const ProductsView: React.FC = () => {
 
   // Products Data from real API
   const [products, setProducts] = useState<ClientProductApiItem[]>([]);
+  const [clientCountsByProduct, setClientCountsByProduct] = useState<Record<string, number>>({});
+  const [leadCountsByProduct, setLeadCountsByProduct] = useState<Record<string, number>>({});
   const [totalProducts, setTotalProducts] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -153,14 +157,63 @@ export const ProductsView: React.FC = () => {
     try {
       setLoading(true);
 
-      const res = await clientProductApi.getProducts({
-        page,
-        limit: pageSize,
-        search: appliedSearch.trim() || undefined,
-        status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
-        subOrganizationId: effectiveSubOrgId,
-        branchId: effectiveBranchId,
+      const [res, clientsRes, leadsRes] = await Promise.all([
+        clientProductApi.getProducts({
+          page,
+          limit: pageSize,
+          search: appliedSearch.trim() || undefined,
+          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+          subOrganizationId: effectiveSubOrgId,
+          branchId: effectiveBranchId,
+        }),
+        platformClientApi.getClients({ limit: 100 }).catch(() => null),
+        platformLeadApi.getLeads({ limit: 100 }).catch(() => null),
+      ]);
+
+      const cCounts: Record<string, number> = {};
+      const allClients = Array.isArray(clientsRes?.data) ? clientsRes.data : [];
+      allClients.forEach((c: any) => {
+        const pId = (c.productId || c.product_id || c.subscription?.productId || c.subscription?.planId || '')?.toString().toLowerCase().trim();
+        const pName = (c.productName || c.product_name || c.subscriptionPlan || c.subscription?.planName || '')?.toString().toLowerCase().trim();
+        if (pId) cCounts[pId] = (cCounts[pId] || 0) + 1;
+        if (pName) cCounts[pName] = (cCounts[pName] || 0) + 1;
+        // Clean alphanumerics
+        const cleanName = pName.replace(/[^a-z0-9]/g, '');
+        if (cleanName) cCounts[cleanName] = (cCounts[cleanName] || 0) + 1;
+
+        if (Array.isArray(c.linkedProducts)) {
+          c.linkedProducts.forEach((lp: any) => {
+            const lpId = (lp.productId || lp.id || '')?.toString().toLowerCase().trim();
+            const lpName = (lp.productName || lp.name || '')?.toString().toLowerCase().trim();
+            if (lpId) cCounts[lpId] = (cCounts[lpId] || 0) + 1;
+            if (lpName) cCounts[lpName] = (cCounts[lpName] || 0) + 1;
+            const lpClean = lpName.replace(/[^a-z0-9]/g, '');
+            if (lpClean) cCounts[lpClean] = (cCounts[lpClean] || 0) + 1;
+          });
+        }
       });
+      setClientCountsByProduct(cCounts);
+
+      const lCounts: Record<string, number> = {};
+      const allLeads = Array.isArray(leadsRes?.data) ? leadsRes.data : [];
+      allLeads.forEach((l: any) => {
+        const pId = (l.productId || l.product_id || '')?.toString().toLowerCase().trim();
+        const pName = (l.planInterest || l.interestedProductOrService || '')?.toString().toLowerCase().trim();
+        if (pId) lCounts[pId] = (lCounts[pId] || 0) + 1;
+        if (pName) lCounts[pName] = (lCounts[pName] || 0) + 1;
+        const cleanName = pName.replace(/[^a-z0-9]/g, '');
+        if (cleanName) lCounts[cleanName] = (lCounts[cleanName] || 0) + 1;
+
+        if (Array.isArray(l.interestedProducts)) {
+          l.interestedProducts.forEach((ip: any) => {
+            const ipStr = String(ip || '').toLowerCase().trim();
+            if (ipStr) lCounts[ipStr] = (lCounts[ipStr] || 0) + 1;
+            const ipClean = ipStr.replace(/[^a-z0-9]/g, '');
+            if (ipClean) lCounts[ipClean] = (lCounts[ipClean] || 0) + 1;
+          });
+        }
+      });
+      setLeadCountsByProduct(lCounts);
 
       if (res && res.success) {
         let items = res.data || [];
@@ -234,14 +287,24 @@ export const ProductsView: React.FC = () => {
         console.warn('API getSubOrganizations notice:', err);
       }
 
+      const isSaleSuite = window.location.pathname.startsWith('/sale-management') || localStorage.getItem('active_org_type_view') === 'Sales Management';
+      const isSubForSuite = (s: SubOrganizationApiItem) => {
+        const code = Number(s.subOrganizationType);
+        if (code === 3) return true;
+        if (code === 1) return !isSaleSuite;
+        if (code === 2) return isSaleSuite;
+        const t = (s.organizationType || '').toLowerCase();
+        return isSaleSuite ? t.includes('sale') : !t.includes('sale');
+      };
+
+      const filteredSubs = apiSubs.filter(isSubForSuite);
       const subMap = new Map<string, SubOrganizationApiItem>();
-      apiSubs.forEach((s) => {
+      filteredSubs.forEach((s) => {
         const key = (s.id || s.code || s.name).trim().toLowerCase();
         subMap.set(key, s);
       });
 
       // Only use API sub-organizations
-
       setSubOrganizations(Array.from(subMap.values()));
     } catch (e) {
       console.warn('Failed to load sub-organizations:', e);
@@ -494,9 +557,6 @@ export const ProductsView: React.FC = () => {
     if (!formData.address.trim()) {
       errors.address = 'Address is required';
     }
-    if (!formData.code.trim()) {
-      errors.code = 'Product / Org Code is required';
-    }
     if (!formData.status) {
       errors.status = 'Status is required';
     }
@@ -685,8 +745,22 @@ export const ProductsView: React.FC = () => {
               ) : (
                 products.map((prod, idx) => {
                   const activePlansCount = prod.plansCount ?? prod.plans?.length ?? 0;
-                  const clientsCount = prod.activeSubscriptions ?? 0;
-                  const leadsCount = 0;
+                  const prodIdKey = (prod.id || '').toLowerCase().trim();
+                  const prodCodeKey = (prod.code || '').toLowerCase().trim();
+                  const prodNameKey = (prod.name || '').toLowerCase().trim();
+                  const prodCleanKey = prodNameKey.replace(/[^a-z0-9]/g, '');
+                  const clientsCount =
+                    clientCountsByProduct[prodIdKey] ||
+                    clientCountsByProduct[prodCodeKey] ||
+                    clientCountsByProduct[prodNameKey] ||
+                    clientCountsByProduct[prodCleanKey] ||
+                    (prod.activeSubscriptions ?? 0);
+                  const leadsCount =
+                    leadCountsByProduct[prodIdKey] ||
+                    leadCountsByProduct[prodCodeKey] ||
+                    leadCountsByProduct[prodNameKey] ||
+                    leadCountsByProduct[prodCleanKey] ||
+                    0;
 
                   // Product contact info
                   const phone = prod.supportPhone || '+91 98765 43210';
@@ -1188,27 +1262,15 @@ export const ProductsView: React.FC = () => {
               )}
             </div>
             <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Product / Org Code <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.code}
-                onChange={(e) => {
-                  setFormData({ ...formData, code: e.target.value.toUpperCase() });
-                  if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
-                }}
-                placeholder="e.g. PRD-001"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                  formErrors.code
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.code && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
-              )}
-            </div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">Product Code</label>
+                <input
+                  type="text"
+                  value={formData.code}
+                  readOnly
+                  placeholder="Auto-generated"
+                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
+                />
+              </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Contact Person Name <span className="text-rose-500 font-bold">*</span>
@@ -1469,70 +1531,73 @@ export const ProductsView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setIsViewModalOpen(false)}
         >
-          <div className="space-y-5 p-2 sm:p-4">
-
-            {/* Profile Card */}
-            <div className="flex items-start justify-between p-4 rounded-xl border border-slate-200 bg-white">
+          <div className="space-y-5">
+            {/* Top Overview / Profile Header Card (Matching Reference Design) */}
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-[#33077C] flex items-center justify-center text-white font-bold text-lg shadow-sm shrink-0">
+                <div className="w-14 h-14 rounded-full bg-[#33077C] flex items-center justify-center text-white font-bold text-base shrink-0 shadow-xs">
                   {getProductInitials(viewingProduct)}
                 </div>
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-bold text-slate-900">{viewingProduct.name}</h3>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{viewingProduct.name}</h3>
                     {viewingProduct.code && (
-                      <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#33077C]/10 text-[#33077C] border border-[#33077C]/20">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
                         {viewingProduct.code}
+                      </span>
+                    )}
+                    {viewingProduct.badge && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border bg-indigo-50 text-indigo-700 border-indigo-200">
+                        {viewingProduct.badge}
                       </span>
                     )}
                   </div>
                   {viewingProduct.tagline && (
-                    <p className="text-xs text-slate-500 mt-0.5 font-medium">{viewingProduct.tagline}</p>
+                    <p className="text-xs font-medium text-slate-500 mt-0.5">{viewingProduct.tagline}</p>
                   )}
                   {viewingProduct.hqCity && (
-                    <div className="flex items-center gap-1 mt-1">
-                      <MapPin className="w-3 h-3 text-slate-400" />
-                      <span className="text-xs text-slate-500">{viewingProduct.hqCity}</span>
+                    <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500 font-medium">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      <span>{viewingProduct.hqCity}</span>
                     </div>
                   )}
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-2 shrink-0">
+
+              {/* Status Pill */}
+              <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
                 {(viewingProduct.status === 'Inactive') ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-300 text-xs font-bold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                     Inactive
                   </span>
                 ) : (viewingProduct.status === 'Suspended') ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-300 text-xs font-bold">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-bold text-xs border border-amber-200">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                     Suspended
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     Active
-                  </span>
-                )}
-                {viewingProduct.badge && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#33077C]/8 text-[#33077C] border border-[#33077C]/20 text-xs font-bold">
-                    <Layers className="w-3.5 h-3.5" />
-                    {viewingProduct.badge}
                   </span>
                 )}
               </div>
             </div>
 
             {/* Two column detail cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
 
-              {/* Left: Corporate & Registration Details */}
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-slate-50/60">
-                  <Building2 className="w-4 h-4 text-[#33077C]" />
-                  <span className="text-xs font-bold text-slate-700">Corporate & Registration Details</span>
+              {/* Left Column: Corporate & Registration Details */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Building2 className="w-3.5 h-3.5" />
+                  </div>
+                  <span>Corporate & Registration Details</span>
                 </div>
-                <div className="divide-y divide-slate-100">
+
+                <div className="space-y-3 text-xs sm:text-[13px]">
                   {([
                     { label: 'Organization', value: defaultOrgName },
                     {
@@ -1562,32 +1627,35 @@ export const ProductsView: React.FC = () => {
                     { label: 'PAN Number', value: viewingProduct.panNumber },
                     { label: 'Created Date', value: formatCreatedDate(viewingProduct.createdAt) },
                     { label: 'Location / HQ City', value: viewingProduct.hqCity },
-                  ] as { label: string; value?: string }[]).map(({ label, value }) => (
-                    <div key={label} className="flex items-center justify-between px-4 py-2.5">
-                      <span className="text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-xs font-bold text-slate-800 text-right max-w-[55%] break-words">{value || '—'}</span>
+                  ] as { label: string; value?: string }[]).map(({ label, value }, idx) => (
+                    <div key={label} className={`flex items-center justify-between gap-4 ${idx > 0 ? 'pt-2.5 border-t border-slate-100' : ''}`}>
+                      <span className="text-slate-400 font-medium shrink-0">{label}</span>
+                      <span className="font-bold text-slate-800 text-right">{value || '-'}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Right: Contact & Address Details */}
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-slate-50/60">
-                  <UserRound className="w-4 h-4 text-[#33077C]" />
-                  <span className="text-xs font-bold text-slate-700">Contact & Address Details</span>
+              {/* Right Column: Contact & Address Details */}
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center font-bold">
+                    <Users className="w-3.5 h-3.5" />
+                  </div>
+                  <span>Contact & Address Details</span>
                 </div>
-                <div className="divide-y divide-slate-100">
+
+                <div className="space-y-3 text-xs sm:text-[13px]">
                   {([
                     { label: 'Contact Person', value: viewingProduct.contactPerson },
                     { label: 'Contact Phone', value: viewingProduct.mobileNumber || viewingProduct.supportPhone },
                     { label: 'WhatsApp Number', value: viewingProduct.supportWhatsapp },
                     { label: 'Official Email', value: viewingProduct.supportEmail },
                     { label: 'Address', value: viewingProduct.address },
-                  ] as { label: string; value?: string }[]).map(({ label, value }) => (
-                    <div key={label} className="flex items-center justify-between px-4 py-2.5">
-                      <span className="text-xs text-slate-400 font-medium shrink-0">{label}</span>
-                      <span className="text-xs font-bold text-slate-800 text-right max-w-[60%] break-words">{value || '—'}</span>
+                  ] as { label: string; value?: string }[]).map(({ label, value }, idx) => (
+                    <div key={label} className={`flex items-center justify-between gap-4 ${idx > 0 ? 'pt-2.5 border-t border-slate-100' : ''}`}>
+                      <span className="text-slate-400 font-medium shrink-0">{label}</span>
+                      <span className="font-bold text-slate-800 text-right break-all">{value || '-'}</span>
                     </div>
                   ))}
                 </div>

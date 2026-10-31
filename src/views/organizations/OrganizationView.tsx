@@ -57,6 +57,7 @@ interface OrganizationItem {
   name: string;
   code: string;
   legalName: string;
+  subOrganizationType?: number | string | null;
   organizationType?: string;
   industry: string;
   location: string;
@@ -158,6 +159,7 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     name: sub.name || 'Unnamed Sub-Organization',
     code: sub.code || 'SUB-01',
     legalName: sub.legalName || sub.name || '',
+    subOrganizationType: sub.subOrganizationType,
     organizationType: formatOrganizationTypeName(sub.organizationType),
     industry: sub.industry || '',
     location: sub.location || sub.address || '',
@@ -288,13 +290,24 @@ export const OrganizationView: React.FC = () => {
 
           if (res && (res.success || Array.isArray(res.data))) {
             const list = Array.isArray(res.data) ? res.data : [];
-            apiItems = list.map(mapSubOrgToItem);
+            const mapped = list.map(mapSubOrgToItem);
+            // Strictly isolate sub-organizations by current active suite:
+            // 1 = Client Management, 2 = Sales Management, 3 = Both
+            apiItems = mapped.filter((item) => {
+              const code = Number(item.subOrganizationType);
+              if (code === 3) return true;
+              if (code === 1) return !isSaleManagement;
+              if (code === 2) return isSaleManagement;
+              const t = String(item.organizationType || '').toLowerCase();
+              if (t.includes('all') || t.includes('both')) return true;
+              return isSaleManagement ? t.includes('sale') : !t.includes('sale');
+            });
           }
         } catch (apiErr) {
           console.warn('Backend sub-organization listing notice:', apiErr);
         }
 
-        // Use API items directly
+        // Use filtered API items directly
         setOrganizations(apiItems);
         setTotalRecords(apiItems.length);
       } else {
@@ -568,9 +581,6 @@ export const OrganizationView: React.FC = () => {
       if (!name.trim()) {
         errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
       }
-      if (!code.trim()) {
-        errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
-      }
       if (!organizationType) {
         errors.organizationType = isOrgSuperAdmin
           ? 'Sub Organization Suite is required'
@@ -615,9 +625,6 @@ export const OrganizationView: React.FC = () => {
       if (!name.trim()) {
         errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
       }
-      if (!code.trim()) {
-        errors.code = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Code is required`;
-      }
       if (phone.trim() && phone.trim().length !== 10) {
         errors.phone = 'Contact Phone must be exactly 10 digits';
       }
@@ -642,7 +649,6 @@ export const OrganizationView: React.FC = () => {
         const t = (v: string) => v.trim();
 
         // String fields — send updated value (or empty string if cleared)
-        if (t(code).toUpperCase() !== editingOrg.code) patch.code = t(code).toUpperCase();
         if (t(name) !== editingOrg.name) patch.name = t(name);
         const resolvedLegal = t(legalName) || t(name);
         if (resolvedLegal !== editingOrg.legalName) patch.legalName = resolvedLegal;
@@ -689,7 +695,6 @@ export const OrganizationView: React.FC = () => {
 
           await subOrganizationApi.createSubOrganization(
             {
-              code: code.trim().toUpperCase() || `SUB-${Date.now().toString().slice(-4)}`,
               name: name.trim(),
               legalName: legalName.trim() || name.trim(),
               organizationType: targetSuiteType,
@@ -720,7 +725,6 @@ export const OrganizationView: React.FC = () => {
           showToast('success', 'Sub-Organization Created', `${name} has been successfully created under ${targetSuiteType}.`);
         } else {
           await organizationApi.createOrganization({
-            code: code.trim().toUpperCase() || `ORG-${Date.now().toString().slice(-4)}`,
             name: name.trim(),
             organizationType: parseOrganizationTypeNumber(organizationType),
             legalName: legalName.trim() || name.trim(),
@@ -1354,25 +1358,14 @@ export const OrganizationView: React.FC = () => {
 
               {/* Field 3: Code */}
               <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'} <span className="text-rose-500 font-bold">*</span>
-                </label>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">{isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'}</label>
                 <input
                   type="text"
                   value={code}
-                  onChange={(e) => {
-                    setCode(e.target.value);
-                    if (formErrors.code) setFormErrors((prev) => ({ ...prev, code: '' }));
-                  }}
-                  placeholder="e.g. ORG-001"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.code
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
+                  readOnly
+                  placeholder="Auto-generated"
+                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
                 />
-                {formErrors.code && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.code}</p>
-                )}
               </div>
 
               {/* Field 4: Organization Type / Suite */}

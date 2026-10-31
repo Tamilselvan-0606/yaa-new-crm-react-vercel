@@ -131,7 +131,9 @@ export const mapApiPurchaseOrderToUi = (
     }
   } catch {}
 
-  const paidAmount = Math.min(grandTotal, existingPaid);
+  // The API tracks what was paid; the browser-stored amount is only a fallback for older records
+  const apiPaid = apiPo.paidAmount !== undefined && apiPo.paidAmount !== null ? Number(apiPo.paidAmount) : undefined;
+  const paidAmount = Math.min(grandTotal, apiPaid ?? existingPaid);
   const balance = Math.max(0, grandTotal - paidAmount);
   const paymentStatus: PurchasePaymentStatus =
     balance <= 0 && grandTotal > 0 && paidAmount >= grandTotal
@@ -184,6 +186,7 @@ export const mapApiPurchaseOrderToUi = (
     paymentStatus: paymentStatus,
     purchaseStatus: normalizedStatus,
     status: apiPo.status,
+    stockReceived: Boolean((apiPo as any).stockReceived),
     notes: apiPo.notes || '',
     createdBy: apiPo.createdBy,
     organizationId: apiPo.organizationId,
@@ -203,6 +206,7 @@ export const mapUiToCreatePurchaseOrderPayload = (
     expectedDeliveryDate?: string;
     discount?: number;
     discountAmount?: number;
+    paidAmount?: number;
     notes?: string;
   },
   items: PurchaseProductItem[]
@@ -232,6 +236,10 @@ export const mapUiToCreatePurchaseOrderPayload = (
 
   if (deliveryDate) {
     payload.expectedDeliveryDate = deliveryDate;
+  }
+
+  if (Number(formData.paidAmount) > 0) {
+    payload.paidAmount = Number(formData.paidAmount);
   }
 
   const trimmedNotes = formData.notes?.trim();

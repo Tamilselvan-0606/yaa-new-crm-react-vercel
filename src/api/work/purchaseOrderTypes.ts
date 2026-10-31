@@ -31,6 +31,10 @@ export interface ApiPurchaseOrder {
   taxAmount: number;
   discountAmount: number;
   grandTotal: number;
+  /** Amount of the bill already paid, balance still due and the resulting payment status (from the API). */
+  paidAmount?: number;
+  balance?: number;
+  paymentStatus?: 'Paid' | 'Partial' | 'Unpaid' | string;
   status: 'Pending' | 'Approved' | 'Ordered' | 'Received' | 'Cancelled' | string;
   notes?: string | null;
   createdBy?: string;
@@ -78,6 +82,7 @@ export interface CreatePurchaseOrderPayload {
   supplierId: string;
   expectedDeliveryDate?: string;
   discountAmount?: number;
+  paidAmount?: number;
   notes?: string;
   items: CreatePurchaseOrderItemPayload[];
 }

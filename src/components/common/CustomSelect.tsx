@@ -25,7 +25,7 @@ interface CustomSelectProps {
 export const CustomSelect: React.FC<CustomSelectProps> = ({
   value,
   onChange,
-  options,
+  options = [],
   placeholder = 'Select option',
   className = '',
   triggerClassName = '',
@@ -47,7 +47,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const normalizedOptions: SelectOption[] = options.map((opt) =>
+  const normalizedOptions: SelectOption[] = (Array.isArray(options) ? options : []).map((opt) =>
     typeof opt === 'string' ? { value: opt, label: opt } : opt
   );
 

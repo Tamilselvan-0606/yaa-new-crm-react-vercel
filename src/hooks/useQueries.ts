@@ -1,4 +1,4 @@
-import { toast } from 'sonner';
+import { toast } from "../utils/toast";
 import { Lead, Customer, TaskItem, ContentItem, PaymentItem } from '../types';
 import {
   useGetLeadsQuery,
