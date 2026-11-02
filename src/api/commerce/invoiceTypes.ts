@@ -183,11 +183,23 @@ export interface InvoiceFilterParams {
 /**
  * Response for GET /commerce/invoices
  */
+export interface CommerceInvoiceSummary {
+  totalCount: number;
+  totalSalesAmount: number;
+  todayAmount: number;
+  todayCount: number;
+  paidAmount: number;
+  pendingPaymentsAmount: number;
+  completedCount: number;
+  cancelledCount: number;
+}
+
 export interface CommerceInvoiceListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiSalesInvoice[];
+  summary?: CommerceInvoiceSummary;
   pagination?: CommerceInvoicePagination;
   meta?: {
     timestamp: string;

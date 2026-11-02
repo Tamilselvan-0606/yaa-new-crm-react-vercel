@@ -809,7 +809,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                 <h3 className="text-2xl font-black text-slate-900 tracking-tight">
                   ₹
                   {(
-                    modulesData?.purchase?.paymentOutSettled ?? 0
+                    modulesData?.purchase?.totalSpend ?? modulesData?.purchase?.paymentOutSettled ?? 0
                   ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                 </h3>
                 <div className="flex items-center justify-between mt-1 text-xs text-slate-500">

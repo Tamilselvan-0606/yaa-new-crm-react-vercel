@@ -1,4 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { stockApi } from '../../../api/commerce/stockApi';
+import type {
+  StockMovementReportRow,
+  StockMovementReportSummary,
+} from '../../../api/commerce/stockTypes';
 import { printTableReport, downloadTableReport } from '../../../utils/printUtils';
 import {
   FileSpreadsheet,
@@ -36,14 +41,27 @@ import {
   Area,
 } from 'recharts';
 
-// Data for Stock In vs Stock Out by Category (Bar Chart)
-const STOCK_MOVEMENT_DATA = [
-  { category: 'Electronics', stockIn: 450, stockOut: 380, available: 520 },
-  { category: 'Apparel', stockIn: 620, stockOut: 510, available: 410 },
-  { category: 'Supplies', stockIn: 310, stockOut: 240, available: 390 },
-  { category: 'Machinery', stockIn: 180, stockOut: 110, available: 220 },
-  { category: 'Hardware', stockIn: 540, stockOut: 460, available: 480 },
-];
+interface StockMovementChartRow {
+  category: string;
+  stockIn: number;
+  stockOut: number;
+  available: number;
+}
+
+const toIsoDate = (d: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+};
+
+// Map the screen's range toggle (3M / 6M / 1Y) to from/to dates
+const getRangeDates = (range: string) => {
+  const to = new Date();
+  const from = new Date();
+  if (range === '3M') from.setMonth(from.getMonth() - 3);
+  else if (range === '1Y') from.setFullYear(from.getFullYear() - 1);
+  else from.setMonth(from.getMonth() - 6);
+  return { from: toIsoDate(from), to: toIsoDate(to) };
+};
 
 // Data for Category Share (Donut Chart)
 const CATEGORY_SHARE_DATA = [
@@ -93,6 +111,52 @@ export const InventoryReportView: React.FC = () => {
   const [timeRange, setTimeRange] = useState('6M');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [movementRows, setMovementRows] = useState<StockMovementReportRow[]>([]);
+  const [movementSummary, setMovementSummary] = useState<StockMovementReportSummary | null>(null);
+  const [isMovementLoading, setIsMovementLoading] = useState(false);
+  const [movementError, setMovementError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const { from, to } = getRangeDates(timeRange);
+    setIsMovementLoading(true);
+    setMovementError(null);
+    stockApi
+      .getMovementReport({ from, to })
+      .then((res) => {
+        if (cancelled) return;
+        setMovementRows(Array.isArray(res?.data) ? res.data : []);
+        setMovementSummary(res?.summary ?? null);
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setMovementRows([]);
+        setMovementSummary(null);
+        setMovementError(err?.message || 'Failed to load stock movement report');
+      })
+      .finally(() => {
+        if (!cancelled) setIsMovementLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange]);
+
+  // Aggregate API rows by category for the chart / exports (honours the category filter)
+  const STOCK_MOVEMENT_DATA: StockMovementChartRow[] = useMemo(() => {
+    const q = selectedCategory === 'ALL' ? '' : selectedCategory.toLowerCase();
+    const map = new Map<string, StockMovementChartRow>();
+    movementRows.forEach((r) => {
+      const cat = r.category || 'Uncategorized';
+      if (q && !cat.toLowerCase().includes(q)) return;
+      const cur = map.get(cat) || { category: cat, stockIn: 0, stockOut: 0, available: 0 };
+      cur.stockIn += Number(r.stockIn) || 0;
+      cur.stockOut += Number(r.stockOut) || 0;
+      cur.available += Number(r.available) || 0;
+      map.set(cat, cur);
+    });
+    return Array.from(map.values());
+  }, [movementRows, selectedCategory]);
 
   const handleExport = () => {
     const csvRows = [
@@ -127,9 +191,14 @@ export const InventoryReportView: React.FC = () => {
       };
     });
 
-    const totalIn = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockIn, 0);
-    const totalOut = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockOut, 0);
-    const totalAvail = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.available, 0);
+    const localIn = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockIn, 0);
+    const localOut = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.stockOut, 0);
+    const localAvail = STOCK_MOVEMENT_DATA.reduce((acc, curr) => acc + curr.available, 0);
+    // API summary covers the whole report; use it unless a category filter narrows the rows
+    const useApiSummary = movementSummary !== null && selectedCategory === 'ALL';
+    const totalIn = useApiSummary ? movementSummary!.totalIn : localIn;
+    const totalOut = useApiSummary ? movementSummary!.totalOut : localOut;
+    const totalAvail = useApiSummary ? movementSummary!.totalAvailable : localAvail;
 
     return {
       title: 'Inventory & Stock Analytics Report',
@@ -348,6 +417,15 @@ export const InventoryReportView: React.FC = () => {
             </div>
 
             <div className="h-72 w-full pt-1">
+              {isMovementLoading ? (
+                <div className="h-full flex items-center justify-center text-sm text-slate-500 gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading stock movement...
+                </div>
+              ) : STOCK_MOVEMENT_DATA.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-sm text-slate-500">
+                  {movementError || 'No stock movement data for the selected period.'}
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={STOCK_MOVEMENT_DATA}
@@ -418,6 +496,7 @@ export const InventoryReportView: React.FC = () => {
                   />
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </div>
           </div>
         </div>

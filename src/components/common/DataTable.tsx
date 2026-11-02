@@ -10,7 +10,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { ChevronDown, ChevronUp, ChevronsUpDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import Tooltip from '@mui/material/Tooltip';
+import { Tooltip } from './Tooltip';
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];

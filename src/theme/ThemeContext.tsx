@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
 import {
   ThemeConfig,
   DEFAULT_THEME,
@@ -9,7 +8,6 @@ import {
   getContrastText,
   getLuminance,
 } from './themeConfig';
-import { createDynamicMuiTheme } from './muiTheme';
 
 interface ThemeContextType {
   theme: ThemeConfig;
@@ -81,7 +79,6 @@ export const CustomThemeProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const isBgDark = getLuminance(theme.bg) < 0.4;
   const isPrimaryDark = getLuminance(theme.primary) < 0.4;
 
-  const muiThemeInstance = createDynamicMuiTheme(theme);
 
   return (
     <ThemeContext.Provider
@@ -99,7 +96,7 @@ export const CustomThemeProvider: React.FC<{ children: React.ReactNode }> = ({ c
         isPrimaryDark,
       }}
     >
-      <MuiThemeProvider theme={muiThemeInstance}>{children}</MuiThemeProvider>
+      {children}
     </ThemeContext.Provider>
   );
 };

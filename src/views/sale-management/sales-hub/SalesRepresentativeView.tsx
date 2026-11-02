@@ -2,7 +2,7 @@ import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Users,
@@ -37,6 +37,7 @@ import {
   salesRepresentativeApi,
   ApiSalesRepresentative,
   ApiRepPortfolio,
+  SalesRepListSummary,
   UpdateSalesRepPayload,
 } from "../../../api/commerce/salesRepresentativeApi";
 import {
@@ -57,7 +58,18 @@ import {
   SalesRepresentative,
 } from "../../../store/useSalesManagementStore";
 
-import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
+import {
+  normalizeIndianPhoneTo10Digits,
+  isValidIndianPhone,
+} from "../../../utils/validation";
+import {
+  checkRequiredText,
+  checkPhone,
+  checkEmail,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { calculateRepMetrics } from "../../../utils/outstandingBalance";
@@ -96,6 +108,7 @@ export const SalesRepresentativeView: React.FC = () => {
   // ── list state ──────────────────────────────────────────────────────────
   const [reps, setReps] = useState<ApiSalesRepresentative[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
+  const [apiSummary, setApiSummary] = useState<SalesRepListSummary | null>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [isListLoading, setIsListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -162,6 +175,30 @@ export const SalesRepresentativeView: React.FC = () => {
   const [deleteRepError, setDeleteRepError] = useState<string | null>(null);
 
   // ── react-hook-form ──────────────────────────────────────────────────────
+  // Duplicate lookups are assigned below (they depend on later state); the resolver reads them at
+  // validation time so duplicate errors are re-evaluated (and cleared) with every revalidation.
+  const dupCheckRef = useRef<{
+    mobile: (m: string) => string | null;
+    email: (e: string) => string | null;
+  }>({ mobile: () => null, email: () => null });
+  const repFormResolver: Resolver<SalesRepFormData> = async (values, context, options) => {
+    const base = await zodResolver(SalesRepresentativeSchema)(values, context, options);
+    const errs: Record<string, { type: string; message: string }> = {
+      ...((base.errors as any) || {}),
+    };
+    const add = (f: string, m: string | null) => {
+      if (m && !errs[f]) errs[f] = { type: "validate", message: m };
+    };
+    add("name", checkRequiredText(values.name, "representative's full name", 2));
+    const mobileErr = checkPhone(values.mobile, isValidIndianPhone, true);
+    add("mobile", mobileErr);
+    if (!mobileErr) add("mobile", dupCheckRef.current.mobile(values.mobile || ""));
+    const emailErr = checkEmail(values.email, true);
+    add("email", emailErr);
+    if (!emailErr && values.email) add("email", dupCheckRef.current.email(values.email));
+    if (Object.keys(errs).length > 0) return { values: {}, errors: errs as any };
+    return base;
+  };
   const {
     register,
     handleSubmit,
@@ -170,10 +207,11 @@ export const SalesRepresentativeView: React.FC = () => {
     reset,
     setError,
     clearErrors,
-    formState: { errors },
+    formState: { errors, isSubmitted },
   } = useForm<SalesRepFormData>({
-    resolver: zodResolver(SalesRepresentativeSchema),
-    mode: "onChange",
+    resolver: repFormResolver,
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       name: "",
       mobile: "",
@@ -309,6 +347,7 @@ export const SalesRepresentativeView: React.FC = () => {
     setListError(null);
     try {
       let repList: ApiSalesRepresentative[] = [];
+      let fetchedSummary: SalesRepListSummary | undefined;
 
       if (appliedStatus === "ALL") {
         const [defaultRes, inactiveRes] = await Promise.allSettled([
@@ -333,6 +372,10 @@ export const SalesRepresentativeView: React.FC = () => {
         }
 
         const repMap = new Map<string, ApiSalesRepresentative>();
+
+        if (defaultRes.status === "fulfilled") {
+          fetchedSummary = defaultRes.value?.summary;
+        }
 
         if (
           defaultRes.status === "fulfilled" &&
@@ -411,6 +454,8 @@ export const SalesRepresentativeView: React.FC = () => {
 
         if (currentReqId !== requestIdRef.current) return;
 
+        fetchedSummary = res.summary;
+
         if (res.success && Array.isArray(res.data)) {
           repList = res.data.map(normalizeApiRep);
         }
@@ -483,6 +528,7 @@ export const SalesRepresentativeView: React.FC = () => {
       setReps(repList);
       setTotalRecords(totalRecs);
       setTotalPages(totalPgs);
+      if (fetchedSummary) setApiSummary(fetchedSummary);
 
       if (appliedStatus === "ALL" && !appliedSearch) {
         allRepsCacheRef.current = repList;
@@ -581,9 +627,30 @@ export const SalesRepresentativeView: React.FC = () => {
     loadPortfolio(rep);
   };
 
+  dupCheckRef.current = {
+    mobile: (m) => {
+      const clean = normalizeIndianPhoneTo10Digits(m) || m.trim();
+      const dup = findDuplicateRepByMobile(clean, editingRep?.id);
+      return dup
+        ? `Phone number is already used by ${dup.name || "another sales representative"}. Each representative must have a unique mobile number.`
+        : null;
+    },
+    email: (e) => {
+      const dup = findDuplicateRepByEmail(e, editingRep?.id);
+      return dup
+        ? `This email is already registered to ${dup.name || "another representative"}. Please use a different email.`
+        : null;
+    },
+  };
+
+  useEffect(() => {
+    if (!isFormModalOpen) clearErrors();
+  }, [isFormModalOpen, clearErrors]);
+
   // ── form helpers ─────────────────────────────────────────────────────────
   const openCreateModal = () => {
     setEditingRep(null);
+    clearErrors();
     reset({
       name: "",
       mobile: "",
@@ -596,6 +663,7 @@ export const SalesRepresentativeView: React.FC = () => {
 
   const openEditModal = (rep: ApiSalesRepresentative) => {
     setEditingRep(rep);
+    clearErrors();
     reset({
       name: rep.name,
       mobile: normalizeIndianPhoneTo10Digits(rep.mobile) || rep.mobile,
@@ -606,30 +674,15 @@ export const SalesRepresentativeView: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
-  const onSubmit = async (data: SalesRepFormData) => {
+  const submitGuard = useSubmitGuard();
+  const statusGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+
+  const onSubmit = (data: SalesRepFormData) => submitGuard.runOnce(async () => {
     const cleanMobile = normalizeIndianPhoneTo10Digits(data.mobile) || data.mobile.trim();
 
-    // Client-side mobile duplicate check: prevents hitting API if already registered
-    const duplicateMobile = findDuplicateRepByMobile(cleanMobile, editingRep?.id);
-    if (duplicateMobile) {
-      setError("mobile", {
-        type: "manual",
-        message: `Phone number is already used by ${duplicateMobile.name || "another sales representative"}. Each representative must have a unique mobile number.`,
-      });
-      return;
-    }
-
-    // Client-side email duplicate check
-    if (data.email) {
-      const duplicateEmail = findDuplicateRepByEmail(data.email, editingRep?.id);
-      if (duplicateEmail) {
-        setError("email", {
-          type: "manual",
-          message: `This email is already registered to ${duplicateEmail.name || "another representative"}. Please use a different email.`,
-        });
-        return;
-      }
-    }
+    // Field rules, duplicate-mobile and duplicate-email checks all live in repFormResolver, so by
+    // the time we get here every one of them has already passed.
 
     setIsSubmitting(true);
     try {
@@ -736,6 +789,12 @@ export const SalesRepresentativeView: React.FC = () => {
         err?.message ||
         "";
       const lowerMsg = String(msg).toLowerCase();
+      const apiFields = extractApiFieldErrors(err);
+      const mappedKeys = (["name", "mobile", "email", "designation"] as const).filter((k) => apiFields[k]);
+      if (mappedKeys.length > 0) {
+        mappedKeys.forEach((k) => setError(k as any, { type: "server", message: apiFields[k] }));
+        return;
+      }
 
       if (code === "DUPLICATE_EMAIL" || lowerMsg.includes("email")) {
         setError("email", {
@@ -754,12 +813,12 @@ export const SalesRepresentativeView: React.FC = () => {
             "Phone number is already used by another login account. Each representative must have a unique mobile number.",
         });
       } else {
-        toast.error(msg || "Failed to save representative. Please try again.");
+        toast.error(getApiErrorMessage(err, "We could not save the representative. Please try again."));
       }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   // Close action dropdown and share popover on outside click or scroll
   useEffect(() => {
@@ -790,10 +849,14 @@ export const SalesRepresentativeView: React.FC = () => {
     };
   }, []);
 
-  const handleToggleStatus = async (
+  const handleToggleStatus = (
     rep: ApiSalesRepresentative,
     newStatus: "Active" | "Inactive",
-  ) => {
+  ) => statusGuard.runOnce(async () => {
+    if (!rep?.id || (newStatus !== "Active" && newStatus !== "Inactive")) {
+      toast.error("Please select a valid sales representative.");
+      return;
+    }
     try {
       const cleanMobile =
         normalizeIndianPhoneTo10Digits(rep.mobile) || rep.mobile?.trim() || "";
@@ -849,16 +912,12 @@ export const SalesRepresentativeView: React.FC = () => {
         loadReps();
       }
     } catch (err: any) {
-      toast.error(
-        err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          "Failed to update status",
-      );
+      toast.error(getApiErrorMessage(err, "We could not update the status. Please try again."));
     }
-  };
+  });
 
-  const handleConfirmDelete = async () => {
-    if (!deleteTargetRep) return;
+  const handleConfirmDelete = () => deleteGuard.runOnce(async () => {
+    if (!deleteTargetRep?.id) return;
     setIsDeletingRep(true);
     setDeleteRepError(null);
     try {
@@ -881,17 +940,13 @@ export const SalesRepresentativeView: React.FC = () => {
       );
       loadReps();
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to delete representative.";
+      const errMsg = getApiErrorMessage(err, "We could not delete the representative. Please try again.");
       setDeleteRepError(errMsg);
       toast.error(errMsg);
     } finally {
       setIsDeletingRep(false);
     }
-  };
+  });
 
   // ── computed map of assigned customers and metrics per rep ─────────────────
   const repMetricsMap = useMemo(() => {
@@ -986,13 +1041,22 @@ export const SalesRepresentativeView: React.FC = () => {
       totalCollected += metrics ? metrics.totalCollected : (Number(r.totalCollectedAmount) || 0);
     });
 
+    if (apiSummary) {
+      return {
+        totalCount: apiSummary.totalCount ?? totalCount,
+        activeCount: apiSummary.activeCount ?? activeCount,
+        totalOutstanding: apiSummary.totalOutstanding ?? totalOutstanding,
+        totalCollected: apiSummary.totalCollected ?? totalCollected,
+      };
+    }
+
     return {
       totalCount,
       activeCount,
       totalOutstanding,
       totalCollected,
     };
-  }, [reps, totalRecords, repMetricsMap]);
+  }, [reps, totalRecords, repMetricsMap, apiSummary]);
 
   // ── Export to Excel ──
   const handleExportExcel = () => {
@@ -1618,6 +1682,7 @@ export const SalesRepresentativeView: React.FC = () => {
                 {...register("mobile")}
                 placeholder="e.g. 9876543210"
                 maxLength={10}
+                data-field="mobile"
                 onKeyDown={(e) => {
                   if (
                     !/[0-9]/.test(e.key) &&
@@ -1632,20 +1697,7 @@ export const SalesRepresentativeView: React.FC = () => {
                 }}
                 onChange={(e) => {
                   const clean = e.target.value.replace(/\D/g, "").slice(0, 10);
-                  setValue("mobile", clean, { shouldValidate: true });
-                  if (clean.length === 10) {
-                    const duplicate = findDuplicateRepByMobile(clean, editingRep?.id);
-                    if (duplicate) {
-                      setError("mobile", {
-                        type: "manual",
-                        message: `Phone number is already used by ${duplicate.name || "another sales representative"}. Each representative must have a unique mobile number.`,
-                      });
-                    } else {
-                      clearErrors("mobile");
-                    }
-                  } else {
-                    clearErrors("mobile");
-                  }
+                  setValue("mobile", clean, { shouldValidate: isSubmitted });
                 }}
                 className={getFormInputCls(Boolean(errors.mobile))}
               />
@@ -1684,7 +1736,7 @@ export const SalesRepresentativeView: React.FC = () => {
                     key={s}
                     type="button"
                     onClick={() =>
-                      setValue("status", s, { shouldValidate: true })
+                      setValue("status", s, { shouldValidate: isSubmitted })
                     }
                     className={`h-11 rounded-xl border flex items-center justify-center gap-2 font-bold text-xs sm:text-[13px] cursor-pointer transition-all ${
                       watchStatus === s

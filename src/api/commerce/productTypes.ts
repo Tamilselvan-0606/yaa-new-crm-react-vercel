@@ -110,12 +110,20 @@ export interface ProductPagination {
   hasPrevPage: boolean;
 }
 
+export interface ProductListSummary {
+  totalItems: number;
+  totalProducts: number;
+  lowStockCount: number;
+  totalStockValue: number;
+}
+
 export interface ProductListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiProduct[];
   pagination?: ProductPagination;
+  summary?: ProductListSummary;
   meta?: {
     timestamp: string;
     requestId: string;

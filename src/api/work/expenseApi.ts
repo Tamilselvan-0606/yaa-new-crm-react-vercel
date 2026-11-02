@@ -131,7 +131,7 @@ export const mapApiExpenseToUi = (apiExp: ApiExpense): UiExpenseItem => {
 
   return {
     id: apiExp.id,
-    expenseNo: apiExp.expenseNo || `EXP-${apiExp.id.slice(0, 8).toUpperCase()}`,
+    expenseNo: apiExp.expenseNo || '',
     expenseDate: expenseDateStr,
     category: apiExp.category?.name || 'General Expense',
     categoryId: apiExp.categoryId,

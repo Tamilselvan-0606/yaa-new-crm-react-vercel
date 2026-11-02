@@ -124,11 +124,24 @@ export interface ProformaFilterParams {
 /**
  * Response for GET /commerce/proformas
  */
+export interface ProformaSummary {
+  totalCount: number;
+  totalAmount: number;
+  openCount: number;
+  openAmount: number;
+  convertedCount: number;
+  convertedAmount: number;
+  cancelledCount: number;
+  growthPercentVsLastMonth?: number;
+  previousMonthTotalAmount?: number;
+}
+
 export interface ProformaListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiProformaInvoice[];
+  summary?: ProformaSummary;
   pagination?: ProformaPagination;
   meta?: {
     timestamp: string;

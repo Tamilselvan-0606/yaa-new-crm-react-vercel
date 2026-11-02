@@ -70,6 +70,7 @@ export interface SupplierListResponse {
   message: string;
   data: ApiSupplier[];
   pagination?: SupplierPagination;
+  summary?: { totalCount: number; activeCount: number; inactiveCount: number; totalPayables: number; newSuppliersCount: number };
   meta?: {
     timestamp: string;
     requestId: string;

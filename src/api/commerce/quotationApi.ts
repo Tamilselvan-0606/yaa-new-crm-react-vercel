@@ -172,8 +172,8 @@ export const mapSaleQuotationToPayload = (
   if (!isCreate && quotation.quotationNo && quotation.quotationNo.trim()) {
     payload.quotationNo = quotation.quotationNo.trim();
   }
-  // Only pass referenceNo if explicitly provided and not empty
-  if (quotation.referenceNo && String(quotation.referenceNo).trim()) {
+  // Server generates referenceNo on create; only pass on update
+  if (!isCreate && quotation.referenceNo && String(quotation.referenceNo).trim()) {
     payload.referenceNo = String(quotation.referenceNo).trim();
   }
   if (quotation.date && quotation.date.trim()) {

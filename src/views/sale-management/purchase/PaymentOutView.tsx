@@ -7,6 +7,19 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { PaymentOutSchema, PaymentOutFormData } from '../../../validations';
 import { FormError } from '../../../components/common/FormError';
 import {
+  checkRequiredSelection,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkMoney,
+  checkPaymentWithinBalance,
+  collectErrors,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  useSubmitGuard,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+} from '../../../utils/formValidation';
+import {
   CreditCard,
   Plus,
   Eye,
@@ -92,6 +105,7 @@ export const PaymentOutView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/work/paymentOutTypes").PaymentOutListResponse["summary"]> | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
 
@@ -227,6 +241,7 @@ export const PaymentOutView: React.FC = () => {
           setIsApiConnected(true);
           setApiErrorMessage(null);
 
+          setApiSummary(response.summary ?? null);
           if (response.pagination) {
             setTotalApiRecords(response.pagination.totalRecords);
             setTotalApiPages(response.pagination.totalPages);
@@ -362,17 +377,41 @@ export const PaymentOutView: React.FC = () => {
     }
   };
 
+  const { runOnce: runSaveOnce } = useSubmitGuard();
+  const { runOnce: runDeleteOnce } = useSubmitGuard();
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  // Invalid receipt file picked: kept silently until the form is submitted, then shown inline.
+  const [receiptFileProblem, setReceiptFileProblem] = useState<string | null>(null);
+  const dateFe = useFieldErrors();
+  const customDateError = dateFe.errors.range ?? null;
+
   // Open Edit Payment Modal
   const {
     register,
+    setError,
     handleSubmit,
     control,
     reset,
     setValue,
     watch,
-    formState: { errors, isSubmitting },
+    clearErrors,
+    formState: { errors, isSubmitting, isSubmitted },
   } = useForm<PaymentOutFormData>({
-    resolver: zodResolver(PaymentOutSchema),
+    // Shared zod schema + friendly local rules layered on top.
+    resolver: (async (values: any, ctx: any, opts: any) => {
+      const base: any = await (zodResolver(PaymentOutSchema) as any)(values, ctx, opts);
+      // Includes the supplier-record and outstanding-balance rules so they clear as soon as they pass.
+      const extra = evaluatePayment(values).recheck;
+      const errs: any = { ...(base.errors || {}) };
+      for (const k of ['supplierId', 'paymentDate', 'amount', 'paymentMode']) {
+        if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
+        else delete errs[k];
+      }
+      if (Object.keys(errs).length === 0) return { values: base.values ?? values, errors: {} };
+      return { values: {}, errors: errs };
+    }) as any,
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       paymentNo: '',
       paymentDate: new Date().toISOString().split('T')[0],
@@ -385,6 +424,14 @@ export const PaymentOutView: React.FC = () => {
       notes: '',
     },
   });
+
+  // Every open/close of the payment form starts with no errors.
+  useEffect(() => {
+    clearErrors();
+    setReceiptError(null);
+    setReceiptFileProblem(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormModalOpen]);
 
   const watchSupplierId = watch('supplierId');
   const watchPurchaseId = watch('purchaseId');
@@ -469,6 +516,7 @@ export const PaymentOutView: React.FC = () => {
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   const handleOpenEditModal = (po: PaymentOut) => {
+    setReceiptError(null);
     loadFormMasterData();
     if (po.status === 'Cancelled') {
       toast.error('Cancelled payments cannot be edited.');
@@ -494,7 +542,7 @@ export const PaymentOutView: React.FC = () => {
   const handleDuplicatePayment = (po: PaymentOut) => {
     loadFormMasterData();
     setEditingPaymentId(null);
-    const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
+    const nextNo = ''; // server generates the payment number on save
     reset({
       paymentNo: nextNo,
       paymentDate: new Date().toISOString().split('T')[0],
@@ -568,9 +616,10 @@ export const PaymentOutView: React.FC = () => {
 
   // Open Create Payment Modal
   const handleOpenCreateModal = () => {
+    setReceiptError(null);
     loadFormMasterData();
     setEditingPaymentId(null);
-    const nextNo = `VPA-${new Date().getFullYear()}-${String((activePool.length || 0) + 101).padStart(3, '0')}`;
+    const nextNo = ''; // server generates the payment number on save
     reset({
       paymentNo: nextNo,
       paymentDate: new Date().toISOString().split('T')[0],
@@ -594,37 +643,77 @@ export const PaymentOutView: React.FC = () => {
     }
   };
 
-  // Submit Payment (Create or Edit)
-  const onSubmitPayment = async (data: PaymentOutFormData) => {
+  // Pure rule evaluation shared by the form resolver and the submit handler.
+  const evaluatePayment = (data: any) => {
     const numAmount = Number(data.amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      toast.error('Payment amount must be greater than 0');
-      return;
-    }
+    const recheck = collectErrors([
+      ['supplierId', checkRequiredSelection(data.supplierId, 'supplier')],
+      ['paymentDate', checkRequiredDate(data.paymentDate, 'payment date')],
+      ['amount', checkMoney(data.amount, 'payment amount')],
+      ['paymentMode', checkRequiredSelection(data.paymentMode, 'payment mode')],
+    ]);
 
-    // Resolve supplier
+    // Resolve supplier: must be a real supplier record (no silent substitution of another supplier).
     let supId = data.supplierId;
     let supplierObj = mergedSuppliers.find((s) => s.id === supId);
     if (!supplierObj) {
-      supplierObj = mergedSuppliers.find((s) => s.name.toLowerCase() === supId.toLowerCase());
+      supplierObj = mergedSuppliers.find((s) => s.name.toLowerCase() === (supId || '').toLowerCase());
       if (supplierObj) supId = supplierObj.id;
     }
-
-    // Ensure supplierId is a valid UUID for the API
-    if (!UUID_REGEX.test(supId)) {
+    if (!recheck.supplierId && !UUID_REGEX.test(supId)) {
       const foundSup = availableSuppliers.find((s) => s.id === supId || s.name === supplierObj?.name);
       if (foundSup && UUID_REGEX.test(foundSup.id)) {
         supId = foundSup.id;
-      } else if (availableSuppliers.length > 0) {
-        supId = availableSuppliers[0].id;
+      } else {
+        recheck.supplierId = 'Please choose the supplier from the list.';
       }
     }
 
     const purchaseObj = mergedPurchases.find((p) => p.id === data.purchaseId);
-    if (purchaseObj && !editingPaymentId && purchaseObj.balance > 0 && numAmount > purchaseObj.balance + 0.01) {
-      toast.error(`Payment amount (₹${numAmount.toLocaleString('en-IN')}) cannot exceed the outstanding balance of ₹${purchaseObj.balance.toLocaleString('en-IN')}.`);
+    if (!recheck.amount && purchaseObj && purchaseObj.balance > 0) {
+      const editedOriginal = editingPaymentId ? activePool.find((p) => p.id === editingPaymentId) : null;
+      // When editing a payment against the same bill, its own earlier amount is part of what can be re-allocated.
+      const allowance =
+        editedOriginal && editedOriginal.purchaseId === data.purchaseId ? Number(editedOriginal.amount) || 0 : 0;
+      const balErr = editingPaymentId && !allowance
+        ? null
+        : checkPaymentWithinBalance(numAmount, purchaseObj.balance + allowance);
+      if (balErr) recheck.amount = balErr;
+    }
+
+    return { recheck, numAmount, supId, supplierObj, purchaseObj };
+  };
+
+  const computeDateRangeErrors = () =>
+    collectErrors([
+      [
+        'range',
+        checkRequiredDate(customStartDate, 'start date') ||
+          checkRequiredDate(customEndDate, 'end date') ||
+          checkDateNotBefore(customEndDate, customStartDate, 'end date', 'start date'),
+      ],
+    ]);
+  useRevalidateAfterSubmit(dateFe, computeDateRangeErrors, [customStartDate, customEndDate]);
+  useEffect(() => {
+    dateFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustomDateModalOpen]);
+
+  // Submit Payment (Create or Edit)
+  const onSubmitPayment = (data: PaymentOutFormData) => {
+    // An invalid receipt file blocks the save (shown inline together with the other errors).
+    if (receiptFileProblem) return;
+    return runSaveOnce(() => submitPaymentInner(data));
+  };
+  const submitPaymentInner = async (data: PaymentOutFormData) => {
+    // Safety net: the resolver already blocked invalid values, so no request is sent when anything is invalid.
+    const { recheck, numAmount, supId, supplierObj, purchaseObj } = evaluatePayment(data);
+    const recheckKeys = Object.keys(recheck);
+    if (recheckKeys.length > 0) {
+      recheckKeys.forEach((k) => setError(k as any, { type: 'validate', message: recheck[k] }));
       return;
     }
+
     const existing = editingPaymentId ? activePool.find((p) => p.id === editingPaymentId) : null;
 
     if (existing && existing.status === 'Cancelled') {
@@ -706,8 +795,20 @@ export const PaymentOutView: React.FC = () => {
         setIsFormModalOpen(false);
         fetchPaymentsOut(true);
       } catch (err: any) {
-        const errMsg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || 'Failed to save payment voucher';
-        toast.error(errMsg);
+        // Keep the modal open and the entered values; show backend field errors inline.
+        const apiFields = extractApiFieldErrors(err);
+        const fieldMap: Record<string, string> = {
+          supplierId: 'supplierId', amount: 'amount', paymentMode: 'paymentMode', referenceNo: 'referenceNo',
+          notes: 'notes', purchaseOrderId: 'purchaseId', paymentDate: 'paymentDate',
+        };
+        let mapped = false;
+        for (const [k, m] of Object.entries(apiFields)) {
+          if (fieldMap[k]) {
+            setError(fieldMap[k] as any, { type: 'server', message: m });
+            mapped = true;
+          }
+        }
+        if (!mapped) toast.error(getApiErrorMessage(err, 'Failed to save payment voucher. Your entries have been kept; please try again.'));
     } finally {
       setIsSubmittingForm(false);
     }
@@ -726,7 +827,8 @@ export const PaymentOutView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeletePayment = async () => {
+  const handleConfirmDeletePayment = () => runDeleteOnce(confirmDeletePaymentInner);
+  const confirmDeletePaymentInner = async () => {
     if (!deleteTargetPayment) return;
     setIsDeletingPayment(true);
     setDeletePaymentError(null);
@@ -748,11 +850,7 @@ export const PaymentOutView: React.FC = () => {
       fetchPaymentsOut(true);
     } catch (err: any) {
       console.error('API cancel failed:', err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to cancel payment voucher';
+      const errMsg = getApiErrorMessage(err, 'Failed to cancel payment voucher');
       setDeletePaymentError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -853,7 +951,7 @@ export const PaymentOutView: React.FC = () => {
   ]);
 
   // Metrics Summary
-  const summary = useMemo(() => {
+  const localSummary = useMemo(() => {
     const totalDisbursed = filteredPayments.reduce(
       (acc, p) => acc + (p.status !== 'Cancelled' ? p.amount : 0),
       0
@@ -888,6 +986,7 @@ export const PaymentOutView: React.FC = () => {
       cashPayments,
     };
   }, [filteredPayments, isApiConnected, totalApiRecords, appliedPeriod, appliedPaymentMode]);
+  const summary = apiSummary ?? localSummary;
 
   // Export Payment-Out Records to Excel
   const handleExportExcel = () => {
@@ -1512,10 +1611,7 @@ export const PaymentOutView: React.FC = () => {
       >
         <form noValidate onSubmit={(e) => {
             e.preventDefault();
-            if (!customStartDate || !customEndDate) {
-              toast.error('Please select both start and end dates.');
-              return;
-            }
+            if (!dateFe.validateAll(computeDateRangeErrors())) return;
             setAppliedPeriod('Custom');
             setIsCustomDateModalOpen(false);
           }} className="space-y-4">
@@ -1526,7 +1622,9 @@ export const PaymentOutView: React.FC = () => {
             <input
               type="date"
               value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
+              onChange={(e) => {
+                setCustomStartDate(e.target.value);
+              }}
               className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C]"
             />
           </div>
@@ -1538,9 +1636,12 @@ export const PaymentOutView: React.FC = () => {
             <input
               type="date"
               value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
+              onChange={(e) => {
+                setCustomEndDate(e.target.value);
+              }}
               className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C]"
             />
+            <FormError message={customDateError || undefined} />
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
@@ -1650,12 +1751,13 @@ export const PaymentOutView: React.FC = () => {
 
             {/* Field 3: Voucher / Payment No */}
             <div>
-              <FormLabel required>Voucher / Payment No</FormLabel>
+              <FormLabel>Voucher / Payment No</FormLabel>
               <input
                 type="text"
+                readOnly
                 {...register('paymentNo')}
                 className={getFormInputCls(!!errors.paymentNo)}
-                placeholder="e.g. VPA-2026-001"
+                placeholder="Auto-generated on save"
               />
               <FormError message={errors.paymentNo?.message} />
             </div>
@@ -1754,6 +1856,13 @@ export const PaymentOutView: React.FC = () => {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
+                        if (!(file.type && file.type.startsWith('image/'))) {
+                          setReceiptFileProblem('Please attach an image file for the receipt.');
+                          e.target.value = '';
+                          return;
+                        }
+                        setReceiptError(null);
+                        setReceiptFileProblem(null);
                         const reader = new FileReader();
                         reader.onloadend = () => {
                           setValue('receiptImage', reader.result as string);
@@ -1765,6 +1874,7 @@ export const PaymentOutView: React.FC = () => {
                   />
                 </label>
               )}
+              <FormError message={receiptError || (isSubmitted ? receiptFileProblem : null) || undefined} />
             </div>
 
             {/* Field 8: Reference no */}

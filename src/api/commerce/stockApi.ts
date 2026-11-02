@@ -11,6 +11,8 @@ import {
   StockBatchesResponse,
   LowStockParams,
   LowStockResponse,
+  StockMovementReportParams,
+  StockMovementReportResponse,
 } from './stockTypes';
 import { ApiStockBatch } from './productTypes';
 import { InventoryStockItem, StockBatch } from '../../store/useSalesManagementStore';
@@ -417,6 +419,29 @@ export const stockApi = {
     const response = await baseClient.get<StockBatchesResponse>('/commerce/stocks/batches', {
       params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     });
+    return response.data;
+  },
+
+  /**
+   * Stock movement report (opening / in / out / available per product)
+   * GET /commerce/stocks/movement-report
+   */
+  getMovementReport: async (
+    params?: StockMovementReportParams,
+  ): Promise<StockMovementReportResponse> => {
+    const queryParams: Record<string, any> = {};
+    if (params) {
+      if (params.from) queryParams.from = params.from;
+      if (params.to) queryParams.to = params.to;
+      if (params.branchId) queryParams.branchId = params.branchId;
+      if (params.productId) queryParams.productId = params.productId;
+      if (params.categoryId) queryParams.categoryId = params.categoryId;
+      if (params.search && params.search.trim()) queryParams.search = params.search.trim();
+    }
+    const response = await baseClient.get<StockMovementReportResponse>(
+      '/commerce/stocks/movement-report',
+      { params: Object.keys(queryParams).length > 0 ? queryParams : undefined },
+    );
     return response.data;
   },
 

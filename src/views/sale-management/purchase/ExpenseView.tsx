@@ -6,6 +6,19 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { ExpenseSchema, ExpenseFormData } from '../../../validations';
 import { FormError } from '../../../components/common/FormError';
 import {
+  checkRequiredText,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkMoney,
+  checkPercent,
+  collectErrors,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  useSubmitGuard,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+} from '../../../utils/formValidation';
+import {
   Receipt,
   Plus,
   Eye,
@@ -406,6 +419,35 @@ export const ExpenseView: React.FC = () => {
     }
   }, [isFormModalOpen, isCategoryModalOpen, loadFormMasterData, fetchCategories]);
 
+  const { runOnce: runSaveOnce } = useSubmitGuard();
+  const { runOnce: runDeleteOnce } = useSubmitGuard();
+  const { runOnce: runCategoryOnce } = useSubmitGuard();
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  // Invalid receipt file picked: kept silently until the form is submitted, then shown inline.
+  const [receiptFileProblem, setReceiptFileProblem] = useState<string | null>(null);
+  const newCatFe = useFieldErrors();
+  const editCatFe = useFieldErrors();
+  const dateFe = useFieldErrors();
+  const newCategoryError = newCatFe.errors.newName ?? null;
+  const editCategoryError = editCatFe.errors.editName ?? null;
+  const customDateError = dateFe.errors.range ?? null;
+
+  // Category must resolve to a real loaded category record (no silent substitution).
+  const categoryIdError = (values: any): string | null => {
+    const id = values?.categoryId;
+    if (!id) {
+      const byName = values?.category
+        ? categories.find((c) => c.name.toLowerCase() === String(values.category).toLowerCase())
+        : undefined;
+      return byName ? null : 'Please select an expense category before continuing.';
+    }
+    if (!isValidUuid(id)) return 'Please choose the expense category from the list.';
+    if (categories.length > 0 && !categories.some((c) => c.id === id)) {
+      return 'Please choose the expense category from the list.';
+    }
+    return null;
+  };
+
   const {
     register,
     handleSubmit,
@@ -413,9 +455,33 @@ export const ExpenseView: React.FC = () => {
     control,
     watch,
     setValue,
-    formState: { errors },
+    setError,
+    clearErrors,
+    formState: { errors, isSubmitted },
   } = useForm<ExpenseFormData>({
-    resolver: zodResolver(ExpenseSchema),
+    // Shared zod schema + friendly local rules layered on top.
+    resolver: (async (values: any, ctx: any, opts: any) => {
+      const base: any = await (zodResolver(ExpenseSchema) as any)(values, ctx, opts);
+      const extra = collectErrors([
+        ['expenseDate', checkRequiredDate(values.expenseDate, 'expense date')],
+        ['title', checkRequiredText(values.title, 'expense title or description', 2)],
+        ['amount', checkMoney(values.amount, 'expense amount')],
+        ['taxPercent', checkPercent(values.taxPercent, 'tax percentage', { optional: true })],
+        ['paymentMode', checkRequiredText(values.paymentMode, 'payment mode')],
+        ['categoryId', categoryIdError(values)],
+      ]);
+      const errs: any = { ...(base.errors || {}) };
+      for (const k of ['expenseDate', 'title', 'amount', 'taxPercent', 'paymentMode', 'categoryId']) {
+        if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
+        else delete errs[k];
+      }
+      // Category is validated through categoryId; avoid a duplicate "category" message.
+      delete errs.category;
+      if (Object.keys(errs).length === 0) return { values: base.values ?? values, errors: {} };
+      return { values: {}, errors: errs };
+    }) as any,
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       expenseNo: '',
       expenseDate: new Date().toISOString().split('T')[0],
@@ -433,6 +499,14 @@ export const ExpenseView: React.FC = () => {
       status: 'Paid',
     },
   });
+
+  // Every open/close of the expense form starts with no errors.
+  useEffect(() => {
+    clearErrors();
+    setReceiptError(null);
+    setReceiptFileProblem(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormModalOpen]);
 
   const watchAmount = watch('amount');
   const watchTaxPercent = watch('taxPercent');
@@ -466,6 +540,7 @@ export const ExpenseView: React.FC = () => {
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
+    setReceiptError(null);
     loadFormMasterData();
     setEditingExpenseId(null);
     setReceiptImageState('');
@@ -492,6 +567,7 @@ export const ExpenseView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (exp: ExpenseItem) => {
+    setReceiptError(null);
     loadFormMasterData();
     setEditingExpenseId(exp.id);
     setReceiptImageState(exp.receiptImage || '');
@@ -517,6 +593,7 @@ export const ExpenseView: React.FC = () => {
 
   // Duplicate Expense Handler
   const handleDuplicateExpense = (exp: ExpenseItem) => {
+    setReceiptError(null);
     loadFormMasterData();
     setEditingExpenseId(null);
     setReceiptImageState(exp.receiptImage || '');
@@ -626,7 +703,8 @@ export const ExpenseView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteExpense = async () => {
+  const handleConfirmDeleteExpense = () => runDeleteOnce(confirmDeleteExpenseInner);
+  const confirmDeleteExpenseInner = async () => {
     if (!deleteTargetExpense) return;
     setIsDeletingExpense(true);
     setDeleteExpenseError(null);
@@ -637,11 +715,7 @@ export const ExpenseView: React.FC = () => {
       setDeleteTargetExpense(null);
       fetchExpenses(true);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to delete expense';
+      const msg = getApiErrorMessage(err, 'Failed to delete expense');
       setDeleteExpenseError(msg);
       toast.error(msg);
     } finally {
@@ -659,16 +733,18 @@ export const ExpenseView: React.FC = () => {
       const isImageMime = Boolean(file.type && file.type.startsWith('image/'));
 
       if (!isImageMime && !hasValidExtension) {
-        toast.error('Only image formats (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg) are allowed');
+        setReceiptFileProblem('Please attach an image file (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg or .avif).');
         e.target.value = '';
         return;
       }
 
       if (file.size > 5 * 1024 * 1024) {
-        toast.error('Image size must be less than 5MB');
+        setReceiptFileProblem('The receipt image must be smaller than 5 MB.');
         e.target.value = '';
         return;
       }
+      setReceiptError(null);
+      setReceiptFileProblem(null);
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
@@ -681,30 +757,36 @@ export const ExpenseView: React.FC = () => {
   };
 
   // Submit Expense Form (Create or Update)
-  const onSubmitExpense = async (data: ExpenseFormData) => {
-    const amountNum = Number(data.amount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      toast.error('Expense amount must be greater than zero.');
-      return;
-    }
-    const taxPercentNum = Number(data.taxPercent || 0);
-    if (isNaN(taxPercentNum) || taxPercentNum < 0 || taxPercentNum > 100) {
-      toast.error('Tax percentage must be between 0 and 100.');
+  const onSubmitExpense = (data: ExpenseFormData) => {
+    // An invalid receipt file blocks the save (shown inline together with the other errors).
+    if (receiptFileProblem) return;
+    return runSaveOnce(() => submitExpenseInner(data));
+  };
+  const submitExpenseInner = async (data: ExpenseFormData) => {
+    // Re-check rules here so no request is sent if anything is invalid.
+    const recheck = collectErrors([
+      ['expenseDate', checkRequiredDate(data.expenseDate, 'expense date')],
+      ['title', checkRequiredText(data.title, 'expense title or description', 2)],
+      ['amount', checkMoney(data.amount, 'expense amount')],
+      ['taxPercent', checkPercent(data.taxPercent, 'tax percentage', { optional: true })],
+      ['paymentMode', checkRequiredText(data.paymentMode, 'payment mode')],
+      ['categoryId', categoryIdError(data)],
+    ]);
+    const recheckKeys = Object.keys(recheck);
+    if (recheckKeys.length > 0) {
+      recheckKeys.forEach((k) => setError(k as any, { type: 'validate', message: recheck[k] }));
       return;
     }
 
-    // Validate Category
+    // Category: the selected record id, or an exact name match of a loaded category.
     let targetCatId = data.categoryId;
     if (!targetCatId || !isValidUuid(targetCatId)) {
       const match = categories.find((c) => c.name.toLowerCase() === data.category.toLowerCase());
-      if (match) {
-        targetCatId = match.id;
-      } else if (categories.length > 0) {
-        targetCatId = categories[0].id;
-      } else {
-        toast.error('Please create or select an expense category first.');
+      if (!match) {
+        setError('categoryId', { type: 'validate', message: 'Please select an expense category before continuing.' });
         return;
       }
+      targetCatId = match.id;
     }
 
     // Determine supplierId
@@ -749,11 +831,15 @@ export const ExpenseView: React.FC = () => {
           if (returnedUrl && typeof returnedUrl === 'string') {
             finalReceiptImage = returnedUrl;
           } else {
-            finalReceiptImage = rawImage;
+            throw new Error('Receipt upload did not return a file location.');
           }
         } catch (upErr) {
-          console.warn('Failed to upload receipt base64 to S3, using data directly:', upErr);
-          finalReceiptImage = rawImage;
+          // Do not send raw image data as the receipt when the upload failed; keep the form as is.
+          console.warn('Failed to upload receipt:', upErr);
+          setReceiptError('The receipt could not be uploaded. Please try attaching it again or remove it.');
+          toast.error('The receipt could not be uploaded. Your entries have been kept.');
+          setIsSubmittingForm(false);
+          return;
         }
       } else {
         finalReceiptImage = rawImage;
@@ -811,73 +897,118 @@ export const ExpenseView: React.FC = () => {
       setIsFormModalOpen(false);
       fetchExpenses(true);
     } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || 'Failed to save expense';
-      toast.error(msg);
+      const apiFields = extractApiFieldErrors(err);
+      const fieldMap: Record<string, string> = {
+        expenseDate: 'expenseDate', title: 'title', amount: 'amount', taxPercent: 'taxPercent',
+        paymentMode: 'paymentMode', referenceNo: 'referenceNo', notes: 'notes', categoryId: 'categoryId', supplierId: 'payee',
+      };
+      let mapped = false;
+      for (const [k, m] of Object.entries(apiFields)) {
+        if (fieldMap[k]) {
+          setError(fieldMap[k] as any, { type: 'server', message: m });
+          mapped = true;
+        }
+      }
+      if (!mapped) toast.error(getApiErrorMessage(err, 'Failed to save expense. Your entries have been kept; please try again.'));
     } finally {
       setIsSubmittingForm(false);
     }
   };
 
   // Category Manager Actions
-  const handleCreateCategory = async (e: React.FormEvent) => {
+  const duplicateCategoryError = (name: string, ignoreId?: string): string | null =>
+    categories.some((c) => c.id !== ignoreId && c.name.trim().toLowerCase() === name.trim().toLowerCase())
+      ? 'A category with this name already exists.'
+      : null;
+
+  const computeNewCategoryErrors = () =>
+    collectErrors([['newName', checkRequiredText(newCategoryName, 'category name') || duplicateCategoryError(newCategoryName)]]);
+  const computeEditCategoryErrors = () =>
+    collectErrors([['editName', checkRequiredText(editCategoryName, 'category name') || duplicateCategoryError(editCategoryName, editingCategoryId || undefined)]]);
+  useRevalidateAfterSubmit(newCatFe, computeNewCategoryErrors, [newCategoryName, categories]);
+  useRevalidateAfterSubmit(editCatFe, computeEditCategoryErrors, [editCategoryName, editingCategoryId, categories]);
+  useEffect(() => {
+    newCatFe.reset();
+    editCatFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCategoryModalOpen]);
+  useEffect(() => {
+    editCatFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingCategoryId]);
+
+  const handleCreateCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCategoryName.trim()) {
-      toast.error('Category name is required');
-      return;
-    }
+    return runCategoryOnce(async () => {
+      if (!newCatFe.validateAll(computeNewCategoryErrors())) return;
 
-    setIsSavingCategory(true);
-    try {
-      const res = await workExpenseCategoryApi.createExpenseCategory({
-        name: newCategoryName.trim(),
-        description: newCategoryDesc.trim() || undefined,
-        status: 'Active',
-      });
-      toast.success(`Category "${res.data.name}" added successfully.`);
-      setNewCategoryName('');
-      setNewCategoryDesc('');
-      await fetchCategories();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to create category');
-    } finally {
-      setIsSavingCategory(false);
-    }
+      setIsSavingCategory(true);
+      try {
+        const res = await workExpenseCategoryApi.createExpenseCategory({
+          name: newCategoryName.trim(),
+          description: newCategoryDesc.trim() || undefined,
+          status: 'Active',
+        });
+        toast.success(`Category "${res.data.name}" added successfully.`);
+        setNewCategoryName('');
+        setNewCategoryDesc('');
+        await fetchCategories();
+      } catch (err: any) {
+        const m = extractApiFieldErrors(err).name;
+        if (m) newCatFe.merge({ newName: m });
+        else toast.error(getApiErrorMessage(err, 'Failed to create category'));
+      } finally {
+        setIsSavingCategory(false);
+      }
+    });
   };
 
-  const handleUpdateCategory = async (id: string) => {
-    if (!editCategoryName.trim()) {
-      toast.error('Category name cannot be empty');
-      return;
-    }
-    try {
-      await workExpenseCategoryApi.updateExpenseCategory(id, {
-        name: editCategoryName.trim(),
-        description: editCategoryDesc.trim() || undefined,
-      });
-      toast.success('Category updated successfully');
-      setEditingCategoryId(null);
-      await fetchCategories();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to update category');
-    }
-  };
+  const handleUpdateCategory = (id: string) =>
+    runCategoryOnce(async () => {
+      if (!editCatFe.validateAll(computeEditCategoryErrors())) return;
+      try {
+        await workExpenseCategoryApi.updateExpenseCategory(id, {
+          name: editCategoryName.trim(),
+          description: editCategoryDesc.trim() || undefined,
+        });
+        toast.success('Category updated successfully');
+        setEditingCategoryId(null);
+        await fetchCategories();
+      } catch (err: any) {
+        const m = extractApiFieldErrors(err).name;
+        if (m) editCatFe.merge({ editName: m });
+        else toast.error(getApiErrorMessage(err, 'Failed to update category'));
+      }
+    });
 
-  const handleDeleteCategory = async (cat: ApiExpenseCategory) => {
-    try {
-      await workExpenseCategoryApi.deleteExpenseCategory(cat.id);
-      toast.success(`Category "${cat.name}" removed successfully.`);
-      await fetchCategories();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to delete category');
-    }
-  };
+  const handleDeleteCategory = (cat: ApiExpenseCategory) =>
+    runCategoryOnce(async () => {
+      try {
+        await workExpenseCategoryApi.deleteExpenseCategory(cat.id);
+        toast.success(`Category "${cat.name}" removed successfully.`);
+        await fetchCategories();
+      } catch (err: any) {
+        toast.error(getApiErrorMessage(err, 'Failed to delete category'));
+      }
+    });
 
   // Custom Date range application
+  const computeDateRangeErrors = () =>
+    collectErrors([
+      [
+        'range',
+        checkRequiredDate(customStartDate, 'start date') ||
+          checkRequiredDate(customEndDate, 'end date') ||
+          checkDateNotBefore(customEndDate, customStartDate, 'end date', 'start date'),
+      ],
+    ]);
+  useRevalidateAfterSubmit(dateFe, computeDateRangeErrors, [customStartDate, customEndDate]);
+  useEffect(() => {
+    dateFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustomDateModalOpen]);
   const handleApplyCustomDates = () => {
-    if (!customStartDate || !customEndDate) {
-      toast.error('Please select both start and end dates');
-      return;
-    }
+    if (!dateFe.validateAll(computeDateRangeErrors())) return;
     setPendingPeriod(`Custom (${customStartDate} to ${customEndDate})`);
     setAppliedPeriod(`Custom (${customStartDate} to ${customEndDate})`);
     setIsCustomDateModalOpen(false);
@@ -1239,7 +1370,7 @@ export const ExpenseView: React.FC = () => {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-xl sm:text-2xl font-bold text-slate-900">
-              {categories.length > 0 ? categories.length : new Set(expenses.map((e) => e.category).filter(Boolean)).size || 0}
+              {apiSummary?.categoryCount ?? (categories.length > 0 ? categories.length : new Set(expenses.map((e) => e.category).filter(Boolean)).size || 0)}
             </span>
           </div>
           <span className="text-[11px] text-slate-400 mt-1 block">
@@ -1663,7 +1794,7 @@ export const ExpenseView: React.FC = () => {
                   />
                 )}
               />
-              <FormError message={errors.category?.message || errors.categoryId?.message} />
+              <FormError message={errors.categoryId?.message || errors.category?.message} />
             </div>
 
             <div>
@@ -1962,6 +2093,7 @@ export const ExpenseView: React.FC = () => {
                   />
                 </label>
               )}
+              <FormError message={receiptError || (isSubmitted ? receiptFileProblem : null) || undefined} />
             </div>
 
             <div className="md:col-span-2">
@@ -2303,9 +2435,12 @@ export const ExpenseView: React.FC = () => {
                   type="text"
                   placeholder="e.g. Courier & Logistics"
                   value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  onChange={(e) => {
+                    setNewCategoryName(e.target.value);
+                  }}
                   className={FORM_INPUT_CLS}
                 />
+                <FormError message={newCategoryError || undefined} />
               </div>
               <div>
                 <FormLabel>Description</FormLabel>
@@ -2371,9 +2506,12 @@ export const ExpenseView: React.FC = () => {
                         <input
                           type="text"
                           value={editCategoryName}
-                          onChange={(e) => setEditCategoryName(e.target.value)}
+                          onChange={(e) => {
+                            setEditCategoryName(e.target.value);
+                          }}
                           className="h-8 px-2.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-900 bg-white"
                         />
+                        {editCategoryError && <FormError message={editCategoryError} />}
                         <input
                           type="text"
                           value={editCategoryDesc}
@@ -2483,7 +2621,9 @@ export const ExpenseView: React.FC = () => {
               <input
                 type="date"
                 value={customStartDate}
-                onChange={(e) => setCustomStartDate(e.target.value)}
+                onChange={(e) => {
+                  setCustomStartDate(e.target.value);
+                }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-[#33077C]"
               />
             </div>
@@ -2492,9 +2632,12 @@ export const ExpenseView: React.FC = () => {
               <input
                 type="date"
                 value={customEndDate}
-                onChange={(e) => setCustomEndDate(e.target.value)}
+                onChange={(e) => {
+                  setCustomEndDate(e.target.value);
+                }}
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-[#33077C]"
               />
+              <FormError message={customDateError || undefined} />
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">

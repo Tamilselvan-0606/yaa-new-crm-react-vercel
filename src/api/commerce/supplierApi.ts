@@ -20,7 +20,7 @@ export * from './supplierTypes';
 export const mapApiSupplierToSupplier = (apiSup: ApiSupplier): Supplier => {
   return {
     id: apiSup.id,
-    supplierCode: apiSup.supplierCode || 'SUP-0001',
+    supplierCode: apiSup.supplierCode || '',
     name: apiSup.name || 'Unnamed Supplier',
     contactPerson: apiSup.contactPerson || apiSup.name || '',
     phone: apiSup.phone || '',

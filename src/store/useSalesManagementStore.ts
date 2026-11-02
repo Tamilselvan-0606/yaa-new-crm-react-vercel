@@ -1202,7 +1202,7 @@ export const useSalesManagementStore = () => {
         id: productId,
         productId,
         productName: batchMeta?.productName || 'Product',
-        sku: batchMeta?.sku || `PRD-${Math.floor(1000 + Math.random() * 9000)}`,
+        sku: batchMeta?.sku || '',
         category: batchMeta?.category || 'General',
         subcategory: batchMeta?.subcategory || 'General',
         unit: batchMeta?.unit || 'KG',
@@ -1793,7 +1793,7 @@ export const useSalesManagementStore = () => {
 
     const currentSales = getStorage<SaleTransaction[]>(KEYS.SALES, INITIAL_SALES);
     const nextInvoiceNum = currentSales.length + 101;
-    const newInvoiceNo = `INV-${new Date().getFullYear()}-${String(nextInvoiceNum).padStart(4, '0')}`;
+    const newInvoiceNo = ''; // the server assigns the invoice number
 
     const newSale: SaleTransaction = {
       id: `sale_${Date.now()}`,
@@ -2377,7 +2377,7 @@ export const useSalesManagementStore = () => {
     } = params;
 
     const customer = customers.find((c) => c.id === customerId);
-    const newReceiptNo = `REC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+    const newReceiptNo = ''; // the server assigns the receipt number
 
     // 1. Create Payment-In
     const newPaymentIn: SalePaymentIn = {
@@ -2419,7 +2419,7 @@ export const useSalesManagementStore = () => {
           newBalance <= 0 ? 'Paid' : newPaid > 0 ? 'Partial' : 'Unpaid';
 
         const paymentRecord: SalePaymentRecord = {
-          id: `PAY-${Date.now().toString().slice(-6)}`,
+          id: `local_pay_${Date.now()}`,
           invoiceNo: s.invoiceNo,
           paymentDate: paymentDate || new Date().toISOString().split('T')[0],
           method: paymentMethod,

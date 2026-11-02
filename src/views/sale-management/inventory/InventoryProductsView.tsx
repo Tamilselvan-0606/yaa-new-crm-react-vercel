@@ -8,6 +8,7 @@ import React, {
   useMemo,
   useRef,
   useEffect,
+  useLayoutEffect,
   useCallback,
 } from "react";
 import {
@@ -73,6 +74,7 @@ import {
   BulkProductItemInfoRow,
   BulkUpdateProductsPayload,
 } from "../../../api";
+import type { ProductListSummary } from "../../../api/commerce/productTypes";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -83,6 +85,19 @@ import {
 } from "../utils/formUtils";
 import { AddCategoryModal } from "./AddCategoryModal";
 import { AddSubcategoryModal } from "./AddSubcategoryModal";
+import { FormError } from "../../../components/common/FormError";
+import {
+  useSubmitGuard,
+  collectErrors,
+  checkRequiredSelection,
+  checkMoney,
+  checkNotGreaterThan,
+  checkPercent,
+  checkNumber,
+  checkDateNotBefore,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 
 // Standard Industry Master Units (empty - units strictly loaded from live API)
 export const DEFAULT_COMMERCE_UNITS: Array<{
@@ -824,8 +839,15 @@ export const InventoryProductsView: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const saveGuard = useSubmitGuard();
+  const toggleGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+  const bulkStatusGuard = useSubmitGuard();
+  const bulkUpdateGuard = useSubmitGuard();
+  const unitGuard = useSubmitGuard();
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<ProductListSummary | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
 
   // Request Deduplication Refs
@@ -875,6 +897,7 @@ export const InventoryProductsView: React.FC = () => {
   const [bulkRowErrors, setBulkRowErrors] = useState<
     Record<string, { productCode?: string; field?: string; message: string }>
   >({});
+  const [bulkSubmitAttempted, setBulkSubmitAttempted] = useState(false);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
@@ -961,6 +984,7 @@ export const InventoryProductsView: React.FC = () => {
           });
           setProducts(mapped);
           setIsApiConnected(true);
+          if (prodResult.summary) setApiSummary(prodResult.summary);
           if (prodResult.pagination) {
             setTotalApiRecords(prodResult.pagination.totalRecords);
             setTotalApiPages(prodResult.pagination.totalPages);
@@ -1116,10 +1140,15 @@ export const InventoryProductsView: React.FC = () => {
   };
 
   // Toggle Product Status (PATCH /commerce/products/:id)
-  const handleToggleStatus = async (item: ProductItem) => {
+  const handleToggleStatus = (item: ProductItem) => toggleGuard.runOnce(async () => {
     const nextStatus = item.status === "Active" ? "Inactive" : "Active";
     setActiveDropdownId(null);
     setDropdownPos(null);
+
+    if (checkRequiredSelection(item?.id, "product")) {
+      toast.error("This product could not be identified. Please refresh and try again.");
+      return;
+    }
 
     try {
       const res = await productApi.patchProduct(item.id, {
@@ -1134,23 +1163,22 @@ export const InventoryProductsView: React.FC = () => {
         toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
         return;
       }
+      toast.error("The product status could not be updated. Please try again.");
     } catch (apiErr: any) {
-      console.warn(
-        "Remote product status patch failed, updating locally:",
-        apiErr,
-      );
+      // Do not pretend the change succeeded when the server rejected it.
+      console.warn("Remote product status patch failed:", apiErr);
+      toast.error(getApiErrorMessage(apiErr, "The product status could not be updated. Please try again."));
     }
-
-    setProducts((prev) =>
-      prev.map((p) => (p.id === item.id ? { ...p, status: nextStatus } : p)),
-    );
-    toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
-  };
+  });
 
   // Confirm and Execute Delete (DELETE /commerce/products/:id)
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = () => deleteGuard.runOnce(async () => {
     if (!deleteConfirmItem) return;
     const { id, productName } = deleteConfirmItem;
+    if (checkRequiredSelection(id, "product")) {
+      setDeleteProductError("This product could not be identified. Please refresh and try again.");
+      return;
+    }
     setIsDeleting(true);
     setDeleteProductError(null);
 
@@ -1172,16 +1200,13 @@ export const InventoryProductsView: React.FC = () => {
       }
     } catch (apiErr: any) {
       console.warn("Remote product delete failed:", apiErr);
-      const errorMsg =
-        apiErr?.response?.data?.message ||
-        apiErr?.message ||
-        "Failed to delete product. Please try again.";
+      const errorMsg = getApiErrorMessage(apiErr, "Failed to delete product. Please try again.");
       setDeleteProductError(errorMsg);
       toast.error(errorMsg);
     } finally {
       setIsDeleting(false);
     }
-  };
+  });
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -1270,9 +1295,22 @@ export const InventoryProductsView: React.FC = () => {
   const [newUnitFullName, setNewUnitFullName] = useState("");
   const [newUnitShortName, setNewUnitShortName] = useState("");
   const [showAddUnitForm, setShowAddUnitForm] = useState(true);
+  // Inline errors for the unit dialog appear only after its action button was clicked
+  const [unitModalAttempted, setUnitModalAttempted] = useState(false);
+  const [unitDoneAttempted, setUnitDoneAttempted] = useState(false);
+  // Image file rejected on selection; shown inline once Save has been attempted
+  const [imageFileError, setImageFileError] = useState<string | null>(null);
 
   // Handler to add a new unit via Commerce unitApi
   const handleAddNewCustomUnit = async (
+    overrideFullName?: string,
+    overrideShortName?: string,
+  ): Promise<ApiUnit | null> =>
+    (await unitGuard.runOnce(() =>
+      addNewCustomUnitImpl(overrideFullName, overrideShortName),
+    )) ?? null;
+
+  const addNewCustomUnitImpl = async (
     overrideFullName?: string,
     overrideShortName?: string,
   ): Promise<ApiUnit | null> => {
@@ -1283,7 +1321,7 @@ export const InventoryProductsView: React.FC = () => {
       overrideShortName !== undefined ? overrideShortName : newUnitShortName
     ).trim();
     if (!fullName) {
-      toast.error("Please enter a unit name (e.g. Dozen, Pack, Drum)");
+      setUnitModalAttempted(true); // inline error is shown under the unit name field
       return null;
     }
     const short = shortName
@@ -1384,7 +1422,7 @@ export const InventoryProductsView: React.FC = () => {
         }
       }
 
-      toast.error(errMsg);
+      toast.error(getApiErrorMessage(err, "Failed to create unit."));
       return null;
     } finally {
       setIsCreatingUnit(false);
@@ -1393,6 +1431,7 @@ export const InventoryProductsView: React.FC = () => {
 
   // Handler to delete unit via Commerce unitApi
   const handleDeleteCustomUnit = async (unitToRemove: ApiUnit) => {
+    if (deletingUnitId || checkRequiredSelection(unitToRemove?.id, "unit")) return;
     const formatted = formatUnitOption(unitToRemove);
     setDeletingUnitId(unitToRemove.id);
     try {
@@ -1411,11 +1450,7 @@ export const InventoryProductsView: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Failed to delete unit via API:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.message ||
-        "Failed to delete unit";
-      toast.error(errMsg);
+      toast.error(getApiErrorMessage(err, "Failed to delete unit."));
     } finally {
       setDeletingUnitId(null);
     }
@@ -1438,9 +1473,12 @@ export const InventoryProductsView: React.FC = () => {
     setValue,
     watch,
     getValues,
-    formState: { errors },
+    setError,
+    clearErrors,
+    formState: { errors, isSubmitted },
   } = useForm<ProductFormValues>({
-    mode: "onChange",
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: defaultProductFormValues,
   });
 
@@ -1461,7 +1499,7 @@ export const InventoryProductsView: React.FC = () => {
     const updated = typeof updater === "function" ? updater(current) : updater;
     Object.entries(updated).forEach(([k, v]) => {
       setValue(k as keyof ProductFormValues, v as any, {
-        shouldValidate: true,
+        shouldValidate: isSubmitted,
       });
     });
   };
@@ -1548,7 +1586,7 @@ export const InventoryProductsView: React.FC = () => {
       ) {
         const fallbackPrice = currentSalePrice || currentPurchasePrice || "";
         if (fallbackPrice) {
-          setValue("atPrice", fallbackPrice as any, { shouldValidate: true });
+          setValue("atPrice", fallbackPrice as any, { shouldValidate: isSubmitted });
         }
       }
     }
@@ -1704,8 +1742,8 @@ export const InventoryProductsView: React.FC = () => {
     const isImageMime = Boolean(file.type && file.type.startsWith("image/"));
 
     if (!isImageMime && !hasValidExtension) {
-      toast.error(
-        "Only image formats (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg) are allowed to be chosen",
+      setImageFileError(
+        "Only image formats (.png, .jpg, .jpeg, .webp, .gif, .bmp, .svg) are allowed.",
       );
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -1713,26 +1751,27 @@ export const InventoryProductsView: React.FC = () => {
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      toast.error("Image size must be less than 10MB");
+      setImageFileError("Image size must be less than 10MB.");
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
       return;
     }
+    setImageFileError(null);
 
     try {
       setIsUploadingImage(true);
       const base64String = await compressImageFile(file);
       setItemImageState(base64String);
       setValue("itemImage", base64String, {
-        shouldValidate: true,
+        shouldValidate: isSubmitted,
         shouldDirty: true,
       });
       setFormData((prev) => ({ ...prev, itemImage: base64String }));
       toast.success("Image selected successfully");
     } catch (err: any) {
       console.error("Image upload processing failed:", err);
-      toast.error(
+      setImageFileError(
         err?.message ||
           "Failed to process image. Please choose a valid image file.",
       );
@@ -1766,12 +1805,7 @@ export const InventoryProductsView: React.FC = () => {
       }
     } catch (err: any) {
       console.warn("Subcategory creation in master API failed:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to create subcategory";
-      toast.error(errMsg);
+      toast.error(getApiErrorMessage(err, "Failed to create subcategory."));
     }
   };
 
@@ -1799,68 +1833,155 @@ export const InventoryProductsView: React.FC = () => {
     return Array.from(new Set(matching));
   }, [masterSubcategories, formData.category]);
 
-  const handleSaveItem = async (
+  // Field-level validation for the product form. Returns { field: message } (empty when valid).
+  const validateProductForm = (data: ProductFormValues): Record<string, string> => {
+    const salePriceNum = Number(data.salePrice) || 0;
+    const blank = (v: unknown) => v === "" || v === undefined || v === null;
+    const discountErr = (() => {
+      if (blank(data.discountValue)) return null;
+      if (data.discountType === "Percentage") return checkPercent(data.discountValue, "discount percentage");
+      const base = checkMoney(data.discountValue, "discount amount", { allowZero: true });
+      if (base) return base;
+      return Number(data.discountValue) > salePriceNum
+        ? `The discount (₹${Number(data.discountValue)}) cannot be more than the sale price (₹${salePriceNum}).`
+        : null;
+    })();
+    const checks: Array<[string, string | null]> = [
+      [
+        "productName",
+        !(data.productName || "").trim()
+          ? "Please enter the item name."
+          : data.productName.trim().length < 2
+            ? "The item name must be at least 2 characters."
+            : null,
+      ],
+      ["salePrice", checkMoney(data.salePrice, "sale price", { allowZero: true, optional: true })],
+      ["discountValue", discountErr],
+      [
+        "purchasePrice",
+        checkMoney(data.purchasePrice, "purchase price", { allowZero: true, optional: true }) ||
+          checkNotGreaterThan(data.purchasePrice, data.salePrice, "purchase price", "sale price"),
+      ],
+      ["openingStock", checkNumber(data.openingStock, "opening stock", { allowZero: true, optional: true })],
+      ["atPrice", checkMoney(data.atPrice, "stock valuation price", { allowZero: true, optional: true })],
+      ["minStockAlert", checkNumber(data.minStockAlert, "minimum stock level", { allowZero: true, optional: true, maxDecimals: 0 })],
+      ["expDate", checkDateNotBefore(data.expDate, data.mfgDate, "expiry date", "manufacturing date")],
+      ["itemImage", imageFileError],
+    ];
+    if (data.hasWholesale) {
+      checks.push(
+        [
+          "wholesalePrice",
+          checkMoney(data.wholesalePrice, "wholesale price", { allowZero: true, optional: true }) ||
+            checkNotGreaterThan(data.wholesalePrice, data.salePrice, "wholesale price", "sale price"),
+        ],
+        ["minWholesaleQty", checkNumber(data.minWholesaleQty, "minimum wholesale quantity", { allowZero: true, optional: true, maxDecimals: 0 })],
+      );
+    }
+    return collectErrors(checks);
+  };
+
+  const MANAGED_KEYS = [
+    "productName", "salePrice", "discountValue", "purchasePrice", "openingStock", "atPrice",
+    "minStockAlert", "expDate", "wholesalePrice", "minWholesaleQty", "itemImage",
+  ] as const;
+
+  // After the first Save attempt, keep the business-rule errors in sync with the values:
+  // a field's error disappears only once the field is valid (also covers cross-field rules such as
+  // purchase price vs sale price). Before any submit attempt this does nothing.
+  useLayoutEffect(() => {
+    if (!isModalOpen || !isSubmitted) return;
+    const live = validateProductForm(getValues());
+    MANAGED_KEYS.forEach((key) => {
+      const current = errors[key as keyof ProductFormValues];
+      const msg = live[key];
+      if (msg) {
+        // Do not overwrite messages produced by the field's own registered rule
+        if (!current || current.message !== msg) {
+          if (!current || current.type === "manual" || current.type === "server") {
+            setError(key as keyof ProductFormValues, { type: "manual", message: msg });
+          }
+        }
+      } else if (current && (current.type === "manual" || current.type === "server")) {
+        clearErrors(key as keyof ProductFormValues);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isModalOpen, isSubmitted, formData.productName, formData.salePrice, formData.discountValue,
+    formData.discountType, formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
+    formData.purchasePrice, formData.openingStock, formData.atPrice, formData.minStockAlert,
+    formData.mfgDate, formData.expDate, imageFileError,
+  ]);
+
+  // Start clean whenever the item modal closes (opening already resets the form)
+  useEffect(() => {
+    if (!isModalOpen) {
+      clearErrors();
+      setImageFileError(null);
+    }
+  }, [isModalOpen, clearErrors]);
+
+  // Unit dialog starts clean every time it opens or closes
+  useEffect(() => {
+    setUnitModalAttempted(false);
+    setUnitDoneAttempted(false);
+  }, [isUnitModalOpen]);
+
+  // Switch to the tab holding the first error so it is visible
+  const revealProductErrors = (errs: Record<string, string>) => {
+    const keys = Object.keys(errs);
+    if (keys.length === 0) return;
+    const stockKeys = ["minStockAlert", "batchNo", "mfgDate", "expDate", "location", "openingStock", "atPrice"];
+    const firstVisible = keys.find((k) => k !== "openingStock" && k !== "atPrice") ?? keys[0];
+    if (stockKeys.includes(firstVisible)) setActiveTab("Stock");
+    else if (firstVisible !== "productName" && firstVisible !== "itemImage") setActiveTab("Pricing");
+  };
+
+  // Registered-rule errors present: still show every business-rule error in the same submit
+  const handleInvalidItem = (rhfErrors: Record<string, any>) => {
+    const extra = validateProductForm(getValues());
+    Object.keys(extra).forEach((k) => {
+      if (!rhfErrors[k]) setError(k as keyof ProductFormValues, { type: "manual", message: extra[k] });
+    });
+    revealProductErrors({ ...extra, ...Object.fromEntries(Object.keys(rhfErrors).map((k) => [k, ""])) });
+  };
+
+  const handleSaveItem = (
     keepOpenAfterSave = false,
     formValuesParam?: ProductFormValues,
-  ) => {
+  ) => saveGuard.runOnce(async () => {
     const data = formValuesParam || getValues();
-    if (!data.productName.trim()) {
-      toast.error("Item Name is required");
+    const validationErrors = validateProductForm(data);
+    if (Object.keys(validationErrors).length > 0) {
+      Object.keys(validationErrors).forEach((k) =>
+        setError(k as keyof ProductFormValues, { type: "manual", message: validationErrors[k] }),
+      );
+      revealProductErrors(validationErrors);
       return;
     }
+    if (editingProduct && checkRequiredSelection(editingProduct.id, "product")) {
+      setError("root", { type: "manual", message: "This product could not be identified. Please close and reopen it." });
+      return;
+    }
+    let saveSucceeded = false;
+    // Map backend field errors onto the form; fall back to a toast for anything else.
+    const reportSaveError = (apiErr: any, fallback: string) => {
+      const apiFields = extractApiFieldErrors(apiErr);
+      let mappedAny = false;
+      for (const [k, v] of Object.entries(apiFields)) {
+        const field = k === "name" ? "productName" : k;
+        if (field in defaultProductFormValues) {
+          setError(field as keyof ProductFormValues, { type: "server", message: v });
+          mappedAny = true;
+        }
+      }
+      // Backend field errors are shown inline; anything else is an API error toast.
+      if (!mappedAny) toast.error(getApiErrorMessage(apiErr, fallback));
+    };
 
     // Existing products keep their code; a new product gets one from the server.
-    const finalCode = data.productCode.trim();
-    const salePriceNum = Number(data.salePrice) || 0;
-    const purchasePriceNum = Number(data.purchasePrice) || 0;
-    const discountValNum = Number(data.discountValue) || 0;
-    const wholesalePriceNum = Number(data.wholesalePrice) || 0;
-    const minWholesaleQtyNum = Number(data.minWholesaleQty) || 0;
-    const openingStockNum = Number(data.openingStock) || 0;
-    const atPriceNum = Number(data.atPrice) || purchasePriceNum;
-    const minStockAlertNum = Number(data.minStockAlert) || 0;
-    if (salePriceNum < 0) {
-      toast.error("Sale price cannot be negative.");
-      return;
-    }
-    if (purchasePriceNum < 0) {
-      toast.error("Purchase price cannot be negative.");
-      return;
-    }
-    if (discountValNum < 0) {
-      toast.error("Discount value cannot be negative.");
-      return;
-    }
-    if (wholesalePriceNum < 0) {
-      toast.error("Wholesale price cannot be negative.");
-      return;
-    }
-    if (minWholesaleQtyNum < 0) {
-      toast.error("Minimum wholesale quantity cannot be negative.");
-      return;
-    }
-    if (openingStockNum < 0) {
-      toast.error("Opening stock cannot be negative.");
-      return;
-    }
-    if (atPriceNum < 0) {
-      toast.error("Stock valuation price cannot be negative.");
-      return;
-    }
-    if (minStockAlertNum < 0) {
-      toast.error("Minimum stock alert level cannot be negative.");
-      return;
-    }
-    if (data.discountType === "Amount" && discountValNum > salePriceNum) {
-      toast.error(
-        `Discount amount (₹${discountValNum}) exceeds the sale price (₹${salePriceNum})`,
-      );
-      return;
-    }
-    if (data.discountType === "Percentage" && discountValNum > 100) {
-      toast.error("Discount percentage cannot exceed 100%");
-      return;
-    }
+    const finalCode = (data.productCode || "").trim();
     const finalStatus = (editingProduct ? editingProduct.status : "Active") as
       | "Active"
       | "Inactive";
@@ -2076,17 +2197,15 @@ export const InventoryProductsView: React.FC = () => {
             toast.success(
               `Item "${updated.productName}" updated successfully!`,
             );
+            saveSucceeded = true;
             if (!keepOpenAfterSave) setIsModalOpen(false);
             return;
           }
+          toast.error("The item could not be updated. Please try again.");
+          return;
         } catch (apiErr: any) {
           console.error("Remote product update failed:", apiErr);
-          const errMsg =
-            apiErr?.response?.data?.error?.message ||
-            apiErr?.response?.data?.message ||
-            apiErr?.message ||
-            "Failed to update product";
-          toast.error(errMsg);
+          reportSaveError(apiErr, "Failed to update product");
           return;
         }
       } else {
@@ -2133,23 +2252,23 @@ export const InventoryProductsView: React.FC = () => {
             ]);
             setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
             toast.success(`Item "${created.productName}" added successfully!`);
+            saveSucceeded = true;
             if (!keepOpenAfterSave) setIsModalOpen(false);
             return;
           }
+          toast.error("The item could not be added. Please try again.");
+          return;
         } catch (apiErr: any) {
           console.error("Remote product create failed:", apiErr);
-          const errMsg =
-            apiErr?.response?.data?.error?.message ||
-            apiErr?.response?.data?.message ||
-            apiErr?.message ||
-            "Failed to create product";
-          toast.error(errMsg);
+          reportSaveError(apiErr, "Failed to create product");
           return;
         }
       }
     } finally {
       setIsSubmitting(false);
-      if (keepOpenAfterSave) {
+      if (!saveSucceeded) {
+        // Keep the modal open and every entered value so the user can correct and retry.
+      } else if (keepOpenAfterSave) {
         setItemImageState("");
         setEditingProduct(null);
         reset({
@@ -2170,7 +2289,7 @@ export const InventoryProductsView: React.FC = () => {
         setIsModalOpen(false);
       }
     }
-  };
+  });
 
   const handleDeleteProduct = (id: string) => {
     setActiveDropdownId(null);
@@ -2180,104 +2299,53 @@ export const InventoryProductsView: React.FC = () => {
     if (prod) {
       setDeleteConfirmItem(prod);
     } else {
-      setProducts((prev) => prev.filter((p) => p.id !== id));
-      toast.success("Item deleted.");
+      // Never claim a delete happened when nothing was sent to the server.
+      toast.error("This item could not be found. Please refresh the list and try again.");
     }
   };
 
   // =========================================================================
   // BULK ACTIONS HANDLERS
   // =========================================================================
-  const handleBulkInactive = async () => {
-    const targetIds =
-      selectedIds.length > 0 ? selectedIds : products.map((p) => p.id);
-    if (targetIds.length === 0) {
-      toast.warning("No products available or selected.");
-      return;
-    }
-
-    setIsBulkMenuOpen(false);
-    setIsBulkStatusLoading(true);
-
-    try {
-      const res = await productApi.bulkUpdateProductStatus({
-        productIds: targetIds,
-        status: "Inactive",
-      });
-      if (res?.success) {
-        toast.success(
-          res.message || `${targetIds.length} item(s) marked as Inactive.`,
-        );
-        setSelectedIds([]);
-        await loadProducts(true);
+  const runBulkStatus = (status: "Active" | "Inactive") =>
+    bulkStatusGuard.runOnce(async () => {
+      const targetIds = (
+        selectedIds.length > 0 ? selectedIds : products.map((p) => p.id)
+      ).filter((id) => !checkRequiredSelection(id, "product"));
+      if (targetIds.length === 0) {
+        toast.warning("Please select at least one item first.");
         return;
       }
-    } catch (err: any) {
-      console.warn(
-        "Bulk status Inactive API failed, falling back locally:",
-        err,
-      );
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to mark items as Inactive";
-      toast.error(errMsg);
-    } finally {
-      setIsBulkStatusLoading(false);
-    }
 
-    // Local state fallback if offline / failed
-    setProducts((prev) =>
-      prev.map((p) =>
-        targetIds.includes(p.id) ? { ...p, status: "Inactive" } : p,
-      ),
-    );
-  };
+      setIsBulkMenuOpen(false);
+      setIsBulkStatusLoading(true);
 
-  const handleBulkActive = async () => {
-    const targetIds =
-      selectedIds.length > 0 ? selectedIds : products.map((p) => p.id);
-    if (targetIds.length === 0) {
-      toast.warning("No products available or selected.");
-      return;
-    }
-
-    setIsBulkMenuOpen(false);
-    setIsBulkStatusLoading(true);
-
-    try {
-      const res = await productApi.bulkUpdateProductStatus({
-        productIds: targetIds,
-        status: "Active",
-      });
-      if (res?.success) {
-        toast.success(
-          res.message || `${targetIds.length} item(s) marked as Active.`,
-        );
-        setSelectedIds([]);
-        await loadProducts(true);
-        return;
+      try {
+        const res = await productApi.bulkUpdateProductStatus({
+          productIds: targetIds,
+          status,
+        });
+        if (res?.success) {
+          toast.success(
+            res.message || `${targetIds.length} item(s) marked as ${status}.`,
+          );
+          setSelectedIds([]);
+          await loadProducts(true);
+          return;
+        }
+        toast.error(`The items could not be marked as ${status}. Please try again.`);
+      } catch (err: any) {
+        // No local fallback: do not show a status the server did not accept.
+        console.warn(`Bulk status ${status} API failed:`, err);
+        toast.error(getApiErrorMessage(err, `Failed to mark items as ${status}.`));
+      } finally {
+        setIsBulkStatusLoading(false);
       }
-    } catch (err: any) {
-      console.warn("Bulk status Active API failed, falling back locally:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to mark items as Active";
-      toast.error(errMsg);
-    } finally {
-      setIsBulkStatusLoading(false);
-    }
+    });
 
-    // Local state fallback if offline / failed
-    setProducts((prev) =>
-      prev.map((p) =>
-        targetIds.includes(p.id) ? { ...p, status: "Active" } : p,
-      ),
-    );
-  };
+  const handleBulkInactive = () => runBulkStatus("Inactive");
+
+  const handleBulkActive = () => runBulkStatus("Active");
 
   const handleBulkAssignCode = () => {
     const targetIds =
@@ -2321,6 +2389,7 @@ export const InventoryProductsView: React.FC = () => {
     setBulkSearch("");
     setBulkTab("Pricing");
     setBulkRowErrors({});
+    setBulkSubmitAttempted(false);
     setIsBulkUpdateModalOpen(true);
   };
 
@@ -2334,27 +2403,8 @@ export const InventoryProductsView: React.FC = () => {
     setBulkItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-        const updated = { ...item, [field]: value };
-        if (bulkRowErrors[id]) {
-          const discVal =
-            Number(field === "discountValue" ? value : updated.discountValue) ||
-            0;
-          const salePrc =
-            Number(field === "salePrice" ? value : updated.salePrice) || 0;
-          const discType =
-            field === "discountType" ? value : updated.discountType;
-          let isValid = true;
-          if (discType === "Amount" && discVal > salePrc) isValid = false;
-          if (discType === "Percentage" && discVal > 100) isValid = false;
-          if (isValid) {
-            setBulkRowErrors((errs) => {
-              const next = { ...errs };
-              delete next[id];
-              return next;
-            });
-          }
-        }
-        return updated;
+        // Errors are re-validated live (after the first Update click) by the bulkItems effect.
+        return { ...item, [field]: value };
       }),
     );
   };
@@ -2435,7 +2485,7 @@ export const InventoryProductsView: React.FC = () => {
   }, [bulkItems, products]);
 
   // Save Bulk Updates (PUT /commerce/products/bulk)
-  const handleSaveBulkUpdate = async () => {
+  const computeBulkChanges = (bulkItems: ProductItem[]) => {
     const commonRows: BulkProductCommonRow[] = [];
     const pricingRows: BulkProductPricingRow[] = [];
     const stockRows: BulkProductStockRow[] = [];
@@ -2534,6 +2584,95 @@ export const InventoryProductsView: React.FC = () => {
       }
     });
 
+    return { commonRows, pricingRows, stockRows, itemInformationRows };
+  };
+
+  // Client-side validation of every changed row. Pure: shows nothing by itself.
+  // Uses the raw edited values so an unreadable entry is reported instead of silently becoming 0.
+  const computeBulkErrors = (
+    bulkItems: ProductItem[],
+    changes: ReturnType<typeof computeBulkChanges>,
+  ) => {
+    const { commonRows, pricingRows, stockRows, itemInformationRows } = changes;
+    const validationErrors: Record<
+      string,
+      { productCode: string; field: string; message: string }
+    > = {};
+    const addRowError = (id: string, field: string, message: string | null) => {
+      if (!message || validationErrors[id]) return; // keep the first problem per row
+      const it = bulkItems.find((b) => b.id === id);
+      validationErrors[id] = {
+        productCode: it?.productCode || it?.productName || id,
+        field,
+        message,
+      };
+    };
+    const changedIds = new Set<string>([
+      ...commonRows.map((r) => r.id),
+      ...pricingRows.map((r) => r.id),
+      ...stockRows.map((r) => r.id),
+      ...itemInformationRows.map((r) => r.id),
+    ]);
+    const rawBlank = (v: unknown) => v === "" || v === undefined || v === null;
+    changedIds.forEach((id) => {
+      const it = bulkItems.find((b) => b.id === id);
+      if (!it) return;
+      if (checkRequiredSelection(id, "product")) {
+        addRowError(id, "productName", "This item could not be identified. Please reopen the bulk update screen.");
+        return;
+      }
+      if (!(it.productName || "").trim()) {
+        addRowError(id, "productName", "Please enter the item name.");
+      }
+    });
+    pricingRows.forEach((row) => {
+      const it = bulkItems.find((b) => b.id === row.id);
+      if (!it) return;
+      addRowError(row.id, "purchasePrice", checkMoney(it.purchasePrice, "purchase price", { allowZero: true, optional: true }));
+      addRowError(row.id, "salePrice", checkMoney(it.salePrice, "sale price", { allowZero: true, optional: true }));
+      if (!rawBlank(it.discountValue)) {
+        if ((it.discountType || "Percentage") === "Percentage") {
+          addRowError(row.id, "discountValue", checkPercent(it.discountValue, "discount percentage"));
+        } else {
+          addRowError(row.id, "discountValue", checkMoney(it.discountValue, "discount amount", { allowZero: true }));
+          if (Number(it.discountValue) > (Number(it.salePrice) || 0)) {
+            addRowError(
+              row.id,
+              "discountValue",
+              `The discount amount (${Number(it.discountValue)}) cannot be more than the sale price (${Number(it.salePrice) || 0}).`,
+            );
+          }
+        }
+      }
+    });
+    stockRows.forEach((row) => {
+      const it = bulkItems.find((b) => b.id === row.id);
+      if (!it) return;
+      addRowError(row.id, "openingStock", checkNumber(it.openingStock, "stock quantity", { allowZero: true, optional: true }));
+      addRowError(row.id, "openingStock", checkMoney(it.atPrice, "stock valuation price", { allowZero: true, optional: true }));
+      addRowError(row.id, "openingStock", checkNumber(it.minStockAlert, "minimum stock level", { allowZero: true, optional: true, maxDecimals: 0 }));
+    });
+
+    return validationErrors;
+  };
+
+  // Re-validate the grid live, but only once the user has clicked Update at least once
+  useEffect(() => {
+    if (!isBulkUpdateModalOpen) {
+      // Closed: start clean next time
+      setBulkRowErrors({});
+      setBulkSubmitAttempted(false);
+      return;
+    }
+    if (!bulkSubmitAttempted) return;
+    setBulkRowErrors(computeBulkErrors(bulkItems, computeBulkChanges(bulkItems)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkItems, bulkSubmitAttempted, isBulkUpdateModalOpen]);
+
+  const handleSaveBulkUpdate = () => bulkUpdateGuard.runOnce(async () => {
+    const changes = computeBulkChanges(bulkItems);
+    const { commonRows, pricingRows, stockRows, itemInformationRows } = changes;
+
     if (
       commonRows.length === 0 &&
       pricingRows.length === 0 &&
@@ -2545,70 +2684,16 @@ export const InventoryProductsView: React.FC = () => {
       return;
     }
 
-    // Client-side validation: ensure discounts do not exceed sale prices
-    const validationErrors: Record<
-      string,
-      { productCode: string; field: string; message: string }
-    > = {};
-    pricingRows.forEach((row) => {
-      const salePrc = Number(row.salePrice) || 0;
-      const discVal = Number(row.discountValue) || 0;
-      const discType = row.discountType || "Percentage";
-      const originalItem = bulkItems.find((b) => b.id === row.id);
-      const prodCode =
-        originalItem?.productCode || originalItem?.productName || row.id;
-
-      if (discType === "Amount" && discVal > salePrc) {
-        validationErrors[row.id] = {
-          productCode: prodCode,
-          field: "discountValue",
-          message: `Discount amount ${discVal} exceeds the sale price ${salePrc}`,
-        };
-      } else if (discType === "Percentage" && discVal > 100) {
-        validationErrors[row.id] = {
-          productCode: prodCode,
-          field: "discountValue",
-          message: `Discount percentage (${discVal}%) exceeds 100%`,
-        };
-      } else if (
-        salePrc < 0 ||
-        discVal < 0 ||
-        Number(row.purchasePrice || 0) < 0
-      ) {
-        validationErrors[row.id] = {
-          productCode: prodCode,
-          field: "salePrice",
-          message: "Price and discount values cannot be negative",
-        };
-      }
-    });
-
-    stockRows.forEach((row) => {
-      const originalItem = bulkItems.find((b) => b.id === row.id);
-      const prodCode =
-        originalItem?.productCode || originalItem?.productName || row.id;
-      if (row.openingStock < 0 || row.atPrice < 0 || row.minStockAlert < 0) {
-        validationErrors[row.id] = {
-          productCode: prodCode,
-          field: "openingStock",
-          message:
-            "Stock quantities, alert levels, and valuation price cannot be negative",
-        };
-      }
-    });
-
+    // Validate every changed row at once; show inline per-row errors, no API call, no toast.
+    setBulkSubmitAttempted(true);
+    const validationErrors = computeBulkErrors(bulkItems, changes);
     if (Object.keys(validationErrors).length > 0) {
       setBulkRowErrors(validationErrors);
-      setBulkTab("Pricing");
-      const count = Object.keys(validationErrors).length;
-      const firstErrMsg = Object.values(validationErrors)[0].message;
-      toast.error(
-        count === 1
-          ? `Validation error: ${firstErrMsg}`
-          : `${count} items failed validation. Discount amounts cannot exceed the sale price.`,
-      );
+      const firstField = Object.values(validationErrors)[0].field;
+      setBulkTab(firstField === "openingStock" ? "Stock" : "Pricing");
       return;
     }
+    setBulkRowErrors({});
     const payload: BulkUpdateProductsPayload = {
       common: commonRows,
       pricing: pricingRows,
@@ -2626,6 +2711,8 @@ export const InventoryProductsView: React.FC = () => {
         await loadProducts(true);
         return;
       }
+      toast.error("The item updates could not be saved. Please try again.");
+      return;
     } catch (err: any) {
       console.error("Bulk update products API failed:", err);
       const errData = err?.response?.data;
@@ -2651,25 +2738,15 @@ export const InventoryProductsView: React.FC = () => {
             return `${f.productCode || f.id}: ${itemMsg || "Validation error"}`;
           })
           .join("; ");
-        toast.error(`Bulk update failed (422): ${errorDetails}`);
+        toast.error(`Some items could not be updated. ${errorDetails}`);
       } else {
-        const errMsg =
-          errData?.error?.message ||
-          errData?.message ||
-          err?.message ||
-          "Failed to save bulk updates";
-        toast.error(errMsg);
+        toast.error(getApiErrorMessage(err, "Failed to save bulk updates."));
       }
       return;
     } finally {
       setIsSavingBulkUpdate(false);
     }
-
-    // Local fallback if offline
-    setProducts(bulkItems);
-    setIsBulkUpdateModalOpen(false);
-    toast.success("All item updates saved locally!");
-  };
+  });
 
   // Filtered bulk items based on bulkSearch
   const filteredBulkItems = useMemo(() => {
@@ -2742,8 +2819,17 @@ export const InventoryProductsView: React.FC = () => {
       return sum + stock * (p.purchasePrice || p.salePrice || 0);
     }, 0);
 
+    if (apiSummary) {
+      return {
+        totalItems: apiSummary.totalItems ?? totalItems,
+        totalProducts: apiSummary.totalProducts ?? totalProducts,
+        lowStockCount: apiSummary.lowStockCount ?? lowStockCount,
+        totalStockVal: apiSummary.totalStockValue ?? totalStockVal,
+      };
+    }
+
     return { totalItems, totalProducts, lowStockCount, totalStockVal };
-  }, [products]);
+  }, [products, apiSummary]);
 
   // Total count calculation
   const totalCount =
@@ -3460,7 +3546,10 @@ export const InventoryProductsView: React.FC = () => {
           <form
             id="product-form"
             noValidate
-            onSubmit={handleSubmit((data) => handleSaveItem(false, data))}
+            onSubmit={handleSubmit(
+              (data) => handleSaveItem(false, data),
+              (rhfErrors) => handleInvalidItem(rhfErrors as Record<string, any>),
+            )}
             className="relative w-full max-w-5xl bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh] my-auto"
           >
             {/* Modal Header - Matches CRM Standard */}
@@ -3546,16 +3635,16 @@ export const InventoryProductsView: React.FC = () => {
                     placeholder="Enter Item Name"
                     disabled={isSubmitting}
                     {...register("productName", {
-                      required: "Item name is required",
+                      required: "Please enter the item name.",
                       minLength: {
                         value: 2,
-                        message: "Item name must be at least 2 characters",
+                        message: "The item name must be at least 2 characters.",
                       },
                       validate: (val) =>
                         /^[A-Za-z0-9\s&'().\-\[\]{}/,+%#:*_"]+$/.test(
                           String(val).trim(),
                         ) ||
-                        "Item name can contain letters, numbers, spaces, brackets, and common symbols",
+                        "The item name contains characters that are not allowed.",
                     })}
                     onInput={(e) => {
                       e.currentTarget.value = e.currentTarget.value.replace(
@@ -3720,8 +3809,9 @@ export const InventoryProductsView: React.FC = () => {
                         type="button"
                         onClick={() => {
                           setItemImageState("");
+                          setImageFileError(null);
                           setValue("itemImage", "", {
-                            shouldValidate: true,
+                            shouldValidate: isSubmitted,
                             shouldDirty: true,
                           });
                           setFormData({ ...formData, itemImage: "" });
@@ -3744,6 +3834,7 @@ export const InventoryProductsView: React.FC = () => {
                       <span>Add Item Image</span>
                     </button>
                   )}
+                  <FormError message={errors.itemImage?.message} showIcon />
                 </div>
               </div>
 
@@ -3780,7 +3871,7 @@ export const InventoryProductsView: React.FC = () => {
                             currentSalePrice || currentPurchasePrice || "";
                           if (fallbackPrice) {
                             setValue("atPrice", fallbackPrice as any, {
-                              shouldValidate: true,
+                              shouldValidate: isSubmitted,
                             });
                           }
                         }
@@ -3825,7 +3916,7 @@ export const InventoryProductsView: React.FC = () => {
                                   val === "" ||
                                   val === undefined ||
                                   Number(val) >= 0 ||
-                                  "Must be a valid positive number",
+                                  "Please enter a valid sale price (0 or more).",
                               })}
                               value={formData.salePrice ?? ""}
                               onKeyDown={(e) =>
@@ -3837,7 +3928,7 @@ export const InventoryProductsView: React.FC = () => {
                                   .replace(/(\..*?)\..*/g, "$1");
                                 e.currentTarget.value = sanitized;
                                 setValue("salePrice", sanitized as any, {
-                                  shouldValidate: true,
+                                  shouldValidate: isSubmitted,
                                 });
                                 if (
                                   !isAtPriceManuallyEdited.current ||
@@ -3845,7 +3936,7 @@ export const InventoryProductsView: React.FC = () => {
                                   Number(getValues("atPrice")) === 0
                                 ) {
                                   setValue("atPrice", sanitized as any, {
-                                    shouldValidate: true,
+                                    shouldValidate: isSubmitted,
                                   });
                                 }
                               }}
@@ -3892,7 +3983,7 @@ export const InventoryProductsView: React.FC = () => {
                                   val === "" ||
                                   val === undefined ||
                                   Number(val) >= 0 ||
-                                  "Must be a valid positive number",
+                                  "Please enter a valid discount (0 or more).",
                               })}
                               onKeyDown={(e) =>
                                 handleNumberOnlyKeyDown(e, true)
@@ -3981,7 +4072,7 @@ export const InventoryProductsView: React.FC = () => {
                                       val === "" ||
                                       val === undefined ||
                                       Number(val) >= 0 ||
-                                      "Must be a valid positive number",
+                                      "Please enter a valid wholesale price (0 or more).",
                                   })}
                                   onKeyDown={(e) =>
                                     handleNumberOnlyKeyDown(e, true)
@@ -4035,7 +4126,7 @@ export const InventoryProductsView: React.FC = () => {
                                       val === "" ||
                                       val === undefined ||
                                       Number(val) >= 0 ||
-                                      "Must be a valid positive integer",
+                                      "Please enter the minimum wholesale quantity as a whole number.",
                                   })}
                                   onKeyDown={(e) =>
                                     handleNumberOnlyKeyDown(e, false)
@@ -4091,7 +4182,7 @@ export const InventoryProductsView: React.FC = () => {
                                 val === "" ||
                                 val === undefined ||
                                 Number(val) >= 0 ||
-                                "Must be a valid positive number",
+                                "Please enter a valid purchase price (0 or more).",
                             })}
                             value={formData.purchasePrice ?? ""}
                             onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
@@ -4101,7 +4192,7 @@ export const InventoryProductsView: React.FC = () => {
                                 .replace(/(\..*?)\..*/g, "$1");
                               e.currentTarget.value = sanitized;
                               setValue("purchasePrice", sanitized as any, {
-                                shouldValidate: true,
+                                shouldValidate: isSubmitted,
                               });
                               if (
                                 (!isAtPriceManuallyEdited.current ||
@@ -4110,7 +4201,7 @@ export const InventoryProductsView: React.FC = () => {
                                 !getValues("salePrice")
                               ) {
                                 setValue("atPrice", sanitized as any, {
-                                  shouldValidate: true,
+                                  shouldValidate: isSubmitted,
                                 });
                               }
                             }}
@@ -4182,7 +4273,7 @@ export const InventoryProductsView: React.FC = () => {
                             val === "" ||
                             val === undefined ||
                             Number(val) >= 0 ||
-                            "Must be a valid positive integer",
+                            "Please enter the minimum stock level as a whole number.",
                         })}
                         onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
                         onInput={(e) => {
@@ -4215,7 +4306,7 @@ export const InventoryProductsView: React.FC = () => {
                           validate: (val) =>
                             !val ||
                             /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                            "Only text characters (letters and spaces) are allowed",
+                            "The location can contain only letters and spaces.",
                         })}
                         onKeyDown={handleTextOnlyKeyDown}
                         onInput={(e) => {
@@ -4279,9 +4370,9 @@ export const InventoryProductsView: React.FC = () => {
                           <input
                             type="date"
                             value={formData.mfgDate || ""}
-                            onChange={(e) =>
-                              setValue("mfgDate", e.target.value)
-                            }
+                            onChange={(e) => {
+                              setValue("mfgDate", e.target.value);
+                            }}
                             className={`${FORM_INPUT_CLS} cursor-pointer`}
                           />
                           <span className="text-[10px] text-slate-400 mt-1 block">
@@ -4295,11 +4386,12 @@ export const InventoryProductsView: React.FC = () => {
                           <input
                             type="date"
                             value={formData.expDate || ""}
-                            onChange={(e) =>
-                              setValue("expDate", e.target.value)
-                            }
+                            onChange={(e) => {
+                              setValue("expDate", e.target.value);
+                            }}
                             className={`${FORM_INPUT_CLS} cursor-pointer`}
                           />
+                          <FormError message={errors.expDate?.message} showIcon />
                           <span className="text-[10px] text-slate-400 mt-1 block">
                             Expiry / Best before date
                           </span>
@@ -4310,6 +4402,15 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* Form-level messages (openingStock / atPrice have no inline input in this form) */}
+            {(errors.root || errors.openingStock || errors.atPrice) && (
+              <div className="px-4 sm:px-6 py-2 bg-white border-t border-slate-100 shrink-0 space-y-0.5">
+                <FormError message={errors.root?.message} showIcon />
+                <FormError message={errors.openingStock?.message} showIcon />
+                <FormError message={errors.atPrice?.message} showIcon />
+              </div>
+            )}
 
             {/* Modal Footer Bar - Matches CRM Standard */}
             <div className="px-4 sm:px-6 py-3.5 sm:py-4 bg-white border-t border-slate-100 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 shrink-0">
@@ -4421,6 +4522,15 @@ export const InventoryProductsView: React.FC = () => {
                         })}
                       </select>
                     </div>
+                    <FormError
+                      message={
+                        unitDoneAttempted &&
+                        (!selectedBaseUnit || selectedBaseUnit === "None")
+                          ? "Please select a base unit."
+                          : undefined
+                      }
+                      showIcon
+                    />
                   </div>
 
                   {/* SECONDARY UNIT */}
@@ -4478,7 +4588,19 @@ export const InventoryProductsView: React.FC = () => {
                           await handleAddNewCustomUnit();
                         }
                       }}
-                      className="w-full h-11 px-4 bg-white border border-slate-300 hover:border-slate-400 rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all shadow-2xs"
+                      className={`w-full h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:ring-4 transition-all shadow-2xs ${
+                        unitModalAttempted && !newUnitFullName.trim()
+                          ? "border-rose-400 focus:border-rose-500 focus:ring-rose-500/10"
+                          : "border-slate-300 hover:border-slate-400 focus:border-[#4309A2] focus:ring-[#4309A2]/10"
+                      }`}
+                    />
+                    <FormError
+                      message={
+                        unitModalAttempted && !newUnitFullName.trim()
+                          ? "Please enter the unit name (for example Dozen, Pack or Drum)."
+                          : undefined
+                      }
+                      showIcon
                     />
                   </div>
 
@@ -4596,6 +4718,7 @@ export const InventoryProductsView: React.FC = () => {
                 type="button"
                 disabled={isCreatingUnit}
                 onClick={async () => {
+                  setUnitDoneAttempted(true);
                   let effectiveBase = selectedBaseUnit;
                   let baseUnitObj = allAvailableUnits.find(
                     (u) => formatUnitOption(u) === selectedBaseUnit,
@@ -4615,8 +4738,7 @@ export const InventoryProductsView: React.FC = () => {
                       ? effectiveBase
                       : "";
                   if (!chosen) {
-                    toast.error("Please select a base unit");
-                    return;
+                    return; // the inline "base unit" error is shown by the Done-attempt flag
                   }
 
                   let unitCode = chosen;
@@ -4937,14 +5059,6 @@ export const InventoryProductsView: React.FC = () => {
                     </ul>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setBulkRowErrors({})}
-                  className="text-rose-400 hover:text-rose-600 p-1 cursor-pointer shrink-0 rounded-lg hover:bg-rose-100 transition-colors"
-                  title="Dismiss"
-                >
-                  <X className="w-4 h-4" />
-                </button>
               </div>
             )}
             {/* 10.3 Editable Data Grid - Follows Application Table Format & Theme */}
@@ -5542,7 +5656,6 @@ export const InventoryProductsView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                onClick={handleSaveBulkUpdate}
                 disabled={isSavingBulkUpdate}
                 className="h-10 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >

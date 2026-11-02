@@ -167,12 +167,20 @@ export interface ApiPagination {
   hasPrevPage: boolean;
 }
 
+export interface SalesRepListSummary {
+  totalCount: number;
+  activeCount: number;
+  totalOutstanding: number;
+  totalCollected: number;
+}
+
 export interface SalesRepListResponse {
   success: boolean;
   statusCode?: number;
   message?: string;
   data: ApiSalesRepresentative[];
   pagination: ApiPagination;
+  summary?: SalesRepListSummary;
   meta?: { timestamp: string; requestId: string };
 }
 

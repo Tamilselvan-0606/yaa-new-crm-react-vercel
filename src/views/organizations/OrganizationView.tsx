@@ -14,9 +14,6 @@ import {
   Edit2,
   Trash2,
   Globe,
-  Mail,
-  Phone,
-  MessageCircle,
   Tag,
   Briefcase,
   Layers,
@@ -51,6 +48,26 @@ import { organizationApi, subOrganizationApi, SubOrganizationApiItem } from '../
 import { OrganizationApiItem } from '../../api/platform/organizationTypes';
 import { subscriptionPlanApi } from '../../api/platform/subscriptionPlanApi';
 import { getStoredOrganizationId } from '../../api/config';
+import { extractApiFieldErrors } from '../../utils/formValidation';
+import {
+  alphanumericUpper,
+  digitsOnly,
+  emailAddress,
+  validGst,
+  indianMobile,
+  liveMobileStartError,
+  validPan,
+  pickFieldErrors,
+  required,
+  requiredWhen,
+  validateFields,
+} from '../../utils/fieldValidators';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useRowActionMenu } from '../../hooks/useRowActionMenu';
+import { ORGANIZATION_STATUS_TONES, StatusBadge } from '../../components/common/StatusBadge';
+import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
+import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { getApiErrorMessage } from '../../utils/apiErrorMessage';
 
 interface OrganizationItem {
   id: string;
@@ -181,6 +198,25 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
   };
 };
 
+
+/**
+ * Whether a sub-organization belongs to the active suite.
+ * subOrganizationType: 1 = Client Management, 2 = Sales Management, 3 = Both.
+ * Without a numeric type it falls back to the organization type text.
+ */
+const matchesActiveSuite = (item: OrganizationItem, isSaleManagement: boolean): boolean => {
+  const code = Number(item.subOrganizationType);
+  if (code === 3) return true;
+  if (code === 1) return !isSaleManagement;
+  if (code === 2) return isSaleManagement;
+  const text = String(item.organizationType || '').toLowerCase();
+  if (text.includes('all') || text.includes('both')) return true;
+  return isSaleManagement ? text.includes('sale') : !text.includes('sale');
+};
+
+/** Server-reported errors with these keys are shown under the matching input. */
+const API_FORM_FIELDS = ['name', 'email', 'gstNumber', 'panNumber', 'phone', 'whatsapp'] as const;
+
 const formatDate = (dateStr: string) => {
   if (!dateStr) return '-';
   try {
@@ -267,64 +303,56 @@ export const OrganizationView: React.FC = () => {
   const [appliedSearch, setAppliedSearch] = useState('');
   const [appliedStatus, setAppliedStatus] = useState<'All' | 'Active' | 'Inactive' | 'Suspend'>('All');
 
+  /** Parent organization used for sub-organization calls (drill-down context, else the user's own org). */
+  const resolveParentOrgId = (): string | undefined =>
+    parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId() || undefined;
+
+  const fetchSubOrganizations = async (page: number, limit: number, search: string, status: string) => {
+    const empty = { items: [] as OrganizationItem[], total: 0 };
+    try {
+      const res = await subOrganizationApi.getSubOrganizations(
+        {
+          page_no: page,
+          page_size: limit,
+          pagination_required: 'true',
+          search: search.trim() || undefined,
+          status: status === 'All' ? undefined : status === 'Suspend' ? 'Suspended' : status,
+        },
+        resolveParentOrgId()
+      );
+      if (!res || !(res.success || Array.isArray(res.data))) return empty;
+
+      const mapped = (Array.isArray(res.data) ? res.data : []).map(mapSubOrgToItem);
+      // A super admin drilling into a parent org sees all of its sub-orgs, whatever suite they are in.
+      const skipSuiteFilter = isSuperAdmin && !!parentOrgContext;
+      const items = skipSuiteFilter ? mapped : mapped.filter((item) => matchesActiveSuite(item, isSaleManagement));
+
+      // The server total counts every record; fall back to the page count once the suite filter removed rows.
+      const serverTotal = res.pagination?.totalRecords;
+      const useServerTotal = serverTotal !== undefined && items.length === mapped.length;
+      return { items, total: useServerTotal ? serverTotal : items.length };
+    } catch (apiErr) {
+      console.warn('Backend sub-organization listing notice:', apiErr);
+      return empty;
+    }
+  };
+
+  const fetchOrganizations = async (page: number, limit: number) => {
+    const res = await organizationApi.getOrganizations(page, limit);
+    if (!res?.success || !Array.isArray(res.data)) return { items: [] as OrganizationItem[], total: 0 };
+    const items = res.data.map(mapApiOrgToItem);
+    return { items, total: res.pagination?.totalRecords || items.length };
+  };
+
   // Fetch Organizations or Sub-Organizations strictly scoped to the active suite
   const loadOrganizations = async (page = currentPage, limit = pageSize, search = appliedSearch, status = appliedStatus) => {
     setIsLoading(true);
     try {
-      if (isSubOrgMode) {
-        // Active organization context for sub-organizations
-        const parentOrgId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-        let apiItems: OrganizationItem[] = [];
-
-        try {
-          const res = await subOrganizationApi.getSubOrganizations(
-            {
-              page_no: page,
-              page_size: limit,
-              pagination_required: 'true',
-              search: search.trim() || undefined,
-              status: status !== 'All' ? (status === 'Suspend' ? 'Suspended' : status) : undefined,
-            },
-            parentOrgId || undefined
-          );
-
-          if (res && (res.success || Array.isArray(res.data))) {
-            const list = Array.isArray(res.data) ? res.data : [];
-            const mapped = list.map(mapSubOrgToItem);
-            // Strictly isolate sub-organizations by current active suite:
-            // 1 = Client Management, 2 = Sales Management, 3 = Both
-            apiItems = mapped.filter((item) => {
-              const code = Number(item.subOrganizationType);
-              if (code === 3) return true;
-              if (code === 1) return !isSaleManagement;
-              if (code === 2) return isSaleManagement;
-              const t = String(item.organizationType || '').toLowerCase();
-              if (t.includes('all') || t.includes('both')) return true;
-              return isSaleManagement ? t.includes('sale') : !t.includes('sale');
-            });
-          }
-        } catch (apiErr) {
-          console.warn('Backend sub-organization listing notice:', apiErr);
-        }
-
-        // Use filtered API items directly
-        setOrganizations(apiItems);
-        setTotalRecords(apiItems.length);
-      } else {
-        const res = await organizationApi.getOrganizations(page, limit);
-        if (res && res.success && Array.isArray(res.data)) {
-          const mapped = res.data.map(mapApiOrgToItem);
-          setOrganizations(mapped);
-          if (res.pagination) {
-            setTotalRecords(res.pagination.totalRecords || mapped.length);
-          } else {
-            setTotalRecords(mapped.length);
-          }
-        } else {
-          setOrganizations([]);
-          setTotalRecords(0);
-        }
-      }
+      const { items, total } = isSubOrgMode
+        ? await fetchSubOrganizations(page, limit, search, status)
+        : await fetchOrganizations(page, limit);
+      setOrganizations(items);
+      setTotalRecords(total);
     } catch (err: any) {
       console.error('Failed to load organizations:', err);
       showToast(
@@ -359,9 +387,9 @@ export const OrganizationView: React.FC = () => {
   const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [editingOrg, setEditingOrg] = useState<OrganizationItem | null>(null);
   const [viewingOrg, setViewingOrg] = useState<OrganizationItem | null>(null);
-  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // 3-dots row menu + click-to-copy contact buttons (shared hooks)
+  const rowMenu = useRowActionMenu(240);
+  const { copiedKey, copy: handleCopy } = useCopyToClipboard();
   const [confirmAction, setConfirmAction] = useState<{
     type: 'Suspend' | 'Inactive' | 'Delete';
     orgId: string;
@@ -399,53 +427,16 @@ export const OrganizationView: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
-    e.stopPropagation();
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 2000);
-  };
-
-  // Close dropdown on click outside, update or close on scroll/resize
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.action-dropdown-container') && !target.closest('.action-dropdown-menu')) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    const handleScrollOrResize = () => {
-      if (activeDropdownId) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-
-    document.addEventListener('click', handleOutsideClick);
-    window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
-    window.addEventListener('resize', handleScrollOrResize);
-    return () => {
-      document.removeEventListener('click', handleOutsideClick);
-      window.removeEventListener('scroll', handleScrollOrResize, true);
-      window.removeEventListener('resize', handleScrollOrResize);
-    };
-  }, [activeDropdownId]);
-
   const handleUpdateStatus = async (id: string, newStatus: 'Active' | 'Pending' | 'Inactive' | 'Suspend') => {
     try {
       setIsProcessingAction(true);
-      if (isSubOrgMode) {
-        const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-        await subOrganizationApi.updateSubOrganizationStatus(id, newStatus === 'Suspend' ? 'Suspended' : newStatus, targetParentId || undefined);
-      } else {
+      if (!isSubOrgMode) {
         await organizationApi.updateOrganizationStatus(id, newStatus as 'Active' | 'Inactive' | 'Suspend');
+      } else {
+        await subOrganizationApi.updateSubOrganizationStatus(id, newStatus === 'Suspend' ? 'Suspended' : newStatus, resolveParentOrgId());
       }
       await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
-      setActiveDropdownId(null);
+      rowMenu.close();
       showToast('success', 'Status Updated', `${isSubOrgMode ? 'Sub-organization' : 'Organization'} status updated to ${newStatus}.`);
     } catch (err: any) {
       showToast('error', 'Update Failed', err?.message || 'Could not update status.');
@@ -490,6 +481,23 @@ export const OrganizationView: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [subOrganizationSupport, setSubOrganizationSupport] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const setFieldError = (field: string, message: string) =>
+    setFormErrors((prev) => (prev[field] === message ? prev : { ...prev, [field]: message }));
+  /** Clears one field's error as soon as the user edits that field. */
+  const clearFieldError = (field: string) => setFormErrors((prev) => (prev[field] ? { ...prev, [field]: '' } : prev));
+
+  /**
+   * onChange handler for a text field: optionally sanitises the raw value, stores it, and sets (or clears)
+   * the field's inline error. `liveError` runs while typing (e.g. "must start with 6-9").
+   */
+  const fieldHandler =
+    (setter: (value: string) => void, field: string, clean?: (raw: string) => string, liveError?: (value: string) => string) =>
+    (raw: string) => {
+      const value = clean ? clean(raw) : raw;
+      setter(value);
+      setFieldError(field, liveError ? liveError(value) : '');
+    };
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -502,13 +510,7 @@ export const OrganizationView: React.FC = () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         setLogo(reader.result as string);
-        if (formErrors.logo) {
-          setFormErrors((prev) => {
-            const next = { ...prev };
-            delete next.logo;
-            return next;
-          });
-        }
+        clearFieldError('logo');
       };
       reader.readAsDataURL(file);
     }
@@ -547,7 +549,7 @@ export const OrganizationView: React.FC = () => {
     setCode(org.code);
     setLegalName(org.legalName);
     const resolvedType = formatOrganizationTypeName(org.organizationType);
-    setOrganizationType(resolvedType !== 'All' ? resolvedType : (isSaleManagement ? 'Sales Management' : 'Client Management'));
+    setOrganizationType(resolvedType); // 0 = All is shown as All, not swapped for the active suite
     setIndustry(org.industry);
     setLocation(org.location);
     setSubscriptionPlan(org.subscriptionPlan || '');
@@ -569,200 +571,162 @@ export const OrganizationView: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const entityLabel = isSubOrgMode ? 'Sub Organization' : 'Organization';
+
+  /** Only the fields the user actually changed, so the PATCH stays minimal. */
+  const buildEditPatch = (current: OrganizationItem): Record<string, any> => {
+    const t = (v: string) => v.trim();
+    const legal = t(legalName) || t(name);
+
+    const next: Record<string, string> = {
+      name: t(name),
+      legalName: legal,
+      industry: t(industry),
+      location: t(location),
+      subscriptionPlan: t(subscriptionPlan),
+      contactPerson: t(contactPerson),
+      email: t(email),
+      phone: t(phone),
+      whatsapp: t(whatsapp),
+      gstNumber: t(gstNumber),
+      panNumber: t(panNumber),
+      registrationType: registrationType || '',
+      address: t(address),
+      logo: logo || '',
+    };
+    const existing: Record<string, string> = {
+      name: current.name,
+      legalName: current.legalName,
+      industry: current.industry || '',
+      location: current.location || '',
+      subscriptionPlan: current.subscriptionPlan || '',
+      contactPerson: current.contactPerson || '',
+      email: current.email || '',
+      phone: current.phone || '',
+      whatsapp: current.whatsapp || '',
+      gstNumber: current.gstNumber || '',
+      panNumber: current.panNumber || '',
+      registrationType: current.registrationType || '',
+      address: current.address || '',
+      logo: current.logo || '',
+    };
+
+    const patch: Record<string, any> = {};
+    Object.keys(next).forEach((key) => {
+      if (next[key] !== existing[key]) patch[key] = next[key];
+    });
+
+    if ((organizationType || 'All') !== (current.organizationType || 'All')) {
+      patch.organizationType = parseOrganizationTypeNumber(organizationType);
+    }
+    if (formStatus !== current.status) patch.status = formStatus;
+    if (subOrganizationSupport !== !!current.subOrganizationSupport) patch.subOrganizationSupport = subOrganizationSupport;
+    if (t(password)) patch.password = t(password); // only when a new password is entered
+    return patch;
+  };
+
+  /** Fields shared by the "create organization" and "create sub organization" payloads. */
+  const buildCreateFields = () => {
+    const optional = (v: string) => v.trim() || undefined;
+    return {
+      name: name.trim(),
+      legalName: legalName.trim() || name.trim(),
+      industry: optional(industry),
+      location: optional(location),
+      subscriptionPlan: optional(subscriptionPlan),
+      contactPerson: optional(contactPerson),
+      email: optional(email),
+      phone: optional(phone),
+      whatsapp: optional(whatsapp),
+      gstNumber: optional(gstNumber),
+      panNumber: optional(panNumber),
+      registrationType: optional(registrationType),
+      address: optional(address),
+      password: optional(password),
+      logo: logo || undefined,
+      subOrganizationSupport,
+    };
+  };
+
+  const saveEdit = async (current: OrganizationItem) => {
+    const patch = buildEditPatch(current);
+    if (!isSubOrgMode) {
+      await organizationApi.updateOrganization(current.id, patch);
+      showToast('success', 'Organization Updated', `${name} has been updated.`);
+      return;
+    }
+    await subOrganizationApi.updateSubOrganization(current.id, patch, resolveParentOrgId());
+    showToast('success', 'Sub-Organization Updated', `${name} has been updated.`);
+  };
+
+  const saveCreate = async () => {
+    const fields = buildCreateFields();
+    if (!isSubOrgMode) {
+      await organizationApi.createOrganization({
+        ...fields,
+        organizationType: parseOrganizationTypeNumber(organizationType),
+        status: formStatus || 'Active',
+      });
+      showToast('success', 'Organization Created', `${name} has been successfully created.`);
+      return;
+    }
+
+    const suiteType = organizationType || 'All';
+    await subOrganizationApi.createSubOrganization(
+      { ...fields, organizationType: suiteType, status: formStatus as any },
+      resolveParentOrgId()
+    );
+    localStorage.removeItem('organizations_catalog_orgsuperadmin');
+    window.dispatchEvent(new CustomEvent('orgChanged', { detail: { organizationType: suiteType } }));
+    window.dispatchEvent(new CustomEvent('subOrgChanged', { detail: { name: name.trim(), organizationType: suiteType } }));
+    window.dispatchEvent(new CustomEvent('subOrganizationsChanged'));
+    showToast('success', 'Sub-Organization Created', `${name} has been successfully created under ${suiteType}.`);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const errors: Record<string, string> = {};
-
-    if (!editingOrg) {
-      if (!logo) {
-        errors.logo = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Logo is required`;
-      }
-      if (!name.trim()) {
-        errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
-      }
-      if (!organizationType) {
-        errors.organizationType = isOrgSuperAdmin
-          ? 'Sub Organization Suite is required'
-          : 'Organization Type is required';
-      }
-      if (!formStatus) {
-        errors.status = 'Status is required';
-      }
-      if (!subscriptionPlan.trim()) {
-        errors.subscriptionPlan = 'Subscription Plan is required';
-      }
-      if (!gstNumber.trim()) {
-        errors.gstNumber = 'GST Number is required';
-      }
-      if (!panNumber.trim()) {
-        errors.panNumber = 'PAN Number is required';
-      }
-      if (!location.trim()) {
-        errors.location = 'Location / HQ City is required';
-      }
-      if (!contactPerson.trim()) {
-        errors.contactPerson = 'Contact Person Name is required';
-      }
-      if (!phone.trim()) {
-        errors.phone = 'Contact Phone is required';
-      } else if (phone.trim().length !== 10) {
-        errors.phone = 'Contact Phone must be exactly 10 digits';
-      }
-      if (whatsapp.trim() && whatsapp.trim().length !== 10) {
-        errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
-      }
-      if (!email.trim()) {
-        errors.email = 'Official Email is required';
-      }
-      if (!password.trim()) {
-        errors.password = 'Password is required';
-      }
-      if (!address.trim()) {
-        errors.address = 'Address is required';
-      }
-    } else {
-      if (!name.trim()) {
-        errors.name = `${isSubOrgMode ? 'Sub Organization' : 'Organization'} Name is required`;
-      }
-      if (phone.trim() && phone.trim().length !== 10) {
-        errors.phone = 'Contact Phone must be exactly 10 digits';
-      }
-      if (whatsapp.trim() && whatsapp.trim().length !== 10) {
-        errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
-      }
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
-      return;
-    }
-    setFormErrors({});
+    // Create needs every mandatory field; edit only needs a name, the rest just has to be well-formed.
+    const create = !editingOrg;
+    const errors = validateFields([
+      ['logo', logo, requiredWhen(create, `${entityLabel} Logo is required`)],
+      ['name', name, [required(`${entityLabel} Name is required`)]],
+      [
+        'organizationType',
+        organizationType,
+        requiredWhen(create, isOrgSuperAdmin ? 'Sub Organization Suite is required' : 'Organization Type is required'),
+      ],
+      ['status', formStatus, requiredWhen(create, 'Status is required')],
+      ['subscriptionPlan', subscriptionPlan, requiredWhen(create, 'Subscription Plan is required')],
+      ['gstNumber', gstNumber, requiredWhen(create, 'GST Number is required', [validGst])],
+      ['panNumber', panNumber, requiredWhen(create, 'PAN Number is required', [validPan])],
+      ['location', location, requiredWhen(create, 'Location / HQ City is required')],
+      ['contactPerson', contactPerson, requiredWhen(create, 'Contact Person Name is required')],
+      ['phone', phone, requiredWhen(create, 'Contact Phone is required', [indianMobile('Contact Phone')])],
+      ['whatsapp', whatsapp, [indianMobile('WhatsApp Number')]],
+      ['email', email, requiredWhen(create, 'Official Email is required', [emailAddress])],
+      ['password', password, requiredWhen(create, 'Password is required')],
+      ['address', address, requiredWhen(create, 'Address is required')],
+    ]);
+    setFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setApiModalError(null);
 
     setIsSubmitting(true);
     try {
-      if (editingOrg) {
-        // Build a partial payload with only the fields that changed
-        const patch: Record<string, any> = {};
-
-        const t = (v: string) => v.trim();
-
-        // String fields — send updated value (or empty string if cleared)
-        if (t(name) !== editingOrg.name) patch.name = t(name);
-        const resolvedLegal = t(legalName) || t(name);
-        if (resolvedLegal !== editingOrg.legalName) patch.legalName = resolvedLegal;
-        if ((organizationType || 'All') !== (editingOrg.organizationType || 'All')) {
-          patch.organizationType = parseOrganizationTypeNumber(organizationType);
-        }
-        if (t(industry) !== (editingOrg.industry || '')) patch.industry = t(industry);
-        if (t(location) !== (editingOrg.location || '')) patch.location = t(location);
-        if (t(subscriptionPlan) !== (editingOrg.subscriptionPlan || '')) patch.subscriptionPlan = t(subscriptionPlan);
-        if (t(contactPerson) !== (editingOrg.contactPerson || '')) patch.contactPerson = t(contactPerson);
-        if (t(email) !== (editingOrg.email || '')) patch.email = t(email);
-        if (t(phone) !== (editingOrg.phone || '')) patch.phone = t(phone);
-        if (t(whatsapp) !== (editingOrg.whatsapp || '')) patch.whatsapp = t(whatsapp);
-        if (t(gstNumber) !== (editingOrg.gstNumber || '')) patch.gstNumber = t(gstNumber);
-        if (t(panNumber) !== (editingOrg.panNumber || '')) patch.panNumber = t(panNumber);
-        if ((registrationType || '') !== (editingOrg.registrationType || '')) patch.registrationType = registrationType || '';
-        if (t(address) !== (editingOrg.address || '')) patch.address = t(address);
-        if (logo !== (editingOrg.logo || '')) patch.logo = logo || '';
-
-        // Non-string fields
-        if (formStatus !== editingOrg.status) patch.status = formStatus;
-        if (subOrganizationSupport !== !!editingOrg.subOrganizationSupport) patch.subOrganizationSupport = subOrganizationSupport;
-
-        // Password — only if a new one is entered
-        if (t(password)) patch.password = t(password);
-
-        if (isSubOrgMode) {
-          // Edit existing sub-organization via PATCH/PUT
-          const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-          await subOrganizationApi.updateSubOrganization(
-            editingOrg.id,
-            patch,
-            targetParentId || undefined
-          );
-          showToast('success', 'Sub-Organization Updated', `${name} has been updated.`);
-        } else {
-          await organizationApi.updateOrganization(editingOrg.id, patch);
-          showToast('success', 'Organization Updated', `${name} has been updated.`);
-        }
-      } else {
-        if (isSubOrgMode) {
-          const targetParentId = parentOrgContext?.id || currentUser?.organizationId || getStoredOrganizationId();
-          const targetSuiteType = organizationType || 'All';
-
-          await subOrganizationApi.createSubOrganization(
-            {
-              name: name.trim(),
-              legalName: legalName.trim() || name.trim(),
-              organizationType: targetSuiteType,
-              industry: industry.trim() || undefined,
-              location: location.trim() || undefined,
-              subscriptionPlan: subscriptionPlan.trim() || undefined,
-              contactPerson: contactPerson.trim() || undefined,
-              email: email.trim() || undefined,
-              phone: phone.trim() || undefined,
-              whatsapp: whatsapp.trim() || undefined,
-              gstNumber: gstNumber.trim() || undefined,
-              panNumber: panNumber.trim() || undefined,
-              registrationType: registrationType.trim() || undefined,
-              address: address.trim() || undefined,
-              logo: logo || undefined,
-              subOrganizationSupport,
-              status: formStatus as any,
-              password: password.trim() || undefined,
-            },
-            targetParentId || undefined
-          );
-
-          localStorage.removeItem('organizations_catalog_orgsuperadmin');
-          window.dispatchEvent(new CustomEvent('orgChanged', { detail: { organizationType: targetSuiteType } }));
-          window.dispatchEvent(new CustomEvent('subOrgChanged', { detail: { name: name.trim(), organizationType: targetSuiteType } }));
-          window.dispatchEvent(new CustomEvent('subOrganizationsChanged'));
-
-          showToast('success', 'Sub-Organization Created', `${name} has been successfully created under ${targetSuiteType}.`);
-        } else {
-          await organizationApi.createOrganization({
-            name: name.trim(),
-            organizationType: parseOrganizationTypeNumber(organizationType),
-            legalName: legalName.trim() || name.trim(),
-            gstNumber: gstNumber.trim() || undefined,
-            panNumber: panNumber.trim() || undefined,
-            email: email.trim() || undefined,
-            phone: phone.trim() || undefined,
-            password: password.trim() || undefined,
-            logo: logo || undefined,
-            status: formStatus || 'Active',
-            subscriptionPlan: subscriptionPlan.trim() || undefined,
-            location: location.trim() || undefined,
-            contactPerson: contactPerson.trim() || undefined,
-            address: address.trim() || undefined,
-            registrationType: registrationType.trim() || undefined,
-            industry: industry.trim() || undefined,
-            whatsapp: whatsapp.trim() || undefined,
-            subOrganizationSupport,
-          });
-          showToast('success', 'Organization Created', `${name} has been successfully created.`);
-        }
-      }
+      await (editingOrg ? saveEdit(editingOrg) : saveCreate());
       setIsModalOpen(false);
       await loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
-      const backendMsg =
-        err?.response?.data?.message ||
-        err?.response?.data?.error?.message ||
-        (Array.isArray(err?.response?.data?.errors)
-          ? err.response.data.errors.map((e: any) => e.message || e).join(', ')
-          : null) ||
-        (Array.isArray(err?.response?.data?.fields)
-          ? err.response.data.fields.map((f: any) => `${f.path?.join('.') ? f.path.join('.') + ': ' : ''}${f.message}`).join(', ')
-          : null) ||
-        err?.message ||
-        'Could not save organization.';
-      setApiModalError(backendMsg);
-      showToast('error', 'Operation Failed', backendMsg);
+      // Field-level problems the server reports are shown under their inputs
+      const serverFieldErrors = pickFieldErrors(extractApiFieldErrors(err), API_FORM_FIELDS);
+      if (Object.keys(serverFieldErrors).length > 0) {
+        setFormErrors((prev) => ({ ...prev, ...serverFieldErrors }));
+        return;
+      }
+      const message = getApiErrorMessage(err, 'Could not save organization.');
+      setApiModalError(message);
+      showToast('error', 'Operation Failed', message);
     } finally {
       setIsSubmitting(false);
     }
@@ -866,7 +830,7 @@ export const OrganizationView: React.FC = () => {
         rightSlot={
           <span className="text-xs font-semibold text-slate-500 pr-2">
             Total Organization :{' '}
-            <span className="text-[#33077C] font-bold">{filteredOrgs.length}</span>
+            <span className="text-[#33077C] font-bold">{totalRecords}</span>
           </span>
         }
       />
@@ -949,76 +913,14 @@ export const OrganizationView: React.FC = () => {
 
                       {/* 3. Contact Info Actions */}
                       <td className="py-4 px-4 border border-slate-200">
-                        <div className="flex items-center justify-center gap-2">
-                          {/* Phone */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => phone && handleCopy(e, phone, `${org.id}-phone`)}
-                              disabled={!phone}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${phone
-                                ? 'bg-blue-50 hover:bg-blue-100 text-blue-600 cursor-pointer'
-                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                                }`}
-                            >
-                              <Phone className="w-3.5 h-3.5" />
-                            </button>
-                            {phone && (
-                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-phone`
-                                ? 'opacity-100 bg-emerald-600 scale-100'
-                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}>
-                                {copiedKey === `${org.id}-phone` ? 'Phone number copied' : phone}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* WhatsApp */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => whatsappVal && handleCopy(e, whatsappVal, `${org.id}-wa`)}
-                              disabled={!whatsappVal}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${whatsappVal
-                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 cursor-pointer'
-                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                                }`}
-                            >
-                              <MessageCircle className="w-3.5 h-3.5" />
-                            </button>
-                            {whatsappVal && (
-                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-wa`
-                                ? 'opacity-100 bg-emerald-600 scale-100'
-                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}>
-                                {copiedKey === `${org.id}-wa` ? 'WhatsApp number copied' : whatsappVal}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Email */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => email && handleCopy(e, email, `${org.id}-email`)}
-                              disabled={!email}
-                              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${email
-                                ? 'bg-purple-50 hover:bg-purple-100 text-purple-600 cursor-pointer'
-                                : 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-60'
-                                }`}
-                            >
-                              <Mail className="w-3.5 h-3.5" />
-                            </button>
-                            {email && (
-                              <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${org.id}-email`
-                                ? 'opacity-100 bg-emerald-600 scale-100'
-                                : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}>
-                                {copiedKey === `${org.id}-email` ? 'Email address copied' : email}
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <ContactCopyButtons
+                          id={org.id}
+                          phone={org.phone}
+                          whatsapp={org.whatsapp || org.phone}
+                          email={org.email}
+                          copiedKey={copiedKey}
+                          onCopy={handleCopy}
+                        />
                       </td>
 
                       {/* 3. Subscription Plans */}
@@ -1051,30 +953,7 @@ export const OrganizationView: React.FC = () => {
 
                       {/* 5. Status */}
                       <td className="py-4 px-5 border border-slate-200 text-center">
-                        {org.status === 'Active' && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            Active
-                          </span>
-                        )}
-                        {org.status === 'Suspend' && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-bold text-xs border border-amber-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                            Suspend
-                          </span>
-                        )}
-                        {org.status === 'Inactive' && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                            Inactive
-                          </span>
-                        )}
-                        {org.status === 'Pending' && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-300">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                            Pending
-                          </span>
-                        )}
+                        <StatusBadge status={org.status} tones={ORGANIZATION_STATUS_TONES} />
                       </td>
 
                       {/* 6. Created Date */}
@@ -1088,36 +967,11 @@ export const OrganizationView: React.FC = () => {
                       </td>
 
                       {/* 7. Action: Three Dots Dropdown */}
-                      <td className="py-4 px-5 border border-slate-200 text-center relative action-dropdown-container">
+                      <td className="py-4 px-5 border border-slate-200 text-center relative" data-row-menu-trigger>
                         <div className="inline-block text-left">
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === org.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - rect.bottom;
-                                const dropdownHeight = 240;
-
-                                if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                  // Open upwards if not enough space below
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - rect.top + 6,
-                                    right: window.innerWidth - rect.right,
-                                  });
-                                } else {
-                                  // Open downwards
-                                  setDropdownPos({
-                                    top: rect.bottom + 6,
-                                    right: window.innerWidth - rect.right,
-                                  });
-                                }
-                                setActiveDropdownId(org.id);
-                              }
-                            }}
+                            onClick={(e) => rowMenu.toggle(e, org.id)}
                             className="w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer bg-[#33077C] hover:bg-[#432eb5] text-white shadow-xs active:scale-95"
                             title="More Actions"
                           >
@@ -1145,27 +999,26 @@ export const OrganizationView: React.FC = () => {
       />
 
       {/* Action Dropdown Menu Portal / Overlay */}
-      {activeDropdownId && dropdownPos && (() => {
-        const targetOrg = organizations.find((o) => o.id === activeDropdownId);
+      {rowMenu.activeId && rowMenu.pos && (() => {
+        const targetOrg = organizations.find((o) => o.id === rowMenu.activeId);
         if (!targetOrg) return null;
 
         return (
           <div
             style={{
               position: 'fixed',
-              ...(dropdownPos.bottom !== undefined
-                ? { bottom: `${dropdownPos.bottom}px` }
-                : { top: `${dropdownPos.top}px` }),
-              right: `${dropdownPos.right}px`,
+              ...(rowMenu.pos.bottom !== undefined
+                ? { bottom: `${rowMenu.pos.bottom}px` }
+                : { top: `${rowMenu.pos.top}px` }),
+              right: `${rowMenu.pos.right}px`,
             }}
-            className="w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] action-dropdown-menu animate-in fade-in zoom-in-95 duration-100 text-left"
+            data-row-menu className="w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left"
           >
             {/* 1. View */}
             <button
               type="button"
               onClick={() => {
-                setActiveDropdownId(null);
-                setDropdownPos(null);
+                rowMenu.close();
                 setViewingOrg(targetOrg);
               }}
               className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
@@ -1180,8 +1033,7 @@ export const OrganizationView: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                setActiveDropdownId(null);
-                setDropdownPos(null);
+                rowMenu.close();
                 handleOpenEditModal(targetOrg);
               }}
               className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
@@ -1197,8 +1049,7 @@ export const OrganizationView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  setActiveDropdownId(null);
-                  setDropdownPos(null);
+                  rowMenu.close();
                   handleOpenSubOrgManager(targetOrg);
                 }}
                 className="w-full px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-3 transition-colors rounded-xl cursor-pointer"
@@ -1214,8 +1065,7 @@ export const OrganizationView: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                setActiveDropdownId(null);
-                setDropdownPos(null);
+                rowMenu.close();
                 setConfirmAction({
                   type: 'Suspend',
                   orgId: targetOrg.id,
@@ -1234,8 +1084,7 @@ export const OrganizationView: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                setActiveDropdownId(null);
-                setDropdownPos(null);
+                rowMenu.close();
                 setConfirmAction({
                   type: 'Inactive',
                   orgId: targetOrg.id,
@@ -1334,39 +1183,17 @@ export const OrganizationView: React.FC = () => {
               </div>
 
               {/* Field 2: Name */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  {isSubOrgMode ? 'Sub Organization Name' : 'Organization Name'} <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => {
-                    setName(e.target.value);
-                    if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
-                  }}
-                  placeholder="Enter organization name"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.name
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.name && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
-                )}
-              </div>
+              <TextField
+                label={`${entityLabel} Name`}
+                required
+                value={name}
+                error={formErrors.name}
+                placeholder="Enter organization name"
+                onValueChange={fieldHandler(setName, 'name')}
+              />
 
               {/* Field 3: Code */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">{isSubOrgMode ? 'Sub Organization Code' : 'Organization Code'}</label>
-                <input
-                  type="text"
-                  value={code}
-                  readOnly
-                  placeholder="Auto-generated"
-                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
-                />
-              </div>
+              <ReadOnlyField label={`${entityLabel} Code`} value={code} placeholder="Auto-generated" />
 
               {/* Field 4: Organization Type / Suite */}
               <div>
@@ -1377,7 +1204,7 @@ export const OrganizationView: React.FC = () => {
                   value={organizationType}
                   onChange={(val) => {
                     setOrganizationType(val);
-                    if (formErrors.organizationType) setFormErrors((prev) => ({ ...prev, organizationType: '' }));
+                    clearFieldError('organizationType');
                   }}
                   options={ORGANIZATION_TYPE_OPTIONS}
                   placeholder="Select company type"
@@ -1390,18 +1217,12 @@ export const OrganizationView: React.FC = () => {
               </div>
 
               {/* Field 5: Legal Entity Name */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Legal Entity Name
-                </label>
-                <input
-                  type="text"
-                  value={legalName}
-                  onChange={(e) => setLegalName(e.target.value)}
-                  placeholder="Enter legal entity name"
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
-              </div>
+              <TextField
+                label="Legal Entity Name"
+                value={legalName}
+                placeholder="Enter legal entity name"
+                onValueChange={setLegalName}
+              />
 
               {/* Field 6: Company Registration Type */}
               <div>
@@ -1426,7 +1247,7 @@ export const OrganizationView: React.FC = () => {
                   value={formStatus}
                   onChange={(val) => {
                     setFormStatus(val as 'Active' | 'Inactive' | 'Suspend');
-                    if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
+                    clearFieldError('status');
                   }}
                   options={STATUS_OPTIONS}
                   placeholder="Select status"
@@ -1447,7 +1268,7 @@ export const OrganizationView: React.FC = () => {
                   value={subscriptionPlan}
                   onChange={(val) => {
                     setSubscriptionPlan(val);
-                    if (formErrors.subscriptionPlan) setFormErrors((prev) => ({ ...prev, subscriptionPlan: '' }));
+                    clearFieldError('subscriptionPlan');
                   }}
                   options={subscriptionPlanOptions}
                   placeholder="Select subscription plan"
@@ -1460,185 +1281,90 @@ export const OrganizationView: React.FC = () => {
               </div>
 
               {/* Field 9: GST Number */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  GST Number <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={gstNumber}
-                  onChange={(e) => {
-                    setGstNumber(e.target.value.toUpperCase());
-                    if (formErrors.gstNumber) setFormErrors((prev) => ({ ...prev, gstNumber: '' }));
-                  }}
-                  placeholder="e.g. 22AAAAA0000A1Z5"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.gstNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.gstNumber && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.gstNumber}</p>
-                )}
-              </div>
+              <TextField
+                label="GST Number"
+                required
+                maxLength={15}
+                inputClassName="uppercase"
+                value={gstNumber}
+                error={formErrors.gstNumber}
+                placeholder="e.g. 33AAAAA0000A1Z5"
+                onValueChange={fieldHandler(setGstNumber, 'gstNumber', (v) => alphanumericUpper(v, 15))}
+              />
 
               {/* Field 10: PAN Number */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  PAN Number <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={panNumber}
-                  onChange={(e) => {
-                    setPanNumber(e.target.value.toUpperCase());
-                    if (formErrors.panNumber) setFormErrors((prev) => ({ ...prev, panNumber: '' }));
-                  }}
-                  placeholder="e.g. ABCDE1234F"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${formErrors.panNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.panNumber && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.panNumber}</p>
-                )}
-              </div>
+              <TextField
+                label="PAN Number"
+                required
+                maxLength={10}
+                inputClassName="uppercase"
+                value={panNumber}
+                error={formErrors.panNumber}
+                placeholder="e.g. AAAAA0000A"
+                onValueChange={fieldHandler(setPanNumber, 'panNumber', (v) => alphanumericUpper(v, 10))}
+              />
 
               {/* Field 11: Industry / Domain */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Industry / Domain
-                </label>
-                <input
-                  type="text"
-                  value={industry}
-                  onChange={(e) => setIndustry(e.target.value)}
-                  placeholder="e.g. Information Technology"
-                  className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
-                />
-              </div>
+              <TextField
+                label="Industry / Domain"
+                value={industry}
+                placeholder="e.g. Information Technology"
+                onValueChange={setIndustry}
+              />
 
               {/* Field 12: Location / HQ City */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Location / HQ City <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => {
-                    setLocation(e.target.value);
-                    if (formErrors.location) setFormErrors((prev) => ({ ...prev, location: '' }));
-                  }}
-                  placeholder="e.g. Chennai, Tamil Nadu"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.location
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.location && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.location}</p>
-                )}
-              </div>
+              <TextField
+                label="Location / HQ City"
+                required
+                value={location}
+                error={formErrors.location}
+                placeholder="e.g. Chennai, Tamil Nadu"
+                onValueChange={fieldHandler(setLocation, 'location')}
+              />
 
               {/* Field 13: Contact Person Name */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Contact Person Name <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={contactPerson}
-                  onChange={(e) => {
-                    setContactPerson(e.target.value);
-                    if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
-                  }}
-                  placeholder="Enter contact person name"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.contactPerson
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.contactPerson && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
-                )}
-              </div>
+              <TextField
+                label="Contact Person Name"
+                required
+                value={contactPerson}
+                error={formErrors.contactPerson}
+                placeholder="Enter contact person name"
+                onValueChange={fieldHandler(setContactPerson, 'contactPerson')}
+              />
 
               {/* Field 14: Contact Phone */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Contact Phone <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={phone}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                    setPhone(val);
-                    if (formErrors.phone) setFormErrors((prev) => ({ ...prev, phone: '' }));
-                  }}
-                  placeholder="e.g. 9876543210"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.phone
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.phone && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.phone}</p>
-                )}
-              </div>
+              <TextField
+                label="Contact Phone"
+                required
+                inputMode="numeric"
+                maxLength={10}
+                value={phone}
+                error={formErrors.phone}
+                placeholder="e.g. 9876543210"
+                onValueChange={fieldHandler(setPhone, 'phone', digitsOnly, (v) => liveMobileStartError('Contact Phone', v))}
+              />
 
               {/* Field 15: WhatsApp Number */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  WhatsApp Number
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={whatsapp}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                    setWhatsapp(val);
-                    if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: '' }));
-                  }}
-                  placeholder="e.g. 9876543210"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.whatsapp
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.whatsapp && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.whatsapp}</p>
-                )}
-              </div>
+              <TextField
+                label="WhatsApp Number"
+                inputMode="numeric"
+                maxLength={10}
+                value={whatsapp}
+                error={formErrors.whatsapp}
+                placeholder="e.g. 9876543210"
+                onValueChange={fieldHandler(setWhatsapp, 'whatsapp', digitsOnly, (v) => liveMobileStartError('WhatsApp Number', v))}
+              />
 
               {/* Field 16: Official Email */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Official Email <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: '' }));
-                  }}
-                  placeholder="e.g. admin@organization.com"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.email
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.email && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.email}</p>
-                )}
-              </div>
+              <TextField
+                label="Official Email"
+                required
+                type="email"
+                value={email}
+                error={formErrors.email}
+                placeholder="e.g. admin@organization.com"
+                onValueChange={fieldHandler(setEmail, 'email')}
+              />
 
               {/* Field 17: Password */}
               <div>
@@ -1652,7 +1378,7 @@ export const OrganizationView: React.FC = () => {
                     value={password}
                     onChange={(e) => {
                       setPassword(e.target.value);
-                      if (formErrors.password) setFormErrors((prev) => ({ ...prev, password: '' }));
+                      clearFieldError('password');
                     }}
                     className={`w-full h-11 pl-4 pr-10 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.password
                       ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
@@ -1674,27 +1400,14 @@ export const OrganizationView: React.FC = () => {
               </div>
 
               {/* Field 18: Address */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Address <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={address}
-                  onChange={(e) => {
-                    setAddress(e.target.value);
-                    if (formErrors.address) setFormErrors((prev) => ({ ...prev, address: '' }));
-                  }}
-                  placeholder="Enter complete address"
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${formErrors.address
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                    }`}
-                />
-                {formErrors.address && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
-                )}
-              </div>
+              <TextField
+                label="Address"
+                required
+                value={address}
+                error={formErrors.address}
+                placeholder="Enter complete address"
+                onValueChange={fieldHandler(setAddress, 'address')}
+              />
 
               {/* Field 19: Sub-Organization Support (Parent Org SuperAdmin only) */}
               {isSuperAdmin && !isSubOrgMode && (
@@ -1810,30 +1523,7 @@ export const OrganizationView: React.FC = () => {
 
               {/* Status & Plan Pills */}
               <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
-                {viewingOrg.status === 'Active' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Active
-                  </span>
-                )}
-                {viewingOrg.status === 'Suspend' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 font-bold text-xs border border-amber-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                    Suspend
-                  </span>
-                )}
-                {viewingOrg.status === 'Inactive' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 font-bold text-xs border border-rose-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                    Inactive
-                  </span>
-                )}
-                {viewingOrg.status === 'Pending' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-300">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                    Pending
-                  </span>
-                )}
+                <StatusBadge status={viewingOrg.status} tones={ORGANIZATION_STATUS_TONES} />
 
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-white border border-slate-200 text-[#33077C] font-bold text-xs shadow-2xs">
                   <Layers className="w-3.5 h-3.5 text-[#33077C]" />

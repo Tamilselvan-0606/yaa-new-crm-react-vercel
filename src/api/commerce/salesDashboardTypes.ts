@@ -66,6 +66,8 @@ export interface SalesDashboardPurchaseModules {
     approved: number;
   };
   paymentOutSettled: number;
+  /** Purchase bills plus expenses (not what was settled to suppliers). */
+  totalSpend?: number;
   paymentsOut: number;
 }
 

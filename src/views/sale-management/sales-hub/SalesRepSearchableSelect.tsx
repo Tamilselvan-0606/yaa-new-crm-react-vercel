@@ -1,7 +1,7 @@
 import { useDebounce } from "use-debounce";
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Search,
@@ -25,7 +25,18 @@ import { Modal } from "../../../components/common/Modal";
 import { toast } from "../../../utils/toast";
 import { baseApi } from "../../../api/baseApi";
 import { store } from "../../../store/store";
-import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
+import {
+  normalizeIndianPhoneTo10Digits,
+  isValidIndianPhone,
+} from "../../../utils/validation";
+import {
+  checkRequiredText,
+  checkPhone,
+  checkEmail,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 import { SalesRepresentativeSchema, SalesRepFormData } from "../../../schemas";
 import { FormLabel, FORM_INPUT_CLS, getFormInputCls } from "../utils/formUtils";
 import { FormError } from "../../../components/common/FormError";
@@ -69,7 +80,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
 
   // Quick Add Rep Modal State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isSubmittingRep, setIsSubmittingRep] = useState(false);
+  const { isSubmitting: isSubmittingRep, runOnce } = useSubmitGuard();
 
   // 10-Record server-side pagination fetcher
   const fetchPage = useCallback(
@@ -124,13 +135,47 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
   // Debounced search query
   const [debouncedSearch] = useDebounce(searchQuery, 400);
 
+  // One fetch per open, and one more per (debounced) search change. Remembering the last query we
+  // fetched for stops any re-render from calling the API again for the same query.
+  const lastFetchedQueryRef = useRef<string | null>(null);
   useEffect(() => {
-    if (isOpen) {
-      handleSearch(debouncedSearch);
+    if (!isOpen) {
+      lastFetchedQueryRef.current = null;
+      return;
     }
+    if (lastFetchedQueryRef.current === debouncedSearch) return;
+    lastFetchedQueryRef.current = debouncedSearch;
+    handleSearch(debouncedSearch);
   }, [debouncedSearch, isOpen, handleSearch]);
 
-  // Add Sales Rep React Hook Form matching SalesRepresentativeView
+  // Add Sales Rep React Hook Form matching SalesRepresentativeView.
+  // The resolver also carries the rules that used to be manual submit-time errors (trimmed name,
+  // required email, duplicate mobile among loaded reps) so they clear as soon as the field is valid.
+  const availableRepsRef = useRef(availableReps);
+  availableRepsRef.current = availableReps;
+  const repResolver: Resolver<SalesRepFormData> = async (values, context, options) => {
+    const base = await zodResolver(SalesRepresentativeSchema)(values, context, options);
+    const errs: Record<string, { type: string; message: string }> = {
+      ...((base.errors as any) || {}),
+    };
+    const add = (f: string, m: string | null) => {
+      if (m && !errs[f]) errs[f] = { type: "validate", message: m };
+    };
+    add("name", checkRequiredText(values.name, "representative's full name", 2));
+    const mobileErr = checkPhone(values.mobile, isValidIndianPhone, true);
+    add("mobile", mobileErr);
+    if (!mobileErr) {
+      const clean = normalizeIndianPhoneTo10Digits(values.mobile || "");
+      const dup = availableRepsRef.current.some(
+        (r) => r.mobile && normalizeIndianPhoneTo10Digits(r.mobile) === clean,
+      );
+      if (dup) add("mobile", "A sales representative with this mobile number already exists.");
+    }
+    add("email", checkEmail(values.email, true));
+    if (Object.keys(errs).length > 0) return { values: {}, errors: errs as any };
+    return base;
+  };
+
   const {
     register,
     handleSubmit,
@@ -141,8 +186,9 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
     clearErrors: clearFormErrors,
     formState: { errors: formErrors },
   } = useForm<SalesRepFormData>({
-    resolver: zodResolver(SalesRepresentativeSchema),
-    mode: "onChange",
+    resolver: repResolver,
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       name: "",
       mobile: "",
@@ -171,14 +217,14 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
   // Focus search input when dropdown opens
   useEffect(() => {
     if (isOpen) {
-      loadInitial();
-      setTimeout(() => {
+      // The list itself is fetched by the open/search effect above.
+      const t = setTimeout(() => {
         searchInputRef.current?.focus();
       }, 50);
-    } else {
-      setSearchQuery("");
+      return () => clearTimeout(t);
     }
-  }, [isOpen, loadInitial]);
+    setSearchQuery("");
+  }, [isOpen]);
 
   // Currently selected rep (preserved even if outside current 10 records)
   const selectedRep = useMemo(() => {
@@ -211,9 +257,9 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
     const trimmed = searchVal.trim();
     if (trimmed) {
       if (/^\d+$/.test(trimmed)) {
-        setFormValue("mobile", trimmed.slice(0, 10), { shouldValidate: true });
+        setFormValue("mobile", trimmed.slice(0, 10));
       } else {
-        setFormValue("name", trimmed, { shouldValidate: true });
+        setFormValue("name", trimmed);
       }
     }
 
@@ -221,9 +267,36 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
     setIsAddModalOpen(true);
   };
 
+  // Start the quick-add form clean every time it closes.
+  useEffect(() => {
+    if (!isAddModalOpen) {
+      resetForm({ name: "", mobile: "", email: "", designation: "", status: "Active" });
+    }
+  }, [isAddModalOpen, resetForm]);
+
   // Submit quick-created Sales Rep
-  const onSubmitRep = async (data: SalesRepFormData) => {
-    setIsSubmittingRep(true);
+  const onSubmitRep = (data: SalesRepFormData) =>
+    runOnce(async () => {
+    // Re-check on submit (trimmed values, duplicates among already-loaded reps) before any API call.
+    const cleanMobileCheck = normalizeIndianPhoneTo10Digits(data.mobile || "");
+    const submitErrors: Array<["name" | "mobile" | "email", string | null]> = [
+      ["name", checkRequiredText(data.name, "representative's full name", 2)],
+      ["mobile", checkPhone(data.mobile, isValidIndianPhone, true)],
+      ["email", checkEmail(data.email, true)],
+    ];
+    if (!submitErrors[1][1]) {
+      const dup = availableReps.some(
+        (r) => r.mobile && normalizeIndianPhoneTo10Digits(r.mobile) === cleanMobileCheck,
+      );
+      if (dup) {
+        submitErrors[1][1] = "A sales representative with this mobile number already exists.";
+      }
+    }
+    const failedChecks = submitErrors.filter(([, m]) => !!m);
+    if (failedChecks.length > 0) {
+      failedChecks.forEach(([f, m]) => setFormError(f, { type: "manual", message: m as string }));
+      return;
+    }
     try {
       const cleanMobile = normalizeIndianPhoneTo10Digits(data.mobile);
       const generatedEmail =
@@ -244,7 +317,15 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
       const createdRep = res?.data || (res as any)?.salesRepresentative;
 
       if (res.success || (res as any).statusCode === 200 || createdRep) {
-        const repId = createdRep?.id || (res as any)?.id || `rep_${Date.now()}`;
+        const repId = createdRep?.id || (res as any)?.id;
+        if (!repId) {
+          // Never invent an id: a made-up id would later be sent as the customer's representative.
+          toast.error("The representative was saved but could not be selected automatically. Please pick them from the list.");
+          if (onRefreshReps) onRefreshReps();
+          refresh();
+          setIsAddModalOpen(false);
+          return;
+        }
         const repData: SalesRepresentative = {
           id: repId,
           name: createdRep?.name || data.name.trim(),
@@ -286,6 +367,13 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
         err?.message ||
         "";
       const lowerMsg = String(msg).toLowerCase();
+      const apiFields = extractApiFieldErrors(err);
+      const fieldKeys = ["name", "mobile", "email", "designation"] as const;
+      const mappedKeys = fieldKeys.filter((k) => apiFields[k]);
+      if (mappedKeys.length > 0) {
+        mappedKeys.forEach((k) => setFormError(k, { type: "server", message: apiFields[k] }));
+        return;
+      }
 
       if (code === "DUPLICATE_EMAIL" || lowerMsg.includes("email")) {
         setFormError("email", {
@@ -303,12 +391,10 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
           message: "This mobile number is already registered for another account.",
         });
       } else {
-        toast.error(msg || "Failed to create sales representative.");
+        toast.error(getApiErrorMessage(err, "We could not create the sales representative. Please try again."));
       }
-    } finally {
-      setIsSubmittingRep(false);
     }
-  };
+    });
 
   const handleContainerScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
@@ -563,6 +649,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
                   maxLength={10}
                   placeholder="9876543210"
                   className={`${getFormInputCls(!!formErrors.mobile)} pl-11`}
+                  data-field="mobile"
                   {...register("mobile")}
                 />
               </div>
@@ -570,7 +657,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
             </div>
 
             <div>
-              <FormLabel>Email Address (Optional)</FormLabel>
+              <FormLabel required>Email Address</FormLabel>
               <input
                 type="email"
                 placeholder="e.g. rep@yaacrm.com"

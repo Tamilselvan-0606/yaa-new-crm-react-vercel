@@ -14,6 +14,7 @@ export * from './subcategoryTypes';
 export interface SubcategoryItemModel {
   id: string;
   sNo: number;
+  code?: string;
   category: string;
   subcategory: string;
   status: 'Active' | 'Inactive';
@@ -34,6 +35,7 @@ export const mapApiSubcategoryToSubcategoryItem = (
   return {
     id: apiSub.id,
     sNo: apiSub.sNo ?? (index !== undefined ? index + 1 : 1),
+    code: apiSub.code,
     category: apiSub.category || apiSub.categoryName || '',
     subcategory: apiSub.subcategory || apiSub.name || '',
     status: (apiSub.status === 'Inactive' ? 'Inactive' : 'Active') as 'Active' | 'Inactive',

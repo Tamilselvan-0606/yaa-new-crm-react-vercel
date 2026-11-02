@@ -7,6 +7,21 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { PurchaseRequestSchema, PurchaseRequestFormData } from '../../../validations';
 import { FormError } from '../../../components/common/FormError';
 import {
+  checkRequiredText,
+  checkRequiredSelection,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkHasLineItems,
+  validateLineItems,
+  collectErrors,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  fieldAttr,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+} from '../../../utils/formValidation';
+import {
   FilePlus,
   Plus,
   Eye,
@@ -109,6 +124,7 @@ export const PurchaseRequestView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/commerce/purchaseRequestTypes").PurchaseRequestListResponse["summary"]> | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
@@ -227,6 +243,7 @@ export const PurchaseRequestView: React.FC = () => {
           setIsApiConnected(true);
           setApiErrorMessage(null);
 
+          setApiSummary(res.summary ?? null);
           if (res.pagination) {
             setTotalApiRecords(res.pagination.totalRecords);
             setTotalApiPages(res.pagination.totalPages);
@@ -347,6 +364,39 @@ export const PurchaseRequestView: React.FC = () => {
   const [requestDate, setRequestDate] = useState(new Date().toISOString().split('T')[0]);
   const [requiredDate, setRequiredDate] = useState(new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]);
 
+  const lineFe = useFieldErrors();
+  const { errors: lineErrors, validateAll, clearError, clearGroup, merge: mergeLineErrors, reset: resetLineErrors } = lineFe;
+  const { runOnce: runSaveOnce } = useSubmitGuard();
+  const { runOnce: runStatusOnce } = useSubmitGuard();
+  const { runOnce: runDeleteOnce } = useSubmitGuard();
+  const [rejectionError, setRejectionError] = useState<string | null>(null);
+
+  // Cross-field / line rules that live outside React Hook Form (dates + items).
+  const computeRequestErrors = () => {
+    const errs = collectErrors([
+      ['requestDate', checkRequiredDate(requestDate, 'request date')],
+      ['requiredDate', checkRequiredDate(requiredDate, 'required-by date') || checkDateNotBefore(requiredDate, requestDate, 'required-by date', 'request date')],
+      ['items', checkHasLineItems(requestItems.map((it) => ({ productId: it.productId, productName: it.productName, quantity: it.requestedQuantity })))],
+    ]);
+    const itemErrs = validateLineItems(
+      requestItems.map((it) => ({
+        productId: it.productId,
+        productName: it.productName,
+        quantity: it.requestedQuantity,
+        unitPrice: it.estimatedUnitPrice,
+      })),
+      { allowZeroPrice: true },
+    );
+    requestItems.forEach((it, i) => {
+      if (!it.productId && !it.productName?.trim() && !itemErrs[`items.${i}.product`]) {
+        itemErrs[`items.${i}.product`] = 'Please select a product before continuing.';
+      }
+      const e = checkDateNotBefore(it.requiredDate, requestDate, 'required-by date', 'request date');
+      if (e) itemErrs[`items.${i}.requiredDate`] = e;
+    });
+    return { ...errs, ...itemErrs };
+  };
+
   // React Hook Form for Requisition Modal
   const {
     register,
@@ -354,9 +404,27 @@ export const PurchaseRequestView: React.FC = () => {
     reset,
     setValue,
     watch,
+    setError,
+    clearErrors,
     formState: { errors },
   } = useForm<PurchaseRequestFormData>({
-    resolver: zodResolver(PurchaseRequestSchema),
+    // Shared zod schema + friendly local rules layered on top.
+    resolver: (async (values: any, ctx: any, opts: any) => {
+      const base: any = await (zodResolver(PurchaseRequestSchema) as any)(values, ctx, opts);
+      const extra = collectErrors([
+        ['requestedBy', checkRequiredText(values.requestedBy, 'name of the person requesting', 2)],
+        ['department', checkRequiredSelection(values.department, 'department')],
+      ]);
+      const errs: any = { ...(base.errors || {}) };
+      for (const k of ['requestedBy', 'department']) {
+        if (extra[k]) errs[k] = { type: 'validate', message: extra[k] };
+        else delete errs[k];
+      }
+      if (Object.keys(errs).length === 0) return { values: base.values ?? values, errors: {} };
+      return { values: {}, errors: errs };
+    }) as any,
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       requestNo: '',
       requestedBy: getLoggedInUserName(),
@@ -367,6 +435,19 @@ export const PurchaseRequestView: React.FC = () => {
       notes: '',
     },
   });
+
+  // After the first submit attempt, keep dates / line items errors in sync with their values.
+  useRevalidateAfterSubmit(lineFe, computeRequestErrors, [requestDate, requiredDate, requestItems]);
+
+  // Every open/close of the form or rejection dialog starts with no errors.
+  useEffect(() => {
+    resetLineErrors();
+    clearErrors();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreateModalOpen]);
+  useEffect(() => {
+    setRejectionError(null);
+  }, [rejectionModalOpen]);
 
   const selectedFormSupplierId = watch('supplierId');
   const selectedFormSupplierName = watch('supplierName');
@@ -495,7 +576,7 @@ export const PurchaseRequestView: React.FC = () => {
   }, [isApiConnected, liveRequests, filteredLocalRequests]);
 
   // Summary Metrics
-  const summary = useMemo(() => {
+  const localSummary = useMemo(() => {
     const listToAnalyze = isApiConnected ? liveRequests : purchaseRequests;
     const totalCount =
       isApiConnected && totalApiRecords !== null ? totalApiRecords : listToAnalyze.length;
@@ -518,10 +599,11 @@ export const PurchaseRequestView: React.FC = () => {
       completedCount,
     };
   }, [isApiConnected, liveRequests, purchaseRequests, totalApiRecords]);
+  const summary = apiSummary ?? localSummary;
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
-    setEditingRequest(null);
+    setEditingRequest(null); resetLineErrors();
     reset({
       requestNo: '',
       requestedBy: getLoggedInUserName(),
@@ -539,7 +621,7 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (req: PurchaseRequest) => {
-    setEditingRequest(req);
+    setEditingRequest(req); resetLineErrors();
     reset({
       requestNo: req.requestNo,
       requestedBy: req.requestedBy || '',
@@ -572,7 +654,7 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Duplicate Request: Populates the form with existing fields & items so the user can review/edit before saving
   const handleDuplicateRequest = (req: PurchaseRequest) => {
-    setEditingRequest(null);
+    setEditingRequest(null); resetLineErrors();
     reset({
       requestNo: '',
       requestedBy: req.requestedBy || getLoggedInUserName(),
@@ -608,6 +690,8 @@ export const PurchaseRequestView: React.FC = () => {
   };
 
   const handleProductChange = (index: number, prodId: string) => {
+    clearError(`items.${index}.product`);
+    clearError('items');
     if (!prodId) {
       setRequestItems((prev) => {
         const copy = [...prev];
@@ -660,6 +744,8 @@ export const PurchaseRequestView: React.FC = () => {
   };
 
   const handleItemFieldChange = (index: number, field: keyof PurchaseRequestItem, val: any) => {
+    clearError(`items.${index}.${field === 'requestedQuantity' ? 'quantity' : field}`);
+    clearError('items');
     setRequestItems((prev) => {
       const copy = [...prev];
       copy[index] = { ...copy[index], [field]: val };
@@ -678,31 +764,25 @@ export const PurchaseRequestView: React.FC = () => {
       requiredDate: requiredDate,
       remarks: '',
     };
+    clearError('items');
     setRequestItems((prev) => [...prev, newItem]);
   };
 
   const handleRemoveItemRow = (index: number) => {
+    clearGroup('items');
     setRequestItems((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const onSaveRequest = async (
+  const onSaveRequest = (
+    data: PurchaseRequestFormData,
+    status: PurchaseRequestStatus = 'Pending Approval'
+  ) => runSaveOnce(() => saveRequestInner(data, status));
+
+  const saveRequestInner = async (
     data: PurchaseRequestFormData,
     status: PurchaseRequestStatus = 'Pending Approval'
   ) => {
-    if (requestItems.length === 0) {
-      toast.error('Please add at least one item to request.');
-      return;
-    }
-    const hasUnselectedProduct = requestItems.some((it) => !it.productId && !it.productName.trim());
-    if (hasUnselectedProduct) {
-      toast.error('Please select or specify a product for all item rows.');
-      return;
-    }
-    const hasInvalidQty = requestItems.some((it) => !it.requestedQuantity || it.requestedQuantity <= 0);
-    if (hasInvalidQty) {
-      toast.error('Requested quantities must be greater than zero.');
-      return;
-    }
+    if (!validateAll(computeRequestErrors())) return;
 
     setIsSubmittingForm(true);
 
@@ -731,21 +811,7 @@ export const PurchaseRequestView: React.FC = () => {
           savePurchaseRequest(mapped);
           toast.success(`Purchase request ${mapped.requestNo} updated successfully.`);
         } else {
-          savePurchaseRequest({
-            ...editingRequest,
-            requestNo: data.requestNo,
-            requestDate,
-            requestedBy: data.requestedBy,
-            department: data.department,
-            requiredDate,
-            priority: data.priority,
-            supplierId: data.supplierId || undefined,
-            supplierName: data.supplierName || undefined,
-            notes: data.notes || '',
-            items: requestItems,
-            updatedAt: new Date().toISOString(),
-          });
-          toast.success(`Purchase request ${data.requestNo} updated.`);
+          throw new Error('The purchase request could not be updated. Please try again.');
         }
       } else {
         // CREATE API: POST /commerce/purchase-requests
@@ -772,24 +838,7 @@ export const PurchaseRequestView: React.FC = () => {
           savePurchaseRequest(mapped);
           toast.success(`Purchase request ${mapped.requestNo} created successfully!`);
         } else {
-          const fallbackReq: PurchaseRequest = {
-            id: `pr_${Date.now()}`,
-            requestNo: data.requestNo,
-            requestDate,
-            requestedBy: data.requestedBy,
-            department: data.department,
-            requiredDate,
-            priority: data.priority,
-            status,
-            supplierId: data.supplierId || undefined,
-            supplierName: data.supplierName || undefined,
-            items: requestItems,
-            notes: data.notes || '',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          savePurchaseRequest(fallbackReq);
-          toast.success(`Purchase request ${data.requestNo} created.`);
+          throw new Error('The purchase request could not be created. Please try again.');
         }
       }
 
@@ -798,32 +847,28 @@ export const PurchaseRequestView: React.FC = () => {
       loadPurchaseRequests(true);
     } catch (err: any) {
       console.warn('Purchase request API save error:', err);
-      const apiMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Server request denied';
-
-      // Ensure work is preserved in local state
-      const localReq: PurchaseRequest = {
-        id: editingRequest ? editingRequest.id : `pr_${Date.now()}`,
-        requestNo: data.requestNo,
-        requestDate,
-        requestedBy: data.requestedBy,
-        department: data.department,
-        requiredDate,
-        priority: data.priority,
-        status: editingRequest ? editingRequest.status : status,
-        items: requestItems,
-        notes: data.notes || '',
-        createdAt: editingRequest ? editingRequest.createdAt : new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      savePurchaseRequest(localReq);
-
-      toast.warning(`Saved locally (${apiMsg})`);
-      setIsCreateModalOpen(false);
-      setEditingRequest(null);
+      // Keep the modal open with everything the user entered; show backend field errors inline.
+      const apiFields = extractApiFieldErrors(err);
+      const mapped: Record<string, string> = {};
+      for (const [k, m] of Object.entries(apiFields)) {
+        if (k === 'requestedBy' || k === 'department' || k === 'priority' || k === 'notes') {
+          setError(k as any, { type: 'server', message: m });
+          mapped[k] = m;
+        } else if (k === 'requiredDate' || k === 'requestDate') {
+          mapped[k] = m;
+        } else {
+          const im = k.match(/^items\.(\d+)\.(\w+)$/);
+          if (im) {
+            const f = im[2] === 'requestedQuantity' || im[2] === 'quantity' ? 'quantity' : im[2] === 'productId' ? 'product' : im[2];
+            mapped[`items.${im[1]}.${f}`] = m;
+          }
+        }
+      }
+      if (Object.keys(mapped).length > 0) {
+        mergeLineErrors(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'Failed to save the purchase request. Your entries have been kept; please try again.'));
+      }
     } finally {
       setIsSubmittingForm(false);
     }
@@ -838,7 +883,8 @@ export const PurchaseRequestView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteRequest = async () => {
+  const handleConfirmDeleteRequest = () => runDeleteOnce(confirmDeleteRequestInner);
+  const confirmDeleteRequestInner = async () => {
     if (!deleteTargetRequest) return;
     setIsDeletingRequest(true);
     setDeleteRequestError(null);
@@ -851,11 +897,7 @@ export const PurchaseRequestView: React.FC = () => {
       loadPurchaseRequests(true);
     } catch (err: any) {
       console.warn('API delete error:', err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to delete purchase request';
+      const errMsg = getApiErrorMessage(err, 'Failed to delete purchase request');
       setDeleteRequestError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -865,11 +907,26 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Convert Request to Purchase Order: opens Purchase Order creation form with all fields prefilled
   const handleConvertToPurchase = (req: PurchaseRequest) => {
-    // 1. Identify target supplier (prefer supplier saved on request, then live UUID supplier, fallback to store supplier)
-    const targetSupplier =
-      req.supplierId
-        ? mergedSuppliers.find((s) => s.id === req.supplierId) || (req.supplierName ? { id: req.supplierId, name: req.supplierName } : undefined)
-        : suppliers.find((s) => UUID_REGEX.test(s.id)) || suppliers[0];
+    // Preconditions: request must be usable and have valid items.
+    const st = (req.status as string)?.toLowerCase();
+    if (st === 'rejected' || st === 'cancelled') {
+      toast.error(`Request ${req.requestNo} was ${st} and cannot be converted to a purchase.`);
+      return;
+    }
+    if (!req.items || req.items.length === 0) {
+      toast.error(`Request ${req.requestNo} has no items to convert. Please add items first.`);
+      return;
+    }
+    const badIdx = req.items.findIndex((it) => !it.productId || !(it.requestedQuantity > 0));
+    if (badIdx >= 0) {
+      toast.error(`Item ${badIdx + 1} of ${req.requestNo} needs a valid product and quantity before it can be converted.`);
+      return;
+    }
+    // 1. Identify target supplier. Only the supplier saved on the request is used; a different
+    //    supplier is never substituted silently, the user picks one on the purchase form instead.
+    const targetSupplier = req.supplierId
+      ? mergedSuppliers.find((s) => s.id === req.supplierId) || (req.supplierName ? { id: req.supplierId, name: req.supplierName } : undefined)
+      : undefined;
 
     // Prepare line items
     const poItems = (req.items || []).map((it) => ({
@@ -899,12 +956,15 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Rejection confirmation handler: invokes PATCH /commerce/purchase-requests/{id}/status
   const [isRejecting, setIsRejecting] = useState(false);
-  const handleConfirmRejection = async () => {
+  const handleConfirmRejection = () => runStatusOnce(confirmRejectionInner);
+  const confirmRejectionInner = async () => {
     if (!targetActionRequest) return;
-    if (!rejectionReason.trim()) {
-      toast.error('Rejection reason is required.');
+    const reasonErr = checkRequiredText(rejectionReason, 'rejection reason');
+    if (reasonErr) {
+      setRejectionError(reasonErr);
       return;
     }
+    setRejectionError(null);
 
     setIsRejecting(true);
     try {
@@ -917,15 +977,11 @@ export const PurchaseRequestView: React.FC = () => {
       setRejectionModalOpen(false);
       loadPurchaseRequests(true);
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to reject purchase request on server';
       console.warn('API rejection error:', err);
-      updatePurchaseRequestStatus(targetActionRequest.id, 'Rejected', rejectionReason.trim());
-      toast.info(`Request ${targetActionRequest.requestNo} marked as rejected locally (${errMsg}).`);
-      setRejectionModalOpen(false);
+      const apiFields = extractApiFieldErrors(err);
+      const m = apiFields.rejectionReason;
+      if (m) setRejectionError(m);
+      else toast.error(getApiErrorMessage(err, 'Failed to reject the purchase request. Please try again.'));
     } finally {
       setIsRejecting(false);
     }
@@ -939,10 +995,16 @@ export const PurchaseRequestView: React.FC = () => {
   };
 
   // Approval handler: invokes PATCH /commerce/purchase-requests/{id}/status
-  const handleApproveRequest = async (reqToApprove?: PurchaseRequest | null) => {
+  const handleApproveRequest = (reqToApprove?: PurchaseRequest | null) =>
+    runStatusOnce(() => approveRequestInner(reqToApprove));
+  const approveRequestInner = async (reqToApprove?: PurchaseRequest | null) => {
     const target = reqToApprove || selectedRequest;
     if (!target) {
       console.warn('Approve called without target request');
+      return;
+    }
+    if (!isPendingApproval(target.status)) {
+      toast.error(`Request ${target.requestNo} is not waiting for approval, so it cannot be approved.`);
       return;
     }
 
@@ -982,15 +1044,8 @@ export const PurchaseRequestView: React.FC = () => {
       setIsViewModalOpen(false);
       loadPurchaseRequests(true);
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to approve request on server';
       console.warn('API purchase request approval error:', err);
-      updatePurchaseRequestStatus(target.id, 'Approved', undefined, approverName);
-      toast.info(`Purchase request ${target.requestNo} approved locally (${errMsg}).`);
-      setIsViewModalOpen(false);
+      toast.error(getApiErrorMessage(err, 'Failed to approve the purchase request. Please try again.'));
     } finally {
       setIsApproving(false);
     }
@@ -1688,7 +1743,12 @@ export const PurchaseRequestView: React.FC = () => {
       >
         <form
           noValidate
-          onSubmit={handleSubmit((data) => onSaveRequest(data, 'Pending Approval'))}
+          onSubmit={handleSubmit(
+            (data) => onSaveRequest(data, 'Pending Approval'),
+            () => {
+              validateAll(computeRequestErrors());
+            },
+          )}
           className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150"
         >
           {/* Metadata: 3-column Grid Layout matching standard reference */}
@@ -1702,7 +1762,7 @@ export const PurchaseRequestView: React.FC = () => {
                 {...register('requestNo')}
                 readOnly
                 className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
-                placeholder="Auto-generated"
+                placeholder="Auto-generated on save"
               />
               <FormError message={errors.requestNo?.message} />
             </div>
@@ -1713,12 +1773,18 @@ export const PurchaseRequestView: React.FC = () => {
               </label>
               <input
                 type="date"
+                {...fieldAttr('requestDate')}
                 value={requestDate}
-                onChange={(e) => setRequestDate(e.target.value)}
+                onChange={(e) => {
+                  setRequestDate(e.target.value);
+                  clearError('requestDate');
+                  clearError('requiredDate');
+                }}
                 disabled={!!editingRequest}
                 title={editingRequest ? "Request date cannot be changed after creation" : undefined}
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
               />
+              <FormError message={lineErrors['requestDate']} />
             </div>
 
             <div>
@@ -1727,10 +1793,15 @@ export const PurchaseRequestView: React.FC = () => {
               </label>
               <input
                 type="date"
+                {...fieldAttr('requiredDate')}
                 value={requiredDate}
-                onChange={(e) => setRequiredDate(e.target.value)}
+                onChange={(e) => {
+                  setRequiredDate(e.target.value);
+                  clearError('requiredDate');
+                }}
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={lineErrors['requiredDate']} />
             </div>
 
             <div>
@@ -1847,6 +1918,7 @@ export const PurchaseRequestView: React.FC = () => {
               </Button>
             </div>
 
+            <FormError message={lineErrors['items']} />
             <div className="border border-slate-200 rounded-[4px] overflow-hidden bg-white shadow-2xs">
               <div className="overflow-x-auto max-w-full">
                 <table className="w-full text-xs border-collapse">
@@ -1881,7 +1953,7 @@ export const PurchaseRequestView: React.FC = () => {
                           </td>
 
                           {/* 2. Product */}
-                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle min-w-[200px]">
+                          <td className="py-2.5 px-2 border-r border-slate-200 align-middle min-w-[200px]" {...fieldAttr(`items.${idx}.product`)}>
                             <ProductSearchableSelect
                               value={it.productId}
                               onChange={(val) => {
@@ -1902,6 +1974,7 @@ export const PurchaseRequestView: React.FC = () => {
                               size="sm"
                               triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                             />
+                            <FormError message={lineErrors[`items.${idx}.product`]} />
                           </td>
 
                           {/* 3. In Stock */}
@@ -1916,6 +1989,7 @@ export const PurchaseRequestView: React.FC = () => {
                             <input
                               type="number"
                               min="1"
+                              {...fieldAttr(`items.${idx}.quantity`)}
                               value={it.requestedQuantity}
                               onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) =>
@@ -1923,6 +1997,7 @@ export const PurchaseRequestView: React.FC = () => {
                               }
                               className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
                             />
+                            <FormError message={lineErrors[`items.${idx}.quantity`]} />
                           </td>
 
                           {/* 5. Est. Cost */}
@@ -1936,10 +2011,12 @@ export const PurchaseRequestView: React.FC = () => {
                           <td className="py-2.5 px-2 border-r border-slate-200 align-middle">
                             <input
                               type="date"
+                              {...fieldAttr(`items.${idx}.requiredDate`)}
                               value={it.requiredDate}
                               onChange={(e) => handleItemFieldChange(idx, 'requiredDate', e.target.value)}
                               className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-medium text-slate-700 outline-none shadow-2xs transition-all cursor-pointer"
                             />
+                            <FormError message={lineErrors[`items.${idx}.requiredDate`]} />
                           </td>
 
                           {/* 7. Delete Action */}
@@ -2093,7 +2170,7 @@ export const PurchaseRequestView: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setTargetActionRequest(selectedRequest);
-                      setRejectionReason('');
+                      setRejectionReason(''); setRejectionError(null);
                       setRejectionModalOpen(true);
                     }}
                     className="h-10 px-4 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
@@ -2187,10 +2264,15 @@ export const PurchaseRequestView: React.FC = () => {
               <textarea
                 rows={3}
                 value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setRejectionReason(v);
+                  setRejectionError((prev) => (prev ? checkRequiredText(v, 'rejection reason') : null));
+                }}
                 placeholder="e.g. Budget constraints, duplicate request, existing surplus stock..."
                 className={FORM_TEXTAREA_CLS}
               />
+              <FormError message={rejectionError || undefined} />
             </div>
             <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button

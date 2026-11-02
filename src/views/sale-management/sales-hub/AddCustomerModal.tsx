@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import {
   User,
@@ -19,7 +19,22 @@ import {
   FORM_TEXTAREA_CLS,
 } from "../utils/formUtils";
 import { SalesRepSearchableSelect } from "./SalesRepSearchableSelect";
-import { normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
+import {
+  normalizeIndianPhoneTo10Digits,
+  isValidIndianPhone,
+} from "../../../utils/validation";
+import {
+  checkRequiredText,
+  checkPhone,
+  checkEmail,
+  checkPincode,
+  checkGstin,
+  checkPan,
+  checkMoney,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 import {
   customerApi,
   CreateCustomerPayload,
@@ -86,7 +101,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     salesRepresentatives,
     setSalesRepresentativesList,
   } = useSalesManagementStore();
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { isSubmitting, runOnce } = useSubmitGuard();
   const [liveSalesReps, setLiveSalesReps] = useState<
     ApiSalesRepresentative[]
   >([]);
@@ -107,8 +122,11 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     setValue,
     reset,
     setError,
-    formState: { errors },
+    clearErrors,
+    formState: { errors, isSubmitted },
   } = useForm<CustomerFormData>({
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       customerType: "Business",
       status: "Active",
@@ -122,13 +140,21 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
 
   const watchSameAsBilling = watch("sameAsBilling");
 
-  const loadSalesReps = async () => {
+  // Guards: never run two rep loads at once, and do not re-fetch on every open once loaded.
+  const isFetchingRepsRef = useRef(false);
+  const hasLoadedRepsRef = useRef(false);
+
+  const loadSalesReps = async (forceRefresh = false) => {
+    if (isFetchingRepsRef.current) return;
+    if (!forceRefresh && hasLoadedRepsRef.current) return;
+    isFetchingRepsRef.current = true;
     setIsSalesRepsLoading(true);
     try {
       const res = await salesRepresentativeApi.getList({
         limit: 200,
       });
       if (res && res.success && Array.isArray(res.data)) {
+        hasLoadedRepsRef.current = true;
         setLiveSalesReps(res.data);
         const mappedReps: SalesRepresentative[] = res.data.map((r) => ({
           id: r.id,
@@ -147,6 +173,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     } catch (err) {
       console.warn("Failed to load sales reps:", err);
     } finally {
+      isFetchingRepsRef.current = false;
       setIsSalesRepsLoading(false);
     }
   };
@@ -163,8 +190,10 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         openingBalance: 0,
       });
       loadSalesReps();
+    } else {
+      clearErrors();
     }
-  }, [isOpen, reset]);
+  }, [isOpen, reset, clearErrors]);
 
   const handleNumberOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (
@@ -184,8 +213,50 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     }
   };
 
-  const onSubmit = async (data: CustomerFormData) => {
-    setIsSubmitting(true);
+  // Submit attempted with field-rule failures: also surface the out-of-rule rep error in the same pass.
+  const onInvalid = () => {
+    const repId = watch("salesRepresentativeId");
+    if (
+      repId &&
+      availableSalesReps.length > 0 &&
+      !availableSalesReps.some((r) => r.id === repId)
+    ) {
+      setError("salesRepresentativeId", {
+        type: "manual",
+        message: "Please choose the sales representative from the list.",
+      });
+    }
+  };
+
+  const onSubmit = (data: CustomerFormData) =>
+    runOnce(async () => {
+    // Re-check every rule here (not only through field rules) so nothing invalid reaches the API.
+    const submitErrors: Array<[keyof CustomerFormData, string | null]> = [
+      ["name", checkRequiredText(data.name, "customer name", 2)],
+      ["phone", checkPhone(data.phone, isValidIndianPhone, true)],
+      ["alternatePhone", checkPhone(data.alternatePhone, isValidIndianPhone)],
+      ["email", checkEmail(data.email)],
+      ["pincode", checkPincode(data.pincode)],
+      ["gstNumber", checkGstin(data.gstNumber)],
+      ["panNumber", checkPan(data.panNumber)],
+      ["creditLimit", checkMoney(data.creditLimit, "credit limit", { allowZero: true, optional: true })],
+      ["openingBalance", checkMoney(data.openingBalance, "existing outstanding amount", { allowZero: true, optional: true })],
+    ];
+    if (
+      data.salesRepresentativeId &&
+      availableSalesReps.length > 0 &&
+      !availableSalesReps.some((r) => r.id === data.salesRepresentativeId)
+    ) {
+      submitErrors.push([
+        "salesRepresentativeId",
+        "Please choose the sales representative from the list.",
+      ]);
+    }
+    const failed = submitErrors.filter(([, m]) => !!m);
+    if (failed.length > 0) {
+      failed.forEach(([f, m]) => setError(f, { type: "manual", message: m as string }));
+      return;
+    }
     try {
       const normalizedPhone = normalizeIndianPhoneTo10Digits(data.phone || "");
       const normalizedAltPhone = data.alternatePhone
@@ -305,21 +376,29 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         setError("customerCode", {
           type: "manual",
           message:
-            "This Customer Code already exists. Please enter a different code or leave blank to auto-generate.",
+            "Could not generate a unique customer code. Please try again.",
         });
-        toast.error("Customer Code already exists.");
+        toast.error("Could not generate a unique customer code. Please try again.");
         return;
       }
 
-      const errMsg =
-        apiErr?.response?.data?.error?.fields?.[0]?.message ||
-        errorMsg ||
-        "Failed to register customer.";
-      toast.error(`Customer creation failed: ${errMsg}`);
-    } finally {
-      setIsSubmitting(false);
+      const fieldErrors = extractApiFieldErrors(apiErr);
+      const knownFields = [
+        "name", "phone", "alternatePhone", "email", "pincode", "gstNumber",
+        "panNumber", "creditLimit", "openingBalance", "city",
+        "state", "country", "company",
+      ] as const;
+      let mapped = false;
+      for (const f of knownFields) {
+        if (fieldErrors[f]) {
+          setError(f as keyof CustomerFormData, { type: "server", message: fieldErrors[f] });
+          mapped = true;
+        }
+      }
+      if (mapped) return;
+      toast.error(getApiErrorMessage(apiErr, "We could not register the customer. Please try again."));
     }
-  };
+    });
 
   return (
     <Modal
@@ -333,7 +412,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
       hideCloseButton={true}
       onBack={onClose}
     >
-      <form onSubmit={handleSubmit(onSubmit)} noValidate>
+      <form onSubmit={handleSubmit(onSubmit, onInvalid)} noValidate>
         <div className="space-y-5 sm:space-y-6 p-0.5 sm:p-2 text-xs animate-in fade-in duration-150">
           {/* Section 1: Basic Details */}
           <div>
@@ -349,11 +428,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 <input
                   type="text"
                   {...register("name", {
-                    required: "Customer name is required",
-                    minLength: {
-                      value: 2,
-                      message: "Name must be at least 2 characters",
-                    },
+                    validate: (val) => checkRequiredText(val, "customer name", 2) || true,
                   })}
                   placeholder="e.g. Marcus Vance or Acme Corp"
                   className={
@@ -395,15 +470,21 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   value={watch("salesRepresentativeId")}
                   onChange={(repId) => {
                     setValue("salesRepresentativeId", repId, {
-                      shouldValidate: true,
+                      shouldValidate: isSubmitted,
                       shouldDirty: true,
                     });
                   }}
                   availableReps={availableSalesReps}
                   isLoading={isSalesRepsLoading}
-                  onRefreshReps={loadSalesReps}
+                  onRefreshReps={() => loadSalesReps(true)}
                   placeholder="Select Sales Representative"
                 />
+                {errors.salesRepresentativeId && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{errors.salesRepresentativeId.message}</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -412,10 +493,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="tel"
                   maxLength={10}
                   {...register("phone", {
-                    required: "Primary phone is required",
                     validate: (val) =>
-                      /^[6-9]\d{9}$/.test((val || "").trim()) ||
-                      "Phone number must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)",
+                      checkPhone(val, isValidIndianPhone, true) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -443,10 +522,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   maxLength={10}
                   {...register("alternatePhone", {
                     validate: (val) =>
-                      !val ||
-                      !val.trim() ||
-                      /^[6-9]\d{9}$/.test(val.trim()) ||
-                      "Alternate phone must be a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9)",
+                      checkPhone(val, isValidIndianPhone) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -474,11 +550,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 <input
                   type="email"
                   {...register("email", {
-                    validate: (val) =>
-                      !val ||
-                      !val.trim() ||
-                      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim()) ||
-                      "Please enter a valid email address (e.g. client@company.com)",
+                    validate: (val) => checkEmail(val) || true,
                   })}
                   placeholder="e.g. client@company.com"
                   className={
@@ -601,11 +673,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   maxLength={6}
                   {...register("pincode", {
-                    validate: (val) =>
-                      !val ||
-                      !val.trim() ||
-                      /^[1-9][0-9]{5}$/.test(val.trim()) ||
-                      "Pincode must be a valid 6-digit Indian postal code",
+                    validate: (val) => checkPincode(val) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -643,13 +711,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   maxLength={15}
                   {...register("gstNumber", {
-                    validate: (val) =>
-                      !val ||
-                      !val.trim() ||
-                      /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(
-                        val.trim().toUpperCase(),
-                      ) ||
-                      "Invalid GSTIN format (e.g. 33AABCZ9876K1Z2)",
+                    validate: (val) => checkGstin(val) || true,
                   })}
                   onInput={(e) => {
                     e.currentTarget.value =
@@ -672,13 +734,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   maxLength={10}
                   {...register("panNumber", {
-                    validate: (val) =>
-                      !val ||
-                      !val.trim() ||
-                      /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(
-                        val.trim().toUpperCase(),
-                      ) ||
-                      "Invalid PAN format (e.g. ABCDE1234F)",
+                    validate: (val) => checkPan(val) || true,
                   })}
                   onInput={(e) => {
                     e.currentTarget.value =
@@ -766,9 +822,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   {...register("creditLimit", {
                     validate: (val) =>
-                      val === "" ||
-                      Number(val) >= 0 ||
-                      "Credit limit cannot be negative",
+                      checkMoney(val, "credit limit", { allowZero: true, optional: true }) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -814,9 +868,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   {...register("openingBalance", {
                     validate: (val) =>
-                      val === "" ||
-                      Number(val) >= 0 ||
-                      "Opening balance cannot be negative",
+                      checkMoney(val, "existing outstanding amount", { allowZero: true, optional: true }) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {

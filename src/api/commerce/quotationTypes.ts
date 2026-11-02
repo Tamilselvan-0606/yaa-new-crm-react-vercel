@@ -186,11 +186,22 @@ export interface ConvertQuotationPayload {
 /**
  * Response for GET /commerce/quotations
  */
+export interface QuotationSummary {
+  totalCount: number;
+  totalAmount: number;
+  openCount: number;
+  openAmount: number;
+  convertedCount: number;
+  convertedAmount: number;
+  cancelledCount: number;
+}
+
 export interface QuotationListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiQuotation[];
+  summary?: QuotationSummary;
   pagination: QuotationPagination;
   meta?: {
     timestamp: string;

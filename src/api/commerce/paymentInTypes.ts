@@ -220,11 +220,19 @@ export interface UpdatePaymentInPayload {
 
 export type PatchPaymentInPayload = Partial<UpdatePaymentInPayload>;
 
+export interface PaymentInSummary {
+  totalCount: number;
+  totalAmount: number;
+  cashAmount: number;
+  onlineAmount: number;
+}
+
 export interface CommercePaymentInListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiPaymentIn[];
+  summary?: PaymentInSummary;
   pagination?: {
     page: number;
     limit: number;

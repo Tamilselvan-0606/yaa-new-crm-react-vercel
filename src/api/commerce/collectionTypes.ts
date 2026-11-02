@@ -73,13 +73,6 @@ export interface CollectionDashboardMetrics {
     count: number;
     amount: number;
   };
-  overdueAmount?: number;
-  overdueCount?: number;
-  dueTodayAmount?: number;
-  dueTodayCount?: number;
-  followUpsTodayCount?: number;
-  collectedThisMonthAmount?: number;
-  collectedThisMonthCount?: number;
 }
 
 export interface CollectionPagination {

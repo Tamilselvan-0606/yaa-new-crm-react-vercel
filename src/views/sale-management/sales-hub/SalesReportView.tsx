@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   BarChart3,
   TrendingUp,
@@ -31,6 +31,7 @@ import {
   Legend,
 } from 'recharts';
 import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
+import { salesReportApi, SalesReportSummary } from '../../../api/commerce/salesReportApi';
 import { Button } from '../../../components/common/Button';
 import { Badge } from '../../../components/common/Badge';
 import { toast } from "../../../utils/toast";
@@ -51,6 +52,31 @@ export const SalesReportView: React.FC = () => {
   const [customEndDate, setCustomEndDate] = useState(
     new Date().toISOString().split('T')[0]
   );
+
+
+  // Server-side KPI summary (falls back to in-browser computation until loaded)
+  const [apiSummary, setApiSummary] = useState<SalesReportSummary | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const params =
+      timeRange === 'custom'
+        ? {
+            from: customStartDate <= customEndDate ? customStartDate : customEndDate,
+            to: customStartDate <= customEndDate ? customEndDate : customStartDate,
+          }
+        : { period: timeRange };
+    salesReportApi
+      .getReportSummary(params)
+      .then((res) => {
+        if (!cancelled) setApiSummary(res?.success && res.data ? res.data : null);
+      })
+      .catch(() => {
+        if (!cancelled) setApiSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange, customStartDate, customEndDate]);
 
   // Filter sales based on chosen range
   const filteredSales = useMemo(() => {
@@ -87,13 +113,22 @@ export const SalesReportView: React.FC = () => {
     const totalTax = filteredSales.reduce((acc, s) => acc + s.totalTax, 0);
     const netSales = filteredSales.reduce((acc, s) => acc + (s.subtotal - s.totalDiscount), 0);
     const totalReturns = salesReturns.reduce((acc, r) => acc + r.returnAmount, 0);
-    const estimatedCost = filteredSales.reduce((acc, s) => {
-      // Est cost 55% of subtotal
-      return acc + s.subtotal * 0.55;
-    }, 0);
-    // Preserves negative profit (net loss) when costs exceed revenue
-    const totalProfit = netSales - estimatedCost - (totalReturns * 0.45);
+    // Fallback only (until the API summary loads): preserves negative profit (net loss)
+    const fallbackCost = filteredSales.reduce((acc, s) => acc + s.subtotal * 0.55, 0);
+    const totalProfit = netSales - fallbackCost - (totalReturns * 0.45);
     const outstandingAmount = filteredSales.reduce((acc, s) => acc + s.balance, 0);
+
+    if (apiSummary) {
+      return {
+        totalSales: apiSummary.totalSales,
+        netSales: apiSummary.netSales,
+        totalDiscount: apiSummary.totalDiscount,
+        totalTax: apiSummary.totalTax,
+        totalReturns: apiSummary.totalReturns,
+        totalProfit: apiSummary.grossProfit,
+        outstandingAmount: apiSummary.outstandingAmount,
+      };
+    }
 
     return {
       totalSales,
@@ -104,7 +139,7 @@ export const SalesReportView: React.FC = () => {
       totalProfit,
       outstandingAmount,
     };
-  }, [filteredSales, salesReturns]);
+  }, [filteredSales, salesReturns, apiSummary]);
 
   // Chart 1: Sales Trend
   const trendData = useMemo(() => {

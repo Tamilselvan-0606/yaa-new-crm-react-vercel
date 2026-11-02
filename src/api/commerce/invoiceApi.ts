@@ -146,7 +146,7 @@ export const mapApiInvoiceToSaleTransaction = (apiInv: ApiSalesInvoice): SaleTra
 
   return {
     id: apiInv.id,
-    invoiceNo: apiInv.invoiceNo || 'INV-0000',
+    invoiceNo: apiInv.invoiceNo || '',
     invoiceStatus: normalizedInvoiceStatus,
     referenceNo: apiInv.referenceNo || undefined,
     saleDate: saleDateStr,

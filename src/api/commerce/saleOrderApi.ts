@@ -153,7 +153,7 @@ export const mapApiSaleOrderToSaleOrderRecord = (apiO: ApiSaleOrder): SaleOrderR
 
   return {
     id: apiO.id,
-    orderNo: apiO.orderNo || 'SO-0000',
+    orderNo: apiO.orderNo || '',
     referenceNo: apiO.referenceNo || undefined,
     orderDate: orderDateStr,
     dueDate: dueDateStr,

@@ -63,6 +63,22 @@ import { FilterDropdown } from '../../../components/common/FilterDropdown';
 import { exportTableToExcel } from '../../../utils/excelExport';
 import { printTableReport } from '../../../utils/printUtils';
 import { toast } from "../../../utils/toast";
+import {
+  checkRequiredText,
+  checkMoney,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkPaymentWithinBalance,
+  checkRecordId,
+  isUuid,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  type FieldErrors,
+} from '../../../utils/formValidation';
+import { FormError } from '../../../components/common/FormError';
 import { SaleActionDropdown } from '../utils';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
@@ -235,6 +251,14 @@ export const CollectionsView: React.FC = () => {
   const [customerTimeline, setCustomerTimeline] = useState<CustomerCollectionTimelineData | null>(null);
   const [isTimelineLoading, setIsTimelineLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const payFE = useFieldErrors();
+  const fuFE = useFieldErrors();
+  const promFE = useFieldErrors();
+  const assignFE = useFieldErrors();
+  const payGuard = useSubmitGuard();
+  const fuGuard = useSubmitGuard();
+  const promGuard = useSubmitGuard();
+  const assignGuard = useSubmitGuard();
 
   // Timeline UI Interactive Filter States
   const [timelineTab, setTimelineTab] = useState<'all' | 'payments' | 'invoices' | 'follow-ups' | 'promises'>('all');
@@ -318,11 +342,27 @@ export const CollectionsView: React.FC = () => {
     }
   }, [selectedRepFilter, todayStr]);
 
-  const isFetchingInvoicesRef = useRef(false);
+  // Latest-request-wins: an identical load already in flight is shared, but a load with different
+  // filters (or one triggered after a payment / follow-up) is never silently dropped; only the
+  // newest response is applied, so the screen cannot end up showing stale data.
+  const invoicesRequestSeqRef = useRef(0);
+  const invoicesInFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
 
-  const loadInvoices = React.useCallback(async () => {
-    if (isFetchingInvoicesRef.current) return;
-    isFetchingInvoicesRef.current = true;
+  const loadInvoices = React.useCallback((): Promise<void> => {
+    const key = JSON.stringify([
+      appliedSearch,
+      selectedRepFilter,
+      selectedCustomerFilter,
+      dueDateFilter,
+      statusFilter,
+      paymentStatusFilter,
+    ]);
+    if (invoicesInFlightRef.current?.key === key) return invoicesInFlightRef.current.promise;
+
+    const requestId = ++invoicesRequestSeqRef.current;
+    const isLatest = () => requestId === invoicesRequestSeqRef.current;
+
+    const run = async () => {
     try {
       setIsInvoicesLoading(true);
 
@@ -347,6 +387,12 @@ export const CollectionsView: React.FC = () => {
         collectionApi.getCustomerAssignments({ limit: 200 }),
       ]);
 
+      if (!isLatest()) return; // a newer load has started; ignore this response
+
+      if (colRes.status === 'rejected') {
+        toast.error(getApiErrorMessage(colRes.reason, 'We could not load the collections. Please try again.'));
+      }
+
       if (assignRes.status === 'fulfilled' && assignRes.value?.success && Array.isArray(assignRes.value.data)) {
         setApiAssignments(assignRes.value.data);
       }
@@ -368,11 +414,20 @@ export const CollectionsView: React.FC = () => {
       setTotalInvoices(colInvoices.length);
     } catch (err) {
       console.error('Failed to load collection invoices:', err);
-      setApiInvoices([]);
+      if (isLatest()) {
+        setApiInvoices([]);
+        toast.error(getApiErrorMessage(err, 'We could not load the collections. Please try again.'));
+      }
     } finally {
-      setIsInvoicesLoading(false);
-      isFetchingInvoicesRef.current = false;
+      if (isLatest()) setIsInvoicesLoading(false);
     }
+    };
+
+    const promise = run().finally(() => {
+      if (invoicesInFlightRef.current?.promise === promise) invoicesInFlightRef.current = null;
+    });
+    invoicesInFlightRef.current = { key, promise };
+    return promise;
   }, [
     appliedSearch,
     selectedRepFilter,
@@ -400,6 +455,7 @@ export const CollectionsView: React.FC = () => {
     } catch (err) {
       console.error('Failed to load customer assignments:', err);
       setApiAssignments([]);
+      toast.error(getApiErrorMessage(err, 'We could not load the customer assignments. Please try again.'));
     } finally {
       setIsAssignmentsLoading(false);
     }
@@ -422,6 +478,7 @@ export const CollectionsView: React.FC = () => {
     } catch (err) {
       console.error('Failed to load follow-ups:', err);
       setApiFollowUps([]);
+      toast.error(getApiErrorMessage(err, 'We could not load the follow-ups. Please try again.'));
     } finally {
       setIsFollowUpsLoading(false);
     }
@@ -444,6 +501,7 @@ export const CollectionsView: React.FC = () => {
     } catch (err) {
       console.error('Failed to load collection history:', err);
       setApiHistory([]);
+      toast.error(getApiErrorMessage(err, 'We could not load the collection history. Please try again.'));
     } finally {
       setIsHistoryLoading(false);
     }
@@ -1035,7 +1093,122 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Open Record Payment Modal prefilled with invoice
+  const outstandingOf = (inv: any): number =>
+    inv?.balance !== undefined && inv?.balance !== null
+      ? Number(inv.balance)
+      : Math.max(0, Number(inv?.grandTotal || 0) - Number(inv?.paidAmount || 0));
+
+  // A date that represents a future commitment must not be before today.
+  const checkNotPast = (value: string, label: string): string | null =>
+    value && value < todayStr ? `The ${label} cannot be in the past. Please choose today or a later date.` : null;
+
+  const validateRecordPayment = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    if (!selectedInvoice?.id) errs.amount = 'Please select an invoice before recording a payment.';
+    const amountErr = checkMoney(paymentAmount, 'payment amount');
+    if (amountErr) {
+      errs.amount = amountErr;
+    } else {
+      const balErr = checkPaymentWithinBalance(paymentAmount, outstandingOf(selectedInvoice), 'payment amount');
+      if (balErr) errs.amount = balErr;
+    }
+    const dateErr = checkRequiredDate(paymentDate, 'payment date');
+    if (dateErr) {
+      errs.paymentDate = dateErr;
+    } else {
+      const invDate = selectedInvoice?.saleDate || selectedInvoice?.invoiceDate || selectedInvoice?.date;
+      const d2 = checkDateNotBefore(paymentDate, invDate ? String(invDate).split('T')[0] : null, 'payment date', 'invoice date');
+      if (d2) errs.paymentDate = d2;
+    }
+    if (!['Bank Transfer', 'Cash', 'UPI', 'Card', 'Cheque', 'Online Payment'].includes(paymentMethod)) {
+      errs.paymentMethod = 'Please select a payment method.';
+    }
+    if (paymentRepId && !isUuid(paymentRepId)) {
+      errs.paymentRep = 'Please choose the collecting sales representative from the list.';
+    }
+    return errs;
+  };
+
+  const validateFollowUp = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const notesErr = checkRequiredText(followUpNotes, 'follow-up discussion');
+    if (notesErr) errs.notes = notesErr;
+    const dateErr = checkRequiredDate(followUpDate, 'follow-up date');
+    if (dateErr) errs.followUpDate = dateErr;
+    if (followUpRepId && !isUuid(followUpRepId)) {
+      errs.followUpRep = 'Please choose the sales representative from the list.';
+    }
+    if (nextFollowUpDate) {
+      const nErr =
+        checkRequiredDate(nextFollowUpDate, 'next follow-up date') ||
+        checkNotPast(nextFollowUpDate, 'next follow-up date') ||
+        (!dateErr ? checkDateNotBefore(nextFollowUpDate, followUpDate, 'next follow-up date', 'follow-up date') : null);
+      if (nErr) errs.nextFollowUp = nErr;
+    }
+    if (followUpHasPromise) {
+      const pdErr = !followUpPromiseDate
+        ? 'Please select the promise date.'
+        : checkRequiredDate(followUpPromiseDate, 'promise date') || checkNotPast(followUpPromiseDate, 'promise date');
+      if (pdErr) errs.promiseDate = pdErr;
+      const paErr = checkMoney(followUpPromiseAmount, 'expected amount');
+      if (paErr) {
+        errs.promiseAmount = paErr;
+      } else {
+        const bal = checkPaymentWithinBalance(followUpPromiseAmount, outstandingOf(selectedInvoice), 'expected amount');
+        if (bal) errs.promiseAmount = bal;
+      }
+    }
+    return errs;
+  };
+
+  const validatePromise = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const amtErr = checkMoney(promisedAmount, 'promised amount');
+    if (amtErr) {
+      errs.promisedAmount = amtErr;
+    } else {
+      const bal = checkPaymentWithinBalance(promisedAmount, outstandingOf(selectedInvoice), 'promised amount');
+      if (bal) errs.promisedAmount = bal;
+    }
+    const dErr = !promiseDate
+      ? 'Please select the promised payment date.'
+      : checkRequiredDate(promiseDate, 'promised payment date') || checkNotPast(promiseDate, 'promised payment date');
+    if (dErr) errs.promiseDate = dErr;
+    return errs;
+  };
+
+  const validateAssign = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const cErr = checkRecordId(assignCustomerId, 'customer');
+    if (cErr) errs.assignCustomer = cErr;
+    const rErr = checkRecordId(assignRepId, 'sales representative');
+    if (rErr) errs.assignRep = rErr;
+    if (assignType !== 'Primary' && assignType !== 'Temporary') errs.assignType = 'Please choose the assignment type.';
+    const dErr = checkRequiredDate(assignEffectiveFrom, 'effective date');
+    if (dErr) errs.assignDate = dErr;
+    return errs;
+  };
+
+  // After the first submit attempt each modal keeps its errors in sync with its values.
+  useRevalidateAfterSubmit(payFE, validateRecordPayment, [
+    selectedInvoice, paymentAmount, paymentDate, paymentMethod, paymentRepId,
+  ]);
+  useRevalidateAfterSubmit(fuFE, validateFollowUp, [
+    selectedInvoice, followUpNotes, followUpDate, followUpRepId, nextFollowUpDate,
+    followUpHasPromise, followUpPromiseDate, followUpPromiseAmount,
+  ]);
+  useRevalidateAfterSubmit(promFE, validatePromise, [selectedInvoice, promisedAmount, promiseDate]);
+  useRevalidateAfterSubmit(assignFE, validateAssign, [
+    assignCustomerId, assignRepId, assignType, assignEffectiveFrom,
+  ]);
+  // Every modal opens and closes with a clean error state.
+  useEffect(() => { payFE.reset(); }, [isRecordPaymentModalOpen, payFE.reset]);
+  useEffect(() => { fuFE.reset(); }, [isFollowUpModalOpen, fuFE.reset]);
+  useEffect(() => { promFE.reset(); }, [isPromiseModalOpen, promFE.reset]);
+  useEffect(() => { assignFE.reset(); }, [isAssignCustomerModalOpen, assignFE.reset]);
+
   const handleOpenRecordPayment = (item: CollectionItem) => {
+    payFE.reset();
     setSelectedInvoice(item.invoice);
     setSelectedCustomer(item.customer);
     setPaymentAmount(item.outstandingAmount);
@@ -1049,26 +1222,12 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Submit Record Payment
-  const handleSubmitRecordPayment = async (e: React.FormEvent) => {
+  const handleSubmitRecordPayment = (e: React.FormEvent) => {
     e.preventDefault();
+    return payGuard.runOnce(async () => {
     if (!selectedInvoice) return;
 
-    if (paymentAmount <= 0) {
-      toast.error('Please enter a valid payment amount greater than �0');
-      return;
-    }
-
-    const currentOutstanding =
-      selectedInvoice.balance !== undefined
-        ? Number(selectedInvoice.balance)
-        : Math.max(0, Number(selectedInvoice.grandTotal || 0) - Number(selectedInvoice.paidAmount || 0));
-
-    if (paymentAmount > currentOutstanding) {
-      toast.error(
-        `Payment amount (�${paymentAmount.toLocaleString()}) cannot exceed outstanding amount (�${currentOutstanding.toLocaleString()})`
-      );
-      return;
-    }
+    if (!payFE.validateAll(validateRecordPayment())) return;
 
     try {
       setIsSubmitting(true);
@@ -1117,14 +1276,25 @@ export const CollectionsView: React.FC = () => {
       if (subView === 'collection-history') loadHistory();
     } catch (err: any) {
       console.error('Failed to record payment:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to record payment');
+      const fe = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      if (fe.amount) mapped.amount = fe.amount;
+      if (fe.paymentDate) mapped.paymentDate = fe.paymentDate;
+      if (fe.paymentMethod) mapped.paymentMethod = fe.paymentMethod;
+      if (Object.keys(mapped).length > 0) {
+        payFE.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'We could not record the payment. Please try again.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
+    });
   };
 
   // Helper: Open Follow-up Modal
   const handleOpenFollowUp = (item: CollectionItem) => {
+    fuFE.reset();
     setSelectedInvoice(item.invoice);
     setSelectedCustomer(item.customer);
     setFollowUpDate(todayStr);
@@ -1142,19 +1312,12 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Submit Follow-up
-  const handleSubmitFollowUp = async (e: React.FormEvent) => {
+  const handleSubmitFollowUp = (e: React.FormEvent) => {
     e.preventDefault();
+    return fuGuard.runOnce(async () => {
     if (!selectedInvoice || !selectedCustomer) return;
 
-    if (!followUpNotes.trim()) {
-      toast.error('Please enter follow-up interaction notes');
-      return;
-    }
-
-    if (followUpHasPromise && (isNaN(Number(followUpPromiseAmount)) || Number(followUpPromiseAmount) <= 0)) {
-      toast.error('Promised amount must be greater than zero when Promise to Pay is checked.');
-      return;
-    }
+    if (!fuFE.validateAll(validateFollowUp())) return;
 
     const savedOutcome = followUpHasPromise ? 'Promise to Pay' : followUpOutcome;
 
@@ -1223,23 +1386,37 @@ export const CollectionsView: React.FC = () => {
       if (subView === 'follow-ups') loadFollowUps();
     } catch (err: any) {
       console.error('Failed to create follow-up:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to save follow-up');
+      const fe = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      if (fe.notes) mapped.notes = fe.notes;
+      if (fe.followUpDate) mapped.followUpDate = fe.followUpDate;
+      if (fe.promiseDate) mapped.promiseDate = fe.promiseDate;
+      if (fe.promisedAmount) mapped.promiseAmount = fe.promisedAmount;
+      if (fe.nextFollowUpDate) mapped.nextFollowUp = fe.nextFollowUpDate;
+      if (Object.keys(mapped).length > 0) {
+        fuFE.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'We could not save the follow-up. Please try again.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
+    });
   };
 
   // Helper: Open Customer Sales Rep Assignment Modal
   const handleOpenAssignCustomer = (cust?: any | null) => {
+    assignFE.reset();
+    // Customer / representative are never pre-filled with an arbitrary "first" record: the user must choose.
     if (cust) {
       setAssignCustomerId(cust.id);
-      setAssignRepId(cust.salesRepresentativeId || liveReps[0]?.id || '');
+      setAssignRepId(cust.salesRepresentativeId || '');
       setAssignType(cust.salesRepresentativeType || 'Primary');
       setAssignEffectiveFrom(cust.assignedDate || todayStr);
       setAssignNotes(cust.assignmentNotes || '');
     } else {
-      setAssignCustomerId(customers[0]?.id || '');
-      setAssignRepId(liveReps[0]?.id || '');
+      setAssignCustomerId('');
+      setAssignRepId('');
       setAssignType('Primary');
       setAssignEffectiveFrom(todayStr);
       setAssignNotes('');
@@ -1247,16 +1424,10 @@ export const CollectionsView: React.FC = () => {
     setIsAssignCustomerModalOpen(true);
   };
 
-  const handleSubmitAssignCustomer = async (e: React.FormEvent) => {
+  const handleSubmitAssignCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assignCustomerId) {
-      toast.error('Please select a customer');
-      return;
-    }
-    if (!assignRepId) {
-      toast.error('Please select a sales representative');
-      return;
-    }
+    return assignGuard.runOnce(async () => {
+    if (!assignFE.validateAll(validateAssign())) return;
 
     try {
       setIsSubmitting(true);
@@ -1335,14 +1506,25 @@ export const CollectionsView: React.FC = () => {
       loadInvoices();
     } catch (err: any) {
       console.error('Failed to assign customer:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to assign sales rep');
+      const fe = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      if (fe.customerId) mapped.assignCustomer = fe.customerId;
+      if (fe.salesRepresentativeId) mapped.assignRep = fe.salesRepresentativeId;
+      if (fe.effectiveFrom) mapped.assignDate = fe.effectiveFrom;
+      if (Object.keys(mapped).length > 0) {
+        assignFE.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'We could not assign the sales representative. Please try again.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
+    });
   };
 
   // Helper: Open Promise to Pay Modal
   const handleOpenPromiseToPay = (item: CollectionItem) => {
+    promFE.reset();
     setSelectedInvoice(item.invoice);
     setSelectedCustomer(item.customer);
     setPromisedAmount(item.outstandingAmount);
@@ -1353,19 +1535,12 @@ export const CollectionsView: React.FC = () => {
   };
 
   // Helper: Submit Promise to Pay
-  const handleSubmitPromiseToPay = async (e: React.FormEvent) => {
+  const handleSubmitPromiseToPay = (e: React.FormEvent) => {
     e.preventDefault();
+    return promGuard.runOnce(async () => {
     if (!selectedInvoice || !selectedCustomer) return;
 
-    if (promisedAmount <= 0) {
-      toast.error('Please enter a valid promised amount');
-      return;
-    }
-
-    if (!promiseDate) {
-      toast.error('Please select the promised payment date');
-      return;
-    }
+    if (!promFE.validateAll(validatePromise())) return;
 
     try {
       setIsSubmitting(true);
@@ -1407,10 +1582,19 @@ export const CollectionsView: React.FC = () => {
       loadMetrics();
     } catch (err: any) {
       console.error('Failed to save promise to pay:', err);
-      toast.error(err?.response?.data?.error?.message || err?.message || 'Failed to save promise');
+      const fe = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      if (fe.promisedAmount) mapped.promisedAmount = fe.promisedAmount;
+      if (fe.promiseDate) mapped.promiseDate = fe.promiseDate;
+      if (Object.keys(mapped).length > 0) {
+        promFE.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'We could not save the promise to pay. Please try again.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
+    });
   };
 
   // Helper: Open Customer Detail & Timeline Modal
@@ -1599,29 +1783,27 @@ export const CollectionsView: React.FC = () => {
   };
 
   const displayTotalOutstanding =
-    dashboardMetrics?.totalOutstanding !== undefined && Number(dashboardMetrics.totalOutstanding) > 0
-      ? Math.max(Number(dashboardMetrics.totalOutstanding), computedTotalOutstanding)
+    dashboardMetrics?.totalOutstanding !== undefined && dashboardMetrics?.totalOutstanding !== null
+      ? Number(dashboardMetrics.totalOutstanding)
       : computedTotalOutstanding;
 
-  const overdueData = dashboardMetrics?.overdue;
   const overdueAmt =
-    typeof overdueData === 'object' && overdueData?.amount !== undefined
-      ? Math.max(Number(overdueData.amount), computedOverdueAmount)
-      : (dashboardMetrics?.overdueAmount !== undefined ? Math.max(Number(dashboardMetrics.overdueAmount), computedOverdueAmount) : computedOverdueAmount);
+    dashboardMetrics?.overdue?.amount !== undefined
+      ? Number(dashboardMetrics.overdue.amount)
+      : computedOverdueAmount;
   const overdueCnt =
-    typeof overdueData === 'object' && overdueData?.count !== undefined
-      ? Math.max(Number(overdueData.count), computedOverdueCount)
-      : (dashboardMetrics?.overdueCount !== undefined ? Math.max(Number(dashboardMetrics.overdueCount), computedOverdueCount) : computedOverdueCount);
+    dashboardMetrics?.overdue?.count !== undefined
+      ? Number(dashboardMetrics.overdue.count)
+      : computedOverdueCount;
 
-  const dueTodayData = dashboardMetrics?.dueToday;
   const dueTodayAmt =
-    typeof dueTodayData === 'object' && dueTodayData?.amount !== undefined
-      ? Math.max(Number(dueTodayData.amount), computedDueTodayAmount)
-      : (dashboardMetrics?.dueTodayAmount !== undefined ? Math.max(Number(dashboardMetrics.dueTodayAmount), computedDueTodayAmount) : computedDueTodayAmount);
+    dashboardMetrics?.dueToday?.amount !== undefined
+      ? Number(dashboardMetrics.dueToday.amount)
+      : computedDueTodayAmount;
   const dueTodayCnt =
-    typeof dueTodayData === 'object' && dueTodayData?.count !== undefined
-      ? Math.max(Number(dueTodayData.count), computedDueTodayCount)
-      : (dashboardMetrics?.dueTodayCount !== undefined ? Math.max(Number(dashboardMetrics.dueTodayCount), computedDueTodayCount) : computedDueTodayCount);
+    dashboardMetrics?.dueToday?.count !== undefined
+      ? Number(dashboardMetrics.dueToday.count)
+      : computedDueTodayCount;
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
@@ -1774,11 +1956,7 @@ export const CollectionsView: React.FC = () => {
               {isMetricsLoading ? (
                 <span className="inline-block w-12 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                Number(
-                  (typeof dashboardMetrics?.followUpsToday === 'object'
-                    ? dashboardMetrics?.followUpsToday?.count
-                    : dashboardMetrics?.followUpsTodayCount) ?? 0
-                )
+                Number(dashboardMetrics?.followUpsToday?.count ?? 0)
               )}
             </div>
             <div className="text-xs text-indigo-600 font-medium mt-0.5">
@@ -1802,19 +1980,11 @@ export const CollectionsView: React.FC = () => {
               {isMetricsLoading ? (
                 <span className="inline-block w-24 h-6 bg-slate-100 animate-pulse rounded-md" />
               ) : (
-                `₹${Number(
-                  (typeof dashboardMetrics?.collectedThisMonth === 'object'
-                    ? dashboardMetrics?.collectedThisMonth?.amount
-                    : dashboardMetrics?.collectedThisMonthAmount) ?? 0
-                ).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                `₹${Number(dashboardMetrics?.collectedThisMonth?.amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
               )}
             </div>
             <div className="text-xs text-emerald-600 font-medium mt-0.5">
-              {Number(
-                (typeof dashboardMetrics?.collectedThisMonth === 'object'
-                  ? dashboardMetrics?.collectedThisMonth?.count
-                  : dashboardMetrics?.collectedThisMonthCount) ?? tabCounts.collected ?? 0
-              )}{' '}
+              {Number(dashboardMetrics?.collectedThisMonth?.count ?? tabCounts.collected ?? 0)}{' '}
               payments collected
             </div>
           </div>
@@ -2811,11 +2981,16 @@ export const CollectionsView: React.FC = () => {
                   step="0.01"
                   min="0.01"
                   value={paymentAmount}
+                  data-field="amount"
                   onKeyDown={handleNonNegativeKeyDown}
-                  onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                  onChange={(e) => {
+                    setPaymentAmount(parseFloat(e.target.value) || 0);
+                    payFE.clearError('amount');
+                  }}
                   className={`${FORM_INPUT_CLS} font-bold text-sm`}
                   required
                 />
+                <FormError message={payFE.errors.amount} />
               </div>
 
               {/* Payment Date */}
@@ -2824,10 +2999,15 @@ export const CollectionsView: React.FC = () => {
                 <input
                   type="date"
                   value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
+                  data-field="paymentDate"
+                  onChange={(e) => {
+                    setPaymentDate(e.target.value);
+                    payFE.clearError('paymentDate');
+                  }}
                   className={FORM_INPUT_CLS}
                   required
                 />
+                <FormError message={payFE.errors.paymentDate} />
               </div>
 
               {/* Payment Method */}
@@ -2835,7 +3015,11 @@ export const CollectionsView: React.FC = () => {
                 <FormLabel>Payment Method</FormLabel>
                 <select
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  data-field="paymentMethod"
+                  onChange={(e) => {
+                    setPaymentMethod(e.target.value);
+                    payFE.clearError('paymentMethod');
+                  }}
                   className={FORM_SELECT_CLS}
                 >
                   <option value="Bank Transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
@@ -2845,6 +3029,7 @@ export const CollectionsView: React.FC = () => {
                   <option value="Cheque">Cheque</option>
                   <option value="Online Payment">Online Payment / Gateway</option>
                 </select>
+                <FormError message={payFE.errors.paymentMethod} />
               </div>
 
               {/* Sales Representative */}
@@ -2852,7 +3037,11 @@ export const CollectionsView: React.FC = () => {
                 <FormLabel>Collecting Sales Representative</FormLabel>
                 <select
                   value={paymentRepId}
-                  onChange={(e) => setPaymentRepId(e.target.value)}
+                  data-field="paymentRep"
+                  onChange={(e) => {
+                    setPaymentRepId(e.target.value);
+                    payFE.clearError('paymentRep');
+                  }}
                   className={FORM_SELECT_CLS}
                 >
                   <option value="">Select Representative (Optional)</option>
@@ -2862,6 +3051,7 @@ export const CollectionsView: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                <FormError message={payFE.errors.paymentRep} />
               </div>
 
               {/* Reference / Transaction No */}
@@ -2994,7 +3184,11 @@ export const CollectionsView: React.FC = () => {
                   <FormLabel>Sales Representative</FormLabel>
                   <select
                     value={followUpRepId}
-                    onChange={(e) => setFollowUpRepId(e.target.value)}
+                    data-field="followUpRep"
+                    onChange={(e) => {
+                      setFollowUpRepId(e.target.value);
+                      fuFE.clearError('followUpRep');
+                    }}
                     className={FORM_SELECT_CLS}
                   >
                     <option value="">Select Representative</option>
@@ -3004,6 +3198,7 @@ export const CollectionsView: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  <FormError message={fuFE.errors.followUpRep} />
                 </div>
 
                 {/* Follow-up Date */}
@@ -3012,10 +3207,16 @@ export const CollectionsView: React.FC = () => {
                   <input
                     type="date"
                     value={followUpDate}
-                    onChange={(e) => setFollowUpDate(e.target.value)}
+                    data-field="followUpDate"
+                    onChange={(e) => {
+                      setFollowUpDate(e.target.value);
+                      fuFE.clearError('followUpDate');
+                      fuFE.clearError('nextFollowUp');
+                    }}
                     className={FORM_INPUT_CLS}
                     required
                   />
+                  <FormError message={fuFE.errors.followUpDate} />
                 </div>
 
                 {/* Discussion */}
@@ -3024,11 +3225,16 @@ export const CollectionsView: React.FC = () => {
                   <textarea
                     rows={2}
                     value={followUpNotes}
-                    onChange={(e) => setFollowUpNotes(e.target.value)}
+                    data-field="notes"
+                    onChange={(e) => {
+                      setFollowUpNotes(e.target.value);
+                      fuFE.clearError('notes');
+                    }}
                     placeholder="Customer confirmed payment on 10 Oct..."
                     className={FORM_TEXTAREA_CLS}
                     required
                   />
+                  <FormError message={fuFE.errors.notes} />
                 </div>
 
                 {/* Promise to Pay Toggle */}
@@ -3050,9 +3256,14 @@ export const CollectionsView: React.FC = () => {
                   <input
                     type="date"
                     value={nextFollowUpDate}
-                    onChange={(e) => setNextFollowUpDate(e.target.value)}
+                    data-field="nextFollowUp"
+                    onChange={(e) => {
+                      setNextFollowUpDate(e.target.value);
+                      fuFE.clearError('nextFollowUp');
+                    }}
                     className={FORM_INPUT_CLS}
                   />
+                  <FormError message={fuFE.errors.nextFollowUp} />
                 </div>
 
                 {/* Conditional Promise Fields */}
@@ -3063,10 +3274,15 @@ export const CollectionsView: React.FC = () => {
                       <input
                         type="date"
                         value={followUpPromiseDate}
-                        onChange={(e) => setFollowUpPromiseDate(e.target.value)}
+                        data-field="promiseDate"
+                        onChange={(e) => {
+                          setFollowUpPromiseDate(e.target.value);
+                          fuFE.clearError('promiseDate');
+                        }}
                         className={FORM_INPUT_CLS}
                         required={followUpHasPromise}
                       />
+                      <FormError message={fuFE.errors.promiseDate} />
                     </div>
                     <div>
                       <FormLabel required>Expected Amount (₹)</FormLabel>
@@ -3076,10 +3292,15 @@ export const CollectionsView: React.FC = () => {
                         min="1"
                         value={followUpPromiseAmount}
                         onKeyDown={handleNonNegativeKeyDown}
-                        onChange={(e) => setFollowUpPromiseAmount(parseFloat(e.target.value) || 0)}
+                        data-field="promiseAmount"
+                        onChange={(e) => {
+                          setFollowUpPromiseAmount(parseFloat(e.target.value) || 0);
+                          fuFE.clearError('promiseAmount');
+                        }}
                         className={`${FORM_INPUT_CLS} font-bold`}
                         required={followUpHasPromise}
                       />
+                      <FormError message={fuFE.errors.promiseAmount} />
                     </div>
                   </>
                 )}
@@ -3174,10 +3395,15 @@ export const CollectionsView: React.FC = () => {
                 min="1"
                 value={promisedAmount}
                 onKeyDown={handleNonNegativeKeyDown}
-                onChange={(e) => setPromisedAmount(parseFloat(e.target.value) || 0)}
+                data-field="promisedAmount"
+                onChange={(e) => {
+                  setPromisedAmount(parseFloat(e.target.value) || 0);
+                  promFE.clearError('promisedAmount');
+                }}
                 className={`${FORM_INPUT_CLS} font-bold text-sm`}
                 required
               />
+              <FormError message={promFE.errors.promisedAmount} />
             </div>
 
             <div>
@@ -3185,10 +3411,15 @@ export const CollectionsView: React.FC = () => {
               <input
                 type="date"
                 value={promiseDate}
-                onChange={(e) => setPromiseDate(e.target.value)}
+                data-field="promiseDate"
+                onChange={(e) => {
+                  setPromiseDate(e.target.value);
+                  promFE.clearError('promiseDate');
+                }}
                 className={FORM_INPUT_CLS}
                 required
               />
+              <FormError message={promFE.errors.promiseDate} />
             </div>
 
             <div>
@@ -4191,20 +4422,32 @@ export const CollectionsView: React.FC = () => {
           <form noValidate onSubmit={handleSubmitAssignCustomer} className="space-y-4 p-2 text-xs pt-1">
             <div>
               <FormLabel required>Customer</FormLabel>
-              <CustomerSearchableSelect
-                value={assignCustomerId}
-                onChange={(val) => setAssignCustomerId(val)}
-                placeholder="Select or search customer..."
-              />
+              <div data-field="assignCustomer">
+                <CustomerSearchableSelect
+                  value={assignCustomerId}
+                  onChange={(val) => {
+                    setAssignCustomerId(val);
+                    assignFE.clearError('assignCustomer');
+                  }}
+                  placeholder="Select or search customer..."
+                />
+              </div>
+              <FormError message={assignFE.errors.assignCustomer} />
             </div>
 
             <div>
               <FormLabel required>Sales Representative</FormLabel>
-              <SalesRepSearchableSelect
-                value={assignRepId}
-                onChange={(val) => setAssignRepId(val)}
-                placeholder="Select sales representative..."
-              />
+              <div data-field="assignRep">
+                <SalesRepSearchableSelect
+                  value={assignRepId}
+                  onChange={(val) => {
+                    setAssignRepId(val);
+                    assignFE.clearError('assignRep');
+                  }}
+                  placeholder="Select sales representative..."
+                />
+              </div>
+              <FormError message={assignFE.errors.assignRep} />
             </div>
 
             <div>
@@ -4238,9 +4481,14 @@ export const CollectionsView: React.FC = () => {
               <input
                 type="date"
                 value={assignEffectiveFrom}
-                onChange={(e) => setAssignEffectiveFrom(e.target.value)}
+                data-field="assignDate"
+                onChange={(e) => {
+                  setAssignEffectiveFrom(e.target.value);
+                  assignFE.clearError('assignDate');
+                }}
                 className={FORM_INPUT_CLS}
               />
+              <FormError message={assignFE.errors.assignDate} />
             </div>
 
             <div>

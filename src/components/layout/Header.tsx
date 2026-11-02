@@ -205,8 +205,18 @@ export const Header: React.FC<HeaderProps> = ({
   const notificationType = isSaleManagement ? 'SALES' : 'CLIENT';
   useEffect(() => {
     refreshReminders(notificationType);
-    const timer = setInterval(() => refreshReminders(notificationType), 60000);
-    return () => clearInterval(timer);
+    // Poll every 5 minutes, and only while the tab is visible; catch up when the tab regains focus.
+    const timer = setInterval(() => {
+      if (!document.hidden) refreshReminders(notificationType);
+    }, 5 * 60 * 1000);
+    const onVisible = () => {
+      if (!document.hidden) refreshReminders(notificationType);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [notificationType, currentUser?.id]);
 
   const selectedOrgType = activeOrgType;
@@ -1280,7 +1290,7 @@ export const Header: React.FC<HeaderProps> = ({
                           <p className="text-xs font-semibold text-slate-900 leading-snug">{rem.title}</p>
                           <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{rem.description}</p>
                           <div className="flex items-center justify-between mt-2">
-                            <span className="text-[10px] text-slate-400 font-mono">
+                            <span className="text-[10px] text-slate-400 font-medium">
                               {formatDateTimeAmPm(rem.dueDate)}
                             </span>
                             <button
@@ -1458,54 +1468,13 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
 
-              {/* Instant Role Perspective Switcher for Testing Access */}
-              <div className="pt-2 pb-1 border-t border-slate-100">
-                <div className="px-3.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Switch Role Perspective</span>
-                </div>
-                <div className="mt-1 space-y-0.5">
-                  {[
-                    { email: 'superadmin@gmail.com', name: 'Super Admin', badge: 'Root Global' },
-                    { email: 'orgadmin@gmail.com', name: 'Organisation Admin', badge: 'All Modules' },
-                    { email: 'suborgadmin@gmail.com', name: 'Sub Org Admin', badge: 'Company Scope' },
-                    { email: 'branchadmin@gmail.com', name: 'Branch Admin', badge: 'Branch Scope' },
-                    { email: 'sarah.j@apexgroup.com', name: 'Staff / Sales Executive', badge: 'Operator' },
-                  ].map((roleOption) => {
-                    const isCurrent = (currentUser?.email || '').toLowerCase() === roleOption.email.toLowerCase();
-                    return (
-                      <button
-                        key={roleOption.email}
-                        type="button"
-                        onClick={async () => {
-                          setIsUserSwitcherOpen(false);
-                          const ok = await useAuthStore.getState().login(roleOption.email, 'Test@12345');
-                          if (ok) {
-                            showToast('info', 'Switched View', `Now viewing as ${roleOption.name}`);
-                          }
-                        }}
-                        className={`w-full flex items-center justify-between px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer text-left ${isCurrent
-                            ? 'bg-purple-50 text-[#33077C] font-bold'
-                            : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
-                          }`}
-                      >
-                        <span className="truncate">{roleOption.name}</span>
-                        <span className="text-[10px] font-mono opacity-60 text-slate-500">
-                          {isCurrent ? '• Active' : roleOption.badge}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               {/* Logout Button */}
               <div className="pt-1.5 border-t border-slate-100">
                 <button
                   onClick={async () => {
                     setIsUserSwitcherOpen(false);
+                    // logout() already shows the "Logged out" toast; do not add a second one here.
                     await logout();
-                    showToast('info', 'Logged Out', 'You have been successfully logged out.');
                     navigate('/login', { replace: true });
                   }}
                   className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50/80 rounded-xl transition-colors cursor-pointer text-left"

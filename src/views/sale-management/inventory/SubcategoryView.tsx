@@ -36,6 +36,8 @@ import {
   categoryApi,
 } from '../../../api';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUtils';
+import { FormError } from '../../../components/common/FormError';
+import { useSubmitGuard, extractApiFieldErrors, getApiErrorMessage, checkRequiredSelection } from '../../../utils/formValidation';
 
 export interface SubcategoryFormValues {
   category: string;
@@ -46,6 +48,7 @@ export interface SubcategoryFormValues {
 interface SubcategoryItem {
   id: string;
   sNo: number;
+  code?: string;
   category: string;
   subcategory: string;
   status: 'Active' | 'Inactive';
@@ -117,9 +120,11 @@ export const SubcategoryView: React.FC = () => {
     reset,
     setValue,
     watch,
-    formState: { errors },
+    setError,
+    formState: { errors, isSubmitted },
   } = useForm<SubcategoryFormValues>({
-    mode: 'onChange',
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       category: '',
       subcategory: '',
@@ -129,6 +134,25 @@ export const SubcategoryView: React.FC = () => {
 
   const watchCategory = watch('category');
   const watchStatus = watch('status');
+
+  // Category is a custom select: register its rules so submit and re-validation both use them
+  register('category', {
+    validate: (val) => {
+      const v = (val || '').trim();
+      if (!v) return 'Please select a category before continuing.';
+      const unchanged = !!editingSubcategory && editingSubcategory.category === v;
+      if (!unchanged && !categoryOptions.some((o) => o.value === v)) return 'Please choose the category from the list.';
+      return true;
+    },
+  });
+
+  // Clear any errors when the modal closes so the next opening starts clean
+  useEffect(() => {
+    if (!isModalOpen) reset({ category: '', subcategory: '', status: 'Active' });
+  }, [isModalOpen, reset]);
+  const saveGuard = useSubmitGuard();
+  const toggleGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
   const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -360,6 +384,7 @@ export const SubcategoryView: React.FC = () => {
       id: subcat.id,
       organizationId: '',
       sNo: subcat.sNo,
+      code: subcat.code,
       categoryId: subcat.categoryId,
       category: subcat.category,
       categoryName: subcat.category,
@@ -374,13 +399,16 @@ export const SubcategoryView: React.FC = () => {
   };
 
   // Save / Update Subcategory (Calls POST or PUT only once user submits)
-  const handleSaveSubcategory = async (data: SubcategoryFormValues) => {
-    if (!data.subcategory.trim() || !data.category.trim()) {
-      toast.error('Both Category and Subcategory Name are required.');
+  const handleSaveSubcategory = (data: SubcategoryFormValues) => saveGuard.runOnce(async () => {
+    const catTrimmed = (data.category || '').trim();
+    const subTrimmed = (data.subcategory || '').trim();
+    if (!catTrimmed || !subTrimmed) return;
+    if (editingSubcategory && checkRequiredSelection(editingSubcategory.id, 'subcategory')) {
+      setError('root', { type: 'manual', message: 'This subcategory could not be identified. Please close and reopen it.' });
       return;
     }
 
-    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    const finalStatus = data.status;
     setIsSubmitting(true);
 
     try {
@@ -402,8 +430,13 @@ export const SubcategoryView: React.FC = () => {
           }
         } catch (apiErr: any) {
           console.error('Remote subcategory update failed:', apiErr);
-          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to update subcategory.';
-          toast.error(errMsg);
+          const fe = extractApiFieldErrors(apiErr);
+          if (fe.subcategory || fe.category) {
+            if (fe.subcategory) setError('subcategory', { type: 'server', message: fe.subcategory });
+            if (fe.category) setError('category', { type: 'server', message: fe.category });
+          } else {
+            toast.error(getApiErrorMessage(apiErr, 'Failed to update subcategory.'));
+          }
           return;
         }
       } else {
@@ -425,21 +458,31 @@ export const SubcategoryView: React.FC = () => {
           }
         } catch (apiErr: any) {
           console.error('Remote subcategory create failed:', apiErr);
-          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to create subcategory.';
-          toast.error(errMsg);
+          const fe = extractApiFieldErrors(apiErr);
+          if (fe.subcategory || fe.category) {
+            if (fe.subcategory) setError('subcategory', { type: 'server', message: fe.subcategory });
+            if (fe.category) setError('category', { type: 'server', message: fe.category });
+          } else {
+            toast.error(getApiErrorMessage(apiErr, 'Failed to create subcategory.'));
+          }
           return;
         }
       }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   // Toggle Subcategory Status (PATCH /commerce/subcategories/:id)
-  const handleToggleStatus = async (item: SubcategoryItem) => {
+  const handleToggleStatus = (item: SubcategoryItem) => toggleGuard.runOnce(async () => {
     const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
     setActiveDropdownId(null);
     setDropdownPos(null);
+
+    if (checkRequiredSelection(item?.id, 'subcategory')) {
+      toast.error('This subcategory could not be identified. Please refresh and try again.');
+      return;
+    }
 
     try {
       const res = await subcategoryApi.patchSubcategory(item.id, { status: nextStatus });
@@ -451,16 +494,19 @@ export const SubcategoryView: React.FC = () => {
       }
     } catch (apiErr: any) {
       console.warn('Remote subcategory status patch failed:', apiErr);
-      const errMsg = apiErr?.response?.data?.error?.message || apiErr?.message || 'Failed to update subcategory status.';
-      toast.error(errMsg);
+      toast.error(getApiErrorMessage(apiErr, 'Failed to update subcategory status.'));
       return;
     }
-  };
+  });
 
   // Confirm and Execute Delete (DELETE /commerce/subcategories/:id)
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = () => deleteGuard.runOnce(async () => {
     if (!deleteConfirmItem) return;
     const { id, subcategory } = deleteConfirmItem;
+    if (checkRequiredSelection(id, 'subcategory')) {
+      setDeleteError('This subcategory could not be identified. Please refresh and try again.');
+      return;
+    }
     setIsDeleting(true);
     setDeleteError(null);
 
@@ -480,13 +526,13 @@ export const SubcategoryView: React.FC = () => {
       }
     } catch (apiErr: any) {
       console.warn('Remote subcategory delete failed:', apiErr);
-      const errorMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to delete subcategory. Please try again.';
+      const errorMsg = getApiErrorMessage(apiErr, 'Failed to delete subcategory. Please try again.');
       setDeleteError(errorMsg);
       toast.error(errorMsg);
     } finally {
       setIsDeleting(false);
     }
-  };
+  });
 
   // Export to Excel
   const handleExport = () => {
@@ -498,6 +544,7 @@ export const SubcategoryView: React.FC = () => {
 
     const excelRows = dataToExport.map((s, idx) => ({
       sNo: idx + 1,
+      code: s.code || "",
       category: s.category,
       subcategory: s.subcategory,
       status: s.status,
@@ -510,6 +557,7 @@ export const SubcategoryView: React.FC = () => {
       subtitle: `Total Subcategories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
+        { header: 'Code', key: 'code', align: 'center', width: 16 },
         { header: 'Category Name', key: 'category', align: 'left', width: 30 },
         { header: 'Subcategory Name', key: 'subcategory', align: 'left', width: 32 },
         { header: 'Status', key: 'status', align: 'center', width: 16 },
@@ -652,6 +700,7 @@ export const SubcategoryView: React.FC = () => {
             <CommonTableHead
               columns={[
                 { label: "S.NO", align: "center", width: "60px" },
+                { label: "CODE", align: "center", width: "110px" },
                 { label: "CATEGORY", align: "left", minWidth: "160px" },
                 { label: "SUBCATEGORY", align: "left", minWidth: "180px" },
                 { label: "STATUS", align: "center", width: "120px" },
@@ -661,7 +710,7 @@ export const SubcategoryView: React.FC = () => {
             <tbody className="divide-y divide-slate-200 text-xs sm:text-[13px] text-slate-700">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="py-16 text-center text-slate-400 font-medium">
+                  <td colSpan={6} className="py-16 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="w-7 h-7 text-[#33077C] animate-spin" />
                       <span className="text-xs text-slate-500 font-semibold">Loading subcategories...</span>
@@ -670,7 +719,7 @@ export const SubcategoryView: React.FC = () => {
                 </tr>
               ) : pagedSubcategories.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={6} className="py-12 text-center text-slate-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-1.5">
                       <Layers className="w-8 h-8 text-slate-300 stroke-[1.5]" />
                       <span className="text-sm font-semibold text-slate-600">No subcategories found</span>
@@ -695,6 +744,11 @@ export const SubcategoryView: React.FC = () => {
                       {/* 1. S.NO */}
                       <td className="py-3 sm:py-4 px-2 sm:px-3 font-semibold text-slate-600 text-center border-r border-slate-200">
                         {sNo}
+                      </td>
+
+                      {/* CODE */}
+                      <td className="py-3 sm:py-4 px-2 sm:px-3 text-center border-r border-slate-200 whitespace-nowrap">
+                        <span className="font-mono text-[11px] font-semibold text-slate-600">{item.code || "—"}</span>
                       </td>
 
                       {/* 2. CATEGORY */}
@@ -802,6 +856,9 @@ export const SubcategoryView: React.FC = () => {
                         <div className="font-bold text-slate-900 text-sm leading-tight">
                           {item.subcategory}
                         </div>
+                        {item.code && (
+                          <div className="text-[11px] font-mono font-semibold text-slate-500 mt-0.5">{item.code}</div>
+                        )}
                         <div className="text-xs text-slate-500 font-medium mt-0.5">
                           Category: <span className="text-slate-800 font-semibold">{item.category}</span>
                         </div>
@@ -919,10 +976,11 @@ export const SubcategoryView: React.FC = () => {
                 <CustomSelect
                   options={categoryOptions}
                   value={watchCategory}
-                  onChange={(val) => setValue('category', val, { shouldValidate: true })}
+                  onChange={(val) => setValue('category', val, { shouldValidate: isSubmitted })}
                   placeholder="Select category"
                   activeColor="brand"
                 />
+                <FormError message={errors.category?.message} showIcon />
               </div>
 
               <div className="flex flex-col">
@@ -932,10 +990,9 @@ export const SubcategoryView: React.FC = () => {
                   disabled={isSubmitting}
                   placeholder="Enter subcategory name"
                   {...register('subcategory', {
-                    required: 'Subcategory name is required',
-                    minLength: { value: 2, message: 'Subcategory name must be at least 2 characters' },
+                    required: 'Please enter the subcategory name.',
                     validate: (val) =>
-                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      val.trim().length >= 2 || 'The subcategory name must be at least 2 characters.',
                   })}
                   onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
@@ -959,12 +1016,14 @@ export const SubcategoryView: React.FC = () => {
                     { label: 'Inactive', value: 'Inactive' },
                   ]}
                   value={watchStatus}
-                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: isSubmitted })}
                   placeholder="Select status"
                   activeColor="brand"
                 />
               </div>
             </div>
+
+            <FormError message={errors.root?.message} showIcon />
 
             <div className="pt-3 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
@@ -1051,6 +1110,12 @@ export const SubcategoryView: React.FC = () => {
 
                 {/* Key Statistics / Attributes Grid */}
                 <div className="grid grid-cols-2 gap-4 p-3.5 bg-slate-50/80 rounded-xl border border-slate-200/80 text-xs">
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Subcategory Code</span>
+                    <span className="font-bold font-mono text-slate-800 text-xs">
+                      {selectedSubcategoryDetail.code || "N/A"}
+                    </span>
+                  </div>
                   <div>
                     <span className="text-[11px] font-medium text-slate-400 block mb-0.5">Category</span>
                     <span className="font-bold text-slate-800 text-xs">

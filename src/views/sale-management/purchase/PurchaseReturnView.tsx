@@ -57,8 +57,218 @@ import { productApi, ApiProduct } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { SaleActionDropdown } from '../utils';
+import { FormError } from '../../../components/common/FormError';
+import {
+  FieldErrors,
+  checkRequiredSelection,
+  checkRecordId,
+  checkQuantity,
+  checkMoney,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkTotalConsistency,
+  collectErrors,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  fieldAttr,
+  focusField,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from '../../../utils/formValidation';
 
 import { formatDate } from '../utils/dateUtils';
+
+// -----------------------------------------------------------------------------
+// Validation (pure functions - no API calls, no state changes)
+// -----------------------------------------------------------------------------
+
+const round2Return = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const fmtInrReturn = (n: number) =>
+  `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** A row the user never touched (no product, price, batch or remarks) is ignored, exactly like before. */
+const isBlankReturnRow = (it: PurchaseReturnItem): boolean =>
+  !it.productId &&
+  !(it.productName || '').trim() &&
+  !Number(it.unitPrice) &&
+  !(it.batch || '').trim() &&
+  !(it.remarks || '').trim();
+
+/**
+ * Rows that will actually be submitted. When a purchase bill was picked its lines are pre-loaded with
+ * quantity 0, so a zero quantity there simply means "this line is not being returned".
+ */
+const getReturnRowsToSubmit = (items: PurchaseReturnItem[], purchaseSelected: boolean) =>
+  items.filter(
+    (it) =>
+      !isBlankReturnRow(it) && !(purchaseSelected && Number(it.returnQuantity) === 0),
+  );
+
+interface ReturnFormValidationInput {
+  supplierId: string;
+  returnDate: string;
+  items: PurchaseReturnItem[];
+  /** Purchase bill chosen from the list (authoritative purchased quantities). */
+  purchase?: PurchaseOrder;
+  purchaseSelected: boolean;
+  /** Quantity of a product already returned against the chosen purchase bill (excluding this return). */
+  alreadyReturned: (productId: string, productName: string) => number;
+  totalReturnAmount: number;
+}
+
+/** Validates the whole purchase return form. Returns `fieldKey -> message` (empty when valid). */
+const validatePurchaseReturnForm = (f: ReturnFormValidationInput): FieldErrors => {
+  const errors: FieldErrors = {};
+
+  const supplierErr = !f.supplierId
+    ? checkRequiredSelection('', 'supplier')
+    : checkRecordId(f.supplierId, 'supplier');
+  Object.assign(
+    errors,
+    collectErrors([
+      ['supplierId', supplierErr],
+      ['returnDate', checkRequiredDate(f.returnDate, 'return date')],
+    ]),
+  );
+  if (errors.returnDate === undefined && f.purchase) {
+    const e = checkDateNotBefore(f.returnDate, f.purchase.purchaseDate, 'return date', 'purchase date');
+    if (e) errors.returnDate = e;
+  }
+
+  let included = 0;
+  let expectedTotal = 0;
+  f.items.forEach((it, i) => {
+    if (isBlankReturnRow(it)) return;
+    if (f.purchaseSelected && Number(it.returnQuantity) === 0) return;
+    included++;
+    const key = (k: string) => `items.${i}.${k}`;
+
+    // Product must be a real record chosen from the list - never a guessed / generated one.
+    const productErr = !it.productId
+      ? checkRequiredSelection('', 'product')
+      : checkRecordId(it.productId, 'product') ||
+        ((it.productName || '').trim() ? null : 'Please choose the product from the list.');
+    if (productErr) errors[key('product')] = productErr;
+
+    const qtyErr = checkQuantity(it.returnQuantity, { label: 'return quantity' });
+    if (qtyErr) {
+      errors[key('quantity')] = qtyErr;
+    } else {
+      const qty = Number(it.returnQuantity);
+      // Quantity originally purchased: prefer the purchase bill's own lines over the editable column.
+      let purchased = Number(it.purchasedQuantity) || 0;
+      if (f.purchase) {
+        const matches = (f.purchase.items || []).filter(
+          (pi) =>
+            (it.productId && pi.productId === it.productId) ||
+            (pi.productName || '').trim().toLowerCase() === (it.productName || '').trim().toLowerCase(),
+        );
+        if (matches.length > 0) {
+          purchased = matches.reduce((s, pi) => s + (Number(pi.quantity) || 0), 0);
+        }
+      }
+      const already = f.purchase ? f.alreadyReturned(it.productId, it.productName) : 0;
+      const available = purchased - already;
+      if (purchased > 0 && qty > available + 0.0005) {
+        errors[key('quantity')] =
+          f.purchase && already > 0
+            ? available <= 0
+              ? `All ${purchased} units of this product have already been returned.`
+              : `Only ${available} left to return (purchased ${purchased}, already returned ${already}).`
+            : `Return quantity cannot exceed the purchased quantity of ${purchased}.`;
+      }
+    }
+
+    const priceErr = checkMoney(it.unitPrice, 'unit price', { allowZero: true });
+    if (priceErr) errors[key('price')] = priceErr;
+
+    if (!qtyErr && !priceErr) {
+      const expected = round2Return(Number(it.returnQuantity) * Number(it.unitPrice));
+      expectedTotal += expected;
+      const totalErr = checkTotalConsistency(expected, it.returnAmount, 'line total', 0.02);
+      if (totalErr) errors[key('total')] = totalErr;
+    }
+  });
+
+  if (included === 0) {
+    errors.items = 'Please add at least one item with a return quantity greater than zero.';
+  } else if (!Object.keys(errors).some((k) => k.startsWith('items.'))) {
+    const totalErr = checkTotalConsistency(
+      expectedTotal,
+      f.totalReturnAmount,
+      'return amount',
+      0.01 * included + 0.05,
+    );
+    const billTotal = Number(f.purchase?.grandTotal) || 0;
+    if (totalErr) {
+      errors.total = totalErr;
+    } else if (f.purchase && billTotal > 0 && f.totalReturnAmount > billTotal + 0.005) {
+      errors.total = `The return amount cannot exceed the purchase bill total of ${fmtInrReturn(billTotal)}.`;
+    }
+  }
+
+  return errors;
+};
+
+/** Checks a saved return before a quick status action (approve / complete). Returns a friendly sentence or null. */
+const validateReturnStatusChange = (
+  pret: PurchaseReturn,
+  nextStatus: PurchaseReturnStatus,
+): string | null => {
+  const current = pret.returnStatus;
+  if (current === nextStatus) return `This return is already ${nextStatus.toLowerCase()}.`;
+  if (current === 'Completed' || current === 'Returned') {
+    return 'Completed returns are final and cannot be changed.';
+  }
+  if (current === 'Cancelled' || current === 'Rejected') {
+    return `A ${current.toLowerCase()} return cannot be changed.`;
+  }
+  if (nextStatus === 'Approved' && current !== 'Requested') {
+    return 'Only requested returns can be approved.';
+  }
+  if (nextStatus === 'Completed' || nextStatus === 'Dispatched' || nextStatus === 'Returned') {
+    if (!pret.items || pret.items.length === 0) return 'This return has no items to send back.';
+    for (let i = 0; i < pret.items.length; i++) {
+      const it = pret.items[i];
+      const name = it.productName || `item ${i + 1}`;
+      if (!pret.stockDeducted) {
+        if (checkRecordId(it.productId, 'product')) {
+          return `Please choose the product from the list for "${name}" before completing this return.`;
+        }
+      }
+      if (!(Number(it.returnQuantity) > 0)) {
+        return `Return quantity must be greater than zero for "${name}".`;
+      }
+    }
+  }
+  return null;
+};
+
+/** Maps backend field paths (`items.0.returnQuantity`) onto this form's field keys. */
+const mapReturnApiFieldKey = (path: string): string => {
+  const m = path.match(/^items\.(\d+)\.(.+)$/);
+  if (m) {
+    const map: Record<string, string> = {
+      productId: 'product',
+      productName: 'product',
+      returnQuantity: 'quantity',
+      purchasedQuantity: 'quantity',
+      unitPrice: 'price',
+      returnAmount: 'total',
+    };
+    return `items.${m[1]}.${map[m[2]] || m[2]}`;
+  }
+  const top: Record<string, string> = {
+    supplierId: 'supplierId',
+    supplierName: 'supplierId',
+    returnDate: 'returnDate',
+    returnAmount: 'total',
+    items: 'items',
+  };
+  return top[path] || path;
+};
+
 export const PurchaseReturnView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -74,6 +284,12 @@ export const PurchaseReturnView: React.FC = () => {
     updatePurchaseOrderStatus,
   } = useSalesManagementStore();
 
+  // Inline validation state and double-submit guards
+  const retErr = useFieldErrors();
+  const saveGuard = useSubmitGuard();
+  const statusGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+
   // Track converted Purchase Order ID to update its status to 'Returned' upon saving
   const [originatingPurchaseId, setOriginatingPurchaseId] = useState<string | null>(null);
   const hasConvertedPoRef = useRef(false);
@@ -86,6 +302,7 @@ export const PurchaseReturnView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/commerce/purchaseReturnTypes").PurchaseReturnListResponse["summary"]> | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
@@ -161,6 +378,8 @@ export const PurchaseReturnView: React.FC = () => {
   const [selectedPurchaseId, setSelectedPurchaseId] = useState('');
   const [manualPurchaseNo, setManualPurchaseNo] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
+  // Display name of the supplier picked from the paginated selector / loaded from a saved return
+  const [selectedSupplierName, setSelectedSupplierName] = useState('');
   const [returnDate, setReturnDate] = useState(new Date().toISOString().split('T')[0]);
   const [returnItems, setReturnItems] = useState<PurchaseReturnItem[]>([]);
   const [refundStatus, setRefundStatus] = useState<RefundStatusType>('Supplier Credit');
@@ -254,10 +473,12 @@ export const PurchaseReturnView: React.FC = () => {
       hasConvertedPoRef.current = true;
       const poData = locState.convertFromPo;
 
+      retErr.reset();
       setEditingReturn(null);
       setSelectedPurchaseId(poData.purchaseId || '');
       setManualPurchaseNo(poData.purchaseNo || '');
       setSelectedSupplierId(poData.supplierId || '');
+      setSelectedSupplierName(poData.supplierName || '');
       setReturnDate(new Date().toISOString().split('T')[0]);
       setRefundStatus('Supplier Credit');
       setReturnStatus('Requested');
@@ -339,6 +560,7 @@ export const PurchaseReturnView: React.FC = () => {
           setIsApiConnected(true);
           setApiErrorMessage(null);
 
+          setApiSummary(response.summary ?? null);
           if (response.pagination) {
             setTotalApiRecords(response.pagination.totalRecords ?? mappedReturns.length);
             setTotalApiPages(response.pagination.totalPages ?? 1);
@@ -445,7 +667,7 @@ export const PurchaseReturnView: React.FC = () => {
     });
   }, [liveReturns, purchaseReturns, isApiConnected, totalApiRecords, appliedSearch, appliedStatus, appliedRefundStatus]);
 
-  const summary = useMemo(() => {
+  const localSummary = useMemo(() => {
     const all = liveReturns.length > 0 ? liveReturns : purchaseReturns;
     const totalCount = totalApiRecords !== null ? totalApiRecords : all.length;
     const pendingCount = all.filter((r) => r.returnStatus === 'Requested').length;
@@ -463,6 +685,7 @@ export const PurchaseReturnView: React.FC = () => {
       returnAmount,
     };
   }, [liveReturns, purchaseReturns, totalApiRecords]);
+  const summary = apiSummary ?? localSummary;
 
   // Pagination calculation
   const totalPages =
@@ -491,8 +714,31 @@ export const PurchaseReturnView: React.FC = () => {
     }
     const sup = suppliers.find((s) => s.id === selectedSupplierId);
     if (sup) return { id: sup.id, name: sup.name };
-    return { id: selectedSupplierId, name: '' };
-  }, [chosenPurchase, suppliers, selectedSupplierId]);
+    return { id: selectedSupplierId, name: selectedSupplierName };
+  }, [chosenPurchase, suppliers, selectedSupplierId, selectedSupplierName]);
+
+  // Quantity of a product already returned against the chosen purchase bill (other, non-cancelled returns).
+  const getAlreadyReturnedQty = (productId: string, productName: string): number => {
+    if (!chosenPurchase) return 0;
+    const all = new Map<string, PurchaseReturn>();
+    [...purchaseReturns, ...liveReturns].forEach((r) => all.set(r.id, r));
+    let total = 0;
+    all.forEach((r) => {
+      if (editingReturn && r.id === editingReturn.id) return;
+      if (r.returnStatus === 'Cancelled' || r.returnStatus === 'Rejected') return;
+      const samePurchase =
+        (r.purchaseId && r.purchaseId === chosenPurchase.id) ||
+        (r.purchaseNo && r.purchaseNo === chosenPurchase.purchaseNo);
+      if (!samePurchase) return;
+      (r.items || []).forEach((ri) => {
+        const sameProduct =
+          (productId && ri.productId === productId) ||
+          (ri.productName || '').trim().toLowerCase() === (productName || '').trim().toLowerCase();
+        if (sameProduct) total += Number(ri.returnQuantity) || 0;
+      });
+    });
+    return total;
+  };
 
   const totalCalculatedReturnAmount = useMemo(() => {
     return returnItems.reduce((acc, it) => acc + (Number(it.returnAmount) || 0), 0);
@@ -500,14 +746,18 @@ export const PurchaseReturnView: React.FC = () => {
 
   // Handle PO selection: auto-fills items from PO
   const handleSelectPurchase = (poId: string) => {
+    retErr.reset();
     setSelectedPurchaseId(poId);
     const po = purchases.find((p) => p.id === poId);
     if (po) {
       setSelectedSupplierId(po.supplierId);
+      setSelectedSupplierName(po.supplierName || '');
       setManualPurchaseNo(po.purchaseNo);
       const items: PurchaseReturnItem[] = po.items.map((it, idx) => ({
         id: `pr_ret_it_${Date.now()}_${idx}`,
-        productId: ensureValidUuid(it.productId),
+        // Keep the real id: a missing / non-UUID id is reported at save time instead of
+        // being replaced by a randomly generated one.
+        productId: it.productId || '',
         productName: it.productName,
         batch: (it.batch && it.batch !== 'SELECT BATCH' ? it.batch : (it as any).batchNo || '').trim(),
         purchasedQuantity: Number(it.quantity) || 1,
@@ -524,18 +774,15 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   const handleReturnQtyChange = (index: number, qty: number) => {
+    // Errors are shown/cleared by submit + useRevalidateAfterSubmit, never while typing first.
     if (isNaN(qty) || qty < 0) {
-      toast.error('Return quantity cannot be negative.');
       return;
     }
     setReturnItems((prev) => {
       const copy = [...prev];
       const it = { ...copy[index] };
-      const maxAllowed = it.purchasedQuantity > 0 ? it.purchasedQuantity : 999999;
-      if (it.purchasedQuantity > 0 && qty > it.purchasedQuantity) {
-        toast.warning(`Return quantity cannot exceed purchased quantity (${it.purchasedQuantity}).`);
-      }
-      const cleanQty = Math.max(0, Math.min(maxAllowed, qty));
+      // Not clamped to the purchased quantity: an excess is reported inline on submit.
+      const cleanQty = Math.max(0, qty);
       it.returnQuantity = cleanQty;
       it.returnAmount = Math.round(cleanQty * it.unitPrice * 100) / 100;
       copy[index] = it;
@@ -545,7 +792,6 @@ export const PurchaseReturnView: React.FC = () => {
 
   const handleUnitPriceChange = (index: number, price: number) => {
     if (isNaN(price) || price < 0) {
-      toast.error('Unit price cannot be negative.');
       return;
     }
     setReturnItems((prev) => {
@@ -582,10 +828,17 @@ export const PurchaseReturnView: React.FC = () => {
     const name = foundApi?.productName || (foundApi as any)?.name || foundStock?.productName || foundOption?.label || '';
     const price = foundApi?.purchasePrice ?? (foundApi as any)?.costPrice ?? foundStock?.unitCost ?? foundStock?.unitPrice ?? 0;
 
+    retErr.clearError(`items.${index}.product`);
+    retErr.clearError(`items.${index}.price`);
+    retErr.clearError(`items.${index}.total`);
+    retErr.clearError('items');
+    retErr.clearError('total');
     setReturnItems((prev) => {
       const copy = [...prev];
       const it = { ...copy[index] };
-      it.productId = ensureValidUuid(productId);
+      // Keep the id the user actually picked; a non-UUID id is flagged at save time
+      // ("Please choose the product from the list.") instead of being swapped for a random one.
+      it.productId = productId;
       it.productName = name;
       it.unitPrice = Number(price) || 0;
       it.returnAmount = Math.round(it.returnQuantity * it.unitPrice * 100) / 100;
@@ -612,15 +865,20 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   const handleRemoveReturnItem = (index: number) => {
+    // Row indexes shift after a removal, so drop all per-row messages.
+    retErr.clearGroup('items.');
+    retErr.clearError('total');
     setReturnItems((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   // Open Create Modal with clean defaults
   const handleOpenCreateModal = () => {
+    retErr.reset();
     setEditingReturn(null);
     setSelectedPurchaseId('');
     setManualPurchaseNo('');
     setSelectedSupplierId('');
+    setSelectedSupplierName('');
     setReturnDate(new Date().toISOString().split('T')[0]);
     setRefundStatus('Supplier Credit');
     setReturnStatus('Requested');
@@ -643,10 +901,12 @@ export const PurchaseReturnView: React.FC = () => {
 
   // Open Edit Modal
   const handleOpenEditModal = (pret: PurchaseReturn) => {
+    retErr.reset();
     setEditingReturn(pret);
     setSelectedPurchaseId(pret.purchaseId || '');
     setManualPurchaseNo(pret.purchaseNo || '');
     setSelectedSupplierId(pret.supplierId || '');
+    setSelectedSupplierName(pret.supplierName || '');
     setReturnDate(pret.returnDate || new Date().toISOString().split('T')[0]);
     setReturnItems(
       pret.items && pret.items.length > 0
@@ -671,34 +931,50 @@ export const PurchaseReturnView: React.FC = () => {
     setIsCreateModalOpen(true);
   };
 
-  // Save / Submit Return
-  const handleSubmitReturnForm = async (e: React.FormEvent) => {
+  // Save / Submit Return (Enter key and the submit button both land here).
+  // The submit guard stops double-clicks / repeated Enter from sending it twice.
+  const handleSubmitReturnForm = (e: React.FormEvent) => {
     e.preventDefault();
+    return saveGuard.runOnce(() => performSubmitReturn());
+  };
 
-    const targetSupplierName = chosenSupplier.name.trim();
-    if (!targetSupplierName) {
-      toast.error('Please select or specify a supplier.');
+  const purchaseSelected = Boolean(selectedPurchaseId);
+  const computeReturnErrors = (): FieldErrors =>
+    validatePurchaseReturnForm({
+      supplierId: chosenSupplier.id || '',
+      returnDate,
+      items: returnItems,
+      purchase: chosenPurchase,
+      purchaseSelected,
+      alreadyReturned: getAlreadyReturnedQty,
+      totalReturnAmount: totalCalculatedReturnAmount,
+    });
+
+  // After the first Save attempt keep errors in sync with the values (cleared only when valid).
+  useRevalidateAfterSubmit(retErr, computeReturnErrors, [
+    chosenSupplier.id,
+    returnDate,
+    returnItems,
+    chosenPurchase,
+    purchaseSelected,
+    totalCalculatedReturnAmount,
+  ]);
+
+  // The form starts and ends clean: no errors carried across open/close.
+  useEffect(() => {
+    retErr.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreateModalOpen]);
+
+  const performSubmitReturn = async () => {
+    // Validate EVERYTHING first. Nothing below (API call, stock outward, PO status patch,
+    // list refresh, modal close) runs unless the form is valid.
+    if (!retErr.validateAll(computeReturnErrors())) {
       return;
     }
 
-    const hasNegativeQty = returnItems.some((it) => it.productName.trim() && Number(it.returnQuantity) < 0);
-    if (hasNegativeQty) {
-      toast.error('Return quantity cannot be negative.');
-      return;
-    }
-    const hasNegativePrice = returnItems.some((it) => it.productName.trim() && Number(it.unitPrice) < 0);
-    if (hasNegativePrice) {
-      toast.error('Unit price cannot be negative.');
-      return;
-    }
-
-    const validItems = returnItems.filter(
-      (it) => it.productName.trim() && Number(it.returnQuantity) > 0
-    );
-    if (validItems.length === 0) {
-      toast.error('Please add at least one valid item with return quantity > 0.');
-      return;
-    }
+    const targetSupplierName = (chosenSupplier.name || '').trim();
+    const validItems = getReturnRowsToSubmit(returnItems, purchaseSelected);
 
     const effectivePurchaseNo =
       (chosenPurchase ? chosenPurchase.purchaseNo : manualPurchaseNo.trim()) ||
@@ -706,7 +982,8 @@ export const PurchaseReturnView: React.FC = () => {
 
     const effectivePurchaseId =
       chosenPurchase?.id && UUID_REGEX.test(chosenPurchase.id) ? chosenPurchase.id : undefined;
-    const effectiveSupplierId = chosenSupplier.id ? ensureValidUuid(chosenSupplier.id) : ensureValidUuid();
+    // Validated above as a real supplier record id (never a generated one).
+    const effectiveSupplierId = chosenSupplier.id;
 
     setIsSubmittingForm(true);
 
@@ -741,7 +1018,10 @@ export const PurchaseReturnView: React.FC = () => {
             throw new Error('No data returned from update API');
           }
         } catch (apiErr: any) {
-          console.warn('API update failed, updating local state:', apiErr);
+          // The server answered and rejected the change: show the problem and keep the form as it is,
+          // instead of pretending the update succeeded locally.
+          if (apiErr?.response && UUID_REGEX.test(editingReturn.id)) throw apiErr;
+          console.warn('API update failed (no server response or local-only record), updating local state:', apiErr);
           updatedReturn = {
             ...editingReturn,
             purchaseId: effectivePurchaseId,
@@ -773,7 +1053,7 @@ export const PurchaseReturnView: React.FC = () => {
                   ? item.batch.trim()
                   : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
                       ? (item as any).batchNo.trim()
-                      : `BAT-${updatedReturn.purchaseNo || 'RET'}`);
+                      : undefined);
               await stockApi.adjustStock({
                 productId: item.productId,
                 quantity: -Math.abs(item.returnQuantity),
@@ -842,7 +1122,7 @@ export const PurchaseReturnView: React.FC = () => {
           }
         } catch (apiErr: any) {
           console.warn('API create failed, saving to local store:', apiErr);
-          const generatedNo = `PRN-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+          const generatedNo = '';
           newReturn = {
             id: ensureValidUuid(),
             returnNo: generatedNo,
@@ -872,7 +1152,7 @@ export const PurchaseReturnView: React.FC = () => {
                   ? item.batch.trim()
                   : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
                       ? (item as any).batchNo.trim()
-                      : `BAT-${newReturn.purchaseNo || 'RET'}`);
+                      : undefined);
               await stockApi.adjustStock({
                 productId: item.productId,
                 quantity: -Math.abs(item.returnQuantity),
@@ -922,20 +1202,47 @@ export const PurchaseReturnView: React.FC = () => {
       setEditingReturn(null);
       fetchPurchaseReturns(true);
     } catch (err: any) {
-      toast.error(err?.message || 'Failed to save purchase return.');
+      // Keep everything the user typed; show backend field problems next to the fields.
+      const mapped: FieldErrors = {};
+      Object.entries(extractApiFieldErrors(err)).forEach(([path, msg]) => {
+        mapped[mapReturnApiFieldKey(path)] = msg;
+      });
+      if (Object.keys(mapped).length > 0) {
+        retErr.merge(mapped);
+        requestAnimationFrame(() => focusField(Object.keys(mapped)[0]));
+      }
+      toast.error(getApiErrorMessage(err, 'We could not save the purchase return. Please review the details and try again.'));
     } finally {
       setIsSubmittingForm(false);
     }
   };
 
   // Quick Status Update
-  const handleQuickStatusChange = async (pret: PurchaseReturn, nextStatus: PurchaseReturnStatus) => {
+  const handleQuickStatusChange = (pret: PurchaseReturn, nextStatus: PurchaseReturnStatus) =>
+    statusGuard.runOnce(async () => {
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+      // Check the action is allowed BEFORE any API call or stock outward adjustment.
+      const problem = validateReturnStatusChange(pret, nextStatus);
+      if (problem) {
+        toast.warning(problem);
+        return;
+      }
+      await performQuickStatusChange(pret, nextStatus);
+    });
+
+  const performQuickStatusChange = async (pret: PurchaseReturn, nextStatus: PurchaseReturnStatus) => {
     try {
       try {
-        await commercePurchaseReturnApi.updatePurchaseReturn(pret.id, {
-          returnStatus: nextStatus,
-        });
-      } catch (err) {
+        // Records that only exist locally (non-UUID id) have nothing to update on the server.
+        if (UUID_REGEX.test(pret.id)) {
+          await commercePurchaseReturnApi.updatePurchaseReturn(pret.id, {
+            returnStatus: nextStatus,
+          });
+        }
+      } catch (err: any) {
+        // A server rejection must stop here: no stock outward, no local "success".
+        if (err?.response) throw err;
         console.warn('Quick status update fallback to local store:', err);
       }
 
@@ -950,7 +1257,7 @@ export const PurchaseReturnView: React.FC = () => {
                 ? item.batch.trim()
                 : (((item as any).batchNo && (item as any).batchNo.trim() && (item as any).batchNo !== 'SELECT BATCH')
                     ? (item as any).batchNo.trim()
-                    : `BAT-${pret.purchaseNo || 'RET'}`);
+                    : undefined);
             await stockApi.adjustStock({
               productId: item.productId,
               quantity: -Math.abs(item.returnQuantity),
@@ -987,17 +1294,19 @@ export const PurchaseReturnView: React.FC = () => {
       savePurchaseReturn(updated);
       toast.success(`Purchase return ${pret.returnNo} marked as ${nextStatus}`);
       fetchPurchaseReturns(true);
-    } catch {
-      toast.error('Failed to update return status');
+    } catch (err: any) {
+      toast.error(getApiErrorMessage(err, 'We could not update the return status. Please try again.'));
     }
   };
 
   // Duplicate Return into Editor
   const handleDuplicateReturn = (pret: PurchaseReturn) => {
+    retErr.reset();
     setEditingReturn(null);
     setSelectedPurchaseId(pret.purchaseId || '');
     setManualPurchaseNo(pret.purchaseNo || '');
     setSelectedSupplierId(pret.supplierId || '');
+    setSelectedSupplierName(pret.supplierName || '');
     setReturnDate(new Date().toISOString().split('T')[0]);
     setReturnItems(
       pret.items && pret.items.length > 0
@@ -1035,7 +1344,9 @@ export const PurchaseReturnView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteReturn = async () => {
+  const handleConfirmDeleteReturn = () => deleteGuard.runOnce(() => performDeleteReturn());
+
+  const performDeleteReturn = async () => {
     if (!deleteTargetReturn) return;
     setIsDeletingReturn(true);
     setDeleteReturnError(null);
@@ -1050,11 +1361,7 @@ export const PurchaseReturnView: React.FC = () => {
       fetchPurchaseReturns(true);
     } catch (err: any) {
       console.error('Failed to delete purchase return:', err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to delete purchase return';
+      const errMsg = getApiErrorMessage(err, 'We could not delete this purchase return. Please try again.');
       setDeleteReturnError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -1723,13 +2030,20 @@ export const PurchaseReturnView: React.FC = () => {
                   className={FORM_INPUT_DISABLED_CLS}
                 />
               ) : (
-                <SupplierSearchableSelect
-                  value={selectedSupplierId}
-                  onChange={(val) => setSelectedSupplierId(val)}
-                  allowNone
-                  placeholder="Select or search supplier..."
-                />
+                <div {...fieldAttr('supplierId')}>
+                  <SupplierSearchableSelect
+                    value={selectedSupplierId}
+                    onChange={(val, sup) => {
+                      retErr.clearError('supplierId');
+                      setSelectedSupplierId(val);
+                      setSelectedSupplierName(sup?.name || '');
+                    }}
+                    allowNone
+                    placeholder="Select or search supplier..."
+                  />
+                </div>
               )}
+              <FormError message={retErr.errors.supplierId} />
             </div>
 
             {/* Return Date */}
@@ -1737,10 +2051,15 @@ export const PurchaseReturnView: React.FC = () => {
               <FormLabel required>Return Date</FormLabel>
               <input
                 type="date"
+                {...fieldAttr('returnDate')}
                 value={returnDate}
-                onChange={(e) => setReturnDate(e.target.value)}
+                onChange={(e) => {
+                  retErr.clearError('returnDate');
+                  setReturnDate(e.target.value);
+                }}
                 className={FORM_INPUT_CLS}
               />
+              <FormError message={retErr.errors.returnDate} />
             </div>
           </div>
 
@@ -1812,7 +2131,8 @@ export const PurchaseReturnView: React.FC = () => {
                   {returnItems.map((it, idx) => (
                     <tr key={it.id || idx} className="hover:bg-slate-50/60">
                       {/* Product Name (Searchable Product Selection) */}
-                      <td className="py-2 px-3 min-w-[200px]">
+                      <td className="py-2 px-3 min-w-[200px] align-top">
+                        <div {...fieldAttr(`items.${idx}.product`)}>
                         <ProductSearchableSelect
                           value={it.productId || ''}
                           onChange={(val) => {
@@ -1831,6 +2151,8 @@ export const PurchaseReturnView: React.FC = () => {
                           placeholder="Select Product..."
                           size="sm"
                         />
+                        </div>
+                        <FormError message={retErr.errors[`items.${idx}.product`]} />
                       </td>
 
                       {/* Batch No */}
@@ -1870,28 +2192,32 @@ export const PurchaseReturnView: React.FC = () => {
                       </td>
 
                       {/* Return Qty */}
-                      <td className="py-2 px-3">
+                      <td className="py-2 px-3 align-top">
                         <input
                           type="number"
                           min="1"
+                          {...fieldAttr(`items.${idx}.quantity`)}
                           value={it.returnQuantity}
                           onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleReturnQtyChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-center bg-white border border-purple-300 rounded-lg text-xs font-bold text-[#33077C] outline-none focus:ring-2 focus:ring-purple-200"
                         />
+                        <FormError message={retErr.errors[`items.${idx}.quantity`]} />
                       </td>
 
                       {/* Unit Price */}
-                      <td className="py-2 px-3">
+                      <td className="py-2 px-3 align-top">
                         <input
                           type="number"
                           min="0"
                           step="0.01"
+                          {...fieldAttr(`items.${idx}.price`)}
                           value={it.unitPrice}
                           onKeyDown={handleNonNegativeKeyDown}
                           onChange={(e) => handleUnitPriceChange(idx, Number(e.target.value))}
                           className="w-full h-8 px-2 text-right bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
                         />
+                        <FormError message={retErr.errors[`items.${idx}.price`]} />
                       </td>
 
                       {/* Reason */}
@@ -1924,6 +2250,7 @@ export const PurchaseReturnView: React.FC = () => {
                       {/* Total */}
                       <td className="py-2 px-3 text-right font-bold text-slate-900 whitespace-nowrap">
                         ₹{(Number(it.returnAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        <FormError message={retErr.errors[`items.${idx}.total`]} className="justify-end whitespace-normal" />
                       </td>
 
                       {/* Delete Row */}
@@ -1945,12 +2272,19 @@ export const PurchaseReturnView: React.FC = () => {
             </div>
           </div>
 
+          <div {...fieldAttr('items')} className="!mt-1">
+            <FormError message={retErr.errors.items} showIcon />
+          </div>
+
           {/* Total Summary Banner */}
           <div className="flex justify-between items-center p-4 bg-purple-50/70 rounded-2xl border border-purple-100 font-bold">
             <span className="text-slate-700 text-xs sm:text-sm">Total Debit Adjustment Amount:</span>
             <span className="text-[#33077C] text-lg font-black tracking-tight">
               ₹{totalCalculatedReturnAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </span>
+          </div>
+          <div {...fieldAttr('total')} className="!mt-1">
+            <FormError message={retErr.errors.total} showIcon />
           </div>
 
           {/* Notes */}

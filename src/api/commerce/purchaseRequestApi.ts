@@ -73,7 +73,7 @@ export const mapApiPurchaseRequestToUi = (
 
   return {
     id: apiPR.id,
-    requestNo: apiPR.requestNo || `PR-${Date.now()}`,
+    requestNo: apiPR.requestNo || '',
     requestDate:
       apiPR.requestDate ||
       (apiPR.createdAt ? apiPR.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]),

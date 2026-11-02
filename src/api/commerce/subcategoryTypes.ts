@@ -1,6 +1,7 @@
 export interface ApiSubcategory {
   id: string;
   sNo?: number;
+  code?: string;
   organizationId: string;
   categoryId?: string;
   category?: string;

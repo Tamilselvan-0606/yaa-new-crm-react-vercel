@@ -80,6 +80,7 @@ export interface PaymentOutListResponse {
   message: string;
   data: ApiPaymentOut[];
   pagination?: PaymentOutPagination;
+  summary?: { totalDisbursed: number; totalVouchers: number; todayPaid: number; bankPayments: number; cashPayments: number };
   meta?: {
     timestamp: string;
     requestId: string;

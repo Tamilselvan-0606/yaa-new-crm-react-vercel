@@ -83,6 +83,20 @@ import {
   handleNonNegativeKeyDown,
   parseNumericValue,
 } from '../utils/formUtils';
+import {
+  checkRequiredText,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkNumber,
+  collectErrors,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  type FieldErrors,
+} from '../../../utils/formValidation';
+import { FormError } from '../../../components/common/FormError';
 
 // Date format helper
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -163,7 +177,15 @@ export const SalesReturnView: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const retFE = useFieldErrors();
+  const statusFE = useFieldErrors();
+  const saveGuard = useSubmitGuard();
+  const statusGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
   const [serverTotal, setServerTotal] = useState(0);
+  const [apiSummary, setApiSummary] = useState<
+    NonNullable<Awaited<ReturnType<typeof commerceSalesReturnApi.getSalesReturns>>["summary"]> | null
+  >(null);
   const isFetchingRef = useRef(false);
   const hasLoadedPrereqs = useRef(false);
 
@@ -291,6 +313,7 @@ export const SalesReturnView: React.FC = () => {
       if (res?.success && Array.isArray(res.data)) {
         const mapped = res.data.map(mapApiSalesReturnToSalesReturn);
         setSalesReturns(mapped);
+        setApiSummary(res.summary ?? null);
         if (res.pagination?.totalRecords !== undefined) {
           setServerTotal(res.pagination.totalRecords);
         } else {
@@ -495,7 +518,9 @@ export const SalesReturnView: React.FC = () => {
   // When selected invoice changes, prefill items and customer
   const handleInvoiceChange = (invId: string) => {
     setSelectedInvoiceId(invId);
+    retFE.reset();
     if (!invId) {
+      setReturnItems([]);
       return;
     }
     const inv = sales.find((s) => s.id === invId);
@@ -718,7 +743,7 @@ export const SalesReturnView: React.FC = () => {
       setCustomerPhone('');
       setReturnItems([]);
     }
-    setRefNo(`RET-${new Date().getFullYear()}-${String(salesReturns.length + 1).padStart(4, '0')}`);
+    setRefNo('');
     setReturnDate(new Date().toISOString().split('T')[0]);
     setRefundMethod('Store Credit');
     setRefundStatus('Refunded');
@@ -727,23 +752,122 @@ export const SalesReturnView: React.FC = () => {
     setIsCreateModalOpen(true);
   };
 
+  // Quantity of a product already returned against the selected invoice (excludes the return being edited
+  // and rejected / cancelled returns). Based on the returns currently loaded in the list.
+  const alreadyReturnedQty = (productId: string): number =>
+    salesReturns
+      .filter(
+        (r) =>
+          r.saleId === selectedInvoiceId &&
+          r.id !== editingReturn?.id &&
+          r.returnStatus !== 'Rejected' &&
+          r.refundStatus !== 'Cancelled'
+      )
+      .reduce(
+        (sum, r) =>
+          sum +
+          (r.items || [])
+            .filter((i) => i.productId === productId)
+            .reduce((s, i) => s + (Number(i.returnQuantity) || 0), 0),
+        0
+      );
+
+  // Pure validation for the sales-return form; empty map = valid.
+  const validateReturnForm = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const linkedInvoice = sales.find((s) => s.id === selectedInvoiceId);
+    const isLegacyUnlinkedEdit = !!editingReturn && !editingReturn.saleId;
+
+    if (!selectedInvoiceId && !isLegacyUnlinkedEdit) {
+      errs.invoice = 'Please select the original invoice for this return.';
+    } else if (selectedInvoiceId && !linkedInvoice && !(editingReturn && editingReturn.saleId === selectedInvoiceId)) {
+      errs.invoice = 'Please choose the original invoice from the list.';
+    }
+
+    const nameErr = checkRequiredText(partyName, 'customer name');
+    if (nameErr) {
+      errs.customer = nameErr;
+    } else if (
+      linkedInvoice?.customerName &&
+      linkedInvoice.customerName.trim().toLowerCase() !== partyName.trim().toLowerCase()
+    ) {
+      errs.customer = `The customer must match the selected invoice (${linkedInvoice.customerName}).`;
+    }
+
+    const dateErr = checkRequiredDate(returnDate, 'return date');
+    if (dateErr) {
+      errs.returnDate = dateErr;
+    } else if (linkedInvoice?.saleDate) {
+      const d2 = checkDateNotBefore(returnDate, String(linkedInvoice.saleDate).split('T')[0], 'return date', 'invoice date');
+      if (d2) errs.returnDate = d2;
+    }
+
+    if (returnItems.length === 0) {
+      errs.items = 'Select an original invoice to load the items you want to return.';
+    } else {
+      // Combined quantity per product (a product may appear on more than one invoice line).
+      const soldByProduct = new Map<string, number>();
+      const returningByProduct = new Map<string, number>();
+      returnItems.forEach((it) => {
+        soldByProduct.set(it.productId, (soldByProduct.get(it.productId) || 0) + (Number(it.soldQuantity) || 0));
+        returningByProduct.set(it.productId, (returningByProduct.get(it.productId) || 0) + (Number(it.returnQuantity) || 0));
+      });
+
+      returnItems.forEach((it, idx) => {
+        const key = `items.${idx}.returnQuantity`;
+        const qtyErr = checkNumber(it.returnQuantity, 'return quantity', { allowZero: true });
+        if (qtyErr) {
+          errs[key] = qtyErr;
+          return;
+        }
+        const priceErr = checkNumber(it.unitPrice, 'unit price', { allowZero: true });
+        if (priceErr) {
+          errs[`items.${idx}.unitPrice`] = priceErr;
+          return;
+        }
+        if (Number(it.returnQuantity) > 0) {
+          const sold = soldByProduct.get(it.productId) || 0;
+          if (sold > 0) {
+            const already = linkedInvoice || editingReturn ? alreadyReturnedQty(it.productId) : 0;
+            const returnable = Math.max(0, sold - already);
+            if ((returningByProduct.get(it.productId) || 0) > returnable + 1e-9) {
+              errs[key] =
+                returnable <= 0
+                  ? `${it.productName} has already been fully returned for this invoice.`
+                  : `You can return at most ${returnable} of ${it.productName} (invoiced ${sold}${already > 0 ? `, already returned ${already}` : ''}).`;
+            }
+          }
+        }
+      });
+
+      if (!returnItems.some((i) => Number(i.returnQuantity) > 0) && !Object.keys(errs).some((k) => k.startsWith('items.'))) {
+        errs.items = 'Please enter a return quantity greater than zero for at least one item.';
+      }
+
+      if (linkedInvoice && !errs.items && !Object.keys(errs).some((k) => k.startsWith('items.'))) {
+        const total = returnItems.reduce((s, i) => s + (Number(i.returnAmount) || 0), 0);
+        const invTotal = Number(linkedInvoice.grandTotal) || 0;
+        if (invTotal > 0 && total > invTotal + 0.05) {
+          errs.items = `The total refund (₹${total.toFixed(2)}) cannot exceed the invoice total of ₹${invTotal.toFixed(2)}.`;
+        }
+      }
+    }
+    return errs;
+  };
+
+  useRevalidateAfterSubmit(retFE, validateReturnForm, [
+    sales, editingReturn, selectedInvoiceId, partyName, returnDate, returnItems,
+  ]);
+  useEffect(() => {
+    retFE.reset();
+  }, [isCreateModalOpen, retFE.reset]);
+
   // Submit Create / Edit Return via Backend API
-  const handleSubmitCreateReturn = async (e: React.FormEvent) => {
+  const handleSubmitCreateReturn = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!partyName.trim()) {
-      toast.error('Please enter customer name');
-      return;
-    }
-    const hasNegative = returnItems.some((i) => i.returnQuantity < 0 || i.unitPrice < 0);
-    if (hasNegative) {
-      toast.error('Return quantity and unit price cannot be negative');
-      return;
-    }
+    return saveGuard.runOnce(async () => {
+    if (!retFE.validateAll(validateReturnForm())) return;
     const validItems = returnItems.filter((i) => i.returnQuantity > 0);
-    if (validItems.length === 0) {
-      toast.error('Please enter return quantity greater than 0 for at least one item');
-      return;
-    }
 
     const matchedCustomer = customers.find(
       (c) => c.id === selectedCustomerId || c.name.toLowerCase() === partyName.toLowerCase()
@@ -752,10 +876,7 @@ export const SalesReturnView: React.FC = () => {
 
     setIsSaving(true);
     try {
-      const returnNumber = refNo.trim() || `RET-${new Date().getFullYear()}-${String(salesReturns.length + 1).padStart(4, '0')}`;
-
       const payload = mapSalesReturnToApiPayload({
-        returnNo: returnNumber,
         invoiceNo: matchedInvoice?.invoiceNo || undefined,
         saleId: selectedInvoiceId && UUID_REGEX.test(selectedInvoiceId) ? selectedInvoiceId : undefined,
         customerId: matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id) ? matchedCustomer.id : undefined,
@@ -799,15 +920,29 @@ export const SalesReturnView: React.FC = () => {
       fetchSalesReturns();
     } catch (err: any) {
       console.error('Failed to save sales return:', err);
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to save sales return';
-      toast.error(msg);
+      const fe = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      if (fe.returnDate) mapped.returnDate = fe.returnDate;
+      if (fe.saleId) mapped.invoice = fe.saleId;
+      if (fe.customerName || fe.customerId) mapped.customer = fe.customerName || fe.customerId;
+      Object.keys(fe).forEach((k) => {
+        const m = /^items\.(\d+)\.(returnQuantity|quantity)$/.exec(k);
+        if (m) {
+          // Backend indexes refer to the filtered list of lines with a quantity.
+          const nonZero = returnItems.map((it, i) => (it.returnQuantity > 0 ? i : -1)).filter((i) => i >= 0);
+          const target = nonZero[Number(m[1])];
+          if (target !== undefined) mapped[`items.${target}.returnQuantity`] = fe[k];
+        }
+      });
+      if (Object.keys(mapped).length > 0) {
+        retFE.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, 'We could not save the sales return. Please try again.'));
+      }
     } finally {
       setIsSaving(false);
     }
+    });
   };
 
   // Open View/Edit
@@ -828,6 +963,7 @@ export const SalesReturnView: React.FC = () => {
       setRefundStatus(tx.originalReturn.refundStatus || 'Refunded');
       setReturnStatus(tx.originalReturn.returnStatus || 'Approved');
       setGeneralNotes(tx.originalReturn.notes || '');
+      retFE.reset();
       setIsCreateModalOpen(true);
     } else {
       toast.info(`Editing transaction #${tx.refNo}`);
@@ -840,15 +976,23 @@ export const SalesReturnView: React.FC = () => {
     setStatusModalReturn(ret);
     setNewStatusValue(ret.returnStatus || 'Approved');
     setRejectionReasonText(ret.rejectionReason || '');
+    statusFE.reset();
   };
 
+  const validateStatusUpdate = (): FieldErrors =>
+    collectErrors([
+      ['status', ['Approved', 'Received', 'Refunded', 'Requested', 'Rejected'].includes(newStatusValue) ? null : 'Please select a valid return status.'],
+      ['rejectionReason', newStatusValue === 'Rejected' ? checkRequiredText(rejectionReasonText, 'rejection reason') : null],
+    ]);
+  useRevalidateAfterSubmit(statusFE, validateStatusUpdate, [newStatusValue, rejectionReasonText]);
+  useEffect(() => {
+    statusFE.reset();
+  }, [statusModalReturn, statusFE.reset]);
+
   // Submit Status Update via PATCH /commerce/returns/{id}/status
-  const handleSaveStatusUpdate = async () => {
+  const handleSaveStatusUpdate = () => statusGuard.runOnce(async () => {
     if (!statusModalReturn) return;
-    if (newStatusValue === 'Rejected' && !rejectionReasonText.trim()) {
-      toast.error('Rejection reason is required when rejecting a return');
-      return;
-    }
+    if (!statusFE.validateAll(validateStatusUpdate())) return;
 
     try {
       if (UUID_REGEX.test(statusModalReturn.id)) {
@@ -876,14 +1020,9 @@ export const SalesReturnView: React.FC = () => {
       fetchSalesReturns();
     } catch (err: any) {
       console.error('Failed to update status:', err);
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to update return status';
-      toast.error(msg);
+      toast.error(getApiErrorMessage(err, 'We could not update the return status. Please try again.'));
     }
-  };
+  });
 
   // Generate e-Invoice
   const handleGenerateEInvoice = (tx: UnifiedTransactionRecord) => {
@@ -1041,7 +1180,7 @@ export const SalesReturnView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteTx = async () => {
+  const handleConfirmDeleteTx = () => deleteGuard.runOnce(async () => {
     if (!deleteTargetTx || !deleteTargetTx.originalReturn) return;
     setIsDeletingTx(true);
     setDeleteTxError(null);
@@ -1064,35 +1203,31 @@ export const SalesReturnView: React.FC = () => {
       fetchSalesReturns();
     } catch (err: any) {
       console.error('Failed to delete sales return:', err);
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        'Failed to delete sales return';
+      const msg = getApiErrorMessage(err, 'We could not delete the sales return. Please try again.');
       setDeleteTxError(msg);
       toast.error(msg);
     } finally {
       setIsDeletingTx(false);
     }
-  };
+  });
 
   // Duplicate Transaction / Return
   const handleDuplicate = (tx: UnifiedTransactionRecord) => {
     setActiveMenuId(null);
     setEditingReturn(null);
-    const newRetNo = `RET-${new Date().getFullYear()}-${String(salesReturns.length + 1).padStart(4, '0')}`;
     setSelectedInvoiceId(tx.originalReturn?.saleId || '');
     setSelectedCustomerId(tx.originalReturn?.customerId || '');
     setPartyName(tx.partyName);
     setReturnDate(new Date().toISOString().split('T')[0]);
-    setRefNo(newRetNo);
+    setRefNo('');
     setReturnItems(tx.originalReturn?.items || []);
     setRefundMethod(tx.originalReturn?.refundMethod || 'Store Credit');
     setRefundStatus('Refunded');
     setReturnStatus('Approved');
     setGeneralNotes(`Duplicate of #${tx.refNo}`);
+    retFE.reset();
     setIsCreateModalOpen(true);
-    toast.info(`Configuring duplicate Credit Note ${newRetNo}`);
+    toast.info(`Configuring duplicate Credit Note from #${tx.refNo}`);
   };
 
   return (
@@ -1458,13 +1593,13 @@ export const SalesReturnView: React.FC = () => {
           <div>
             Total Amount:{' '}
             <span className="text-[#33077C] font-black">
-              ₹{Number(ledgerTotals.totalSum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              ₹{Number((apiSummary ? apiSummary.totalAmount : ledgerTotals.totalSum) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div>
             Balance:{' '}
             <span className="text-slate-900 font-black">
-              ₹{Number(ledgerTotals.balanceSum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              ₹{Number((apiSummary ? apiSummary.balanceAmount : ledgerTotals.balanceSum) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </span>
           </div>
         </div>
@@ -1506,16 +1641,18 @@ export const SalesReturnView: React.FC = () => {
                 <FormLabel required>Original Invoice</FormLabel>
                 <select
                   value={selectedInvoiceId}
+                  data-field="invoice"
                   onChange={(e) => handleInvoiceChange(e.target.value)}
                   className={FORM_SELECT_CLS}
                 >
-                  <option value="">Manual / Unlinked Return</option>
+                  <option value="">Select original invoice</option>
                   {sales.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.invoiceNo} - {s.customerName} (₹{s.grandTotal})
                     </option>
                   ))}
                 </select>
+                <FormError message={retFE.errors.invoice} />
               </div>
 
               <div>
@@ -1525,18 +1662,39 @@ export const SalesReturnView: React.FC = () => {
                   required
                   placeholder="Customer Name"
                   value={partyName}
-                  onChange={(e) => setPartyName(e.target.value)}
+                  data-field="customer"
+                  onChange={(e) => {
+                    setPartyName(e.target.value);
+                    retFE.clearError('customer');
+                  }}
                   className={FORM_INPUT_CLS}
                 />
+                <FormError message={retFE.errors.customer} />
               </div>
 
               <div>
-                <FormLabel>Return Date</FormLabel>
+                <FormLabel required>Return Date</FormLabel>
                 <input
                   type="date"
                   value={returnDate}
-                  onChange={(e) => setReturnDate(e.target.value)}
+                  data-field="returnDate"
+                  onChange={(e) => {
+                    setReturnDate(e.target.value);
+                    retFE.clearError('returnDate');
+                  }}
                   className={FORM_INPUT_CLS}
+                />
+                <FormError message={retFE.errors.returnDate} />
+              </div>
+
+              <div>
+                <FormLabel>Return Number</FormLabel>
+                <input
+                  type="text"
+                  value={editingReturn ? refNo : ''}
+                  readOnly
+                  placeholder="Auto-generated on save"
+                  className={`${FORM_INPUT_CLS} font-mono`}
                 />
               </div>
             </div>
@@ -1596,8 +1754,11 @@ export const SalesReturnView: React.FC = () => {
                               min="0"
                               max={item.soldQuantity || 9999}
                               value={item.returnQuantity}
+                              data-field={`items.${idx}.returnQuantity`}
                               onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) => {
+                                retFE.clearError(`items.${idx}.returnQuantity`);
+                                retFE.clearError('items');
                                 const parsed = parseNumericValue(e.target.value, 0);
                                 const qty = parsed !== null ? Math.max(0, parsed) : 0;
                                 const updated = [...returnItems];
@@ -1610,6 +1771,7 @@ export const SalesReturnView: React.FC = () => {
                               }}
                               className="w-16 h-8 px-2 text-center bg-white border border-slate-200 rounded-lg font-bold outline-none focus:border-[#4309A2]"
                             />
+                            <FormError message={retFE.errors[`items.${idx}.returnQuantity`]} className="justify-center max-w-[11rem] mx-auto text-left" />
                           </td>
                           <td className="p-2.5 text-right font-medium">₹{item.unitPrice}</td>
                           <td className="p-2.5">
@@ -1638,6 +1800,7 @@ export const SalesReturnView: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              <FormError message={retFE.errors.items} className="px-3 pb-2" />
             </div>
 
             {/* Row 3: Refund Method, Refund Status, Return Status */}
@@ -1846,7 +2009,11 @@ export const SalesReturnView: React.FC = () => {
               <FormLabel>New Status</FormLabel>
               <select
                 value={newStatusValue}
-                onChange={(e) => setNewStatusValue(e.target.value as SalesReturnStatus)}
+                data-field="status"
+                onChange={(e) => {
+                  setNewStatusValue(e.target.value as SalesReturnStatus);
+                  statusFE.reset();
+                }}
                 className={FORM_SELECT_CLS}
               >
                 <option value="Approved">Approved (Restores Stock)</option>
@@ -1863,10 +2030,15 @@ export const SalesReturnView: React.FC = () => {
                 <textarea
                   rows={3}
                   value={rejectionReasonText}
-                  onChange={(e) => setRejectionReasonText(e.target.value)}
+                  data-field="rejectionReason"
+                  onChange={(e) => {
+                    setRejectionReasonText(e.target.value);
+                    statusFE.clearError('rejectionReason');
+                  }}
                   placeholder="Explain why this return was rejected (e.g. Item damaged by customer misuse, seal already opened)..."
                   className={FORM_TEXTAREA_CLS}
                 />
+                <FormError message={statusFE.errors.rejectionReason} />
               </div>
             )}
 

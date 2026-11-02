@@ -11,6 +11,7 @@ import { AppLoader } from './components/common/AppLoader';
 
 // Views
 import { DashboardView } from './views/dashboard/DashboardView';
+import { PlatformAdminDashboardView } from './views/dashboard/PlatformAdminDashboardView';
 import { BranchesView } from './views/branches/BranchesView';
 import { ProductsView } from './views/products/ProductsView';
 import { LeadsView } from './views/leads/LeadsView';
@@ -115,13 +116,7 @@ const MainLayout: React.FC = () => {
             <Routes>
               <Route
                 path="/"
-                element={
-                  <DashboardView
-                    onOpenAddLead={() => setQuickLeadOpen(true)}
-                    onOpenCreateTask={() => setQuickTaskOpen(true)}
-                    onOpenCreateContent={() => setQuickContentOpen(true)}
-                  />
-                }
+                element={<PlatformAdminDashboardView />}
               />
               <Route path="/organization" element={<OrganizationView />} />
               <Route path="/subscription-plans" element={<SubscriptionPlansView />} />

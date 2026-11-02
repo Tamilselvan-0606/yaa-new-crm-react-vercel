@@ -117,6 +117,32 @@ import {
   round2,
 } from "../../../utils/financialCalculations";
 import { toast } from "../../../utils/toast";
+import { FormError } from "../../../components/common/FormError";
+import {
+  FieldErrors,
+  checkRequiredText,
+  checkRequiredSelection,
+  checkRecordId,
+  checkNumber,
+  checkQuantity,
+  checkMoney,
+  checkPercent,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkPaymentWithinBalance,
+  checkTotalConsistency,
+  checkGstSplit,
+  checkHasLineItems,
+  validateLineItems,
+  collectErrors,
+  useFieldErrors,
+  useSubmitGuard,
+  useRevalidateAfterSubmit,
+  fieldAttr,
+  focusField,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 import { useNavigate, useLocation } from "react-router-dom";
 
 import { formatDate } from "../utils/dateUtils";
@@ -151,6 +177,315 @@ const TAX_RATE_OPTIONS = [
   { label: "GST @ 40%", rate: 40 },
 ];
 
+// -----------------------------------------------------------------------------
+// Validation (pure functions - no API calls, no state changes)
+// -----------------------------------------------------------------------------
+
+interface PurchaseFormValidationContext {
+  totals: {
+    subtotal: number;
+    discount: number;
+    taxableAmount: number;
+    tax: number;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    roundOffAmount: number;
+    grandTotal: number;
+  };
+  /** Date of the payment being recorded with this bill (falls back to the purchase date). */
+  paymentDate: string;
+  isEditing: boolean;
+  /** "With Purchase Request" chosen, requests are available, but none selected. */
+  requestSelectionMissing: boolean;
+}
+
+const fmtInr = (n: number) =>
+  `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Validates the whole purchase bill form. Returns a map of `fieldKey -> message` (empty when valid). */
+const validatePurchaseForm = (
+  form: {
+    supplierId: string;
+    purchaseDate: string;
+    dueDate: string;
+    items: PurchaseProductItem[];
+    withGst: boolean;
+    gstType: "intra_state" | "inter_state";
+    shipping: number;
+    otherCharges: number;
+    paymentMethod: string;
+    paidAmount: number;
+  },
+  ctx: PurchaseFormValidationContext,
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  const { totals } = ctx;
+
+  if (ctx.requestSelectionMissing) {
+    errors.purchaseRequest =
+      'Please select a purchase request or switch to "Without Purchase Request".';
+  }
+
+  // Header
+  const supplierErr = ctx.isEditing
+    ? checkRequiredSelection(form.supplierId, "supplier")
+    : checkRecordId(form.supplierId, "supplier");
+  Object.assign(
+    errors,
+    collectErrors([
+      ["supplierId", supplierErr],
+      ["purchaseDate", checkRequiredDate(form.purchaseDate, "purchase date")],
+      [
+        "dueDate",
+        checkDateNotBefore(form.dueDate, form.purchaseDate, "due date", "purchase date"),
+      ],
+    ]),
+  );
+
+  // Line items
+  const lineInputs = form.items.map((it) => ({
+    productId: it.productId,
+    productName: it.productName,
+    quantity: it.quantity,
+    unitPrice: it.purchasePrice,
+    discountPercent: it.discountPercent,
+    discountAmount: it.discountAmount,
+    taxPercent: form.withGst ? it.taxPercent : undefined,
+  }));
+  const noLines = checkHasLineItems(lineInputs);
+  if (noLines) errors.items = "Please add at least one item before saving.";
+  Object.assign(
+    errors,
+    validateLineItems(lineInputs, {
+      priceKey: "unitPrice",
+      allowZeroPrice: true, // free / sample items are allowed
+    }),
+  );
+  form.items.forEach((it, i) => {
+    const freeErr = checkNumber(it.freeQuantity, "free quantity", {
+      allowZero: true,
+      optional: true,
+    });
+    if (freeErr) errors[`items.${i}.freeQuantity`] = freeErr;
+    const saleErr = checkMoney(it.salePrice, "sale price", {
+      allowZero: true,
+      optional: true,
+    });
+    if (saleErr) errors[`items.${i}.salePrice`] = saleErr;
+
+    // The line total that will be submitted must match its own quantity/price/discount/GST.
+    // (Skipped for saved bills: their stored totals come from the server and may legitimately differ.)
+    if (
+      !ctx.isEditing &&
+      !errors[`items.${i}.quantity`] &&
+      !errors[`items.${i}.price`]
+    ) {
+      const expected = calculateLineItem(
+        {
+          quantity: it.quantity,
+          unitPrice: it.purchasePrice,
+          discountPercent: it.discountPercent,
+          discountAmount: it.discountAmount,
+          taxPercent: it.taxPercent,
+        },
+        { withGst: form.withGst, gstType: form.gstType },
+      ).lineTotal;
+      const totalErr = checkTotalConsistency(expected, it.total, "line total", 0.02);
+      if (totalErr) errors[`items.${i}.total`] = totalErr;
+    }
+  });
+
+  // Charges
+  Object.assign(
+    errors,
+    collectErrors([
+      ["shipping", checkMoney(form.shipping, "shipping charge", { allowZero: true })],
+      ["otherCharges", checkMoney(form.otherCharges, "other charges", { allowZero: true })],
+    ]),
+  );
+
+  // Totals (only when the lines themselves are usable)
+  const hasLineErrors = Object.keys(errors).some((k) => k.startsWith("items."));
+  if (!hasLineErrors && form.items.length > 0) {
+    const lineTolerance = 0.01 * form.items.length + 0.05;
+    const expectedGrand =
+      totals.taxableAmount +
+      totals.tax +
+      (Number(form.shipping) || 0) +
+      (Number(form.otherCharges) || 0) +
+      totals.roundOffAmount;
+    const grandErr = checkTotalConsistency(
+      Math.max(0, expectedGrand),
+      totals.grandTotal,
+      "grand total",
+      lineTolerance,
+    );
+    const gstErr = checkGstSplit(
+      { cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, total: totals.tax },
+      !form.withGst ? "exempt" : form.gstType === "intra_state" ? "intra" : "inter",
+    );
+    const discountErr =
+      totals.discount < 0 || totals.discount > totals.subtotal + 0.005
+        ? "The total discount cannot exceed the subtotal."
+        : null;
+    Object.assign(
+      errors,
+      collectErrors([
+        ["totals", gstErr || discountErr || grandErr],
+      ]),
+    );
+  }
+
+  // Payment
+  const paid = Number(form.paidAmount);
+  const paidErr =
+    checkMoney(form.paidAmount, "paid amount", { allowZero: true }) ||
+    (Number.isFinite(paid) && paid > totals.grandTotal + 0.005
+      ? `Paid amount cannot exceed the grand total of ${fmtInr(totals.grandTotal)}.`
+      : null);
+  if (paidErr) errors.paidAmount = paidErr;
+  if (!paidErr && paid > 0) {
+    const modeErr = checkRequiredSelection(form.paymentMethod, "payment mode");
+    if (modeErr) errors.paymentMethod = modeErr;
+    const dateErr = checkRequiredDate(ctx.paymentDate || form.purchaseDate, "payment date");
+    if (dateErr) errors.paymentDate = dateErr;
+  }
+
+  return errors;
+};
+
+/** Validates the "Record Payment" modal inside the bill form. */
+const validateFormPayment = (
+  details: { amountPaid: number; date: string; paymentType: string },
+  balanceLimit: number,
+  limitLabel: string,
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  const amountErr =
+    checkNumber(details.amountPaid, "payment amount", { maxDecimals: 2 }) ||
+    checkPaymentWithinBalance(details.amountPaid, balanceLimit, limitLabel);
+  if (amountErr) {
+    errors.amountPaid =
+      amountErr === "Payment amount must be greater than zero."
+        ? "Please enter a payment amount greater than zero."
+        : amountErr;
+  }
+  const dateErr = checkRequiredDate(details.date, "payment date");
+  if (dateErr) errors.date = dateErr;
+  const typeErr = checkRequiredSelection(details.paymentType, "payment type");
+  if (typeErr) errors.paymentType = typeErr;
+  return errors;
+};
+
+/** Validates the standalone "Disburse Payment" modal against the bill's outstanding balance. */
+const validateRecordPayment = (
+  amount: number,
+  balance: number,
+  method: string,
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  const amountErr =
+    checkNumber(amount, "payment amount", { maxDecimals: 2 }) ||
+    checkPaymentWithinBalance(amount, balance);
+  if (amountErr) {
+    errors.amount =
+      amountErr === "Payment amount must be greater than zero."
+        ? "Please enter a payment amount greater than zero."
+        : amountErr;
+  }
+  const modeErr = checkRequiredSelection(method, "payment mode");
+  if (modeErr) errors.method = modeErr;
+  return errors;
+};
+
+/** Validates the quick "Add New Product" modal. */
+const validateQuickProduct = (f: {
+  productName: string;
+  purchasePrice: string;
+  salePrice: string;
+}): FieldErrors =>
+  collectErrors([
+    ["productName", checkRequiredText(f.productName, "product name")],
+    ["purchasePrice", checkMoney(f.purchasePrice, "purchase price", { allowZero: true })],
+    ["salePrice", checkMoney(f.salePrice, "sale price", { allowZero: true })],
+  ]);
+
+/**
+ * Checks a saved purchase order before a status action (receive / approve / order / cancel).
+ * Returns a friendly sentence, or null when the action may proceed.
+ */
+const validateStatusChange = (
+  po: PurchaseOrder,
+  newStatus: "Pending" | "Approved" | "Ordered" | "Received" | "Cancelled",
+): string | null => {
+  const current = po.purchaseStatus as string;
+  if (current === newStatus) {
+    return `This purchase order is already ${newStatus.toLowerCase()}.`;
+  }
+  if (current === "Received" || current === "Completed") {
+    return "Received purchase orders are final and cannot be changed.";
+  }
+  if (current === "Cancelled") {
+    return "Cancelled purchase orders cannot be changed.";
+  }
+  if (newStatus === "Approved" && current !== "Pending") {
+    return "Only pending purchase orders can be approved.";
+  }
+  if (newStatus === "Ordered" && current !== "Pending" && current !== "Approved") {
+    return "Only pending or approved purchase orders can be marked as ordered.";
+  }
+  if (newStatus === "Received") {
+    if (!po.items || po.items.length === 0) {
+      return "This purchase order has no items to receive.";
+    }
+    const supplierErr = checkRequiredSelection(po.supplierId, "supplier");
+    if (supplierErr) return "This purchase order has no supplier. Please edit it and choose a supplier first.";
+    for (let i = 0; i < po.items.length; i++) {
+      const it = po.items[i];
+      const name = it.productName || `item ${i + 1}`;
+      if (checkRequiredSelection(it.productId, "product")) {
+        return `Please choose the product from the list for "${name}" before receiving stock.`;
+      }
+      if (UUID_REGEX.test(po.id) && checkRecordId(it.productId, "product")) {
+        return `Please choose the product from the list for "${name}" before receiving stock.`;
+      }
+      if (!(Number(it.quantity) > 0)) {
+        return `Quantity must be greater than zero for "${name}" before receiving stock.`;
+      }
+    }
+  }
+  return null;
+};
+
+/** Maps backend field paths (`items.0.unitCost`) onto this form's field keys. */
+const mapPurchaseApiFieldKey = (path: string): string => {
+  const m = path.match(/^items\.(\d+)\.(.+)$/);
+  if (m) {
+    const map: Record<string, string> = {
+      productId: "product",
+      quantity: "quantity",
+      unitCost: "price",
+      unitPrice: "price",
+      purchasePrice: "price",
+      taxPercent: "taxPercent",
+      discountPercent: "discountPercent",
+      discountAmount: "discountAmount",
+    };
+    return `items.${m[1]}.${map[m[2]] || m[2]}`;
+  }
+  const top: Record<string, string> = {
+    supplierId: "supplierId",
+    dueDate: "dueDate",
+    expectedDeliveryDate: "dueDate",
+    purchaseDate: "purchaseDate",
+    paidAmount: "paidAmount",
+    discountAmount: "totals",
+    amount: "amount",
+  };
+  return top[path] || path;
+};
+
 export const PurchaseOrderView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -170,6 +505,18 @@ export const PurchaseOrderView: React.FC = () => {
     updatePurchaseRequestStatus,
     purchaseRequests,
   } = useSalesManagementStore();
+
+  // Inline validation state (one error map per form / modal) and double-submit guards
+  const formErr = useFieldErrors(); // purchase bill form
+  const formPayErr = useFieldErrors(); // "Record Payment" modal inside the bill form
+  const recordPayErr = useFieldErrors(); // "Disburse Payment" modal on the list
+  const quickProdErr = useFieldErrors(); // quick "Add New Product" modal
+  const saveGuard = useSubmitGuard();
+  const statusGuard = useSubmitGuard();
+  const paymentGuard = useSubmitGuard();
+  const quickProductGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+  const convertGuard = useSubmitGuard();
 
   // Purchase Type State (With Purchase Request vs Without Purchase Request)
   const [purchaseType, setPurchaseType] = useState<
@@ -193,6 +540,7 @@ export const PurchaseOrderView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/work/purchaseOrderTypes").PurchaseOrderListResponse["summary"]> | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
@@ -288,6 +636,7 @@ export const PurchaseOrderView: React.FC = () => {
 
   const handleOpenAddProductModal = (targetRowIndex: number | null = null) => {
     setAddProductTargetRowIdx(targetRowIndex);
+    quickProdErr.reset();
     setQuickProductForm({
       productName: "",
       productCode: "",
@@ -301,24 +650,18 @@ export const PurchaseOrderView: React.FC = () => {
     setIsAddProductModalOpen(true);
   };
 
-  const handleSaveQuickProduct = async () => {
-    if (!quickProductForm.productName.trim()) {
-      toast.error("Product Name is required.");
-      return;
-    }
+  const handleSaveQuickProduct = () =>
+    quickProductGuard.runOnce(async () => {
+      // Validate first: nothing is sent to the API unless every field is valid.
+      if (!quickProdErr.validateAll(validateQuickProduct(quickProductForm))) {
+        return;
+      }
+      await performSaveQuickProduct();
+    });
 
-    const purchasePriceNum = Number(quickProductForm.purchasePrice);
-    const salePriceNum = Number(quickProductForm.salePrice);
-
-    if (
-      isNaN(purchasePriceNum) ||
-      purchasePriceNum < 0 ||
-      isNaN(salePriceNum) ||
-      salePriceNum < 0
-    ) {
-      toast.error("Prices cannot be negative or invalid numbers.");
-      return;
-    }
+  const performSaveQuickProduct = async () => {
+    const purchasePriceNum = Number(quickProductForm.purchasePrice) || 0;
+    const salePriceNum = Number(quickProductForm.salePrice) || 0;
 
     setIsCreatingProduct(true);
     try {
@@ -411,11 +754,20 @@ export const PurchaseOrderView: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Failed to create product from purchase bill:", err);
+      const apiFields = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      Object.entries(apiFields).forEach(([k, msg]) => {
+        const key = k === "name" ? "productName" : k;
+        if (["productName", "purchasePrice", "salePrice"].includes(key)) {
+          mapped[key] = msg;
+        }
+      });
+      if (Object.keys(mapped).length > 0) quickProdErr.merge(mapped);
       toast.error(
-        err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          "Failed to create product",
+        getApiErrorMessage(
+          err,
+          "We could not create the product. Please try again.",
+        ),
       );
     } finally {
       setIsCreatingProduct(false);
@@ -738,7 +1090,7 @@ export const PurchaseOrderView: React.FC = () => {
     if (locState?.convertFromPr && !hasConvertedRef.current) {
       hasConvertedRef.current = true;
       const prData = locState.convertFromPr;
-      const nextPoNo = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const nextPoNo = ""; // server generates the PO number on save
 
       setPurchaseType("with_request");
       if (prData.requestId) {
@@ -829,8 +1181,7 @@ export const PurchaseOrderView: React.FC = () => {
       });
 
       const matchedSupplier =
-        mergedSuppliers.find((s) => s.id === prData.supplierId) ||
-        (mergedSuppliers.length > 0 ? mergedSuppliers[0] : null);
+        mergedSuppliers.find((s) => s.id === prData.supplierId) || null;
 
       setFormData({
         purchaseNo: nextPoNo,
@@ -860,6 +1211,7 @@ export const PurchaseOrderView: React.FC = () => {
           : `Converted from Purchase Requisition ${prData.requestNo}`,
       });
 
+      formErr.reset();
       setEditingPurchase(null);
       setIsFormModalOpen(true);
       // Clean up React Router location state immediately so closing/saving won't re-trigger this block
@@ -954,6 +1306,7 @@ export const PurchaseOrderView: React.FC = () => {
           setApiErrorMessage(null);
           setLivePurchases(mapped);
 
+          setApiSummary(response.summary ?? null);
           if (response.pagination) {
             setTotalApiRecords(
               response.pagination.totalRecords ?? mapped.length,
@@ -1067,7 +1420,7 @@ export const PurchaseOrderView: React.FC = () => {
   }, [activeDropdownId, activeShareId]);
 
   // Summary Metrics
-  const summary = useMemo(() => {
+  const localSummary = useMemo(() => {
     const pool = isApiConnected ? livePurchases : purchases;
     const totalAmount = pool.reduce((acc, p) => acc + (p.grandTotal || 0), 0);
     const todayStr = new Date().toISOString().split("T")[0];
@@ -1095,11 +1448,12 @@ export const PurchaseOrderView: React.FC = () => {
       completedCount,
     };
   }, [isApiConnected, livePurchases, purchases, totalApiRecords]);
+  const summary = apiSummary ?? localSummary;
 
   // Open Create Modal (No mock data: uses live products/suppliers if available or clean empty inputs)
   const handleOpenCreateModal = () => {
     loadFormMasterData();
-    const nextPoNo = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nextPoNo = ""; // server generates the PO number on save
 
     const initialItem: PurchaseProductItem = {
       id: `po_it_${Date.now()}`,
@@ -1157,6 +1511,7 @@ export const PurchaseOrderView: React.FC = () => {
       notes: "",
     });
     setCustomBatchRows({});
+    formErr.reset();
     setEditingPurchase(null);
     setIsFormModalOpen(true);
   };
@@ -1212,13 +1567,14 @@ export const PurchaseOrderView: React.FC = () => {
       notes: po.notes || "",
     });
     setCustomBatchRows({});
+    formErr.reset();
     setEditingPurchase(po);
     setIsFormModalOpen(true);
   };
 
   // Duplicate Purchase Bill: Pre-fills form fields so user can review/edit before saving
   const handleDuplicatePurchase = (po: PurchaseOrder) => {
-    const nextPoNo = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nextPoNo = ""; // server generates the PO number on save
 
     setFormData({
       purchaseNo: nextPoNo,
@@ -1251,6 +1607,7 @@ export const PurchaseOrderView: React.FC = () => {
     });
 
     setCustomBatchRows({});
+    formErr.reset();
     setEditingPurchase(null);
     setIsFormModalOpen(true);
     toast.info(
@@ -1259,7 +1616,32 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   // Convert Purchase to Purchase Return: opens Purchase Return creation form with fields prefilled
-  const handleConvertToReturn = (po: PurchaseOrder) => {
+  const handleConvertToReturn = (po: PurchaseOrder) =>
+    convertGuard.runOnce(async () => {
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+      // Preconditions: only a received bill with real items can be returned.
+      if (!po.items || po.items.length === 0) {
+        toast.warning("This purchase bill has no items to return.");
+        return;
+      }
+      if (po.purchaseStatus === "Cancelled") {
+        toast.warning("A cancelled purchase bill cannot be returned.");
+        return;
+      }
+      const badItem = po.items.find(
+        (it) => checkRecordId(it.productId, "product") !== null,
+      );
+      if (badItem) {
+        toast.warning(
+          `Please choose the product from the list for "${badItem.productName || "an item"}" before creating a return.`,
+        );
+        return;
+      }
+      performConvertToReturn(po);
+    });
+
+  const performConvertToReturn = (po: PurchaseOrder) => {
     const returnItems: PurchaseReturnItem[] = po.items.map((it) => ({
       id: `pret_it_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       productId: it.productId,
@@ -1502,6 +1884,7 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   const handleSupplierChange = (supId: string) => {
+    formErr.clearError("supplierId");
     const sup = mergedSuppliers.find((s) => s.id === supId);
     if (sup) {
       setFormData((prev) => ({
@@ -1558,7 +1941,7 @@ export const PurchaseOrderView: React.FC = () => {
     setOriginatingRequestId(pr.id);
 
     // 1. Match supplier from request
-    let matchedSupplier =
+    const matchedSupplier =
       mergedSuppliers.find((s) => s.id === pr.supplierId) ||
       mergedSuppliers.find(
         (s) =>
@@ -1566,9 +1949,9 @@ export const PurchaseOrderView: React.FC = () => {
           (pr.supplierName || "").trim().toLowerCase(),
       );
 
-    if (!matchedSupplier && mergedSuppliers.length > 0) {
-      matchedSupplier = mergedSuppliers[0];
-    }
+    // Never substitute an unrelated "first available" supplier: if the request's supplier
+    // cannot be resolved, the supplier field keeps the request's own value (or stays empty)
+    // and the user is asked to choose one before saving.
 
     // 2. Map line items from request
     const prItems: PurchaseProductItem[] = (pr.items || []).map((it, idx) => {
@@ -1774,14 +2157,6 @@ export const PurchaseOrderView: React.FC = () => {
         });
       });
 
-      // 5. If no batches exist for this product, generate fallback lots
-      if (batchMap.size === 0) {
-        const currentYear = new Date().getFullYear();
-        const fallback1 = `BAT-${currentYear}-001`;
-        const fallback2 = `BAT-${currentYear}-002`;
-        batchMap.set(fallback1, { batchNo: fallback1 });
-        batchMap.set(fallback2, { batchNo: fallback2 });
-      }
 
       // 6. Ensure currentBatch is present if non-empty
       if (
@@ -1877,6 +2252,11 @@ export const PurchaseOrderView: React.FC = () => {
   const handleItemProductChange = (index: number, prodId: string) => {
     const option = productOptions.find((p) => p.value === prodId);
     if (!option) return;
+    formErr.clearError(`items.${index}.product`);
+    formErr.clearError(`items.${index}.price`);
+    formErr.clearError(`items.${index}.total`);
+    formErr.clearError("items");
+    formErr.clearError("totals");
 
     // Reset custom batch toggle for this row when switching product
     setCustomBatchRows((prev) => {
@@ -1927,6 +2307,15 @@ export const PurchaseOrderView: React.FC = () => {
     field: keyof PurchaseProductItem,
     val: any,
   ) => {
+    const errKeyByField: Record<string, string> = {
+      purchasePrice: "price",
+      salePrice: "salePrice",
+      freeQuantity: "freeQuantity",
+    };
+    formErr.clearError(`items.${index}.${errKeyByField[field as string] || field}`);
+    formErr.clearError(`items.${index}.total`);
+    formErr.clearError(`items.${index}.discountAmount`);
+    formErr.clearError("totals");
     setFormData((prev) => {
       const copy = [...prev.items];
       const current = { ...copy[index] };
@@ -1983,10 +2372,14 @@ export const PurchaseOrderView: React.FC = () => {
       total: 0,
     };
 
+    formErr.clearError("items");
     setFormData((prev) => ({ ...prev, items: [...prev.items, newItem] }));
   };
 
   const handleRemoveItemRow = (index: number) => {
+    // Row indexes shift after a removal, so drop all per-row messages.
+    formErr.clearGroup("items.");
+    formErr.clearError("totals");
     setFormData((prev) => ({
       ...prev,
       items: prev.items.filter((_, i) => i !== index),
@@ -2171,6 +2564,7 @@ export const PurchaseOrderView: React.FC = () => {
       0,
       calculatedTotals.grandTotal - (Number(formData.paidAmount) || 0),
     );
+    formPayErr.reset();
     setFormPaymentDetails({
       amountPaid:
         remainingBalance > 0
@@ -2277,106 +2671,90 @@ export const PurchaseOrderView: React.FC = () => {
     }
   };
 
-  // Save Purchase Order (Create or Update with Work API)
-  const handleSavePurchase = async (status: PurchaseStatus = "Pending") => {
-    let targetSupplierId = formData.supplierId;
-    if (!targetSupplierId) {
-      // If no supplier selected yet, pick the first available supplier
-      if (mergedSuppliers.length > 0) {
-        targetSupplierId = mergedSuppliers[0].id;
-        setFormData((prev) => ({
-          ...prev,
-          supplierId: mergedSuppliers[0].id,
-          supplierName: mergedSuppliers[0].name,
-        }));
-      } else {
-        targetSupplierId = ensureValidUuid();
-      }
-    }
+  // Save Purchase Order (Create or Update with Work API).
+  // Wrapped in a submit guard so double-clicks / repeated Enter cannot send it twice.
+  const handleSavePurchase = (status: PurchaseStatus = "Pending") =>
+    saveGuard.runOnce(() => performSavePurchase(status));
 
-    // Check if the selected supplierId exists among actual database suppliers fetched from GET /work/suppliers
-    if (availableSuppliers.length > 0) {
-      const isKnownApiSupplier = availableSuppliers.some(
-        (s) => s.id === targetSupplierId,
-      );
-      if (!isKnownApiSupplier) {
-        // Match by name or fallback to first valid API supplier
-        const matchedByName = availableSuppliers.find(
-          (s) =>
-            s.name.trim().toLowerCase() ===
-            formData.supplierName.trim().toLowerCase(),
-        );
-        if (matchedByName) {
-          targetSupplierId = matchedByName.id;
-        } else {
-          targetSupplierId = availableSuppliers[0].id;
-        }
-      }
-    } else if (!targetSupplierId) {
-      targetSupplierId = ensureValidUuid();
-    }
+  /** Runs the full form validation; returns true (and clears messages) only when the form is valid. */
+  const computePurchaseErrors = (): FieldErrors =>
+    validatePurchaseForm(formData, {
+      totals: calculatedTotals,
+      paymentDate: formPaymentDetails.date,
+      isEditing: Boolean(editingPurchase),
+      requestSelectionMissing:
+        purchaseType === "with_request" &&
+        !selectedRequestId &&
+        eligiblePurchaseRequests.length > 0,
+    });
+  const validatePurchaseBeforeSave = (): boolean =>
+    formErr.validateAll(computePurchaseErrors());
 
-    if (
-      purchaseType === "with_request" &&
-      !selectedRequestId &&
-      eligiblePurchaseRequests.length > 0
-    ) {
-      toast.warning(
-        'Please select a Purchase Request or switch to "Without Purchase Request".',
-      );
-      return;
-    }
+  // After the first Save attempt keep errors in sync with the values (cleared only when valid).
+  useRevalidateAfterSubmit(formErr, computePurchaseErrors, [
+    formData,
+    calculatedTotals,
+    formPaymentDetails.date,
+    editingPurchase,
+    purchaseType,
+    selectedRequestId,
+    eligiblePurchaseRequests.length,
+  ]);
 
-    if (
-      formData.items.length === 0 ||
-      !formData.items.some((it) => it.productId)
-    ) {
-      toast.error("Please select at least one valid product.");
-      return;
-    }
-    const hasInvalidQty = formData.items.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("Product quantities must be greater than zero.");
-      return;
-    }
-    const hasInvalidPrice = formData.items.some(
-      (it) =>
-        (it.purchasePrice !== undefined && it.purchasePrice < 0) ||
-        (it.salePrice !== undefined && it.salePrice < 0),
-    );
-    if (hasInvalidPrice) {
-      toast.error("Product prices cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = formData.items.some(
-      (it) =>
-        (it.discountPercent !== undefined &&
-          (it.discountPercent < 0 || it.discountPercent > 100)) ||
-        (it.discountAmount !== undefined && it.discountAmount < 0),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
-    if (formData.shipping !== undefined && Number(formData.shipping) < 0) {
-      toast.error("Shipping charges cannot be negative.");
-      return;
-    }
+  // Every form / modal starts and ends clean: no errors carried across open/close.
+  useEffect(() => {
+    formErr.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormModalOpen]);
+  useEffect(() => {
+    formPayErr.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormPaymentModalOpen]);
+  useEffect(() => {
+    recordPayErr.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPaymentModalOpen]);
+  useEffect(() => {
+    quickProdErr.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAddProductModalOpen]);
+  useRevalidateAfterSubmit(
+    formPayErr,
+    () =>
+      validateFormPayment(
+        {
+          amountPaid: formPaymentDetails.amountPaid,
+          date: formPaymentDetails.date,
+          paymentType: formPaymentDetails.paymentType || "Cash",
+        },
+        editingPurchase
+          ? Math.max(
+              0,
+              calculatedTotals.grandTotal - (Number(formData.paidAmount) || 0),
+            )
+          : calculatedTotals.grandTotal,
+        "Payment amount",
+      ),
+    [
+      formPaymentDetails,
+      editingPurchase,
+      calculatedTotals.grandTotal,
+      formData.paidAmount,
+    ],
+  );
+  useRevalidateAfterSubmit(
+    quickProdErr,
+    () => validateQuickProduct(quickProductForm),
+    [quickProductForm],
+  );
 
-    if (formData.paidAmount < 0) {
-      toast.error("Paid amount cannot be negative.");
+  const performSavePurchase = async (_status: PurchaseStatus = "Pending") => {
+    // Validate BEFORE any API call, voucher creation or stock adjustment.
+    // Missing suppliers / products are never replaced by "the first available" record.
+    if (!validatePurchaseBeforeSave()) {
       return;
     }
-    if (formData.paidAmount > calculatedTotals.grandTotal) {
-      toast.error(
-        `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-      );
-      return;
-    }
+    const targetSupplierId = formData.supplierId;
 
     const finalPaid = Math.min(
       calculatedTotals.grandTotal,
@@ -2436,7 +2814,7 @@ export const PurchaseOrderView: React.FC = () => {
             otherCharges: formData.otherCharges,
           };
         } else {
-          throw new Error("No data returned from Work API");
+          throw new Error("The server did not return the saved purchase order. Please try again.");
         }
 
         // Auto-generate Payment Out voucher if new payment was recorded during edit
@@ -2454,7 +2832,7 @@ export const PurchaseOrderView: React.FC = () => {
         if (finalPaid > basePaidBenchmark) {
           const deltaAmount = finalPaid - basePaidBenchmark;
           let apiVoucherId = `po_pm_${Date.now()}`;
-          let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
+          let apiVoucherNo = '';
 
           if (UUID_REGEX.test(updatedPo.supplierId)) {
             try {
@@ -2542,7 +2920,7 @@ export const PurchaseOrderView: React.FC = () => {
         if (apiRes && apiRes.data) {
           createdPo = mapApiPurchaseOrderToUi(apiRes.data);
         } else {
-          throw new Error("No data returned from Work API");
+          throw new Error("The server did not return the saved purchase order. Please try again.");
         }
 
         createdPo = {
@@ -2574,7 +2952,7 @@ export const PurchaseOrderView: React.FC = () => {
         // Record payment voucher in Work Payment Out API & local store if initial payment was specified
         if (finalPaid > 0) {
           let apiVoucherId = `po_pm_${Date.now()}`;
-          let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
+          let apiVoucherNo = '';
 
           if (UUID_REGEX.test(createdPo.supplierId)) {
             try {
@@ -2656,7 +3034,7 @@ export const PurchaseOrderView: React.FC = () => {
               const cleanBatch =
                 item.batch && item.batch.trim() && item.batch !== "SELECT BATCH"
                   ? item.batch.trim()
-                  : prodBatch || `BAT-${createdPo.purchaseNo || "PO"}`;
+                  : prodBatch || undefined;
               await stockApi.adjustStock({
                 productId: item.productId,
                 quantity: item.quantity,
@@ -2712,11 +3090,21 @@ export const PurchaseOrderView: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Error saving purchase order:", err);
+      // Keep everything the user typed; show backend field problems next to the fields.
+      const apiFields = extractApiFieldErrors(err);
+      const mapped: FieldErrors = {};
+      Object.entries(apiFields).forEach(([path, msg]) => {
+        mapped[mapPurchaseApiFieldKey(path)] = msg;
+      });
+      if (Object.keys(mapped).length > 0) {
+        formErr.merge(mapped);
+        requestAnimationFrame(() => focusField(Object.keys(mapped)[0]));
+      }
       toast.error(
-        err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          "Error saving purchase order",
+        getApiErrorMessage(
+          err,
+          "We could not save the purchase order. Please review the details and try again.",
+        ),
       );
     } finally {
       setIsSubmitting(false);
@@ -2724,7 +3112,23 @@ export const PurchaseOrderView: React.FC = () => {
   };
 
   // Change Purchase Order Status via Work API & sync Stock Inward to Commerce
-  const handleUpdateStatus = async (
+  const handleUpdateStatus = (
+    po: PurchaseOrder,
+    newStatus: "Pending" | "Approved" | "Ordered" | "Received" | "Cancelled",
+  ) =>
+    statusGuard.runOnce(async () => {
+      setActiveDropdownId(null);
+      setDropdownPos(null);
+      // Check the action is allowed for this order BEFORE any API call or stock inward.
+      const problem = validateStatusChange(po, newStatus);
+      if (problem) {
+        toast.warning(problem);
+        return;
+      }
+      await performUpdateStatus(po, newStatus);
+    });
+
+  const performUpdateStatus = async (
     po: PurchaseOrder,
     newStatus: "Pending" | "Approved" | "Ordered" | "Received" | "Cancelled",
   ) => {
@@ -2756,7 +3160,7 @@ export const PurchaseOrderView: React.FC = () => {
           const cleanBatch =
             item.batch && item.batch.trim() && item.batch !== "SELECT BATCH"
               ? item.batch.trim()
-              : prodBatch || `BAT-${targetPo.purchaseNo || "PO"}`;
+              : prodBatch || undefined;
           await stockApi.adjustStock({
             productId: item.productId,
             quantity: item.quantity,
@@ -2823,7 +3227,7 @@ export const PurchaseOrderView: React.FC = () => {
       const cleanBatch =
         it.batch && it.batch.trim() && it.batch !== "SELECT BATCH"
           ? it.batch.trim()
-          : prodBatch || `BAT-${po.purchaseNo || "PO"}`;
+          : prodBatch || undefined;
       return {
         productId: ensureValidUuid(it.productId),
         quantity: Math.max(1, Number(it.quantity) || 1),
@@ -2892,12 +3296,12 @@ export const PurchaseOrderView: React.FC = () => {
       }
       fetchPurchaseOrders(true);
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        `Failed to update status to ${newStatus}`;
-      toast.error(errMsg);
+      toast.error(
+        getApiErrorMessage(
+          err,
+          `We could not change the status to ${newStatus}. Please try again.`,
+        ),
+      );
     }
   };
 
@@ -2914,8 +3318,20 @@ export const PurchaseOrderView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeletePo = async () => {
+  const handleConfirmDeletePo = () =>
+    deleteGuard.runOnce(() => performDeletePo());
+
+  const performDeletePo = async () => {
     if (!deleteTargetPo) return;
+    if (
+      deleteTargetPo.purchaseStatus === "Received" ||
+      (deleteTargetPo.purchaseStatus as string) === "Completed"
+    ) {
+      setDeletePoError(
+        "Received purchase orders are final and cannot be deleted.",
+      );
+      return;
+    }
     setIsDeletingPo(true);
     setDeletePoError(null);
 
@@ -2944,11 +3360,10 @@ export const PurchaseOrderView: React.FC = () => {
       setDeleteTargetPo(null);
       fetchPurchaseOrders(true);
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to delete purchase order";
+      const errMsg = getApiErrorMessage(
+        err,
+        "We could not delete this purchase order. Please try again.",
+      );
       setDeletePoError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -2962,26 +3377,43 @@ export const PurchaseOrderView: React.FC = () => {
     setRecordAmount(po.balance);
     setRecordMethod("Bank Transfer");
     setRecordNotes("");
+    recordPayErr.reset();
     setIsPaymentModalOpen(true);
   };
 
-  const handleConfirmPayment = async () => {
+  useRevalidateAfterSubmit(
+    recordPayErr,
+    () =>
+      validateRecordPayment(
+        recordAmount,
+        Number(selectedPurchase?.balance) || 0,
+        recordMethod,
+      ),
+    [recordAmount, recordMethod, selectedPurchase],
+  );
+
+  const handleConfirmPayment = () =>
+    paymentGuard.runOnce(() => performConfirmPayment());
+
+  const performConfirmPayment = async () => {
     if (!selectedPurchase) return;
-    if (recordAmount <= 0) {
-      toast.error("Payment amount must be greater than zero.");
-      return;
-    }
-    if (recordAmount > selectedPurchase.balance) {
-      toast.error(
-        `Payment amount cannot exceed balance due of ₹${selectedPurchase.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}.`,
-      );
+    // Validate against the outstanding balance BEFORE creating any payment voucher.
+    if (
+      !recordPayErr.validateAll(
+        validateRecordPayment(
+          recordAmount,
+          Number(selectedPurchase.balance) || 0,
+          recordMethod,
+        ),
+      )
+    ) {
       return;
     }
 
     try {
       // 1. If backend supplier ID is valid UUID, create live Payment Out in Work API
       let apiVoucherId = `po_pm_${Date.now()}`;
-      let apiVoucherNo = `PV-${Date.now().toString().slice(-5)}`;
+      let apiVoucherNo = '';
       if (UUID_REGEX.test(selectedPurchase.supplierId)) {
         try {
           const pRes = await workPaymentOutApi.createPaymentOut(
@@ -3061,7 +3493,19 @@ export const PurchaseOrderView: React.FC = () => {
       setIsPaymentModalOpen(false);
       fetchPurchaseOrders(true);
     } catch (err: any) {
-      toast.error("Failed to record payment");
+      const apiFields = extractApiFieldErrors(err);
+      if (apiFields.amount || apiFields.paymentType) {
+        recordPayErr.merge({
+          ...(apiFields.amount ? { amount: apiFields.amount } : {}),
+          ...(apiFields.paymentType ? { method: apiFields.paymentType } : {}),
+        });
+      }
+      toast.error(
+        getApiErrorMessage(
+          err,
+          "We could not record the payment. Please try again.",
+        ),
+      );
     }
   };
 
@@ -3349,9 +3793,13 @@ export const PurchaseOrderView: React.FC = () => {
                           </button>
                         )}
                       </div>
+                      <div {...fieldAttr("purchaseRequest")}>
                       <CustomSelect
                         value={selectedRequestId}
-                        onChange={(val) => handleSelectPurchaseRequest(val)}
+                        onChange={(val) => {
+                          formErr.clearError("purchaseRequest");
+                          handleSelectPurchaseRequest(val);
+                        }}
                         options={eligiblePurchaseRequests.map((r) => ({
                           value: r.id,
                           label: `${r.requestNo} — ${r.supplierName || r.requestedBy || "Requisition"} (${r.items?.length || 0} items) • [${r.status}]`,
@@ -3362,6 +3810,8 @@ export const PurchaseOrderView: React.FC = () => {
                             : "Select Approved Purchase Request..."
                         }
                       />
+                      </div>
+                      <FormError message={formErr.errors.purchaseRequest} />
                       <p className="text-[11px] text-slate-500 mt-1 font-medium">
                         {eligiblePurchaseRequests.length === 0
                           ? 'No pending purchase requests found. You can switch to "Without Purchase Request".'
@@ -3435,6 +3885,7 @@ export const PurchaseOrderView: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div>
                   <FormLabel required>Select Supplier</FormLabel>
+                  <div {...fieldAttr("supplierId")}>
                   <SupplierSearchableSelect
                     value={formData.supplierId}
                     onChange={(val, sup) => {
@@ -3456,6 +3907,8 @@ export const PurchaseOrderView: React.FC = () => {
                     }
                     placeholder="Select or search supplier..."
                   />
+                  </div>
+                  <FormError message={formErr.errors.supplierId} />
                 </div>
 
                 <div>
@@ -3463,12 +3916,8 @@ export const PurchaseOrderView: React.FC = () => {
                   <input
                     type="text"
                     value={formData.purchaseNo}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        purchaseNo: e.target.value,
-                      }))
-                    }
+                    readOnly
+                    placeholder="Auto-generated on save"
                     className={`${FORM_INPUT_CLS} font-bold text-[#33077C]`}
                   />
                 </div>
@@ -3494,30 +3943,37 @@ export const PurchaseOrderView: React.FC = () => {
                   <FormLabel required>Purchase Date</FormLabel>
                   <input
                     type="date"
+                    {...fieldAttr("purchaseDate")}
                     value={formData.purchaseDate}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      formErr.clearError("purchaseDate");
+                      formErr.clearError("dueDate");
                       setFormData((prev) => ({
                         ...prev,
                         purchaseDate: e.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     className={FORM_INPUT_CLS}
                   />
+                  <FormError message={formErr.errors.purchaseDate} />
                 </div>
 
                 <div>
                   <FormLabel>Due Date</FormLabel>
                   <input
                     type="date"
+                    {...fieldAttr("dueDate")}
                     value={formData.dueDate}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      formErr.clearError("dueDate");
                       setFormData((prev) => ({
                         ...prev,
                         dueDate: e.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     className={FORM_INPUT_CLS}
                   />
+                  <FormError message={formErr.errors.dueDate} />
                 </div>
 
                 <div>
@@ -3785,6 +4241,7 @@ export const PurchaseOrderView: React.FC = () => {
 
                               {/* 2. Product Name Selection */}
                               <td className="py-3 px-2 border-r border-slate-200 align-top">
+                                <div {...fieldAttr(`items.${idx}.product`)}>
                                 <SearchableSelect
                                   value={it.productId}
                                   onChange={(val) =>
@@ -3808,6 +4265,10 @@ export const PurchaseOrderView: React.FC = () => {
                                   allowClear
                                   triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold"
                                   size="sm"
+                                />
+                                </div>
+                                <FormError
+                                  message={formErr.errors[`items.${idx}.product`]}
                                 />
                               </td>
 
@@ -3893,6 +4354,7 @@ export const PurchaseOrderView: React.FC = () => {
                                 <input
                                   type="number"
                                   min="1"
+                                  {...fieldAttr(`items.${idx}.quantity`)}
                                   value={it.quantity === 0 ? "" : it.quantity}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
@@ -3903,6 +4365,9 @@ export const PurchaseOrderView: React.FC = () => {
                                     )
                                   }
                                   className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
+                                />
+                                <FormError
+                                  message={formErr.errors[`items.${idx}.quantity`]}
                                 />
                               </td>
 
@@ -3926,6 +4391,11 @@ export const PurchaseOrderView: React.FC = () => {
                                     )
                                   }
                                   className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-semibold text-emerald-700 outline-none shadow-2xs transition-all"
+                                />
+                                <FormError
+                                  message={
+                                    formErr.errors[`items.${idx}.freeQuantity`]
+                                  }
                                 />
                               </td>
 
@@ -3995,6 +4465,7 @@ export const PurchaseOrderView: React.FC = () => {
                                     type="number"
                                     step="0.01"
                                     min="0"
+                                    {...fieldAttr(`items.${idx}.price`)}
                                     value={
                                       priceTaxMode === "With Tax"
                                         ? unitPriceWithTax
@@ -4032,6 +4503,9 @@ export const PurchaseOrderView: React.FC = () => {
                                       ? `Excl: ₹${(it.purchasePrice || 0).toFixed(2)}`
                                       : `Incl: ₹${unitPriceWithTax.toFixed(2)}`}
                                   </div>
+                                  <FormError
+                                    message={formErr.errors[`items.${idx}.price`]}
+                                  />
                                 </div>
                               </td>
 
@@ -4057,6 +4531,9 @@ export const PurchaseOrderView: React.FC = () => {
                                   }
                                   className="w-full h-10 px-2.5 text-right bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-bold text-slate-800 outline-none shadow-2xs transition-all"
                                 />
+                                <FormError
+                                  message={formErr.errors[`items.${idx}.salePrice`]}
+                                />
                               </td>
 
                               {/* 11. Discount (%) - Separation of % and Amount */}
@@ -4080,6 +4557,11 @@ export const PurchaseOrderView: React.FC = () => {
                                   }
                                   className="w-full h-10 px-2 text-center bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-medium text-slate-700 outline-none shadow-2xs transition-all"
                                 />
+                                <FormError
+                                  message={
+                                    formErr.errors[`items.${idx}.discountPercent`]
+                                  }
+                                />
                               </td>
                               <td className="py-3 px-2 border-r border-slate-200 w-20 align-top">
                                 <input
@@ -4101,6 +4583,11 @@ export const PurchaseOrderView: React.FC = () => {
                                     )
                                   }
                                   className="w-full h-10 px-2 text-right bg-white hover:border-slate-400 focus:bg-white border border-slate-300 focus:border-[#33077C] focus:ring-2 focus:ring-[#33077C]/10 rounded-[4px] text-xs font-medium text-slate-700 outline-none shadow-2xs transition-all"
+                                />
+                                <FormError
+                                  message={
+                                    formErr.errors[`items.${idx}.discountAmount`]
+                                  }
                                 />
                               </td>
 
@@ -4126,6 +4613,11 @@ export const PurchaseOrderView: React.FC = () => {
                                       triggerClassName="!h-10 !rounded-[4px] !border !border-slate-300 hover:!border-slate-400 focus:!border-[#33077C] !bg-white shadow-2xs text-xs font-semibold justify-center"
                                       size="sm"
                                     />
+                                    <FormError
+                                      message={
+                                        formErr.errors[`items.${idx}.taxPercent`]
+                                      }
+                                    />
                                   </td>
                                   <td className="py-3 px-2 border-r border-slate-200 w-20 align-top">
                                     <div className="h-10 flex items-center justify-end px-2.5 bg-slate-50/70 border border-slate-200 rounded-[4px] text-xs font-semibold text-slate-700">
@@ -4145,6 +4637,9 @@ export const PurchaseOrderView: React.FC = () => {
                                     minimumFractionDigits: 2,
                                   })}
                                 </div>
+                                <FormError
+                                  message={formErr.errors[`items.${idx}.total`]}
+                                />
                               </td>
 
                               {/* 14. Delete Action */}
@@ -4167,6 +4662,10 @@ export const PurchaseOrderView: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              <div {...fieldAttr("items")} className="!mt-1">
+                <FormError message={formErr.errors.items} showIcon />
               </div>
 
               {/* Bottom Table Bar: Add Item Button on left, Financial Breakdown below */}
@@ -4544,6 +5043,13 @@ export const PurchaseOrderView: React.FC = () => {
                         </div>
                       </div>
 
+                      <div {...fieldAttr("shipping")} className="text-right">
+                        <FormError
+                          message={formErr.errors.shipping}
+                          className="justify-end"
+                        />
+                      </div>
+
                       {/* 3. Rounding Adjustment */}
                       <div className="pt-3 border-t border-slate-100 space-y-2">
                         <div className="flex items-center justify-between">
@@ -4654,6 +5160,10 @@ export const PurchaseOrderView: React.FC = () => {
                         </span>
                       </div>
 
+                      <div {...fieldAttr("totals")}>
+                        <FormError message={formErr.errors.totals} showIcon />
+                      </div>
+
                       {/* 5. Paid to Supplier & Balance Payable */}
                       <div className="pt-2 border-t border-slate-100 space-y-3">
                         <div className="flex items-center justify-between text-xs">
@@ -4667,6 +5177,12 @@ export const PurchaseOrderView: React.FC = () => {
                             <input
                               type="text"
                               inputMode="decimal"
+                              {...fieldAttr("paidAmount")}
+                              onInput={() => {
+                                formErr.clearError("paidAmount");
+                                formErr.clearError("paymentMethod");
+                                formErr.clearError("paymentDate");
+                              }}
                               value={
                                 formData.paidAmount === 0
                                   ? ""
@@ -4704,12 +5220,6 @@ export const PurchaseOrderView: React.FC = () => {
                                 if (isNaN(newAmount) || newAmount < 0) {
                                   newAmount = 0;
                                 }
-                                if (newAmount > calculatedTotals.grandTotal) {
-                                  newAmount = calculatedTotals.grandTotal;
-                                  toast.warning(
-                                    `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-                                  );
-                                }
                                 setFormData((prev) => ({
                                   ...prev,
                                   paidAmount: newAmount,
@@ -4722,6 +5232,21 @@ export const PurchaseOrderView: React.FC = () => {
                               className="w-32 h-8.5 text-right pl-6 pr-2.5 bg-white border-2 border-emerald-600 focus:border-emerald-700 focus:ring-2 focus:ring-emerald-500/20 rounded-[6px] font-bold text-emerald-700 text-xs outline-none shadow-2xs transition-all"
                             />
                           </div>
+                        </div>
+
+                        <div className="text-right">
+                          <FormError
+                            message={formErr.errors.paidAmount}
+                            className="justify-end"
+                          />
+                          <FormError
+                            message={formErr.errors.paymentMethod}
+                            className="justify-end"
+                          />
+                          <FormError
+                            message={formErr.errors.paymentDate}
+                            className="justify-end"
+                          />
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
@@ -4920,6 +5445,8 @@ export const PurchaseOrderView: React.FC = () => {
                       <input
                         type="text"
                         inputMode="decimal"
+                        {...fieldAttr("amountPaid")}
+                        onInput={() => formPayErr.clearError("amountPaid")}
                         value={
                           formPaymentDetails.amountPaid === 0
                             ? ""
@@ -4954,17 +5481,6 @@ export const PurchaseOrderView: React.FC = () => {
                           if (isNaN(newAmount) || newAmount < 0) {
                             newAmount = 0;
                           }
-                          const maxLimit =
-                            editingPurchase &&
-                            (Number(formData.paidAmount) || 0) > 0
-                              ? calculatedTotals.balance
-                              : calculatedTotals.grandTotal;
-                          if (newAmount > maxLimit && maxLimit > 0) {
-                            newAmount = maxLimit;
-                            toast.warning(
-                              `Payment amount cannot exceed ₹${maxLimit.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-                            );
-                          }
                           setFormPaymentDetails((prev) => ({
                             ...prev,
                             amountPaid: newAmount,
@@ -4972,6 +5488,7 @@ export const PurchaseOrderView: React.FC = () => {
                         }}
                         className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-semibold text-emerald-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                       />
+                      <FormError message={formPayErr.errors.amountPaid} />
                     </div>
 
                     {/* Date */}
@@ -4981,15 +5498,18 @@ export const PurchaseOrderView: React.FC = () => {
                       </label>
                       <input
                         type="date"
+                        {...fieldAttr("date")}
                         value={formPaymentDetails.date}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          formPayErr.clearError("date");
                           setFormPaymentDetails((prev) => ({
                             ...prev,
                             date: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                       />
+                      <FormError message={formPayErr.errors.date} />
                     </div>
 
                     {/* Payment Type */}
@@ -4997,14 +5517,16 @@ export const PurchaseOrderView: React.FC = () => {
                       <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                         Payment Type <span className="text-rose-500">*</span>
                       </label>
+                      <div {...fieldAttr("paymentType")}>
                       <CustomSelect
                         value={formPaymentDetails.paymentType || "Cash"}
-                        onChange={(val) =>
+                        onChange={(val) => {
+                          formPayErr.clearError("paymentType");
                           setFormPaymentDetails((prev) => ({
                             ...prev,
                             paymentType: val as any,
-                          }))
-                        }
+                          }));
+                        }}
                         options={[
                           { value: "Cash", label: "Cash" },
                           {
@@ -5018,6 +5540,8 @@ export const PurchaseOrderView: React.FC = () => {
                         ]}
                         placeholder="Select Payment Mode"
                       />
+                      </div>
+                      <FormError message={formPayErr.errors.paymentType} />
                     </div>
                   </div>
 
@@ -5077,32 +5601,28 @@ export const PurchaseOrderView: React.FC = () => {
                       variant="primary"
                       size="md"
                       icon={<Check className="w-4 h-4 stroke-[2.5]" />}
-                      onClick={() => {
-                        const enteredAmount =
-                          Number(formPaymentDetails.amountPaid) || 0;
-                        if (enteredAmount <= 0) {
-                          toast.error(
-                            "Payment amount must be greater than zero.",
-                          );
+                      onClick={() => paymentGuard.runOnce(async () => {
+                        // Validate amount (vs outstanding balance), date and payment type first.
+                        const currentPaid = Number(formData.paidAmount) || 0;
+                        const limit = editingPurchase
+                          ? Math.max(0, calculatedTotals.grandTotal - currentPaid)
+                          : calculatedTotals.grandTotal;
+                        const payErrs = validateFormPayment(
+                          {
+                            amountPaid: formPaymentDetails.amountPaid,
+                            date: formPaymentDetails.date,
+                            paymentType: formPaymentDetails.paymentType || "Cash",
+                          },
+                          limit,
+                          "Payment amount",
+                        );
+                        if (!formPayErr.validateAll(payErrs)) {
                           return;
                         }
+                        const enteredAmount =
+                          Number(formPaymentDetails.amountPaid) || 0;
 
                         if (editingPurchase) {
-                          const currentPaid = Number(formData.paidAmount) || 0;
-                          const currentBalance = Math.max(
-                            0,
-                            calculatedTotals.grandTotal - currentPaid,
-                          );
-                          if (
-                            enteredAmount > currentBalance &&
-                            currentBalance > 0
-                          ) {
-                            toast.error(
-                              `Payment amount cannot exceed remaining balance of ₹${currentBalance.toLocaleString("en-IN")}`,
-                            );
-                            return;
-                          }
-
                           const newTotalPaid = Math.min(
                             calculatedTotals.grandTotal,
                             currentPaid + enteredAmount,
@@ -5120,12 +5640,6 @@ export const PurchaseOrderView: React.FC = () => {
                             `Payment of ₹${enteredAmount.toLocaleString("en-IN")} applied! Click Update Purchase Bill to save.`,
                           );
                         } else {
-                          if (enteredAmount > calculatedTotals.grandTotal) {
-                            toast.error(
-                              `Payment amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN")}`,
-                            );
-                            return;
-                          }
                           setFormData((prev) => ({
                             ...prev,
                             paidAmount: enteredAmount,
@@ -5137,7 +5651,10 @@ export const PurchaseOrderView: React.FC = () => {
                             `Payment amount of ₹${enteredAmount.toLocaleString("en-IN")} (${formPaymentDetails.paymentType || "Cash"}) updated!`,
                           );
                         }
-                      }}
+                        formErr.clearError("paidAmount");
+                        formErr.clearError("paymentMethod");
+                        formErr.clearError("paymentDate");
+                      })}
                       className="w-full sm:w-auto justify-center"
                     >
                       Apply Payment
@@ -5170,16 +5687,19 @@ export const PurchaseOrderView: React.FC = () => {
                     <input
                       type="text"
                       placeholder="e.g. Wireless Mouse"
+                      {...fieldAttr("productName")}
                       value={quickProductForm.productName}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        quickProdErr.clearError("productName");
                         setQuickProductForm((prev) => ({
                           ...prev,
                           productName: e.target.value,
-                        }))
-                      }
+                        }));
+                      }}
                       className={FORM_INPUT_CLS}
                       autoFocus
                     />
+                    <FormError message={quickProdErr.errors.productName} />
                   </div>
 
                   {/* Row 2: Product Code / SKU & Category */}
@@ -5266,15 +5786,19 @@ export const PurchaseOrderView: React.FC = () => {
                           min="0"
                           step="0.01"
                           placeholder="0.00"
+                          {...fieldAttr("purchasePrice")}
+                          onKeyDown={handleNonNegativeKeyDown}
                           value={quickProductForm.purchasePrice}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            quickProdErr.clearError("purchasePrice");
                             setQuickProductForm((prev) => ({
                               ...prev,
                               purchasePrice: e.target.value,
-                            }))
-                          }
+                            }));
+                          }}
                           className={FORM_INPUT_CLS}
                         />
+                        <FormError message={quickProdErr.errors.purchasePrice} />
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
                           Supplier cost price
                         </span>
@@ -5286,15 +5810,19 @@ export const PurchaseOrderView: React.FC = () => {
                           min="0"
                           step="0.01"
                           placeholder="0.00"
+                          {...fieldAttr("salePrice")}
+                          onKeyDown={handleNonNegativeKeyDown}
                           value={quickProductForm.salePrice}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            quickProdErr.clearError("salePrice");
                             setQuickProductForm((prev) => ({
                               ...prev,
                               salePrice: e.target.value,
-                            }))
-                          }
+                            }));
+                          }}
                           className={FORM_INPUT_CLS}
                         />
+                        <FormError message={quickProdErr.errors.salePrice} />
                         <span className="text-[10px] text-slate-500 mt-0.5 block">
                           Default customer price
                         </span>
@@ -6383,6 +6911,8 @@ export const PurchaseOrderView: React.FC = () => {
                     <input
                       type="text"
                       inputMode="decimal"
+                      {...fieldAttr("amount")}
+                      onInput={() => recordPayErr.clearError("amount")}
                       value={recordAmount === 0 ? "" : recordAmount}
                       onKeyDown={(e) => {
                         if (["-", "e", "E", "+"].includes(e.key)) {
@@ -6400,24 +6930,24 @@ export const PurchaseOrderView: React.FC = () => {
                           setRecordAmount(0);
                         } else if (num < 0) {
                           setRecordAmount(0);
-                        } else if (num > selectedPurchase.balance) {
-                          setRecordAmount(selectedPurchase.balance);
-                          toast.warning(
-                            `Disbursed amount cannot exceed balance due of ₹${selectedPurchase.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-                          );
                         } else {
                           setRecordAmount(num);
                         }
                       }}
                       className={`${FORM_INPUT_CLS} !text-emerald-600 font-bold`}
                     />
+                    <FormError message={recordPayErr.errors.amount} />
                   </div>
 
                   <div>
                     <FormLabel required>Payment Mode</FormLabel>
                     <select
                       value={recordMethod}
-                      onChange={(e) => setRecordMethod(e.target.value as any)}
+                      {...fieldAttr("method")}
+                      onChange={(e) => {
+                        recordPayErr.clearError("method");
+                        setRecordMethod(e.target.value as any);
+                      }}
                       className={FORM_SELECT_CLS}
                     >
                       <option value="Bank Transfer">
@@ -6452,7 +6982,8 @@ export const PurchaseOrderView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                    disabled={paymentGuard.isSubmitting}
+                    className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <Check className="w-4 h-4" />
                     <span>Confirm Payment</span>

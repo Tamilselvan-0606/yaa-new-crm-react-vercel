@@ -14,9 +14,6 @@ import { Branch, BranchStatus } from '../../types';
 import {
   GitBranch,
   Plus,
-  Phone,
-  MessageCircle,
-  Mail,
   MoreVertical,
   Pencil,
   Trash2,
@@ -41,6 +38,23 @@ import { Pagination } from '../../components/common/Pagination';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
+import {
+  digitsOnly,
+  emailAddress,
+  indianMobile,
+  liveMobileStartError,
+  minLength,
+  required,
+  requiredWhen,
+  validateFields,
+  when,
+} from '../../utils/fieldValidators';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useRowActionMenu } from '../../hooks/useRowActionMenu';
+import { StatusBadge } from '../../components/common/StatusBadge';
+import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
+import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
 
 const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
@@ -97,21 +111,11 @@ export const BranchesView: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // 3-Dots Action Dropdown State
-  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  const handleCopy = (e: React.MouseEvent, text: string, key: string, label: string) => {
-    e.stopPropagation();
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    showToast?.('success', 'Copied to Clipboard', `${label}: ${text}`);
-    setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 2000);
-  };
+  // 3-dots row menu + click-to-copy contact buttons (shared hooks)
+  const rowMenu = useRowActionMenu(220);
+  const { copiedKey, copy: handleCopy } = useCopyToClipboard((label, text) =>
+    showToast?.('success', 'Copied to Clipboard', `${label}: ${text}`)
+  );
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -148,6 +152,12 @@ export const BranchesView: React.FC = () => {
   });
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  /** Updates one form field and sets (or clears) its inline error in a single call. */
+  const updateField = (key: keyof typeof formData, value: string, error = '') => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    setFormErrors((prev) => (prev[key] === error ? prev : { ...prev, [key]: error }));
+  };
 
   // Organizations & Sub-Organizations state
   const [subOrganizations, setSubOrganizations] = useState<SubOrganizationApiItem[]>([]);
@@ -408,29 +418,6 @@ export const BranchesView: React.FC = () => {
     return () => window.removeEventListener('branchesChanged', handleBranchesChanged);
   }, [page, pageSize, appliedSearch, appliedStatus, isSaleManagement]);
 
-  // Close dropdown on outside click or scroll
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.branch-action-dropdown-container') && !target.closest('.branch-action-dropdown-menu')) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    const handleScroll = () => {
-      if (activeDropdownId) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [activeDropdownId]);
-
   // Modal Handlers
   const handleOpenAddModal = () => {
     setEditingBranch(null);
@@ -486,50 +473,21 @@ export const BranchesView: React.FC = () => {
   const handleSaveBranch = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const errors: Record<string, string> = {};
-
-    if (!formData.name.trim()) {
-      errors.name = 'Branch Name is required';
-    }
-    if (!formData.organizationId && !defaultOrgName.trim()) {
-      errors.organizationId = 'Select Organization is required';
-    }
-    if (subOrganizations.length > 0 && !formData.subOrganizationId) {
-      errors.subOrganizationId = 'Select Sub-Organization is required';
-    }
-    if (!formData.contactPerson.trim()) {
-      errors.contactPerson = 'Contact Person Name is required';
-    }
-    if (!formData.mobileNumber.trim()) {
-      errors.mobileNumber = 'Mobile Number is required';
-    } else if (formData.mobileNumber.trim().length !== 10) {
-      errors.mobileNumber = 'Mobile Number must be exactly 10 digits';
-    }
-    if (formData.whatsapp.trim() && formData.whatsapp.trim().length !== 10) {
-      errors.whatsapp = 'WhatsApp Number must be exactly 10 digits';
-    }
-    if (!formData.location.trim()) {
-      errors.location = 'Location is required';
-    }
-    if (!formData.email.trim()) {
-      errors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      errors.email = 'Please enter a valid email address';
-    }
-    if (!editingBranch && !formData.password.trim()) {
-      errors.password = 'Password is required';
-    } else if (!editingBranch && formData.password.trim().length < 12) {
-      errors.password = 'Password must be at least 12 characters';
-    }
-    if (!formData.status) {
-      errors.status = 'Status is required';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
-      return;
-    }
-    setFormErrors({});
+    const isCreate = !editingBranch;
+    const errors = validateFields([
+      ['name', formData.name, [required('Branch Name is required')]],
+      ['organizationId', formData.organizationId || defaultOrgName, [required('Select Organization is required')]],
+      ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
+      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required')]],
+      ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
+      ['whatsapp', formData.whatsapp, [indianMobile('WhatsApp Number')]],
+      ['location', formData.location, [required('Location is required')]],
+      ['email', formData.email, [required('Email is required'), emailAddress]],
+      ['password', formData.password, when(isCreate, [required('Password is required'), minLength(12, 'Password must be at least 12 characters')])],
+      ['status', formData.status, [required('Status is required')]],
+    ]);
+    setFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
 
     try {
       setSubmitting(true);
@@ -917,88 +875,14 @@ export const BranchesView: React.FC = () => {
 
                       {/* 3. CONTACT INFO */}
                       <td className="py-4 px-4 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-2">
-                          {/* Mobile / Phone */}
-                          {branch.mobileNumber ? (
-                            <div className="relative group">
-                              <button
-                                type="button"
-                                onClick={(e) => handleCopy(e, branch.mobileNumber!, `${branch.id}-phone`, 'Phone Number')}
-                                className="w-8 h-8 rounded-lg bg-[#EBF3FF] hover:bg-[#dbeafe] flex items-center justify-center text-[#2563EB] hover:scale-110 active:scale-95 transition-all shadow-2xs cursor-pointer"
-                                title="Click to copy phone number"
-                              >
-                                <Phone className="w-3.5 h-3.5" />
-                              </button>
-                              <div
-                                className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 text-white text-[11px] font-semibold rounded-md shadow-md whitespace-nowrap z-30 ${
-                                  copiedKey === `${branch.id}-phone`
-                                    ? 'opacity-100 bg-emerald-600 scale-100'
-                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}
-                              >
-                                {copiedKey === `${branch.id}-phone` ? 'Copied!' : branch.mobileNumber}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 opacity-40">
-                              <Phone className="w-3.5 h-3.5" />
-                            </div>
-                          )}
-
-                          {/* WhatsApp */}
-                          {branch.whatsapp ? (
-                            <div className="relative group">
-                              <button
-                                type="button"
-                                onClick={(e) => handleCopy(e, branch.whatsapp!, `${branch.id}-wa`, 'WhatsApp Number')}
-                                className="w-8 h-8 rounded-lg bg-[#ECFDF5] hover:bg-[#d1fae5] flex items-center justify-center text-[#059669] hover:scale-110 active:scale-95 transition-all shadow-2xs cursor-pointer"
-                                title="Click to copy WhatsApp number"
-                              >
-                                <MessageCircle className="w-3.5 h-3.5" />
-                              </button>
-                              <div
-                                className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 text-white text-[11px] font-semibold rounded-md shadow-md whitespace-nowrap z-30 ${
-                                  copiedKey === `${branch.id}-wa`
-                                    ? 'opacity-100 bg-emerald-600 scale-100'
-                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}
-                              >
-                                {copiedKey === `${branch.id}-wa` ? 'Copied!' : branch.whatsapp}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 opacity-40">
-                              <MessageCircle className="w-3.5 h-3.5" />
-                            </div>
-                          )}
-
-                          {/* Email */}
-                          {branch.email ? (
-                            <div className="relative group">
-                              <button
-                                type="button"
-                                onClick={(e) => handleCopy(e, branch.email!, `${branch.id}-email`, 'Email Address')}
-                                className="w-8 h-8 rounded-lg bg-[#FEEFEE] hover:bg-[#fee2e2] flex items-center justify-center text-[#EF4444] hover:scale-110 active:scale-95 transition-all shadow-2xs cursor-pointer"
-                                title="Click to copy email address"
-                              >
-                                <Mail className="w-3.5 h-3.5" />
-                              </button>
-                              <div
-                                className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 text-white text-[11px] font-semibold rounded-md shadow-md whitespace-nowrap z-30 ${
-                                  copiedKey === `${branch.id}-email`
-                                    ? 'opacity-100 bg-emerald-600 scale-100'
-                                    : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                }`}
-                              >
-                                {copiedKey === `${branch.id}-email` ? 'Copied!' : branch.email}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 opacity-40">
-                              <Mail className="w-3.5 h-3.5" />
-                            </div>
-                          )}
-                        </div>
+                        <ContactCopyButtons
+                          id={branch.id}
+                          phone={branch.mobileNumber}
+                          whatsapp={branch.whatsapp}
+                          email={branch.email}
+                          copiedKey={copiedKey}
+                          onCopy={handleCopy}
+                        />
                       </td>
 
                       {/* 4. LOCATION */}
@@ -1011,22 +895,7 @@ export const BranchesView: React.FC = () => {
 
                       {/* 5. STATUS */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                        {branch.status === 'Inactive' ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                            <span>Inactive</span>
-                          </span>
-                        ) : branch.status === 'Suspended' ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-300 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                            <span>Suspended</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>Active</span>
-                          </span>
-                        )}
+                        <StatusBadge status={branch.status} />
                       </td>
 
                       {/* 6. CREATED DATE */}
@@ -1043,52 +912,30 @@ export const BranchesView: React.FC = () => {
 
                       {/* 7. ACTIONS */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="relative inline-block text-left branch-action-dropdown-container">
+                        <div className="relative inline-block text-left" data-row-menu-trigger>
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === branch.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                const btnRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - btnRect.bottom;
-                                const dropdownHeight = 220;
-                                if (spaceBelow < dropdownHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - btnRect.top + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: btnRect.bottom + 4,
-                                    right: window.innerWidth - btnRect.right,
-                                  });
-                                }
-                                setActiveDropdownId(branch.id);
-                              }
-                            }}
+                            onClick={(e) => rowMenu.toggle(e, branch.id)}
                             className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                             title="More Actions"
                           >
                             <MoreVertical className="w-4 h-4 fill-white text-white" />
                           </button>
 
-                          {activeDropdownId === branch.id && dropdownPos && (
+                          {rowMenu.activeId === branch.id && rowMenu.pos && (
                             <div
-                              className="branch-action-dropdown-menu fixed z-[9999] w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
+                              data-row-menu className="fixed z-[9999] w-48 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-100 font-sans text-left"
                               style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : 'auto',
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : 'auto',
-                                right: `${dropdownPos.right}px`,
+                                top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : 'auto',
+                                bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : 'auto',
+                                right: `${rowMenu.pos.right}px`,
                               }}
                             >
                               {/* Edit */}
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   handleOpenEditModal(branch);
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1106,7 +953,7 @@ export const BranchesView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   handleViewBranch(branch);
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1124,7 +971,7 @@ export const BranchesView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Inactive',
                                     branch,
@@ -1149,7 +996,7 @@ export const BranchesView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Suspend',
                                     branch,
@@ -1176,7 +1023,7 @@ export const BranchesView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Delete',
                                     branch,
@@ -1236,7 +1083,7 @@ export const BranchesView: React.FC = () => {
         hideCloseButton={true}
         onBack={() => setIsModalOpen(false)}
       >
-        <form onSubmit={handleSaveBranch} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        <form noValidate onSubmit={handleSaveBranch} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
 
           {/* Row 1: Organization (Read-Only) | Sub-Organization | Branch Name */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1291,162 +1138,73 @@ export const BranchesView: React.FC = () => {
               )}
             </div>
 
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Branch Name <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => {
-                  setFormData({ ...formData, name: e.target.value });
-                  if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
-                }}
-                placeholder="Enter branch name"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.name
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.name && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
-              )}
-            </div>
+            <TextField
+              label="Branch Name"
+              required
+              value={formData.name}
+              error={formErrors.name}
+              placeholder="Enter branch name"
+              onValueChange={(v) => updateField('name', v)}
+            />
           </div>
 
           {/* Row 2: Branch Code | Contact Person Name | Mobile Number */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">Branch Code</label>
-                <input
-                  type="text"
-                  value={formData.code}
-                  readOnly
-                  placeholder="Auto-generated"
-                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
-                />
-              </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Contact Person Name <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.contactPerson}
-                onChange={(e) => {
-                  setFormData({ ...formData, contactPerson: e.target.value });
-                  if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
-                }}
-                placeholder="Enter contact person name"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.contactPerson
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.contactPerson && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Mobile Number <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="e.g. 9876543210"
-                value={formData.mobileNumber}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                  setFormData({ ...formData, mobileNumber: val });
-                  if (formErrors.mobileNumber) setFormErrors((prev) => ({ ...prev, mobileNumber: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.mobileNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.mobileNumber && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.mobileNumber}</p>
-              )}
-            </div>
+            <ReadOnlyField label="Branch Code" value={formData.code} placeholder="Auto-generated" />
+            <TextField
+              label="Contact Person Name"
+              required
+              value={formData.contactPerson}
+              error={formErrors.contactPerson}
+              placeholder="Enter contact person name"
+              onValueChange={(v) => updateField('contactPerson', v)}
+            />
+            <TextField
+              label="Mobile Number"
+              required
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="e.g. 9876543210"
+              value={formData.mobileNumber}
+              error={formErrors.mobileNumber}
+              onValueChange={(v) => {
+                const digits = digitsOnly(v);
+                updateField('mobileNumber', digits, liveMobileStartError('Mobile Number', digits));
+              }}
+            />
           </div>
 
           {/* Row 3: WhatsApp Number | Email | Location */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                WhatsApp Number
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="e.g. 9876543210"
-                value={formData.whatsapp}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                  setFormData({ ...formData, whatsapp: val });
-                  if (formErrors.whatsapp) setFormErrors((prev) => ({ ...prev, whatsapp: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.whatsapp
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.whatsapp && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.whatsapp}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Email <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="email"
-                value={formData.email}
-                onChange={(e) => {
-                  setFormData({ ...formData, email: e.target.value });
-                  if (formErrors.email) setFormErrors((prev) => ({ ...prev, email: '' }));
-                }}
-                placeholder="e.g. branch@organization.com"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.email
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.email && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.email}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Location <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.location}
-                onChange={(e) => {
-                  setFormData({ ...formData, location: e.target.value });
-                  if (formErrors.location) setFormErrors((prev) => ({ ...prev, location: '' }));
-                }}
-                placeholder="e.g. Chennai, Tamil Nadu"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.location
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.location && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.location}</p>
-              )}
-            </div>
+            <TextField
+              label="WhatsApp Number"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="e.g. 9876543210"
+              value={formData.whatsapp}
+              error={formErrors.whatsapp}
+              onValueChange={(v) => {
+                const digits = digitsOnly(v);
+                updateField('whatsapp', digits, liveMobileStartError('WhatsApp Number', digits));
+              }}
+            />
+            <TextField
+              label="Email"
+              required
+              type="email"
+              value={formData.email}
+              error={formErrors.email}
+              placeholder="e.g. branch@organization.com"
+              onValueChange={(v) => updateField('email', v)}
+            />
+            <TextField
+              label="Location"
+              required
+              value={formData.location}
+              error={formErrors.location}
+              placeholder="e.g. Chennai, Tamil Nadu"
+              onValueChange={(v) => updateField('location', v)}
+            />
           </div>
 
           {/* Row 4: Status | Password */}
@@ -1751,28 +1509,15 @@ export const BranchesView: React.FC = () => {
         confirmButtonText={
           confirmAction?.type === 'Delete'
             ? 'Yes, Delete'
-            : confirmAction?.type === 'Suspend'
-              ? (confirmAction.branch.status === 'Suspended' ? 'Yes, Resume' : 'Yes, Suspend')
-              : (confirmAction?.branch.status === 'Inactive' ? 'Yes, Activate' : 'Yes, Inactive')
+            : confirmAction && confirmButtonLabel(confirmAction.type, confirmAction.branch.status)
         }
         isLoading={isProcessingAction}
         onConfirm={async () => {
           if (!confirmAction) return;
           setIsProcessingAction(true);
           try {
-            if (confirmAction.type === 'Delete') {
-              await handleDeleteBranch(confirmAction.branch);
-            } else if (confirmAction.type === 'Suspend') {
-              await handleUpdateStatus(
-                confirmAction.branch,
-                confirmAction.branch.status === 'Suspended' ? 'Active' : 'Suspended'
-              );
-            } else if (confirmAction.type === 'Inactive') {
-              await handleUpdateStatus(
-                confirmAction.branch,
-                confirmAction.branch.status === 'Inactive' ? 'Active' : 'Inactive'
-              );
-            }
+            const { type, branch } = confirmAction;
+            await (type === 'Delete' ? handleDeleteBranch(branch) : handleUpdateStatus(branch, nextStatus(type, branch.status)));
             setConfirmAction(null);
           } catch (err: any) {
             console.error('Action failed:', err);

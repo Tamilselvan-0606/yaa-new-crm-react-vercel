@@ -154,7 +154,7 @@ export const mapApiPurchaseOrderToUi = (
 
   return {
     id: apiPo.id,
-    purchaseNo: apiPo.poNo || `PO-${apiPo.id.slice(0, 8).toUpperCase()}`,
+    purchaseNo: apiPo.poNo || '',
     poNo: apiPo.poNo,
     purchaseInvoiceNo: apiPo.poNo || '',
     supplierId: apiPo.supplierId,

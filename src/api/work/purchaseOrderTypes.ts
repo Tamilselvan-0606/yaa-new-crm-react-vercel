@@ -110,6 +110,7 @@ export interface PurchaseOrderListResponse {
   message: string;
   data: ApiPurchaseOrder[];
   pagination?: PurchaseOrderPagination;
+  summary?: { totalCount: number; totalAmount: number; todayCount: number; todayAmount: number; pendingPayments: number; paidCount: number; completedCount: number };
   meta?: {
     timestamp: string;
     requestId: string;

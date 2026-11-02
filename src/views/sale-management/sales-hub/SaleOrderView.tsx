@@ -124,6 +124,195 @@ import {
   parseTaxRate,
   round2,
 } from "../../../utils/financialCalculations";
+import {
+  FieldErrors,
+  checkDateNotBefore,
+  checkRequiredDate,
+  checkRequiredSelection,
+  checkTotalConsistency,
+  extractApiFieldErrors,
+  fieldAttr,
+  getApiErrorMessage,
+  isUuid,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  validateBatchStock,
+  validateLineItems,
+} from "../../../utils/formValidation";
+import { useBatchStock } from "../../../hooks/useBatchStock";
+
+const PRODUCT_PICK_MSG = "Please choose the product from the list.";
+const STOCK_REJECTED_MSG =
+  "Not enough stock is available in this batch. Please reduce the quantity.";
+
+/** Maps backend field paths (e.g. `items.0.quantity`) onto this form's error keys. */
+const mapApiFieldsToForm = (
+  apiErrors: FieldErrors,
+  rowIndexes: number[],
+): FieldErrors => {
+  const lineField: Record<string, string> = {
+    productId: "product",
+    quantity: "quantity",
+    unitPrice: "price",
+    discountPercent: "discountPercent",
+    discountAmount: "discountAmount",
+    taxPercent: "taxPercent",
+  };
+  const out: FieldErrors = {};
+  Object.entries(apiErrors).forEach(([path, message]) => {
+    const m = path.match(/^items\.(\d+)\.(\w+)$/);
+    if (m) {
+      const row = rowIndexes[Number(m[1])] ?? Number(m[1]);
+      const f = lineField[m[2]];
+      if (f === "quantity" && /stock|insufficient|available/i.test(message)) {
+        out[`items.${row}.quantity`] = STOCK_REJECTED_MSG;
+      } else if (f) out[`items.${row}.${f}`] = message;
+      else out.items = message;
+    } else if (path === "customerId") out.customerId = message;
+    else if (path === "orderDate") out.orderDate = message;
+    else if (path === "dueDate") out.dueDate = message;
+    else if (path === "items") out.items = message;
+  });
+  return out;
+};
+
+/**
+ * Batch-stock errors (`items.{i}.quantity`) for the rows of a sale order. Used by both the live
+ * display and the save validator so they always agree. No credit is given: a sale order does not
+ * hold stock at this stage and the frontend has no reservation data.
+ */
+const computeSaleOrderStockErrors = (
+  items: ExtendedSaleOrderItem[],
+  ctx: {
+    resolveProductId: (it: ExtendedSaleOrderItem) => string | undefined;
+    getAvailable?: (productId: string, batch: string) => number | null;
+  },
+): FieldErrors => {
+  const getAvailable = ctx.getAvailable;
+  if (!getAvailable) return {};
+  return validateBatchStock(
+    items.map((it) => ({
+      productId: ctx.resolveProductId(it) || "",
+      productName: it.productName,
+      batch: it.batch,
+      quantity: it.quantity,
+    })),
+    {
+      getAvailable: (line) =>
+        line.productId && line.batch
+          ? getAvailable(line.productId, line.batch)
+          : null,
+    },
+  );
+};
+
+/**
+ * Pure validation for the sale order form. Returns an error map (empty = valid).
+ * Line keys are `items.{index}.{field}`; row indexes match the on-screen rows.
+ * `ctx.resolveProductId` maps a row to a real product id (UUID) or undefined.
+ */
+const validateSaleOrderForm = (
+  form: {
+    partyName: string;
+    customerId?: string | null;
+    orderDate: string;
+    dueDate?: string;
+    items: ExtendedSaleOrderItem[];
+  },
+  ctx: {
+    resolveProductId: (it: ExtendedSaleOrderItem) => string | undefined;
+    /** Batch stock from the backend (null = unknown, never an error). */
+    getAvailable?: (productId: string, batch: string) => number | null;
+    finalAmount: number;
+    roundOff: number;
+  },
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  if (!form.partyName?.trim() && !form.customerId) {
+    errors.customerId = checkRequiredSelection("", "customer") as string;
+  }
+  const dateErr = checkRequiredDate(form.orderDate, "order date");
+  if (dateErr) errors.orderDate = dateErr;
+  else {
+    const dueErr = checkDateNotBefore(
+      form.dueDate,
+      form.orderDate,
+      "delivery due date",
+      "order date",
+    );
+    if (dueErr) errors.dueDate = dueErr;
+  }
+
+  // Same "real line" rule the save handler has always used.
+  const isReal = (i: ExtendedSaleOrderItem) =>
+    !!i.productName?.trim() || Number(i.unitPrice) > 0;
+  const realRows = form.items.filter(isReal);
+  if (realRows.length === 0) {
+    errors.items = "Please add at least one item before saving.";
+    return errors;
+  }
+  const lines = form.items.map((it) =>
+    isReal(it)
+      ? {
+          productId: ctx.resolveProductId(it) || "",
+          productName: it.productName,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: it.discountPercent,
+          discountAmount: it.discountAmount,
+          taxPercent: it.taxPercent,
+        }
+      : {},
+  );
+  Object.assign(
+    errors,
+    validateLineItems(lines, {
+      requireProduct: false,
+      allowZeroPrice: true,
+      priceKey: "unitPrice",
+    }),
+  );
+  form.items.forEach((it, i) => {
+    if (isReal(it) && !errors[`items.${i}.product`] && !ctx.resolveProductId(it)) {
+      errors[`items.${i}.product`] = PRODUCT_PICK_MSG;
+    }
+  });
+  // Strict batch-stock check (combined across rows of the same product + batch).
+  const stockErrors = computeSaleOrderStockErrors(form.items, ctx);
+  Object.entries(stockErrors).forEach(([k, msg]) => {
+    if (!errors[k]) errors[k] = msg;
+  });
+
+  if (Object.keys(errors).length === 0) {
+    const expected = round2(
+      realRows.reduce(
+        (s, it) =>
+          s +
+          calculateLineItem(
+            {
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              discountPercent: it.discountPercent,
+              discountAmount: it.discountAmount,
+              taxPercent: it.taxPercent,
+            },
+            { withGst: true },
+          ).lineTotal,
+        0,
+      ),
+    );
+    const submitted = round2(ctx.finalAmount - ctx.roundOff);
+    const totalErr = checkTotalConsistency(
+      expected,
+      submitted,
+      "order total",
+      0.01 * realRows.length + 0.05,
+    );
+    if (totalErr) errors.total = totalErr;
+  }
+  return errors;
+};
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -343,7 +532,24 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const fe = useFieldErrors();
+  const { runOnce } = useSubmitGuard();
+  // Batch-wise stock (backend data, cached per product). Single source for stock shown/validated here.
+  const {
+    loadProduct: loadBatchStock,
+    refresh: refreshBatchStock,
+    forget: forgetBatchStock,
+    getBatches: getStockBatches,
+    getAvailable: getBatchAvailable,
+  } = useBatchStock();
+  const [stockConvertIssue, setStockConvertIssue] = useState<{
+    title: string;
+    lines: string[];
+  } | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState(0);
+  const [apiSummary, setApiSummary] = useState<
+    NonNullable<Awaited<ReturnType<typeof commerceSaleOrderApi.getOrders>>["summary"]> | null
+  >(null);
   const [totalApiPages, setTotalApiPages] = useState(1);
 
   // Live Masters for Form Selection
@@ -754,6 +960,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         });
 
         persistSaleOrders(merged);
+        setApiSummary(res.summary ?? null);
         setTotalApiRecords(res.pagination?.totalRecords ?? merged.length);
         setTotalApiPages(
           Math.max(
@@ -1013,7 +1220,21 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Handle select product from searchable popover
   const handleSelectProduct = (index: number, product: any) => {
-    handleItemChange(index, "productId", product.productId || product.id);
+    const newProductId = product.productId || product.id;
+    const currentRows = activeTab.formData.items;
+    const oldProductId = currentRows[index]?.productId;
+    if (oldProductId !== newProductId) {
+      // Batch belongs to the previous product: reset it and drop that product's stale stock state.
+      handleItemChange(index, "batch", "");
+      if (
+        oldProductId &&
+        !currentRows.some((r, i) => i !== index && r.productId === oldProductId)
+      ) {
+        forgetBatchStock(oldProductId);
+      }
+    }
+    loadBatchStock(newProductId);
+    handleItemChange(index, "productId", newProductId);
     handleItemChange(index, "productName", product.productName);
     handleItemChange(index, "sku", product.sku || "");
     handleItemChange(index, "unit", product.unit || "PCS");
@@ -1022,13 +1243,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     handleItemChange(index, "unitPrice", Number(product.unitPrice || 0));
     handleItemChange(index, "taxPercent", Number(product.taxPercent || 0));
     setOpenProductDropdownRow(null);
-  };
-
-  // Auto-generate Order Number
-  const generateNextOrderNo = () => {
-    const year = new Date().getFullYear();
-    const count = saleOrders.length + 1;
-    return `SO-${year}-${String(count).padStart(4, "0")}`;
   };
 
   // Initial Form Data State
@@ -1040,8 +1254,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       customerEmail: "",
       customerCompany: "",
       billingAddress: "",
-      orderNo: generateNextOrderNo(),
-      referenceNo: String(customNum),
+      orderNo: "", // Server-assigned on save
+      referenceNo: "",
       orderDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
       stateOfSupply: "33-Tamil Nadu",
@@ -1090,6 +1304,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const activeTab = useMemo(() => {
     return tabs.find((t) => t.id === activeTabId) || tabs[0];
   }, [tabs, activeTabId]);
+
+  // Errors belong to the active tab's form; never carry them across tabs / modes.
+  useEffect(() => {
+    fe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, viewMode]);
 
   const updateActiveTabFormData = (
     updater: (prev: typeof activeTab.formData) => typeof activeTab.formData,
@@ -1232,11 +1452,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           target.sku = foundStock.sku;
           target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || "";
           target.taxPercent = (foundStock as any).taxPercent ?? 5;
-          if (target.unitPrice === 0) {
-            toast.warning(
-              `Product "${foundStock.productName}" has no default Sale Price configured.`,
-            );
-          }
         }
       }
 
@@ -1337,45 +1552,91 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   ]);
 
   // Save / Update Sales Order (Live Backend Integration)
-  const handleSaveSaleOrder = async (andConvert = false) => {
-    const form = activeTab.formData;
-    if (!form.partyName.trim()) {
-      toast.error("Please select or enter a customer name");
-      return;
+  // Maps a form row to a real product id (UUID) or undefined. Never guesses a different product.
+  const resolveProductIdForItem = (
+    it: ExtendedSaleOrderItem,
+  ): string | undefined => {
+    const nameKey = it.productName?.trim().toLowerCase();
+    if (it.productId && UUID_REGEX.test(it.productId)) {
+      // If the user edited the text after picking a product, the old id no longer matches what they see.
+      const known: any = allStockItems.find(
+        (p: any) => p.productId === it.productId || p.id === it.productId,
+      );
+      if (!known || !nameKey || !known.productName || known.productName.toLowerCase() === nameKey) {
+        return it.productId;
+      }
     }
+    if (!nameKey) return undefined;
+    const match = allStockItems.find(
+      (p: any) =>
+        (p.productId &&
+          UUID_REGEX.test(p.productId) &&
+          p.productName?.toLowerCase() === nameKey) ||
+        (p.id &&
+          UUID_REGEX.test(p.id) &&
+          p.productName?.toLowerCase() === nameKey) ||
+        (p.sku && p.sku.toLowerCase() === nameKey),
+    );
+    if (!match) return undefined;
+    return match.productId && UUID_REGEX.test(match.productId)
+      ? match.productId
+      : UUID_REGEX.test(match.id)
+        ? match.id
+        : undefined;
+  };
+
+  const computeSaleOrderErrors = () =>
+    validateSaleOrderForm(activeTab.formData, {
+      resolveProductId: resolveProductIdForItem,
+      getAvailable: getBatchAvailable,
+      finalAmount: currentCalculations.finalAmount,
+      roundOff: currentCalculations.roundOff,
+    });
+  // After the first submit attempt, keep errors in sync with the current values.
+  useRevalidateAfterSubmit(fe, computeSaleOrderErrors, [activeTab.formData, currentCalculations, allStockItems, getBatchAvailable]);
+
+  // LIVE stock errors (explicit exception to submit-first): shown under the Qty cell as soon as
+  // quantity / product / batch changes, without waiting for a save attempt. Never a toast.
+  const liveStockErrors = useMemo(
+    () =>
+      computeSaleOrderStockErrors(activeTab.formData.items, {
+        resolveProductId: resolveProductIdForItem,
+        getAvailable: getBatchAvailable,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab.formData.items, getBatchAvailable, allStockItems],
+  );
+
+  // Load batch stock once per product already on the form (edit / duplicate / reopened rows).
+  const formProductIdsKey = Array.from(
+    new Set(
+      activeTab.formData.items
+        .map((it) => it.productId)
+        .filter((id): id is string => !!id && UUID_REGEX.test(id)),
+    ),
+  ).join(",");
+  useEffect(() => {
+    if (viewMode !== "form" || !formProductIdsKey) return;
+    formProductIdsKey.split(",").forEach((id) => loadBatchStock(id));
+  }, [viewMode, formProductIdsKey, loadBatchStock]);
+
+  const handleSaveSaleOrder = (andConvert = false) =>
+    runOnce(async () => {
+    const form = activeTab.formData;
+    // Re-read stock for every distinct product so changes since the form was opened are checked.
+    const stockProductIds = Array.from(
+      new Set(
+        form.items
+          .map((it) => resolveProductIdForItem(it))
+          .filter((id): id is string => !!id),
+      ),
+    );
+    await refreshBatchStock(stockProductIds);
+    const valid = fe.validateAll(computeSaleOrderErrors());
+    if (!valid) return;
     const validItems = form.items.filter(
       (i) => i.productName.trim() || Number(i.unitPrice) > 0,
     );
-    if (validItems.length === 0) {
-      toast.error("Please enter at least one item with valid name and rate");
-      return;
-    }
-    const hasInvalidQty = validItems.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("All items must have a quantity greater than zero.");
-      return;
-    }
-    const hasInvalidPrice = validItems.some(
-      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
-    );
-    if (hasInvalidPrice) {
-      toast.error("Item rates cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = validItems.some(
-      (it) =>
-        (it.discountPercent !== undefined &&
-          (it.discountPercent < 0 || it.discountPercent > 100)) ||
-        (it.discountAmount !== undefined && it.discountAmount < 0),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
 
     setIsActionLoading(true);
     try {
@@ -1392,67 +1653,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         }
       }
 
-      // 2. Resolve valid UUID productId for every item row
-      const resolvedItems: ExtendedSaleOrderItem[] = [];
-      for (const it of validItems) {
-        let pId = it.productId;
-        // Check if pId is not a valid UUID, search in allStockItems / liveProducts
-        if (!pId || !UUID_REGEX.test(pId)) {
-          const match = allStockItems.find(
-            (p: any) =>
-              (p.productId &&
-                UUID_REGEX.test(p.productId) &&
-                p.productName?.toLowerCase() ===
-                  it.productName.trim().toLowerCase()) ||
-              (p.id &&
-                UUID_REGEX.test(p.id) &&
-                p.productName?.toLowerCase() ===
-                  it.productName.trim().toLowerCase()) ||
-              (p.sku &&
-                p.sku.toLowerCase() === it.productName.trim().toLowerCase()),
-          );
-          if (match) {
-            pId =
-              match.productId && UUID_REGEX.test(match.productId)
-                ? match.productId
-                : match.id;
-          }
-        }
-
-        // If still not a valid UUID, attempt auto-creating the product via productApi
-        if (!pId || !UUID_REGEX.test(pId)) {
-          try {
-            const createProdRes = await productApi.createProduct({
-              itemType: "Product",
-              productName: it.productName.trim() || "Custom Product",
-              salePrice: Number(it.unitPrice) || 0,
-              salePriceTaxType: "Excluded",
-              unit: it.unit && it.unit !== "NONE" ? it.unit : "PCS",
-              category: it.category || "General",
-            });
-            if (
-              createProdRes.data?.id &&
-              UUID_REGEX.test(createProdRes.data.id)
-            ) {
-              pId = createProdRes.data.id;
-            }
-          } catch (createErr) {
-            console.warn("Auto-create product fallback notice:", createErr);
-          }
-        }
-
-        // Fallback to first available live product if still missing UUID
-        if (!pId || !UUID_REGEX.test(pId)) {
-          if (liveProducts.length > 0 && UUID_REGEX.test(liveProducts[0].id)) {
-            pId = liveProducts[0].id;
-          }
-        }
-
-        resolvedItems.push({
-          ...it,
-          productId: pId || "",
-        });
-      }
+      // 2. Every row was validated above to resolve to a real product id.
+      const resolvedItems: ExtendedSaleOrderItem[] = validItems.map((it) => ({
+        ...it,
+        productId: resolveProductIdForItem(it) || "",
+      }));
 
       const isEdit = !!(
         activeTab.editingOrder && UUID_REGEX.test(activeTab.editingOrder.id)
@@ -1512,6 +1717,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         toast.success(`Sales Order ${finalOrderNo} created successfully!`);
       }
 
+      // Refresh batch stock so the next form shows current figures (no stock adjustment is made here).
+      void refreshBatchStock(stockProductIds);
+
       // If "Save & Convert to Sale" clicked
       if (andConvert) {
         navigate("/sale-management/sales/sale", {
@@ -1568,20 +1776,35 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       setViewMode("list");
     } catch (err: any) {
       console.error("Save sale order failed:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        (Array.isArray(err?.response?.data?.error?.fields)
-          ? err.response.data.error.fields
-              .map((f: any) => `${f.path?.join(".") || "field"}: ${f.message}`)
-              .join(", ")
-          : null) ||
-        err?.message ||
-        "Failed to save sales order";
-      toast.error(errMsg);
+      const rowIdx = form.items
+        .map((it, i) => (it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1))
+        .filter((i) => i >= 0);
+      const apiFieldErrors = mapApiFieldsToForm(extractApiFieldErrors(err), rowIdx);
+      const apiMessage = String(
+        err?.response?.data?.error?.message ?? err?.data?.error?.message ?? err?.message ?? "",
+      );
+      const stockRejected = /(insufficient|not enough|out of)\s+stock|stock.*(insufficient|not enough|exceed)/i.test(
+        apiMessage,
+      );
+      if (stockRejected) {
+        // Stock changed on the server: show fresh figures and flag the quantity inline.
+        void refreshBatchStock(stockProductIds);
+        if (!Object.keys(apiFieldErrors).some((k) => k.endsWith(".quantity"))) {
+          const target = rowIdx.find((i) => form.items[i]?.batch) ?? rowIdx[0];
+          if (target !== undefined) {
+            apiFieldErrors[`items.${target}.quantity`] = STOCK_REJECTED_MSG;
+          }
+        }
+      }
+      if (Object.keys(apiFieldErrors).length > 0) {
+        fe.merge(apiFieldErrors);
+      } else {
+        toast.error(getApiErrorMessage(err, "Failed to save sales order"));
+      }
     } finally {
       setIsActionLoading(false);
     }
-  };
+    });
 
   // Determine conversion status across all next stages
   const getOrderStages = (order: SaleOrderRecord) => {
@@ -1632,10 +1855,30 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   // Convert to Sale Invoice from Table -> Opens New Sale Invoice page with calculations
+  // Preconditions shared by every conversion action. Returns a friendly message or null.
+  const getConvertBlocker = (order: SaleOrderRecord): string | null => {
+    if (!order?.id) return "This sale order could not be found. Please refresh the list.";
+    if (order.status === "Cancelled") {
+      return `Sale order ${order.orderNo} is cancelled and cannot be converted.`;
+    }
+    const hasLines = (order.items || []).some(
+      (it) => Number(it.quantity) > 0 && (it.productName || it.productId),
+    );
+    if (!hasLines) {
+      return `Sale order ${order.orderNo} has no items to convert. Please add items first.`;
+    }
+    return null;
+  };
+
   const handleConvertExistingToSale = async (order: SaleOrderRecord) => {
     const stages = getOrderStages(order);
     if (stages.isFullyConverted || stages.isInvoiceConverted) {
       toast.info(`Sale order ${order.orderNo} is already converted.`);
+      return;
+    }
+    const blocker = getConvertBlocker(order);
+    if (blocker) {
+      toast.error(blocker);
       return;
     }
     setActiveConvertDropdownId(null);
@@ -1675,8 +1918,51 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     });
   };
 
+  // Batch-stock check for converting sale order(s) (refreshes stock first). Lines of all selected
+  // orders are validated together because they draw on the same batches. Returns readable issues.
+  const findConversionStockShortages = async (
+    orders: SaleOrderRecord[],
+  ): Promise<string[]> => {
+    const lines = orders.flatMap((o) =>
+      (o.items || []).map((it) => ({
+        orderNo: o.orderNo,
+        productId: it.productId || "",
+        productName: it.productName,
+        batch: it.batch,
+        quantity: it.quantity,
+      })),
+    );
+    await refreshBatchStock(lines.map((l) => l.productId));
+    const errs = validateBatchStock(lines, {
+      getAvailable: (l) =>
+        l.productId && l.batch ? getBatchAvailable(l.productId, l.batch) : null,
+    });
+    return Object.entries(errs).map(([key, msg]) => {
+      const l = lines[Number(key.split(".")[1])];
+      return `${l.orderNo} - ${l.productName || "Item"} (batch ${l.batch}): ${msg}`;
+    });
+  };
+
   // Convert to Delivery Challan from Table
-  const handleConvertExistingToChallan = async (order: SaleOrderRecord) => {
+  const handleConvertExistingToChallan = (order: SaleOrderRecord) =>
+    runOnce(async () => {
+    const blocker = getConvertBlocker(order);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
+    if (getOrderStages(order).isChallanConverted) {
+      toast.info(`Sale order ${order.orderNo} is already converted to a delivery challan.`);
+      return;
+    }
+    const shortages = await findConversionStockShortages([order]);
+    if (shortages.length > 0) {
+      setStockConvertIssue({
+        title: `Cannot convert ${order.orderNo} to a Delivery Challan`,
+        lines: shortages,
+      });
+      return;
+    }
     try {
       setIsActionLoading(true);
       const currentLineage = findDocumentLineage(order.orderNo);
@@ -1685,7 +1971,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       ).filter((c: any) => !isMockChallan(c));
       let challanNo =
         currentLineage?.challanNo ||
-        `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
+        "";
 
       let didBackendConvertCreateChallan = false;
       let apiChallanId = "";
@@ -1720,12 +2006,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         );
         if (found && UUID_REGEX.test(found.id)) {
           resolvedCustomerId = found.id;
-        } else if (
-          liveCustomers.length > 0 &&
-          UUID_REGEX.test(liveCustomers[0].id)
-        ) {
-          resolvedCustomerId = liveCustomers[0].id;
         }
+      }
+      // Never attach a different customer: block when the order's customer cannot be resolved.
+      if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+        toast.error(
+          "Please choose the customer from the list. Edit the order and select a customer before converting.",
+        );
+        return;
       }
 
       const newChallan: DeliveryChallanRecord = {
@@ -1799,22 +2087,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         ]),
       );
 
+      void refreshBatchStock((order.items || []).map((it) => it.productId));
       toast.success(
-        `Sale Order ${order.orderNo} converted to Delivery Challan ${challanNo}!`,
+        `Sale Order ${order.orderNo} converted to Delivery Challan${challanNo ? ` ${challanNo}` : ''}!`,
       );
       await fetchSaleOrders();
     } catch (err: any) {
       console.error("Convert to challan error:", err);
-      toast.error("Failed to convert to delivery challan");
+      toast.error(getApiErrorMessage(err, "Failed to convert to delivery challan"));
     } finally {
       setIsActionLoading(false);
     }
-  };
+    });
 
   // Duplicate Sale Order
   const handleDuplicateOrder = (item: SaleOrderRecord) => {
     const nextNum = saleOrders.length + 1;
-    const newOrderNo = `SO-${new Date().getFullYear()}-${String(nextNum).padStart(4, "0")}`;
     const duplicatedTab: SaleOrderTabItem = {
       id: `tab-dup-${Date.now()}`,
       title: `Copy ${item.orderNo}`,
@@ -1826,8 +2114,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         customerEmail: item.customerEmail || "",
         customerCompany: item.customerCompany || "",
         billingAddress: item.billingAddress || "",
-        orderNo: newOrderNo,
-        referenceNo: String(nextNum),
+        orderNo: "",
+        referenceNo: "",
         orderDate: new Date().toISOString().split("T")[0],
         dueDate: new Date(Date.now() + 14 * 86400000)
           .toISOString()
@@ -1849,12 +2137,28 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   // Bulk Convert Handler (POST /commerce/orders/bulk-convert)
-  const handleBulkConvertToSale = async () => {
+  const handleBulkConvertToSale = () =>
+    runOnce(async () => {
     const openOrdersToConvert = saleOrders.filter(
       (o) => selectedBulkOrderIds.includes(o.id) && o.status === "Open",
     );
     if (openOrdersToConvert.length === 0) {
       toast.error("Please select at least one open sale order to convert");
+      return;
+    }
+    const blocked = openOrdersToConvert
+      .map((o) => ({ o, msg: getConvertBlocker(o) }))
+      .find((x) => x.msg);
+    if (blocked) {
+      toast.error(blocked.msg as string);
+      return;
+    }
+    const shortages = await findConversionStockShortages(openOrdersToConvert);
+    if (shortages.length > 0) {
+      setStockConvertIssue({
+        title: "Cannot convert the selected sale orders",
+        lines: shortages,
+      });
       return;
     }
 
@@ -1889,7 +2193,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         const currentLineage = findDocumentLineage(order.orderNo);
         const invNo =
           currentLineage?.invoiceNo ||
-          `INV-${new Date().getFullYear()}-${String(200 + saleOrders.length + 1 + idx).padStart(4, "0")}`;
+          "";
 
         convertedOrderMap.set(order.id, invNo);
         convertedOrderMap.set(order.orderNo, invNo);
@@ -1972,20 +2276,19 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         ]),
       );
 
+      void refreshBatchStock(
+        openOrdersToConvert.flatMap((o) => (o.items || []).map((it) => it.productId)),
+      );
       setIsBulkConvertModalOpen(false);
       setSelectedBulkOrderIds([]);
       await fetchSaleOrders();
     } catch (err: any) {
       console.error("Bulk convert failed:", err);
-      toast.error(
-        err?.response?.data?.error?.message ||
-          err?.message ||
-          "Bulk convert failed",
-      );
+      toast.error(getApiErrorMessage(err, "Bulk convert failed"));
     } finally {
       setIsActionLoading(false);
     }
-  };
+    });
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
@@ -2248,8 +2551,18 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteOrder = async () => {
-    if (!deleteTargetOrder) return;
+  const handleConfirmDeleteOrder = () =>
+    runOnce(async () => {
+    if (!deleteTargetOrder || !deleteTargetOrder.id) {
+      toast.error("Please select a sale order to delete.");
+      return;
+    }
+    if (deleteTargetOrder.status === "Converted" || deleteTargetOrder.status === "Completed") {
+      const msg = `Sale order ${deleteTargetOrder.orderNo} is already ${deleteTargetOrder.status.toLowerCase()} and cannot be deleted.`;
+      setDeleteOrderError(msg);
+      toast.error(msg);
+      return;
+    }
     setIsDeletingOrder(true);
     setDeleteOrderError(null);
     try {
@@ -2266,19 +2579,29 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       await fetchSaleOrders();
     } catch (err: any) {
       console.error("Delete order failed:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.message ||
-        "Failed to delete sale order";
+      const errMsg = getApiErrorMessage(err, "Failed to delete sale order");
       setDeleteOrderError(errMsg);
       toast.error(errMsg);
     } finally {
       setIsDeletingOrder(false);
     }
-  };
+    });
 
   // Cancel Sale Order Status (PATCH /commerce/orders/{id}/status)
-  const handleCancelOrder = async (order: SaleOrderRecord) => {
+  const handleCancelOrder = (order: SaleOrderRecord) =>
+    runOnce(async () => {
+    if (!order?.id) {
+      toast.error("This sale order could not be found. Please refresh the list.");
+      return;
+    }
+    if (order.status === "Cancelled") {
+      toast.info(`Sale order ${order.orderNo} is already cancelled.`);
+      return;
+    }
+    if (order.status === "Converted" || order.status === "Completed") {
+      toast.error(`Sale order ${order.orderNo} is already ${order.status.toLowerCase()} and cannot be cancelled.`);
+      return;
+    }
     try {
       setIsActionLoading(true);
       if (UUID_REGEX.test(order.id)) {
@@ -2293,15 +2616,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       await fetchSaleOrders();
     } catch (err: any) {
       console.error("Cancel order failed:", err);
-      toast.error(
-        err?.response?.data?.error?.message ||
-          err?.message ||
-          "Failed to cancel sale order",
-      );
+      toast.error(getApiErrorMessage(err, "Failed to cancel sale order"));
     } finally {
       setIsActionLoading(false);
     }
-  };
+    });
 
   // Metrics calculation
   const metrics = useMemo(() => {
@@ -2325,6 +2644,30 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       totalCount: totalApiRecords > 0 ? totalApiRecords : saleOrders.length,
     };
   }, [saleOrders, totalApiRecords]);
+
+  // KPI card metrics: prefer API summary, fall back to in-browser computation
+  const cardMetrics = useMemo(
+    () =>
+      apiSummary
+        ? {
+            totalVal: apiSummary.totalAmount,
+            openVal: apiSummary.openAmount,
+            convertedVal: apiSummary.convertedAmount,
+            totalCount: apiSummary.totalCount,
+            openCount: apiSummary.openCount,
+            convertedCount: apiSummary.convertedCount,
+            cancelledCount: apiSummary.cancelledCount,
+          }
+        : {
+            ...metrics,
+            openCount: saleOrders.filter((o) => o.status === "Open").length,
+            convertedCount: saleOrders.filter((o) => o.status === "Converted")
+              .length,
+            cancelledCount: saleOrders.filter((o) => o.status === "Cancelled")
+              .length,
+          },
+    [apiSummary, metrics, saleOrders],
+  );
 
   // Client Filtered List (when running locally or with cached results)
   const filteredOrders = useMemo(() => {
@@ -2446,15 +2789,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                       {activeTab.editingOrder.orderNo}
                     </span>
                   </>
-                ) : activeTab.formData.orderNo ? (
+                ) : (
                   <>
                     <span>New Sale Order</span>
                     <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
-                      {activeTab.formData.orderNo}
+                      {activeTab.formData.orderNo || "Auto-generated on save"}
                     </span>
                   </>
-                ) : (
-                  "Create advance sale orders and reserve inventory for scheduled fulfillment"
                 )}
               </p>
             </div>
@@ -2482,11 +2823,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Customer <span className="text-rose-500">*</span>
                 </label>
+                <div {...fieldAttr("customerId")}>
                 <CustomerSearchableSelect
                   value={activeTab.formData.customerId}
                   allowNone
                   size="lg"
                   onChange={(val, cust) => {
+                    fe.clearError("customerId");
                     updateActiveTabFormData((prev) => ({
                       ...prev,
                       customerId: val,
@@ -2526,6 +2869,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
                   placeholder="Select or search customer..."
                 />
+                </div>
+                <FormError message={fe.errors.customerId} />
 
                 {/* Party Details Preview Pill */}
                 {activeTab.formData.partyName && (
@@ -2559,16 +2904,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     <input
                       type="date"
                       value={activeTab.formData.orderDate}
-                      onChange={(e) =>
+                      {...fieldAttr("orderDate")}
+                      onChange={(e) => {
+                        fe.clearError("orderDate");
+                        fe.clearError("dueDate");
                         updateActiveTabFormData((prev) => ({
                           ...prev,
                           orderDate: e.target.value,
-                        }))
-                      }
-                      className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                        }));
+                      }}
+                      className={`w-full h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.orderDate ? "border-rose-400" : "border-slate-200"}`}
                     />
                   </div>
                 </div>
+                {(fe.errors.orderDate || fe.errors.dueDate) && (
+                  <FormError message={fe.errors.orderDate || fe.errors.dueDate} />
+                )}
 
                 {/* State of Supply */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
@@ -2596,6 +2947,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             </div>
 
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
+            {(fe.errors.items || fe.errors.total) && (
+              <div className="mt-4" {...fieldAttr("items")}>
+                <FormError message={fe.errors.items || fe.errors.total} />
+              </div>
+            )}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
               <table className="w-full text-xs border-collapse">
                 {/* Table Header */}
@@ -2627,13 +2983,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                         DESCRIPTION
                       </th>
                     )}
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[160px] text-white">
                       BATCH NO
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-28 min-w-[112px] text-white">
                       QTY
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 min-w-[96px] text-white">
                       UNIT
                     </th>
                     <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
@@ -2784,7 +3140,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   {activeTab.formData.items.map((rowItem, idx) => (
                     <tr
                       key={rowItem.id || idx}
-                      className="hover:bg-slate-50/70 transition-colors"
+                      className="align-top hover:bg-slate-50/70 transition-colors"
                     >
                       <td className="py-3 px-3 text-center text-slate-400 font-semibold">
                         {idx + 1}
@@ -2817,6 +3173,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               type="text"
                               placeholder="Type or select product item..."
                               value={rowItem.productName || ""}
+                              {...fieldAttr(`items.${idx}.product`)}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenProductDropdownRow(idx);
@@ -2838,6 +3195,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               }}
                               onChange={(e) => {
                                 const val = e.target.value;
+                                fe.clearError(`items.${idx}.product`);
                                 handleItemChange(idx, "productName", val);
                                 setProductSearchQuery(val);
                                 setOpenProductDropdownRow(idx);
@@ -3094,19 +3452,22 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             </div>
                           )}
                         </div>
+                        <FormError message={fe.errors[`items.${idx}.product`]} />
                       </td>
                       {/* Batch No */}
                       <td className="py-2.5 px-2">
                         {(() => {
-                          const matchedStock = allStockItems.find(
-                            (s: any) =>
-                              s.productId === rowItem.productId ||
-                              s.id === rowItem.productId,
+                          // Batches of THIS product only, with backend stock (useBatchStock).
+                          const resolvedBatches: any[] = getStockBatches(
+                            rowItem.productId,
                           );
-                          const batches = (matchedStock as any)?.batches || [];
-                          const resolvedBatches = batches;
-                          if (rowItem.productId || batches.length > 0) {
+                          const rowAvailable = getBatchAvailable(
+                            rowItem.productId,
+                            rowItem.batch,
+                          );
+                          if (rowItem.productId) {
                             return (
+                              <div>
                               <select
                                 value={rowItem.batch || ""}
                                 onChange={(e) =>
@@ -3135,6 +3496,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                     </option>
                                   )}
                               </select>
+                              {rowAvailable !== null && (
+                                <div className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
+                                  Available: {rowAvailable}
+                                </div>
+                              )}
+                              </div>
                             );
                           }
                           return (
@@ -3155,16 +3522,19 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           type="number"
                           min="1"
                           value={rowItem.quantity || ""}
+                          {...fieldAttr(`items.${idx}.quantity`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.quantity`);
                             handleItemChange(
                               idx,
                               "quantity",
                               Number(e.target.value),
-                            )
-                          }
-                          className="w-full h-9 px-2 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2]"
+                            );
+                          }}
+                          className={`w-full h-9 px-2 text-center bg-white border hover:border-slate-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-slate-200"}`}
                         />
+                        <FormError message={fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]} />
                       </td>
                       <td className="py-2.5 px-2">
                         <select
@@ -3179,6 +3549,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               {u}
                             </option>
                           ))}
+                          {rowItem.unit && !UNIT_OPTIONS.includes(rowItem.unit) && (
+                            <option value={rowItem.unit}>{rowItem.unit}</option>
+                          )}
                         </select>
                       </td>
                       <td className="py-2.5 px-2">
@@ -3187,16 +3560,19 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                           min="0"
                           placeholder="0.00"
                           value={rowItem.unitPrice || ""}
+                          {...fieldAttr(`items.${idx}.price`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.price`);
                             handleItemChange(
                               idx,
                               "unitPrice",
                               Number(e.target.value),
-                            )
-                          }
-                          className="w-full h-9 px-2.5 text-right bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                            );
+                          }}
+                          className={`w-full h-9 px-2.5 text-right bg-white border hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.price`] ? "border-rose-400" : "border-slate-200"}`}
                         />
+                        <FormError message={fe.errors[`items.${idx}.price`]} />
                       </td>
                       {columnSettings.showDiscount && (
                         <td className="py-2.5 px-2">
@@ -3207,32 +3583,37 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                               max="100"
                               placeholder="%"
                               value={rowItem.discountPercent || ""}
+                              {...fieldAttr(`items.${idx}.discountPercent`)}
                               onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                fe.clearError(`items.${idx}.discountPercent`);
                                 handleItemChange(
                                   idx,
                                   "discountPercent",
                                   Number(e.target.value),
-                                )
-                              }
-                              className="w-16 h-9 px-1.5 text-center bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2]"
+                                );
+                              }}
+                              className={`w-16 h-9 px-1.5 text-center bg-white border hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:border-[#4309A2] ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-slate-200"}`}
                             />
                             <span className="text-[11px] text-slate-400">
                               ₹{rowItem.discountAmount?.toFixed(0) || 0}
                             </span>
                           </div>
+                          <FormError message={fe.errors[`items.${idx}.discountPercent`] || fe.errors[`items.${idx}.discountAmount`]} />
                         </td>
                       )}
                       <td className="py-2.5 px-2">
                         <select
                           value={rowItem.taxPercent || 0}
-                          onChange={(e) =>
+                          {...fieldAttr(`items.${idx}.taxPercent`)}
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.taxPercent`);
                             handleItemChange(
                               idx,
                               "taxPercent",
                               Number(e.target.value),
-                            )
-                          }
+                            );
+                          }}
                           className="w-full h-9 px-2 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold text-slate-700 outline-none focus:border-[#4309A2]"
                         >
                           {TAX_RATE_OPTIONS.map((tx) => (
@@ -3241,6 +3622,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             </option>
                           ))}
                         </select>
+                        <FormError message={fe.errors[`items.${idx}.taxPercent`]} />
                       </td>
                       <td className="py-2.5 px-4 text-right font-bold text-slate-900">
                         ₹
@@ -3935,12 +4317,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
               ₹
-              {metrics.totalVal.toLocaleString("en-IN", {
+              {cardMetrics.totalVal.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {metrics.totalCount} orders recorded
+              {cardMetrics.totalCount} orders recorded
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shrink-0">
@@ -3956,12 +4338,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             </div>
             <div className="text-xl sm:text-2xl font-black text-amber-600 mt-1">
               ₹
-              {metrics.openVal.toLocaleString("en-IN", {
+              {cardMetrics.openVal.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {saleOrders.filter((o) => o.status === "Open").length} orders in
+              {cardMetrics.openCount} orders in
               progress
             </div>
           </div>
@@ -3978,12 +4360,12 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             </div>
             <div className="text-xl sm:text-2xl font-black text-emerald-600 mt-1">
               ₹
-              {metrics.convertedVal.toLocaleString("en-IN", {
+              {cardMetrics.convertedVal.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {saleOrders.filter((o) => o.status === "Converted").length} orders
+              {cardMetrics.convertedCount} orders
               fulfilled
             </div>
           </div>
@@ -3999,7 +4381,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               Cancelled Orders
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
-              {saleOrders.filter((o) => o.status === "Cancelled").length}
+              {cardMetrics.cancelledCount}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
               Voided orders
@@ -4869,6 +5251,39 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               >
                 Close
               </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Conversion blocked: not enough batch stock */}
+      {stockConvertIssue && (
+        <Modal
+          isOpen={!!stockConvertIssue}
+          onClose={() => setStockConvertIssue(null)}
+          title={stockConvertIssue.title}
+          maxWidth="lg"
+        >
+          <div className="p-6 space-y-3 text-xs font-sans">
+            <p className="text-slate-600">
+              There is not enough stock in the selected batch to convert. Please reduce the
+              quantity on the sale order or choose another batch, then try again.
+            </p>
+            <ul className="space-y-1.5 max-h-64 overflow-y-auto">
+              {stockConvertIssue.lines.map((l, i) => (
+                <li key={i} className="text-rose-600 font-semibold">
+                  {l}
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setStockConvertIssue(null)}
+                className="px-4 py-2 rounded-xl bg-[#33077C] text-white font-bold hover:bg-[#4309A2]"
+              >
+                Close
+              </button>
             </div>
           </div>
         </Modal>

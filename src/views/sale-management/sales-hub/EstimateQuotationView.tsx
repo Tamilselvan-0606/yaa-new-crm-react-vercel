@@ -149,6 +149,169 @@ import {
   parseTaxRate,
   round2,
 } from "../../../utils/financialCalculations";
+import {
+  FieldErrors,
+  checkDateNotBefore,
+  checkRequiredDate,
+  checkRequiredSelection,
+  checkTotalConsistency,
+  extractApiFieldErrors,
+  fieldAttr,
+  getApiErrorMessage,
+  isUuid,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  validateBatchStock,
+  validateLineItems,
+} from "../../../utils/formValidation";
+import { useBatchStock } from "../../../hooks/useBatchStock";
+import { FormError } from "../../../components/common/FormError";
+
+const PRODUCT_PICK_MSG = "Please choose the product from the list.";
+
+/** Maps backend field paths (e.g. `items.0.quantity`) onto this form's error keys. */
+const mapApiFieldsToForm = (
+  apiErrors: FieldErrors,
+  rowIndexes: number[],
+): FieldErrors => {
+  const lineField: Record<string, string> = {
+    productId: "product",
+    quantity: "quantity",
+    unitPrice: "price",
+    discountPercent: "discountPercent",
+    discountAmount: "discountAmount",
+    taxPercent: "taxPercent",
+  };
+  const topLevel: Record<string, string> = {
+    customerId: "customerId",
+    date: "date",
+    validUntil: "validUntil",
+    items: "items",
+  };
+  const out: FieldErrors = {};
+  Object.entries(apiErrors).forEach(([path, message]) => {
+    const m = path.match(/^items\.(\d+)\.(\w+)$/);
+    if (m) {
+      const row = rowIndexes[Number(m[1])] ?? Number(m[1]);
+      const f = lineField[m[2]];
+      if (f === "quantity" && /stock|insufficient|available/i.test(message)) {
+        out[`items.${row}.quantity`] =
+          "Not enough stock is available in this batch. Please reduce the quantity.";
+      } else if (f) out[`items.${row}.${f}`] = message;
+      else out.items = message;
+    } else if (topLevel[path]) out[topLevel[path]] = message;
+  });
+  return out;
+};
+
+/**
+ * Pure validation for the estimate form. Returns an error map (empty = valid).
+ * Line keys are `items.{index}.{field}`. Estimate lines may be custom (name only, no product id).
+ */
+const validateEstimateForm = (
+  form: {
+    partyName: string;
+    customerId?: string | null;
+    date: string;
+    validUntil?: string;
+    items: ExtendedEstimateItem[];
+  },
+  ctx: {
+    isInclusive: boolean;
+    finalAmount: number;
+    roundOff: number;
+    knownProductName: (id: string) => string | undefined;
+  },
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  if (!form.partyName?.trim() && !form.customerId) {
+    errors.customerId = checkRequiredSelection("", "customer") as string;
+  }
+  const dateErr = checkRequiredDate(form.date, "estimate date");
+  if (dateErr) errors.date = dateErr;
+  else {
+    const e = checkDateNotBefore(
+      form.validUntil,
+      form.date,
+      "valid-until date",
+      "estimate date",
+    );
+    if (e) errors.validUntil = e;
+  }
+
+  const isReal = (i: ExtendedEstimateItem) =>
+    !!i.productName?.trim() || Number(i.unitPrice) > 0;
+  const realRows = form.items.filter(isReal);
+  if (realRows.length === 0) {
+    errors.items = "Please add at least one item before saving.";
+    return errors;
+  }
+  const lines = form.items.map((it) =>
+    isReal(it)
+      ? {
+          productId: it.productId,
+          productName: it.productName,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: it.discountPercent,
+          discountAmount: it.discountAmount,
+          taxPercent: it.taxPercent,
+        }
+      : {},
+  );
+  Object.assign(
+    errors,
+    validateLineItems(lines, {
+      requireProduct: true,
+      allowZeroPrice: true,
+      priceKey: "unitPrice",
+    }),
+  );
+  form.items.forEach((it, i) => {
+    if (!isReal(it) || errors[`items.${i}.product`]) return;
+    if (!it.productName?.trim()) {
+      errors[`items.${i}.product`] = checkRequiredSelection("", "product") as string;
+      return;
+    }
+    // Text edited after picking a product: the old id would point at a different product.
+    if (it.productId && isUuid(it.productId)) {
+      const known = ctx.knownProductName(it.productId);
+      if (known && known.trim().toLowerCase() !== it.productName.trim().toLowerCase()) {
+        errors[`items.${i}.product`] = PRODUCT_PICK_MSG;
+      }
+    }
+  });
+
+  if (Object.keys(errors).length === 0) {
+    const expected = round2(
+      realRows.reduce(
+        (sum, it) =>
+          sum +
+          calculateLineItem(
+            {
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              discountPercent: it.discountPercent,
+              discountAmount: it.discountAmount,
+              taxPercent: it.taxPercent,
+              isTaxInclusive: ctx.isInclusive,
+            },
+            { withGst: true },
+          ).lineTotal,
+        0,
+      ),
+    );
+    const totalErr = checkTotalConsistency(
+      expected,
+      round2(ctx.finalAmount - ctx.roundOff),
+      "estimate total",
+      0.01 * realRows.length + 0.05,
+    );
+    if (totalErr) errors.total = totalErr;
+  }
+  return errors;
+};
 
 // Helper for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
@@ -411,8 +574,13 @@ export const EstimateQuotationView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<
+    NonNullable<Awaited<ReturnType<typeof quotationApi.getQuotations>>["summary"]> | null
+  >(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const fe = useFieldErrors();
+  const { runOnce } = useSubmitGuard();
   const [isConverting, setIsConverting] = useState(false);
 
   // Convert Modal State
@@ -680,6 +848,7 @@ export const EstimateQuotationView: React.FC = () => {
           const list = Array.isArray(response.data) ? response.data : [];
           const mapped = list.map(mapApiQuotationToSaleQuotation);
           setLiveQuotations(mapped);
+          setApiSummary(response.summary ?? null);
           setTotalApiRecords(
             response.pagination?.totalRecords ?? mapped.length,
           );
@@ -1309,6 +1478,9 @@ export const EstimateQuotationView: React.FC = () => {
     };
   }, [displayQuotations, isApiConnected, totalApiRecords]);
 
+  // KPI card metrics: prefer API summary, fall back to in-browser computation
+  const cardMetrics = apiSummary ?? metrics;
+
   // Pagination calculation
   const totalPages =
     isApiConnected && totalApiPages !== null
@@ -1323,32 +1495,8 @@ export const EstimateQuotationView: React.FC = () => {
     return displayQuotations;
   }, [displayQuotations, safePage, pageSize]);
 
-  // Helper to calculate the next auto-increasing reference number based on existing records
-  const getNextReferenceNo = useCallback(() => {
-    const allExisting = liveQuotations.length > 0 ? liveQuotations : quotations;
-    let maxRef = 0;
-    allExisting.forEach((q) => {
-      if (q.referenceNo) {
-        const numMatch = String(q.referenceNo).match(/\d+/g);
-        if (numMatch && numMatch.length > 0) {
-          const parsed = parseInt(numMatch[numMatch.length - 1], 10);
-          if (!isNaN(parsed) && parsed > maxRef) {
-            maxRef = parsed;
-          }
-        }
-      }
-    });
-    // Ensure the new ref no is also strictly greater than total count of existing quotations
-    const count =
-      typeof totalApiRecords === "number" && totalApiRecords > 0
-        ? totalApiRecords
-        : allExisting.length;
-    return Math.max(maxRef + 1, count + 1);
-  }, [liveQuotations, quotations, totalApiRecords]);
-
   // Helper to build fresh estimate formData (NO MOCK DATA)
-  const createDefaultFormData = (num?: number) => {
-    const assignedRef = num !== undefined ? num : getNextReferenceNo();
+  const createDefaultFormData = () => {
     const initialRows: ExtendedEstimateItem[] = [
       {
         id: `row_${Date.now()}_1`,
@@ -1387,8 +1535,7 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Form Initializer (Opens Estimate #...)
   const handleOpenCreateForm = () => {
-    const nextRef = getNextReferenceNo();
-    const initialData = createDefaultFormData(nextRef);
+    const initialData = createDefaultFormData();
     setValidUptoDays("30");
     const firstTab: EstimateTabItem = {
       id: "tab_1",
@@ -1417,18 +1564,9 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Add New Estimate Tab (clicks + button in tab bar)
   const handleAddNewTab = () => {
-    const existingTabRefs = tabs.map((t) => {
-      const parsed = parseInt(t.formData.referenceNo, 10);
-      return !isNaN(parsed) ? parsed : t.num || 0;
-    });
-    const maxTabRef =
-      existingTabRefs.length > 0
-        ? Math.max(...existingTabRefs)
-        : getNextReferenceNo() - 1;
-    const nextRef = Math.max(getNextReferenceNo(), maxTabRef + 1);
 
     const newTabId = `tab_${Date.now()}`;
-    const newFormData = createDefaultFormData(nextRef);
+    const newFormData = createDefaultFormData();
     const newTab: EstimateTabItem = {
       id: newTabId,
       title: `New Estimate ${tabs.length + 1}`,
@@ -1616,6 +1754,7 @@ export const EstimateQuotationView: React.FC = () => {
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index] };
+      const prevProductId = item.productId || "";
       item.productId = prod.productId || prod.id || "";
       item.productName = prod.productName || prod.name || "";
       item.sku = prod.sku || prod.productCode || "";
@@ -1638,6 +1777,11 @@ export const EstimateQuotationView: React.FC = () => {
       }
       if (prod.hsnCode) {
         item.hsnCode = prod.hsnCode;
+      }
+      if (item.productId !== prevProductId) {
+        // New product: the old batch belongs to another product.
+        item.batch = "";
+        item.isCustomBatch = false;
       }
       const productBatches = prod.batches || [];
       if (productBatches.length > 0 && !item.batch) {
@@ -1709,6 +1853,13 @@ export const EstimateQuotationView: React.FC = () => {
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index], [field]: value };
+      const prevProductId = newItems[index].productId || "";
+      const resetBatchOnProductChange = () => {
+        if ((item.productId || "") !== prevProductId) {
+          item.batch = "";
+          item.isCustomBatch = false;
+        }
+      };
 
       if (field === "productId") {
         const query = String(value).trim().toLowerCase();
@@ -1744,6 +1895,7 @@ export const EstimateQuotationView: React.FC = () => {
           if ((prod as any).hsnCode) {
             item.hsnCode = (prod as any).hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (prod as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1790,6 +1942,7 @@ export const EstimateQuotationView: React.FC = () => {
           if ((matched as any).hsnCode) {
             item.hsnCode = (matched as any).hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (matched as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1834,6 +1987,7 @@ export const EstimateQuotationView: React.FC = () => {
           if ((matched as any).hsnCode) {
             item.hsnCode = (matched as any).hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (matched as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1947,52 +2101,113 @@ export const EstimateQuotationView: React.FC = () => {
     manualRoundOff,
   ]);
 
-  // Save Estimate via Commerce API
-  const handleSaveEstimate = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!formData.partyName.trim()) {
-      toast.error("Please select or enter Customer name");
-      return;
+  // Errors belong to the active tab's form; never carry them across tabs / modes.
+  useEffect(() => {
+    fe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, viewMode, isConvertModalOpen]);
+
+  // Batch-wise stock: backend data only (useBatchStock). Estimates never reserve or deduct stock.
+  const batchStock = useBatchStock();
+  const docProductIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          formData.items
+            .map((it) => it.productId)
+            .filter((id): id is string => !!id && isUuid(id)),
+        ),
+      ),
+    [formData.items],
+  );
+  const docProductKey = docProductIds.join(",");
+  const prevDocProductIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    // Only runs when the set of products on the document changes (not per keystroke).
+    const prev = prevDocProductIdsRef.current;
+    prev
+      .filter((id) => !docProductIds.includes(id))
+      .forEach((id) => batchStock.forget(id));
+    docProductIds
+      .filter((id) => !prev.includes(id))
+      .forEach((id) => {
+        void batchStock.loadProduct(id);
+      });
+    prevDocProductIdsRef.current = docProductIds;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docProductKey]);
+
+  const computeStockErrors = (
+    items: Array<{ productId?: string; productName?: string; batch?: string; quantity?: unknown }>,
+  ): FieldErrors =>
+    validateBatchStock(
+      items.map((it) => ({
+        productId: it.productId,
+        productName: it.productName,
+        batch: it.batch,
+        quantity: it.quantity,
+      })),
+      { getAvailable: (l) => batchStock.getAvailable(l.productId, l.batch) },
+    );
+  // Live (shown before any submit attempt): recomputed when quantity / product / batch / stock change.
+  const liveStockErrors = useMemo(
+    () => computeStockErrors(formData.items),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [formData.items, batchStock.getAvailable],
+  );
+
+  const computeEstimateErrors = () => {
+    const errs = validateEstimateForm(formData, {
+      isInclusive: priceTaxMode === "With Tax",
+      finalAmount: formCalculations.grandTotal,
+      roundOff: formCalculations.roundOffDiff,
+      knownProductName: (id) =>
+        availableProducts.find((pr: any) => pr.productId === id || pr.id === id)
+          ?.productName,
+    });
+    const stockErrs = computeStockErrors(formData.items);
+    Object.entries(stockErrs).forEach(([k, v]) => {
+      if (!errs[k]) errs[k] = v;
+    });
+    return errs;
+  };
+  const computeConvertErrors = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const msg = convertTargetQuotation
+      ? checkDateNotBefore(convertDueDate, convertTargetQuotation.date, "due date", "estimate date")
+      : null;
+    if (msg) errs.convertDueDate = msg;
+    if (convertTargetQuotation) {
+      // The converted lines keep productId, batch and quantity: check them against batch stock.
+      const stockErrs = computeStockErrors(convertTargetQuotation.items || []);
+      const first = Object.entries(stockErrs)[0];
+      if (first) {
+        const rowNo = Number(first[0].split(".")[1]) + 1;
+        const it = (convertTargetQuotation.items || [])[rowNo - 1];
+        errs.convertStock = `${it?.productName || `Item ${rowNo}`}${it?.batch ? ` (batch ${it.batch})` : ""}: ${first[1]}`;
+      }
     }
+    return errs;
+  };
+  // After the first submit attempt, keep errors in sync with the values (form or convert modal).
+  useRevalidateAfterSubmit(
+    fe,
+    () => (isConvertModalOpen ? computeConvertErrors() : computeEstimateErrors()),
+    [formData, priceTaxMode, formCalculations, availableProducts, isConvertModalOpen, convertDueDate, convertTargetQuotation, batchStock.version],
+  );
+
+  // Save Estimate via Commerce API
+  const handleSaveEstimate = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    return runOnce(async () => {
+    // Re-read batch stock for every distinct product so stock changed elsewhere is checked.
+    await batchStock.refresh(docProductIds);
+    if (!fe.validateAll(computeEstimateErrors())) return;
     const validItems = formData.items.filter(
       (it) => it.productName.trim() || Number(it.unitPrice) > 0,
     );
-    if (validItems.length === 0) {
-      toast.error("Please add at least one line item with name and rate");
-      return;
-    }
-    const hasInvalidQty = validItems.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("All items must have a quantity greater than zero.");
-      return;
-    }
-    const hasInvalidPrice = validItems.some(
-      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
-    );
-    if (hasInvalidPrice) {
-      toast.error("Item rates cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = validItems.some(
-      (it) =>
-        (it.discountPercent !== undefined &&
-          (it.discountPercent < 0 || it.discountPercent > 100)) ||
-        (it.discountAmount !== undefined && it.discountAmount < 0),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
     const { rawSubtotal, totalTax, totalDiscount, grandTotal } =
       formCalculations;
-    if (grandTotal < 0) {
-      toast.error("Grand total cannot be negative.");
-      return;
-    }
     const isEditing = Boolean(editingQuotation && editingQuotation.id);
     const calculatedGstType = determineGstType(formData.stateOfSupply);
 
@@ -2063,6 +2278,8 @@ export const EstimateQuotationView: React.FC = () => {
         saveQuotation(mapped);
         toast.success(`Estimate ${mapped.quotationNo} created successfully!`);
       }
+      // Fresh batch stock for the next form (the estimate itself never changes stock).
+      void batchStock.refresh(docProductIds);
 
       await fetchQuotations(
         1,
@@ -2090,18 +2307,30 @@ export const EstimateQuotationView: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Save estimate error:", err);
-      const errorMsg =
-        err.response?.data?.error?.message ||
-        err.response?.data?.message ||
-        err.message ||
-        "Failed to save estimate";
-      toast.error(errorMsg);
+      const rowIdx = formData.items
+        .map((it, i) => (it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1))
+        .filter((i) => i >= 0);
+      const apiFieldErrors = mapApiFieldsToForm(extractApiFieldErrors(err), rowIdx);
+      if (Object.keys(apiFieldErrors).length > 0) {
+        fe.merge(apiFieldErrors);
+      } else {
+        toast.error(getApiErrorMessage(err, "Failed to save estimate"));
+      }
+      // The server rejected the data (4xx): keep the form open with the entered values,
+      // do not fall back to a local-only save.
+      const httpStatus = err?.response?.status ?? err?.status;
+      if (
+        Object.keys(apiFieldErrors).length > 0 ||
+        (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus < 500)
+      ) {
+        return;
+      }
       // Local fallback
       const fallbackQuotation: SaleQuotation = {
         id: editingQuotation ? editingQuotation.id : `quot_${Date.now()}`,
         quotationNo:
-          formData.quotationNo || `EST-${Date.now().toString().slice(-4)}`,
-        referenceNo: formData.referenceNo || "1",
+          formData.quotationNo || "",
+        referenceNo: formData.referenceNo || "",
         date: formData.date,
         validUntil: formData.validUntil,
         customerId: formData.customerId || `cust_${Date.now()}`,
@@ -2151,6 +2380,7 @@ export const EstimateQuotationView: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
+    });
   };
 
   // Helper to determine converted status for each document stage
@@ -2262,11 +2492,32 @@ export const EstimateQuotationView: React.FC = () => {
     };
   };
 
+  // Preconditions shared by every conversion action. Returns a friendly message or null.
+  const getConvertBlocker = (quot: SaleQuotation): string | null => {
+    if (!quot?.id) return "This estimate could not be found. Please refresh the list.";
+    if (quot.status === "Cancelled") {
+      return `Estimate ${quot.quotationNo} is cancelled and cannot be converted.`;
+    }
+    const hasLines = (quot.items || []).some(
+      (it) => Number(it.quantity) > 0 && (it.productName || it.productId),
+    );
+    if (!hasLines) {
+      return `Estimate ${quot.quotationNo} has no items to convert. Please add items first.`;
+    }
+    return null;
+  };
+
   // Convert handlers using Live Commerce API Modal
   const handleOpenConvertModal = (
     quot: SaleQuotation,
     type: "Invoice" | "Order" | "Proforma" | "Challan",
   ) => {
+    const blocker = getConvertBlocker(quot);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
+    fe.reset();
     const stages = getQuotationStages(quot);
     if (stages.isFullyConverted) {
       toast.info(
@@ -2303,10 +2554,25 @@ export const EstimateQuotationView: React.FC = () => {
     setConvertDropdownPos(null);
   };
 
-  const handleExecuteConvert = async () => {
+  const handleExecuteConvert = () =>
+    runOnce(async () => {
     if (!convertTargetQuotation) return;
-    setIsConverting(true);
     const quot = convertTargetQuotation;
+    const blocker = getConvertBlocker(quot);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
+    if (!getQuotationStages(quot).availableStages.some((st) => st.type === convertType)) {
+      toast.info(`Estimate ${quot.quotationNo} has already been converted to this document type.`);
+      return;
+    }
+    // Converted lines keep productId / batch / quantity: check them against fresh batch stock first.
+    await batchStock.refresh(
+      (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
+    );
+    if (!fe.validateAll(computeConvertErrors())) return;
+    setIsConverting(true);
 
     try {
       if (convertType === "Invoice") {
@@ -2411,6 +2677,17 @@ export const EstimateQuotationView: React.FC = () => {
         }
       } catch (apiErr) {
         console.warn("Backend convertQuotation returned notice:", apiErr);
+        if (/stock|insufficient/i.test(getApiErrorMessage(apiErr, ""))) {
+          // Backend rejected for stock: show it inline in the modal and do not create anything locally.
+          fe.merge({
+            convertStock:
+              "Not enough stock is available in one of the batches. Please reduce the quantity on the estimate first.",
+          });
+          void batchStock.refresh(
+            (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
+          );
+          return;
+        }
       }
 
       if (convertType === "Proforma") {
@@ -2442,9 +2719,7 @@ export const EstimateQuotationView: React.FC = () => {
             console.warn("Proforma lookup after convert notice:", lookupErr);
           }
         }
-        const year = new Date().getFullYear();
-        const finalDocNo =
-          apiConvertedDocNo || `PRO-${year}-${String(Date.now()).slice(-4)}`;
+        const finalDocNo = apiConvertedDocNo || "";
         const newProforma: SaleProformaInvoice = {
           id: apiConvertedDocId || `pro_conv_${Date.now()}`,
           proformaNo: finalDocNo,
@@ -2471,6 +2746,7 @@ export const EstimateQuotationView: React.FC = () => {
             productId: it.productId,
             productName: it.productName,
             sku: it.sku,
+            batch: it.batch,
             quantity: it.quantity,
             unitPrice: it.unitPrice,
             taxPercent: it.taxPercent || 0,
@@ -2536,12 +2812,10 @@ export const EstimateQuotationView: React.FC = () => {
           ]),
         );
         toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice ${newProforma.proformaNo}!`,
+          `Quotation ${quot.quotationNo} successfully converted to Proforma Invoice${newProforma.proformaNo ? ` ${newProforma.proformaNo}` : ''}!`,
         );
       } else if (convertType === "Order") {
-        const year = new Date().getFullYear();
-        const finalDocNo =
-          apiConvertedDocNo || `SO-${year}-${String(Date.now()).slice(-4)}`;
+        const finalDocNo = apiConvertedDocNo || "";
         const newOrder: SaleOrderRecord = {
           id: apiConvertedDocId || `order_conv_${Date.now()}`,
           orderNo: finalDocNo,
@@ -2569,6 +2843,7 @@ export const EstimateQuotationView: React.FC = () => {
             productId: it.productId,
             productName: it.productName,
             sku: it.sku,
+            batch: it.batch,
             quantity: it.quantity,
             unitPrice: it.unitPrice,
             taxPercent: it.taxPercent || 0,
@@ -2635,7 +2910,7 @@ export const EstimateQuotationView: React.FC = () => {
           ]),
         );
         toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Sale Order ${newOrder.orderNo}!`,
+          `Quotation ${quot.quotationNo} successfully converted to Sale Order${newOrder.orderNo ? ` ${newOrder.orderNo}` : ''}!`,
         );
       } else if (convertType === "Challan") {
         const currentLineage = findDocumentLineage(quot.quotationNo);
@@ -2645,7 +2920,7 @@ export const EstimateQuotationView: React.FC = () => {
         const finalDocNo =
           apiConvertedDocNo ||
           currentLineage?.challanNo ||
-          `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
+          "";
 
         let resolvedCustomerId = quot.customerId;
         if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
@@ -2656,9 +2931,15 @@ export const EstimateQuotationView: React.FC = () => {
           );
           if (found && UUID_REGEX.test(found.id)) {
             resolvedCustomerId = found.id;
-          } else if (customers.length > 0 && UUID_REGEX.test(customers[0].id)) {
-            resolvedCustomerId = customers[0].id;
           }
+        }
+        // Never attach a different customer: block when the estimate's customer cannot be resolved.
+        if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
+          fe.merge({
+            _form:
+              "Please choose the customer from the list. Edit the estimate and select a customer before converting.",
+          });
+          return;
         }
 
         const newChallan: DeliveryChallanRecord = {
@@ -2689,6 +2970,7 @@ export const EstimateQuotationView: React.FC = () => {
             productId: it.productId,
             productName: it.productName,
             sku: it.sku,
+            batch: it.batch,
             quantity: it.quantity,
             unitPrice: it.unitPrice,
             taxPercent: it.taxPercent || 0,
@@ -2761,10 +3043,13 @@ export const EstimateQuotationView: React.FC = () => {
           ]),
         );
         toast.success(
-          `Quotation ${quot.quotationNo} successfully converted to Delivery Challan ${newChallan.challanNo}!`,
+          `Quotation ${quot.quotationNo} successfully converted to Delivery Challan${newChallan.challanNo ? ` ${newChallan.challanNo}` : ''}!`,
         );
       }
 
+      void batchStock.refresh(
+        (quot.items || []).map((it) => it.productId).filter((id): id is string => !!id),
+      );
       setIsConvertModalOpen(false);
       setConvertTargetQuotation(null);
       await fetchQuotations(
@@ -2776,15 +3061,14 @@ export const EstimateQuotationView: React.FC = () => {
       );
     } catch (err: any) {
       console.error("Convert API call error:", err);
+      // Keep the modal open so the user can retry; entered values are preserved.
       toast.error(
-        err.message || `Failed to convert quotation to ${convertType}`,
+        getApiErrorMessage(err, `Failed to convert quotation to ${convertType}`),
       );
-      setIsConvertModalOpen(false);
-      setConvertTargetQuotation(null);
     } finally {
       setIsConverting(false);
     }
-  };
+    });
 
   // Delete via Live API with confirmation modal
   const handleDelete = (id: string, no: string) => {
@@ -2794,8 +3078,12 @@ export const EstimateQuotationView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteQuotation = async () => {
-    if (!deleteTargetQuotation) return;
+  const handleConfirmDeleteQuotation = () =>
+    runOnce(async () => {
+    if (!deleteTargetQuotation || !deleteTargetQuotation.id) {
+      toast.error("Please select an estimate to delete.");
+      return;
+    }
     setIsDeletingQuotation(true);
     setDeleteQuotationError(null);
     try {
@@ -2814,28 +3102,28 @@ export const EstimateQuotationView: React.FC = () => {
         appliedPeriod,
       );
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to delete quotation.";
+      const errMsg = getApiErrorMessage(err, "Failed to delete quotation.");
       setDeleteQuotationError(errMsg);
       toast.error(errMsg);
     } finally {
       setIsDeletingQuotation(false);
     }
-  };
+    });
 
   // Duplicate via Live API
-  const handleDuplicate = async (item: SaleQuotation) => {
+  const handleDuplicate = (item: SaleQuotation) =>
+    runOnce(async () => {
     setActiveDropdownId(null);
+    if (!item?.id || !(item.items || []).some((it) => Number(it.quantity) > 0)) {
+      toast.error("This estimate has no items to duplicate.");
+      return;
+    }
     try {
-      const nextRef = getNextReferenceNo();
       const duplicatedPayload = mapSaleQuotationToPayload(
         {
           ...item,
           quotationNo: undefined, // Let server auto-generate unique number
-          referenceNo: String(nextRef),
+          referenceNo: undefined, // Server auto-generates
           date: new Date().toISOString().split("T")[0],
           validUntil: new Date(Date.now() + 30 * 86400000)
             .toISOString()
@@ -2856,9 +3144,54 @@ export const EstimateQuotationView: React.FC = () => {
         appliedPeriod,
       );
     } catch (err: any) {
-      toast.error(err.message || "Failed to duplicate quotation on server");
+      toast.error(getApiErrorMessage(err, "Failed to duplicate quotation on server"));
     }
-  };
+    });
+
+  // Cancel / re-open an estimate (PATCH status). Guarded against double clicks.
+  const handleUpdateQuotationStatus = (
+    item: SaleQuotation,
+    status: "Cancelled" | "Open",
+  ) =>
+    runOnce(async () => {
+      if (!item?.id) {
+        toast.error("This estimate could not be found. Please refresh the list.");
+        return;
+      }
+      if (status === "Cancelled" && item.status !== "Open") {
+        toast.error(`Estimate ${item.quotationNo} is not open, so it cannot be cancelled.`);
+        return;
+      }
+      if (status === "Open" && item.status !== "Cancelled") {
+        toast.error(`Estimate ${item.quotationNo} is not cancelled, so it cannot be reopened.`);
+        return;
+      }
+      try {
+        await quotationApi.updateStatus(item.id, { status });
+        toast.success(
+          status === "Cancelled"
+            ? `Quotation ${item.quotationNo} marked as Cancelled`
+            : `Quotation ${item.quotationNo} reopened as Open`,
+        );
+        updateQuotationStatus(item.id, status);
+        await fetchQuotations(
+          page,
+          pageSize,
+          appliedSearch,
+          appliedStatus,
+          appliedPeriod,
+        );
+      } catch (err: any) {
+        toast.error(
+          getApiErrorMessage(
+            err,
+            status === "Cancelled"
+              ? "Failed to cancel quotation"
+              : "Failed to reopen quotation",
+          ),
+        );
+      }
+    });
 
   // Open Preview with fresh server data
   const handleOpenPreview = async (item: SaleQuotation) => {
@@ -3483,11 +3816,13 @@ export const EstimateQuotationView: React.FC = () => {
               {/* Left Column: Party (CRM Theme) */}
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
                 <FormLabel required>Customer</FormLabel>
+                <div {...fieldAttr("customerId")}>
                 <CustomerSearchableSelect
                   value={formData.customerId}
                   allowNone
                   size="lg"
                   onChange={(val, cust) => {
+                    fe.clearError("customerId");
                     setFormData((prev) => ({
                       ...prev,
                       customerId: val,
@@ -3511,6 +3846,8 @@ export const EstimateQuotationView: React.FC = () => {
                   onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
                   placeholder="Select or search customer..."
                 />
+                </div>
+                <FormError message={fe.errors.customerId} />
 
                 
 
@@ -3537,6 +3874,20 @@ export const EstimateQuotationView: React.FC = () => {
 
               {/* Right Column: Estimation No, Invoice Date, State of supply, Valid Upto */}
               <div className="lg:col-span-6 xl:col-span-7 flex flex-col items-end gap-3 text-xs">
+                {/* Reference No. (server-generated, read-only) */}
+                <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
+                  <span className="font-medium text-slate-600 w-24 sm:w-auto text-right">
+                    Reference No.
+                  </span>
+                  <div className="w-40 sm:w-48 h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center text-xs sm:text-[13px] font-semibold text-slate-600 font-mono">
+                    <span>
+                      {editingQuotation?.referenceNo ||
+                        formData.referenceNo ||
+                        "Auto-generated on save"}
+                    </span>
+                  </div>
+                </div>
+
                 {/* Estimation No. (Bold Display) */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
                   <span className="font-bold text-slate-700 w-24 sm:w-auto text-right">
@@ -3546,7 +3897,7 @@ export const EstimateQuotationView: React.FC = () => {
                     <span>
                       {editingQuotation?.quotationNo ||
                         formData.quotationNo ||
-                        "Auto-generated"}
+                        "Auto-generated on save"}
                     </span>
                   </div>
                 </div>
@@ -3560,7 +3911,10 @@ export const EstimateQuotationView: React.FC = () => {
                     <input
                       type="date"
                       value={formData.date}
+                      {...fieldAttr("date")}
                       onChange={(e) => {
+                        fe.clearError("date");
+                        fe.clearError("validUntil");
                         const newDate = e.target.value;
                         const days = Number(validUptoDays) || 30;
                         const d = new Date(
@@ -3576,10 +3930,11 @@ export const EstimateQuotationView: React.FC = () => {
                           validUntil: computedValidUntil,
                         });
                       }}
-                      className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                      className={`w-full h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.date ? "border-rose-400" : "border-slate-200"}`}
                     />
                   </div>
                 </div>
+                <FormError message={fe.errors.date} />
 
                 {/* State of Supply */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
@@ -3637,8 +3992,14 @@ export const EstimateQuotationView: React.FC = () => {
                     <option value="120">120 Days</option>
                   </select>
                 </div>
+                <FormError message={fe.errors.validUntil} />
               </div>
             </div>
+            {(fe.errors.items || fe.errors.total) && (
+              <div className="mt-4" {...fieldAttr("items")}>
+                <FormError message={fe.errors.items || fe.errors.total} />
+              </div>
+            )}
 
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[360px] pb-32">
@@ -3672,13 +4033,13 @@ export const EstimateQuotationView: React.FC = () => {
                         DESCRIPTION
                       </th>
                     )}
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[160px] text-white">
                       BATCH NO
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-28 min-w-[112px] text-white">
                       QTY
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 min-w-[96px] text-white">
                       UNIT
                     </th>
                     <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
@@ -3845,7 +4206,7 @@ export const EstimateQuotationView: React.FC = () => {
                   {formData.items.map((row, idx) => (
                     <tr
                       key={row.id}
-                      className="hover:bg-purple-50/20 transition-colors group"
+                      className="align-top hover:bg-purple-50/20 transition-colors group"
                     >
                       {/* Row Number */}
                       <td className="py-2 px-2 text-center font-bold text-slate-500 border-r border-slate-200 bg-slate-50/30">
@@ -3868,6 +4229,7 @@ export const EstimateQuotationView: React.FC = () => {
                             <input
                               type="text"
                               value={row.productName}
+                              {...fieldAttr(`items.${idx}.product`)}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenProductDropdownRow(idx);
@@ -3885,6 +4247,7 @@ export const EstimateQuotationView: React.FC = () => {
                               }}
                               onChange={(e) => {
                                 const val = e.target.value;
+                                fe.clearError(`items.${idx}.product`);
                                 handleRowChange(idx, "productName", val);
                                 setProductSearchQuery(val);
                                 setOpenProductDropdownRow(idx);
@@ -4113,6 +4476,7 @@ export const EstimateQuotationView: React.FC = () => {
                             </div>
                           )}
                         </div>
+                        <FormError message={fe.errors[`items.${idx}.product`]} />
                       </td>
 
                       {/* ITEM CATEGORY (optional column) */}
@@ -4200,11 +4564,16 @@ export const EstimateQuotationView: React.FC = () => {
                             row.sku ||
                             cleanName.substring(0, 4) ||
                             "BAT";
-                          const batches =
-                            matchedProduct?.batches &&
-                            matchedProduct.batches.length > 0
-                              ? matchedProduct.batches
-                              : [{ batchNo: `BAT-${prefix}-01` }];
+                          // Option list: the selected product's own batches. The stock figure
+                          // shown comes only from the backend batch-stock hook.
+                          const hookBatches = batchStock.getBatches(row.productId);
+                          const batches: Array<{ batchNo: string }> =
+                            hookBatches.length > 0
+                              ? hookBatches.map((hb) => ({ batchNo: hb.batchNo }))
+                              : matchedProduct?.batches &&
+                                  matchedProduct.batches.length > 0
+                                ? matchedProduct.batches
+                                : [{ batchNo: `BAT-${prefix}-01` }];
 
                           // If the user selected to manually type a custom batch
                           if (row.isCustomBatch) {
@@ -4280,9 +4649,13 @@ export const EstimateQuotationView: React.FC = () => {
                                 {batches.map((b) => (
                                   <option key={b.batchNo} value={b.batchNo}>
                                     {b.batchNo}{" "}
-                                    {typeof b.quantity === "number"
-                                      ? `(${b.quantity} in stock)`
-                                      : ""}
+                                    {(() => {
+                                      const av = batchStock.getAvailable(
+                                        row.productId,
+                                        b.batchNo,
+                                      );
+                                      return av === null ? "" : `(${av} in stock)`;
+                                    })()}
                                   </option>
                                 ))}
                                 {row.batch &&
@@ -4321,15 +4694,23 @@ export const EstimateQuotationView: React.FC = () => {
                           type="number"
                           min="1"
                           value={row.quantity || ""}
+                          {...fieldAttr(`items.${idx}.quantity`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.quantity`);
                             handleRowChange(
                               idx,
                               "quantity",
                               Number(e.target.value),
-                            )
+                            );
+                          }}
+                          className={`w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
+                        />
+                        <FormError
+                          message={
+                            fe.errors[`items.${idx}.quantity`] ||
+                            liveStockErrors[`items.${idx}.quantity`]
                           }
-                          className="w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
                         />
                       </td>
 
@@ -4347,6 +4728,9 @@ export const EstimateQuotationView: React.FC = () => {
                               {u}
                             </option>
                           ))}
+                          {row.unit && !UNIT_OPTIONS.includes(row.unit) && (
+                            <option value={row.unit}>{row.unit}</option>
+                          )}
                         </select>
                       </td>
 
@@ -4358,16 +4742,19 @@ export const EstimateQuotationView: React.FC = () => {
                           min="0"
                           value={row.unitPrice === 0 ? "" : row.unitPrice}
                           placeholder="0.00"
+                          {...fieldAttr(`items.${idx}.price`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.price`);
                             handleRowChange(
                               idx,
                               "unitPrice",
                               Number(e.target.value),
-                            )
-                          }
-                          className="w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                            );
+                          }}
+                          className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.price`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
                         />
+                        <FormError message={fe.errors[`items.${idx}.price`]} />
                       </td>
 
                       {/* DISCOUNT % and AMOUNT (conditional) */}
@@ -4384,16 +4771,19 @@ export const EstimateQuotationView: React.FC = () => {
                                   : row.discountPercent
                               }
                               placeholder="0"
+                              {...fieldAttr(`items.${idx}.discountPercent`)}
                               onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                fe.clearError(`items.${idx}.discountPercent`);
                                 handleRowChange(
                                   idx,
                                   "discountPercent",
                                   Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
+                                );
+                              }}
+                              className={`w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
+                            <FormError message={fe.errors[`items.${idx}.discountPercent`]} />
                           </td>
 
                           <td className="p-1.5 border-r border-slate-200 w-24">
@@ -4407,16 +4797,19 @@ export const EstimateQuotationView: React.FC = () => {
                                   : row.discountAmount
                               }
                               placeholder="0.00"
+                              {...fieldAttr(`items.${idx}.discountAmount`)}
                               onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                fe.clearError(`items.${idx}.discountAmount`);
                                 handleRowChange(
                                   idx,
                                   "discountAmount",
                                   Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
+                                );
+                              }}
+                              className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountAmount`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
+                            <FormError message={fe.errors[`items.${idx}.discountAmount`]} />
                           </td>
                         </>
                       )}
@@ -4425,13 +4818,15 @@ export const EstimateQuotationView: React.FC = () => {
                       <td className="p-1.5 border-r border-slate-200 w-28">
                         <select
                           value={row.taxPercent}
-                          onChange={(e) =>
+                          {...fieldAttr(`items.${idx}.taxPercent`)}
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.taxPercent`);
                             handleRowChange(
                               idx,
                               "taxPercent",
                               Number(e.target.value),
-                            )
-                          }
+                            );
+                          }}
                           className="w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none cursor-pointer transition-colors"
                         >
                           {TAX_RATE_OPTIONS.map((t) => (
@@ -4440,6 +4835,7 @@ export const EstimateQuotationView: React.FC = () => {
                             </option>
                           ))}
                         </select>
+                        <FormError message={fe.errors[`items.${idx}.taxPercent`]} />
                       </td>
 
                       {/* TAX AMOUNT */}
@@ -4986,12 +5382,12 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
               ₹{" "}
-              {metrics.totalAmount.toLocaleString("en-IN", {
+              {cardMetrics.totalAmount.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {metrics.totalCount} quotations generated
+              {cardMetrics.totalCount} quotations generated
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold shrink-0">
@@ -5007,12 +5403,12 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-amber-600 mt-1">
               ₹{" "}
-              {metrics.openAmount.toLocaleString("en-IN", {
+              {cardMetrics.openAmount.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {metrics.openCount} awaiting customer confirmation
+              {cardMetrics.openCount} awaiting customer confirmation
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
@@ -5028,12 +5424,12 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-emerald-600 mt-1">
               ₹{" "}
-              {metrics.convertedAmount.toLocaleString("en-IN", {
+              {cardMetrics.convertedAmount.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {metrics.convertedCount} successfully converted
+              {cardMetrics.convertedCount} successfully converted
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
@@ -5501,57 +5897,15 @@ export const EstimateQuotationView: React.FC = () => {
                                 label: "Mark as Cancelled",
                                 variant: "cancel",
                                 hidden: item.status !== "Open",
-                                onClick: async () => {
-                                  try {
-                                    await quotationApi.updateStatus(item.id, {
-                                      status: "Cancelled",
-                                    });
-                                    toast.success(
-                                      `Quotation ${item.quotationNo} marked as Cancelled`,
-                                    );
-                                    updateQuotationStatus(item.id, "Cancelled");
-                                    await fetchQuotations(
-                                      page,
-                                      pageSize,
-                                      appliedSearch,
-                                      appliedStatus,
-                                      appliedPeriod,
-                                    );
-                                  } catch (err: any) {
-                                    toast.error(
-                                      err.message ||
-                                        "Failed to cancel quotation",
-                                    );
-                                  }
-                                },
+                                onClick: () =>
+                                  handleUpdateQuotationStatus(item, "Cancelled"),
                               },
                               {
                                 label: "Mark as Open",
                                 variant: "activate",
                                 hidden: item.status !== "Cancelled",
-                                onClick: async () => {
-                                  try {
-                                    await quotationApi.updateStatus(item.id, {
-                                      status: "Open",
-                                    });
-                                    toast.success(
-                                      `Quotation ${item.quotationNo} reopened as Open`,
-                                    );
-                                    updateQuotationStatus(item.id, "Open");
-                                    await fetchQuotations(
-                                      page,
-                                      pageSize,
-                                      appliedSearch,
-                                      appliedStatus,
-                                      appliedPeriod,
-                                    );
-                                  } catch (err: any) {
-                                    toast.error(
-                                      err.message ||
-                                        "Failed to reopen quotation",
-                                    );
-                                  }
-                                },
+                                onClick: () =>
+                                  handleUpdateQuotationStatus(item, "Open"),
                               },
                               {
                                 label: "Delete",
@@ -5851,9 +6205,16 @@ export const EstimateQuotationView: React.FC = () => {
                     <input
                       type="date"
                       value={convertDueDate}
-                      onChange={(e) => setConvertDueDate(e.target.value)}
+                      {...fieldAttr("convertDueDate")}
+                      onChange={(e) => {
+                        fe.clearError("convertDueDate");
+                        setConvertDueDate(e.target.value);
+                      }}
                       className={FORM_INPUT_CLS}
                     />
+                    <FormError message={fe.errors.convertDueDate} />
+                    <FormError message={fe.errors.convertStock} />
+                    <FormError message={fe.errors._form} />
                     <p className="text-[11px] text-slate-500 mt-1 pl-1">
                       Specifies the settlement due date for the generated{" "}
                       {targetTypeLabel}.

@@ -55,7 +55,7 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
 
   return {
     id: apiPout.id,
-    paymentNo: apiPout.paymentNo || `PAY-${apiPout.id.slice(0, 8).toUpperCase()}`,
+    paymentNo: apiPout.paymentNo || '',
     paymentDate: paymentDateStr,
     supplierId: apiPout.supplierId,
     supplierName: apiPout.supplier?.name || 'Unknown Supplier',

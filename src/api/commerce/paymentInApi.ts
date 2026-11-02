@@ -30,7 +30,7 @@ export const mapApiPaymentInToSalePaymentIn = (apiPay: ApiPaymentIn): SalePaymen
 
   return {
     id: apiPay.id,
-    receiptNo: apiPay.receiptNo || `REC-${Date.now().toString().slice(-6)}`,
+    receiptNo: apiPay.receiptNo || '',
     date: dateStr,
     paymentDate: dateStr,
     customerId: apiPay.customerId || apiPay.customer?.id || undefined,
@@ -77,9 +77,6 @@ export const mapSalePaymentInToApiPayload = (
     receivedAmount: Math.max(0, Number(pay.receivedAmount ?? pay.amount ?? 0)),
   };
 
-  if (pay.receiptNo && pay.receiptNo.trim()) {
-    payload.receiptNo = pay.receiptNo.trim();
-  }
   if (pay.customerId && UUID_REGEX.test(pay.customerId)) {
     payload.customerId = pay.customerId;
   }

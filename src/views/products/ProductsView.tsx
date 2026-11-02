@@ -17,9 +17,6 @@ import {
 import {
   Boxes,
   Plus,
-  Phone,
-  MessageCircle,
-  Mail,
   Layers,
   Users,
   MoreVertical,
@@ -45,6 +42,24 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import { useScopeLock } from '../../hooks/useScopeLock';
+import {
+  alphanumericUpper,
+  digitsOnly,
+  emailAddress,
+  indianMobile,
+  liveMobileStartError,
+  required,
+  requiredWhen,
+  validateFields,
+  validGst,
+  validPan,
+} from '../../utils/fieldValidators';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useRowActionMenu } from '../../hooks/useRowActionMenu';
+import { StatusBadge } from '../../components/common/StatusBadge';
+import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
+import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
 
 export const ProductsView: React.FC = () => {
   const { showToast, currentUser } = useAuth();
@@ -78,13 +93,9 @@ export const ProductsView: React.FC = () => {
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-
-  // Copied tooltip key state
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  // 3-Dots Action Dropdown State
-  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  // 3-dots row menu + click-to-copy contact buttons (shared hooks)
+  const rowMenu = useRowActionMenu(240);
+  const { copiedKey, copy: handleCopy } = useCopyToClipboard();
 
   // Add / Edit Product Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -103,6 +114,12 @@ export const ProductsView: React.FC = () => {
 
   const [submitting, setSubmitting] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  /** Updates one form field and sets (or clears) its inline error in a single call. */
+  const updateField = (key: keyof typeof formData, value: string, error = '') => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    setFormErrors((prev) => (prev[key] === error ? prev : { ...prev, [key]: error }));
+  };
   const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     organizationId: '',
@@ -376,38 +393,6 @@ export const ProductsView: React.FC = () => {
     }
   }, [isModalOpen, isViewModalOpen]);
 
-  // Close dropdown on outside click or scroll
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.product-action-dropdown-container') && !target.closest('.product-action-dropdown-menu')) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    const handleScroll = () => {
-      if (activeDropdownId) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [activeDropdownId]);
-
-  const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
-    e.stopPropagation();
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 2000);
-  };
 
   // Helper: Generates 2-letter uppercase initials for product avatar matching reference (YC, DM, DD, AA, TU, etc.)
   const getProductInitials = (prod?: ClientProductApiItem): string => {
@@ -514,58 +499,22 @@ export const ProductsView: React.FC = () => {
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const errors: Record<string, string> = {};
-
-    if (!formData.name.trim()) {
-      errors.name = 'Product / Org Name is required';
-    }
-    if (subOrganizations.length > 0 && !formData.subOrganizationId) {
-      errors.subOrganizationId = 'Select Sub-Organization is required';
-    }
-    if (branches.length > 0 && !formData.branchId) {
-      errors.branchId = 'Select Branch is required';
-    }
-    if (!formData.contactPerson.trim()) {
-      errors.contactPerson = 'Contact Person Name is required';
-    }
-    if (!formData.mobileNumber.trim()) {
-      errors.mobileNumber = 'Mobile Number is required';
-    } else if (formData.mobileNumber.trim().length !== 10) {
-      errors.mobileNumber = 'Mobile Number must be exactly 10 digits';
-    }
-    if (formData.supportWhatsapp.trim() && formData.supportWhatsapp.trim().length !== 10) {
-      errors.supportWhatsapp = 'WhatsApp Number must be exactly 10 digits';
-    }
-    if (!formData.supportEmail.trim()) {
-      errors.supportEmail = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.supportEmail.trim())) {
-      errors.supportEmail = 'Please enter a valid email address';
-    }
-    if (!formData.gstNumber.trim()) {
-      errors.gstNumber = 'GST Number is required';
-    } else if (formData.gstNumber.trim().length !== 15) {
-      errors.gstNumber = 'GST Number must be exactly 15 characters';
-    }
-    if (!formData.panNumber.trim()) {
-      errors.panNumber = 'PAN Number is required';
-    } else if (formData.panNumber.trim().length !== 10) {
-      errors.panNumber = 'PAN Number must be exactly 10 characters';
-    }
-    if (!formData.hqCity.trim()) {
-      errors.hqCity = 'HQ City is required';
-    }
-    if (!formData.address.trim()) {
-      errors.address = 'Address is required';
-    }
-    if (!formData.status) {
-      errors.status = 'Status is required';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
-      return;
-    }
-    setFormErrors({});
+    const errors = validateFields([
+      ['name', formData.name, [required('Product / Org Name is required')]],
+      ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
+      ['branchId', formData.branchId, requiredWhen(branches.length > 0, 'Select Branch is required')],
+      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required')]],
+      ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
+      ['supportWhatsapp', formData.supportWhatsapp, [indianMobile('WhatsApp Number')]],
+      ['supportEmail', formData.supportEmail, [required('Email is required'), emailAddress]],
+      ['gstNumber', formData.gstNumber, [required('GST Number is required'), validGst]],
+      ['panNumber', formData.panNumber, [required('PAN Number is required'), validPan]],
+      ['hqCity', formData.hqCity, [required('HQ City is required')]],
+      ['address', formData.address, [required('Address is required')]],
+      ['status', formData.status, [required('Status is required')]],
+    ]);
+    setFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
 
     try {
       setSubmitting(true);
@@ -795,58 +744,14 @@ export const ProductsView: React.FC = () => {
 
                       {/* 2. CONTACT INFO */}
                       <td className="py-4 px-4 border border-slate-200">
-                        <div className="flex items-center justify-center gap-2">
-                          {/* Phone */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => handleCopy(e, phone, `${prod.id}-phone`)}
-                              className="w-8 h-8 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors cursor-pointer"
-                            >
-                              <Phone className="w-3.5 h-3.5" />
-                            </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${prod.id}-phone`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${prod.id}-phone` ? 'Phone number copied' : phone}
-                            </div>
-                          </div>
-
-                          {/* WhatsApp */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => handleCopy(e, whatsapp || phone, `${prod.id}-wa`)}
-                              className="w-8 h-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-600 flex items-center justify-center transition-colors cursor-pointer"
-                            >
-                              <MessageCircle className="w-3.5 h-3.5" />
-                            </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${prod.id}-wa`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${prod.id}-wa` ? 'WhatsApp copied' : (whatsapp || phone)}
-                            </div>
-                          </div>
-
-                          {/* Email */}
-                          <div className="relative group">
-                            <button
-                              type="button"
-                              onClick={(e) => handleCopy(e, email, `${prod.id}-email`)}
-                              className="w-8 h-8 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-600 flex items-center justify-center transition-colors cursor-pointer"
-                            >
-                              <Mail className="w-3.5 h-3.5" />
-                            </button>
-                            <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${prod.id}-email`
-                              ? 'opacity-100 bg-emerald-600 scale-100'
-                              : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                              }`}>
-                              {copiedKey === `${prod.id}-email` ? 'Email address copied' : email}
-                            </div>
-                          </div>
-                        </div>
+                        <ContactCopyButtons
+                          id={prod.id}
+                          phone={phone}
+                          whatsapp={whatsapp || phone}
+                          email={email}
+                          copiedKey={copiedKey}
+                          onCopy={handleCopy}
+                        />
                       </td>
 
                       {/* 3. TOTAL PLANS */}
@@ -868,22 +773,7 @@ export const ProductsView: React.FC = () => {
 
                       {/* 4. STATUS (Dynamic pill with dot matching status: Active / Inactive / Suspended) */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                        {(prod.status === 'Inactive') ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                            <span>Inactive</span>
-                          </span>
-                        ) : (prod.status === 'Suspended') ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-300 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                            <span>Suspended</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50/90 text-emerald-700 border border-emerald-300/80 text-xs font-bold shadow-2xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                            <span>Active</span>
-                          </span>
-                        )}
+                        <StatusBadge status={prod.status} />
                       </td>
 
                       {/* 5. CREATED DATE (Exact styling from Image 1: Bold primary date e.g. "15 Jan, 2023", light grey subtext "Active Account") */}
@@ -923,55 +813,31 @@ export const ProductsView: React.FC = () => {
 
                       {/* 7. ACTIONS (3-Dots Action Menu: Edit, View, Inactive, Suspend, Delete) */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
-                        <div className="relative inline-block text-left product-action-dropdown-container">
+                        <div className="relative inline-block text-left" data-row-menu-trigger>
                           <button
                             type="button"
                             title="Product Actions"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (activeDropdownId === prod.id) {
-                                setActiveDropdownId(null);
-                                setDropdownPos(null);
-                              } else {
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const spaceBelow = window.innerHeight - rect.bottom;
-                                const dropdownHeight = 240;
-                                const rightPos = window.innerWidth - rect.right;
-
-                                if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                  setDropdownPos({
-                                    bottom: window.innerHeight - rect.top + 6,
-                                    right: rightPos,
-                                  });
-                                } else {
-                                  setDropdownPos({
-                                    top: rect.bottom + 6,
-                                    right: rightPos,
-                                  });
-                                }
-                                setActiveDropdownId(prod.id);
-                              }
-                            }}
+                            onClick={(e) => rowMenu.toggle(e, prod.id)}
                             className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                           >
                             <MoreVertical className="w-4 h-4 fill-white" />
                           </button>
 
                           {/* Dropdown Menu */}
-                          {activeDropdownId === prod.id && dropdownPos && (
+                          {rowMenu.activeId === prod.id && rowMenu.pos && (
                             <div
-                              className="product-action-dropdown-menu fixed z-50 w-48 bg-white rounded-2xl shadow-2xl border border-slate-100 py-2 px-1.5 animate-in fade-in zoom-in-95 duration-100"
+                              data-row-menu className="fixed z-50 w-48 bg-white rounded-2xl shadow-2xl border border-slate-100 py-2 px-1.5 animate-in fade-in zoom-in-95 duration-100"
                               style={{
-                                top: dropdownPos.top !== undefined ? `${dropdownPos.top}px` : undefined,
-                                bottom: dropdownPos.bottom !== undefined ? `${dropdownPos.bottom}px` : undefined,
-                                right: `${dropdownPos.right}px`,
+                                top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : undefined,
+                                bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : undefined,
+                                right: `${rowMenu.pos.right}px`,
                               }}
                             >
                               {/* 1. Edit */}
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   handleOpenEditModal(prod);
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -989,7 +855,7 @@ export const ProductsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   handleViewProduct(prod);
                                 }}
                                 className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1007,7 +873,7 @@ export const ProductsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Inactive',
                                     product: prod,
@@ -1032,7 +898,7 @@ export const ProductsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Suspend',
                                     product: prod,
@@ -1059,7 +925,7 @@ export const ProductsView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setActiveDropdownId(null);
+                                  rowMenu.close();
                                   setConfirmAction({
                                     type: 'Delete',
                                     product: prod,
@@ -1114,7 +980,7 @@ export const ProductsView: React.FC = () => {
         hideCloseButton={true}
         onBack={() => setIsModalOpen(false)}
       >
-        <form onSubmit={handleSaveProduct} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
+        <form noValidate onSubmit={handleSaveProduct} className="space-y-4 p-2 sm:p-4 animate-in fade-in duration-150">
 
           {apiModalError && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-700 animate-in fade-in duration-150">
@@ -1239,236 +1105,105 @@ export const ProductsView: React.FC = () => {
 
           {/* Row 1: Product/Org Name | Product/Org Code | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Product / Org Name <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => {
-                  setFormData({ ...formData, name: e.target.value });
-                  if (formErrors.name) setFormErrors((prev) => ({ ...prev, name: '' }));
-                }}
-                placeholder="Enter product / org name"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.name
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.name && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.name}</p>
-              )}
-            </div>
-            <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">Product Code</label>
-                <input
-                  type="text"
-                  value={formData.code}
-                  readOnly
-                  placeholder="Auto-generated"
-                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 outline-none cursor-not-allowed"
-                />
-              </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Contact Person Name <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.contactPerson}
-                onChange={(e) => {
-                  setFormData({ ...formData, contactPerson: e.target.value });
-                  if (formErrors.contactPerson) setFormErrors((prev) => ({ ...prev, contactPerson: '' }));
-                }}
-                placeholder="Enter contact person name"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.contactPerson
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.contactPerson && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.contactPerson}</p>
-              )}
-            </div>
+            <TextField
+              label="Product / Org Name"
+              required
+              value={formData.name}
+              error={formErrors.name}
+              placeholder="Enter product / org name"
+              onValueChange={(v) => updateField('name', v)}
+            />
+            <ReadOnlyField label="Product Code" value={formData.code} placeholder="Auto-generated" />
+            <TextField
+              label="Contact Person Name"
+              required
+              value={formData.contactPerson}
+              error={formErrors.contactPerson}
+              placeholder="Enter contact person name"
+              onValueChange={(v) => updateField('contactPerson', v)}
+            />
           </div>
 
           {/* Row 2: Mobile Number | WhatsApp Number | Email */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Mobile Number <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="e.g. 9876543210"
-                value={formData.mobileNumber}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                  setFormData({ ...formData, mobileNumber: val });
-                  if (formErrors.mobileNumber) setFormErrors((prev) => ({ ...prev, mobileNumber: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.mobileNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.mobileNumber && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.mobileNumber}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                WhatsApp Number
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="e.g. 9876543210"
-                value={formData.supportWhatsapp}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                  setFormData({ ...formData, supportWhatsapp: val });
-                  if (formErrors.supportWhatsapp) setFormErrors((prev) => ({ ...prev, supportWhatsapp: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.supportWhatsapp
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.supportWhatsapp && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.supportWhatsapp}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Email <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="email"
-                value={formData.supportEmail}
-                onChange={(e) => {
-                  setFormData({ ...formData, supportEmail: e.target.value });
-                  if (formErrors.supportEmail) setFormErrors((prev) => ({ ...prev, supportEmail: '' }));
-                }}
-                placeholder="e.g. product@organization.com"
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.supportEmail
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.supportEmail && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.supportEmail}</p>
-              )}
-            </div>
+            <TextField
+              label="Mobile Number"
+              required
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="e.g. 9876543210"
+              value={formData.mobileNumber}
+              error={formErrors.mobileNumber}
+              onValueChange={(v) => {
+                const digits = digitsOnly(v);
+                updateField('mobileNumber', digits, liveMobileStartError('Mobile Number', digits));
+              }}
+            />
+            <TextField
+              label="WhatsApp Number"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="e.g. 9876543210"
+              value={formData.supportWhatsapp}
+              error={formErrors.supportWhatsapp}
+              onValueChange={(v) => {
+                const digits = digitsOnly(v);
+                updateField('supportWhatsapp', digits, liveMobileStartError('WhatsApp Number', digits));
+              }}
+            />
+            <TextField
+              label="Email"
+              required
+              type="email"
+              value={formData.supportEmail}
+              error={formErrors.supportEmail}
+              placeholder="e.g. product@organization.com"
+              onValueChange={(v) => updateField('supportEmail', v)}
+            />
           </div>
 
           {/* Row 3: GST Number | PAN Number | HQ City */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                GST Number <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                maxLength={15}
-                placeholder="e.g. 22AAAAA0000A1Z5"
-                value={formData.gstNumber}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15);
-                  setFormData({ ...formData, gstNumber: val });
-                  if (formErrors.gstNumber) setFormErrors((prev) => ({ ...prev, gstNumber: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                  formErrors.gstNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.gstNumber && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.gstNumber}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                PAN Number <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                maxLength={10}
-                placeholder="e.g. ABCDE1234F"
-                value={formData.panNumber}
-                onChange={(e) => {
-                  const val = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
-                  setFormData({ ...formData, panNumber: val });
-                  if (formErrors.panNumber) setFormErrors((prev) => ({ ...prev, panNumber: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
-                  formErrors.panNumber
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.panNumber && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.panNumber}</p>
-              )}
-            </div>
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                HQ City <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Chennai"
-                value={formData.hqCity}
-                onChange={(e) => {
-                  setFormData({ ...formData, hqCity: e.target.value });
-                  if (formErrors.hqCity) setFormErrors((prev) => ({ ...prev, hqCity: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.hqCity
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.hqCity && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.hqCity}</p>
-              )}
-            </div>
+            <TextField
+              label="GST Number"
+              required
+              maxLength={15}
+              inputClassName="uppercase"
+              value={formData.gstNumber}
+              error={formErrors.gstNumber}
+              placeholder="e.g. 33AAAAA0000A1Z5"
+              onValueChange={(v) => updateField('gstNumber', alphanumericUpper(v, 15))}
+            />
+            <TextField
+              label="PAN Number"
+              required
+              maxLength={10}
+              inputClassName="uppercase"
+              value={formData.panNumber}
+              error={formErrors.panNumber}
+              placeholder="e.g. AAAAA0000A"
+              onValueChange={(v) => updateField('panNumber', alphanumericUpper(v, 10))}
+            />
+            <TextField
+              label="HQ City"
+              required
+              value={formData.hqCity}
+              error={formErrors.hqCity}
+              placeholder="e.g. Chennai"
+              onValueChange={(v) => updateField('hqCity', v)}
+            />
           </div>
 
           {/* Row 4: Address | Status | (spare) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Address <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                placeholder="Enter complete address"
-                value={formData.address}
-                onChange={(e) => {
-                  setFormData({ ...formData, address: e.target.value });
-                  if (formErrors.address) setFormErrors((prev) => ({ ...prev, address: '' }));
-                }}
-                className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                  formErrors.address
-                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                }`}
-              />
-              {formErrors.address && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
-              )}
-            </div>
+            <TextField
+              label="Address"
+              required
+              value={formData.address}
+              error={formErrors.address}
+              placeholder="Enter complete address"
+              onValueChange={(v) => updateField('address', v)}
+            />
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Status <span className="text-rose-500 font-bold">*</span>
@@ -1722,28 +1457,15 @@ export const ProductsView: React.FC = () => {
         confirmButtonText={
           confirmAction?.type === 'Delete'
             ? 'Yes, Delete'
-            : confirmAction?.type === 'Suspend'
-              ? (confirmAction.product.status === 'Suspended' ? 'Yes, Resume' : 'Yes, Suspend')
-              : (confirmAction?.product.status === 'Inactive' ? 'Yes, Activate' : 'Yes, Inactive')
+            : confirmAction && confirmButtonLabel(confirmAction.type, confirmAction.product.status)
         }
         isLoading={isProcessingAction}
         onConfirm={async () => {
           if (!confirmAction) return;
           setIsProcessingAction(true);
           try {
-            if (confirmAction.type === 'Delete') {
-              await handleDeleteProduct(confirmAction.product);
-            } else if (confirmAction.type === 'Suspend') {
-              await handleUpdateStatus(
-                confirmAction.product,
-                confirmAction.product.status === 'Suspended' ? 'Active' : 'Suspended'
-              );
-            } else if (confirmAction.type === 'Inactive') {
-              await handleUpdateStatus(
-                confirmAction.product,
-                confirmAction.product.status === 'Inactive' ? 'Active' : 'Inactive'
-              );
-            }
+            const { type, product } = confirmAction;
+            await (type === 'Delete' ? handleDeleteProduct(product) : handleUpdateStatus(product, nextStatus(type, product.status)));
             setConfirmAction(null);
           } catch (err: any) {
             console.error('Action failed:', err);

@@ -39,7 +39,7 @@ import { DataTable } from '../../components/common/DataTable';
 import { TaskFormModal } from '../../components/forms/TaskFormModal';
 import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
-import Tooltip from '@mui/material/Tooltip';
+import { Tooltip } from '../../components/common/Tooltip';
 
 interface TasksViewProps {
   initialCreateOpen?: boolean;

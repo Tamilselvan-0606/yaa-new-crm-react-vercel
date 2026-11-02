@@ -23,6 +23,7 @@ import {
   XCircle,
   IndianRupee,
   TrendingUp,
+  TrendingDown,
   Calendar,
   Building2,
   User,
@@ -142,6 +143,160 @@ import {
   parseTaxRate,
   round2,
 } from "../../../utils/financialCalculations";
+import {
+  FieldErrors,
+  checkDateNotBefore,
+  checkRequiredDate,
+  checkRequiredSelection,
+  checkTotalConsistency,
+  extractApiFieldErrors,
+  fieldAttr,
+  getApiErrorMessage,
+  isUuid,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  validateBatchStock,
+  validateLineItems,
+} from "../../../utils/formValidation";
+import { useBatchStock } from "../../../hooks/useBatchStock";
+import { FormError } from "../../../components/common/FormError";
+
+const PRODUCT_PICK_MSG = "Please choose the product from the list.";
+
+/** Maps backend field paths (e.g. `items.0.quantity`) onto this form's error keys. */
+const mapApiFieldsToForm = (
+  apiErrors: FieldErrors,
+  rowIndexes: number[],
+): FieldErrors => {
+  const lineField: Record<string, string> = {
+    productId: "product",
+    quantity: "quantity",
+    unitPrice: "price",
+    discountPercent: "discountPercent",
+    discountAmount: "discountAmount",
+    taxPercent: "taxPercent",
+  };
+  const topLevel: Record<string, string> = {
+    customerId: "customerId",
+    date: "date",
+    validUntil: "validUntil",
+    items: "items",
+  };
+  const out: FieldErrors = {};
+  Object.entries(apiErrors).forEach(([path, message]) => {
+    const m = path.match(/^items\.(\d+)\.(\w+)$/);
+    if (m) {
+      const row = rowIndexes[Number(m[1])] ?? Number(m[1]);
+      const f = lineField[m[2]];
+      if (f === "quantity" && /stock|insufficient|available/i.test(message)) {
+        out[`items.${row}.quantity`] =
+          "Not enough stock is available in this batch. Please reduce the quantity.";
+      } else if (f) out[`items.${row}.${f}`] = message;
+      else out.items = message;
+    } else if (topLevel[path]) out[topLevel[path]] = message;
+  });
+  return out;
+};
+
+/**
+ * Pure validation for the proforma invoice form. Returns an error map (empty = valid).
+ * Proforma lines require a real product id (the API payload needs one), resolved by `ctx.resolveProductId`.
+ */
+const validateProformaForm = (
+  form: {
+    partyName: string;
+    customerId?: string | null;
+    date: string;
+    validUntil?: string;
+    items: ExtendedProformaItem[];
+  },
+  ctx: {
+    isInclusive: boolean;
+    finalAmount: number;
+    roundOff: number;
+    resolveProductId: (it: ExtendedProformaItem) => string | undefined;
+  },
+): FieldErrors => {
+  const errors: FieldErrors = {};
+  if (!form.partyName?.trim() && !form.customerId) {
+    errors.customerId = checkRequiredSelection("", "customer") as string;
+  }
+  const dateErr = checkRequiredDate(form.date, "invoice date");
+  if (dateErr) errors.date = dateErr;
+  else {
+    const e = checkDateNotBefore(
+      form.validUntil,
+      form.date,
+      "valid-until date",
+      "invoice date",
+    );
+    if (e) errors.validUntil = e;
+  }
+
+  const isReal = (i: ExtendedProformaItem) =>
+    !!i.productName?.trim() || Number(i.unitPrice) > 0;
+  const realRows = form.items.filter(isReal);
+  if (realRows.length === 0) {
+    errors.items = "Please add at least one item before saving.";
+    return errors;
+  }
+  const lines = form.items.map((it) =>
+    isReal(it)
+      ? {
+          productId: ctx.resolveProductId(it) || "",
+          productName: it.productName,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: it.discountPercent,
+          discountAmount: it.discountAmount,
+          taxPercent: it.taxPercent,
+        }
+      : {},
+  );
+  Object.assign(
+    errors,
+    validateLineItems(lines, {
+      requireProduct: false,
+      allowZeroPrice: true,
+      priceKey: "unitPrice",
+    }),
+  );
+  form.items.forEach((it, i) => {
+    if (isReal(it) && !errors[`items.${i}.product`] && !ctx.resolveProductId(it)) {
+      errors[`items.${i}.product`] = PRODUCT_PICK_MSG;
+    }
+  });
+
+  if (Object.keys(errors).length === 0) {
+    const expected = round2(
+      realRows.reduce(
+        (sum, it) =>
+          sum +
+          calculateLineItem(
+            {
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              discountPercent: it.discountPercent,
+              discountAmount: it.discountAmount,
+              taxPercent: it.taxPercent,
+              isTaxInclusive: ctx.isInclusive,
+            },
+            { withGst: true },
+          ).lineTotal,
+        0,
+      ),
+    );
+    const totalErr = checkTotalConsistency(
+      expected,
+      round2(ctx.finalAmount - ctx.roundOff),
+      "invoice total",
+      0.01 * realRows.length + 0.05,
+    );
+    if (totalErr) errors.total = totalErr;
+  }
+  return errors;
+};
 import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
 
@@ -363,12 +518,17 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<
+    NonNullable<Awaited<ReturnType<typeof commerceProformaApi.getProformas>>["summary"]> | null
+  >(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [liveCustomers, setLiveCustomers] = useState<SalesCustomer[]>([]);
   const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
   const [liveProducts, setLiveProducts] = useState<ProductItemModel[]>([]);
   const [liveBatches, setLiveBatches] = useState<ApiStockBatch[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const fe = useFieldErrors();
+  const { runOnce } = useSubmitGuard();
 
   // Proforma state with localStorage persistence as offline fallback
   const [proformaList, setProformaList] = useState<SaleProformaInvoice[]>(
@@ -643,6 +803,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           }
 
           setLiveProformas(deduped);
+          setApiSummary(response.summary ?? null);
           setTotalApiRecords(
             Math.max(
               deduped.length,
@@ -1513,6 +1674,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index] };
+      const prevProductId = item.productId || "";
       item.productId = prod.productId || prod.id || "";
       item.productName = prod.productName || prod.name || "";
       item.sku = prod.sku || prod.productCode || "";
@@ -1535,6 +1697,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
       if (prod.hsnCode) {
         item.hsnCode = prod.hsnCode;
+      }
+      if (item.productId !== prevProductId) {
+        // New product: the old batch belongs to another product.
+        item.batch = "";
+        item.isCustomBatch = false;
       }
       const productBatches = prod.batches || [];
       if (productBatches.length > 0 && !item.batch) {
@@ -1606,6 +1773,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index], [field]: value };
+      const prevProductId = newItems[index].productId || "";
+      const resetBatchOnProductChange = () => {
+        if ((item.productId || "") !== prevProductId) {
+          item.batch = "";
+          item.isCustomBatch = false;
+        }
+      };
 
       if (field === "productId") {
         const query = String(value).trim().toLowerCase();
@@ -1638,6 +1812,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           if (prod.hsnCode) {
             item.hsnCode = prod.hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (prod as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1681,6 +1856,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           if (matched.hsnCode) {
             item.hsnCode = matched.hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (matched as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1722,6 +1898,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           if (matched.hsnCode) {
             item.hsnCode = matched.hsnCode;
           }
+          resetBatchOnProductChange();
           const productBatches = (matched as any).batches || [];
           if (productBatches.length > 0 && !item.batch) {
             const firstActive =
@@ -1835,109 +2012,154 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     manualRoundOff,
   ]);
 
-  // Save Proforma Invoice Handler
-  const handleSaveProforma = async (andConvert = false) => {
-    if (!formData.partyName.trim()) {
-      toast.error("Please select or enter Customer name");
-      return;
+  // Errors belong to the active tab's form; never carry them across tabs / modes.
+  useEffect(() => {
+    fe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, viewMode]);
+
+  // Maps a form row to a real product id (UUID) or undefined. Never guesses a different product.
+  const resolveProductIdForItem = (
+    it: ExtendedProformaItem,
+  ): string | undefined => {
+    const nameKey = it.productName?.trim().toLowerCase();
+    if (it.productId && UUID_REGEX.test(it.productId)) {
+      // If the user edited the text after picking a product, the old id no longer matches what they see.
+      const known = availableProducts.find(
+        (p) => p.productId === it.productId || p.id === it.productId,
+      );
+      if (
+        !known ||
+        !nameKey ||
+        !known.productName ||
+        known.productName.toLowerCase() === nameKey
+      ) {
+        return it.productId;
+      }
     }
+    if (!nameKey) return undefined;
+    const match = availableProducts.find(
+      (p) =>
+        (p.productId &&
+          UUID_REGEX.test(p.productId) &&
+          p.productName.toLowerCase() === nameKey) ||
+        (p.id &&
+          UUID_REGEX.test(p.id) &&
+          p.productName.toLowerCase() === nameKey),
+    );
+    if (!match) return undefined;
+    return match.productId && UUID_REGEX.test(match.productId)
+      ? match.productId
+      : UUID_REGEX.test(match.id)
+        ? match.id
+        : undefined;
+  };
+
+  // Batch-wise stock: backend data only (useBatchStock). Reservations/allocations by other
+  // documents are not in the frontend API data, so none are subtracted. No stock is deducted here.
+  const batchStock = useBatchStock();
+  const docProductIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          formData.items
+            .map((it) => it.productId)
+            .filter((id): id is string => !!id && isUuid(id)),
+        ),
+      ),
+    [formData.items],
+  );
+  const docProductKey = docProductIds.join(",");
+  const prevDocProductIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    // Only runs when the set of products on the document changes (not per keystroke).
+    const prev = prevDocProductIdsRef.current;
+    prev
+      .filter((id) => !docProductIds.includes(id))
+      .forEach((id) => batchStock.forget(id));
+    docProductIds
+      .filter((id) => !prev.includes(id))
+      .forEach((id) => {
+        void batchStock.loadProduct(id);
+      });
+    prevDocProductIdsRef.current = docProductIds;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docProductKey]);
+
+  const computeStockErrors = (
+    items: Array<{ productId?: string; productName?: string; batch?: string; quantity?: unknown }>,
+    resolve?: (it: any) => string | undefined,
+  ): FieldErrors =>
+    validateBatchStock(
+      items.map((it) => ({
+        productId: (resolve ? resolve(it) : undefined) || it.productId,
+        productName: it.productName,
+        batch: it.batch,
+        quantity: it.quantity,
+      })),
+      { getAvailable: (l) => batchStock.getAvailable(l.productId, l.batch) },
+    );
+  // Live (shown before any submit attempt): recomputed when quantity / product / batch / stock change.
+  const liveStockErrors = useMemo(
+    () => computeStockErrors(formData.items, resolveProductIdForItem),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [formData.items, batchStock.getAvailable],
+  );
+
+  const computeProformaErrors = () => {
+    const errs = validateProformaForm(formData, {
+      isInclusive: priceTaxMode === "With Tax",
+      finalAmount: formCalculations.grandTotal,
+      roundOff: formCalculations.roundOffDiff,
+      resolveProductId: resolveProductIdForItem,
+    });
+    const stockErrs = computeStockErrors(formData.items, resolveProductIdForItem);
+    Object.entries(stockErrs).forEach(([k, v]) => {
+      if (!errs[k]) errs[k] = v;
+    });
+    return errs;
+  };
+  // After the first submit attempt, keep errors in sync with the current values.
+  useRevalidateAfterSubmit(fe, computeProformaErrors, [formData, priceTaxMode, formCalculations, availableProducts, batchStock.version]);
+
+  // Inline (non-toast) error shown on the list when a conversion is blocked by batch stock.
+  const [convertStockError, setConvertStockError] = useState<string | null>(null);
+  // Refreshes stock for the proforma's products, then checks its lines (productId + batch + quantity,
+  // exactly what the conversion carries over). Returns true when the conversion must be blocked.
+  const isConvertBlockedByStock = async (
+    proforma: SaleProformaInvoice,
+  ): Promise<boolean> => {
+    const items = proforma.items || [];
+    await batchStock.refresh(items.map((it) => it.productId));
+    const errs = computeStockErrors(items);
+    const first = Object.entries(errs)[0];
+    if (!first) {
+      setConvertStockError(null);
+      return false;
+    }
+    const it = items[Number(first[0].split(".")[1])];
+    setConvertStockError(
+      `Proforma ${proforma.proformaNo} cannot be converted. ${it?.productName || "Item"}${it?.batch ? ` (batch ${it.batch})` : ""}: ${first[1]}`,
+    );
+    setActiveConvertDropdownId(null);
+    setConvertDropdownPos(null);
+    return true;
+  };
+
+  // Save Proforma Invoice Handler
+  const handleSaveProforma = (andConvert = false) =>
+    runOnce(async () => {
+    // Re-read batch stock for every distinct product so stock changed elsewhere is checked.
+    await batchStock.refresh(docProductIds);
+    if (!fe.validateAll(computeProformaErrors())) return;
     const validItems = formData.items.filter(
       (it) => it.productName.trim() || Number(it.unitPrice) > 0,
     );
-    if (validItems.length === 0) {
-      toast.error("Please add at least one line item with name and rate");
-      return;
-    }
-    const hasInvalidQty = validItems.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("All items must have a quantity greater than zero.");
-      return;
-    }
-    const hasInvalidPrice = validItems.some(
-      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
-    );
-    if (hasInvalidPrice) {
-      toast.error("Item rates cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = validItems.some(
-      (it) =>
-        (it.discountPercent !== undefined &&
-          (it.discountPercent < 0 || it.discountPercent > 100)) ||
-        (it.discountAmount !== undefined && it.discountAmount < 0),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
-    if (formCalculations.grandTotal < 0) {
-      toast.error("Grand total cannot be negative.");
-      return;
-    }
-
-    // Resolve valid UUID productId for every item row
-    const resolvedItems: ExtendedProformaItem[] = [];
-    for (const it of validItems) {
-      let pid = it.productId;
-      // 1. If pid is not a valid UUID, look for matching product in availableProducts
-      if (!pid || !UUID_REGEX.test(pid)) {
-        const match = availableProducts.find(
-          (p) =>
-            (p.productId &&
-              UUID_REGEX.test(p.productId) &&
-              p.productName.toLowerCase() ===
-                it.productName.trim().toLowerCase()) ||
-            (p.id &&
-              UUID_REGEX.test(p.id) &&
-              p.productName.toLowerCase() ===
-                it.productName.trim().toLowerCase()),
-        );
-        if (match) {
-          pid =
-            match.productId && UUID_REGEX.test(match.productId)
-              ? match.productId
-              : match.id;
-        }
-      }
-
-      // 2. If still not a valid UUID, try auto-creating the product via productApi to get a real Commerce UUID
-      if (!pid || !UUID_REGEX.test(pid)) {
-        try {
-          const createProdRes = await productApi.createProduct({
-            itemType: "Product",
-            productName: it.productName.trim() || "Custom Item",
-            salePrice: Number(it.unitPrice) || 0,
-            salePriceTaxType: "Excluded",
-            unit: it.unit && it.unit !== "NONE" ? it.unit : "PCS",
-            category: it.category || "General",
-          });
-          if (
-            createProdRes.data?.id &&
-            UUID_REGEX.test(createProdRes.data.id)
-          ) {
-            pid = createProdRes.data.id;
-          }
-        } catch (createErr) {
-          console.warn("Auto-create product fallback notice:", createErr);
-        }
-      }
-
-      if (!pid || !UUID_REGEX.test(pid)) {
-        toast.error(
-          `Please select a registered product for "${it.productName || "line item"}".`,
-        );
-        return;
-      }
-
-      resolvedItems.push({
-        ...it,
-        productId: pid,
-      });
-    }
+    // Every row was validated above to resolve to a real product id.
+    const resolvedItems: ExtendedProformaItem[] = validItems.map((it) => ({
+      ...it,
+      productId: resolveProductIdForItem(it) as string,
+    }));
 
     const { rawSubtotal, totalTax, totalDiscount, roundOffDiff, grandTotal } =
       formCalculations;
@@ -1947,10 +2169,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       : `pro_${Date.now()}`;
     const newProforma: SaleProformaInvoice = {
       id: proformaId,
-      proformaNo:
-        formData.proformaNo ||
-        `PRO-${new Date().getFullYear()}-${String((totalApiRecords ?? proformaList.length) + 1).padStart(4, "0")}`,
-      referenceNo: formData.referenceNo || "1",
+      proformaNo: formData.proformaNo || "",
+      referenceNo: formData.referenceNo || "",
       date: formData.date,
       validUntil: formData.validUntil,
       customerId: formData.customerId || "",
@@ -1980,9 +2200,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         : editingProforma
           ? editingProforma.status
           : "Open",
-      convertedToInvoiceNo: andConvert
-        ? `INV-${new Date().getFullYear()}-010${proformaList.length + 5}`
-        : undefined,
+      convertedToInvoiceNo: undefined,
       convertedAt: andConvert
         ? new Date().toISOString()
         : editingProforma
@@ -2034,6 +2252,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
 
       dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
+      // Fresh batch stock for the next form (no stock is changed by the frontend).
+      void batchStock.refresh(docProductIds);
 
       if (andConvert) {
         try {
@@ -2049,7 +2269,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           newProforma.convertedAt = new Date().toISOString();
           if (convertedNo) newProforma.convertedToInvoiceNo = convertedNo;
           toast.success(
-            `Proforma converted to Sale Invoice ${convertedNo || ""}!`,
+            `Proforma converted to Sale Invoice${convertedNo ? ` ${convertedNo}` : ""}!`,
           );
         } catch (convErr: any) {
           console.warn("API convert notice:", convErr);
@@ -2097,14 +2317,24 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
     } catch (err: any) {
       console.error("Failed to save proforma invoice:", err);
-      const apiErr = err.response?.data?.error || err.data?.error || err;
-      const fieldMsg =
-        Array.isArray(apiErr.fields) && apiErr.fields.length > 0
-          ? `${apiErr.message || "Validation error"}: ${apiErr.fields.map((f: any) => `${f.path?.join(".") || "field"} - ${f.message}`).join(", ")}`
-          : apiErr.message ||
-            err.message ||
-            "Failed to save proforma invoice to server. Saved in offline storage.";
-      toast.error(fieldMsg);
+      const rowIdx = formData.items
+        .map((it, i) => (it.productName.trim() || Number(it.unitPrice) > 0 ? i : -1))
+        .filter((i) => i >= 0);
+      const apiFieldErrors = mapApiFieldsToForm(extractApiFieldErrors(err), rowIdx);
+      if (Object.keys(apiFieldErrors).length > 0) {
+        fe.merge(apiFieldErrors);
+      } else {
+        toast.error(getApiErrorMessage(err, "Failed to save proforma invoice to server."));
+      }
+      // The server rejected the data (4xx): keep the form open with the entered values,
+      // do not fall back to a local-only save.
+      const httpStatus = err?.response?.status ?? err?.status;
+      if (
+        Object.keys(apiFieldErrors).length > 0 ||
+        (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus < 500)
+      ) {
+        return;
+      }
       let updatedList: SaleProformaInvoice[];
       if (editingProforma) {
         updatedList = proformaList.map((p) =>
@@ -2123,7 +2353,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  };
+    });
 
   // Determine conversion status across all next stages
   const getProformaStages = (proforma: SaleProformaInvoice) => {
@@ -2194,8 +2424,29 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     };
   };
 
+  // Preconditions shared by every conversion action. Returns a friendly message or null.
+  const getConvertBlocker = (proforma: SaleProformaInvoice): string | null => {
+    if (!proforma?.id) return "This proforma invoice could not be found. Please refresh the list.";
+    if (proforma.status === "Cancelled") {
+      return `Proforma ${proforma.proformaNo} is cancelled and cannot be converted.`;
+    }
+    const hasLines = (proforma.items || []).some(
+      (it) => Number(it.quantity) > 0 && (it.productName || it.productId),
+    );
+    if (!hasLines) {
+      return `Proforma ${proforma.proformaNo} has no items to convert. Please add items first.`;
+    }
+    return null;
+  };
+
   // Convert Existing Proforma -> Opens New Sale Invoice page with calculations
-  const handleConvertExistingToSale = async (proforma: SaleProformaInvoice) => {
+  const handleConvertExistingToSale = (proforma: SaleProformaInvoice) =>
+    runOnce(async () => {
+    const blocker = getConvertBlocker(proforma);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
     const stages = getProformaStages(proforma);
     if (stages.isFullyConverted || stages.isInvoiceConverted) {
       toast.info(
@@ -2203,6 +2454,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
       return;
     }
+    if (await isConvertBlockedByStock(proforma)) return;
     setActiveConvertDropdownId(null);
     setConvertDropdownPos(null);
 
@@ -2238,17 +2490,22 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         },
       },
     });
-  };
+    });
 
   // Convert Existing Proforma to Sale Order (Directly creates Order and updates Proforma status)
-  const handleConvertExistingToOrder = async (
-    proforma: SaleProformaInvoice,
-  ) => {
+  const handleConvertExistingToOrder = (proforma: SaleProformaInvoice) =>
+    runOnce(async () => {
+    const blocker = getConvertBlocker(proforma);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
     const stages = getProformaStages(proforma);
     if (stages.isFullyConverted || stages.isOrderConverted) {
       toast.info(`Proforma ${proforma.proformaNo} already has a Sale Order.`);
       return;
     }
+    if (await isConvertBlockedByStock(proforma)) return;
     try {
       const currentLineage = findDocumentLineage(proforma.proformaNo);
       const upstreamQuotationNo = currentLineage?.estimateNo;
@@ -2258,7 +2515,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
       let convertedNo =
         currentLineage?.orderNo ||
-        `SO-${new Date().getFullYear()}-${String(existingOrders.length + 1).padStart(4, "0")}`;
+        "";
 
       const newOrder: SaleOrderRecord = {
         id: `so_${Date.now()}`,
@@ -2281,6 +2538,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           id: it.id || `item_${Date.now()}_${Math.random()}`,
           productId: it.productId,
           productName: it.productName,
+          batch: it.batch,
           quantity: it.quantity,
           unitPrice: it.unitPrice,
           taxPercent: it.taxPercent || 0,
@@ -2378,7 +2636,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       persistProformas(updated);
 
       toast.success(
-        `Proforma ${proforma.proformaNo} converted to Sale Order ${convertedNo}!`,
+        `Proforma ${proforma.proformaNo} converted to Sale Order${convertedNo ? ` ${convertedNo}` : ''}!`,
       );
       fetchProformas(
         page,
@@ -2389,17 +2647,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
     } catch (err: any) {
       console.error("API convert to order fallback error:", err);
-      toast.error("Failed to convert proforma to sale order");
+      toast.error(getApiErrorMessage(err, "Failed to convert proforma to sale order"));
     } finally {
       setActiveConvertDropdownId(null);
       setConvertDropdownPos(null);
     }
-  };
+    });
 
   // Convert Existing Proforma to Delivery Challan
-  const handleConvertExistingToChallan = async (
-    proforma: SaleProformaInvoice,
-  ) => {
+  const handleConvertExistingToChallan = (proforma: SaleProformaInvoice) =>
+    runOnce(async () => {
+    const blocker = getConvertBlocker(proforma);
+    if (blocker) {
+      toast.error(blocker);
+      return;
+    }
     const stages = getProformaStages(proforma);
     if (stages.isFullyConverted || stages.isChallanConverted) {
       toast.info(
@@ -2407,6 +2669,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
       return;
     }
+    if (await isConvertBlockedByStock(proforma)) return;
     try {
       const currentLineage = findDocumentLineage(proforma.proformaNo);
       const existingChallans = JSON.parse(
@@ -2414,7 +2677,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
       const convertedNo =
         currentLineage?.challanNo ||
-        `DC-${new Date().getFullYear()}-${String(existingChallans.length + 1).padStart(4, "0")}`;
+        "";
 
       const newChallan: DeliveryChallanRecord = {
         id: `dc_${Date.now()}`,
@@ -2438,6 +2701,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           productId: it.productId,
           productName: it.productName,
           sku: it.sku,
+          batch: it.batch,
           quantity: it.quantity,
           unitPrice: it.unitPrice,
           taxPercent: it.taxPercent || 0,
@@ -2484,7 +2748,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       });
 
       toast.success(
-        `Proforma ${proforma.proformaNo} converted to Delivery Challan ${newChallan.challanNo}!`,
+        `Proforma ${proforma.proformaNo} converted to Delivery Challan${newChallan.challanNo ? ` ${newChallan.challanNo}` : ''}!`,
       );
       fetchProformas(
         page,
@@ -2495,22 +2759,21 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
     } catch (err: any) {
       console.error("API convert to challan error:", err);
-      toast.error("Failed to convert proforma to delivery challan");
+      toast.error(getApiErrorMessage(err, "Failed to convert proforma to delivery challan"));
     } finally {
       setActiveConvertDropdownId(null);
       setConvertDropdownPos(null);
     }
-  };
+    });
 
   // Duplicate Proforma (POST /commerce/proformas)
-  const handleDuplicateProforma = async (proforma: SaleProformaInvoice) => {
-    const nextNum = (totalApiRecords ?? proformaList.length) + 1;
-    const newProformaNo = `PRO-${new Date().getFullYear()}-${String(nextNum).padStart(4, "0")}`;
+  const handleDuplicateProforma = (proforma: SaleProformaInvoice) =>
+    runOnce(async () => {
     const duplicated: SaleProformaInvoice = {
       ...proforma,
       id: `pro_${Date.now()}`,
-      proformaNo: newProformaNo,
-      referenceNo: String(nextNum),
+      proformaNo: "",
+      referenceNo: "",
       date: new Date().toISOString().split("T")[0],
       status: "Open",
       convertedToInvoiceNo: undefined,
@@ -2560,7 +2823,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
       dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
       toast.success(
-        `Duplicated ${proforma.proformaNo} as new Proforma ${duplicated.proformaNo || newProformaNo}!`,
+        `Duplicated ${proforma.proformaNo} as new Proforma ${duplicated.proformaNo || ""}!`,
       );
     } catch (err: any) {
       console.warn("Duplicate API notice:", err);
@@ -2578,7 +2841,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       setActiveDropdownId(null);
       setDropdownPos(null);
     }
-  };
+    });
 
   // Delete Proforma (DELETE /commerce/proformas/{id}) with confirmation modal
   const handleOpenDeleteModal = (id: string, proformaNo: string) => {
@@ -2589,8 +2852,12 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteProforma = async () => {
-    if (!deleteTargetProforma) return;
+  const handleConfirmDeleteProforma = () =>
+    runOnce(async () => {
+    if (!deleteTargetProforma || !deleteTargetProforma.id) {
+      toast.error("Please select a proforma invoice to delete.");
+      return;
+    }
     setIsDeletingProforma(true);
     setDeleteProformaError(null);
     try {
@@ -2618,23 +2885,36 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         appliedPeriod,
       );
     } catch (err: any) {
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to delete proforma invoice.";
+      const errMsg = getApiErrorMessage(err, "Failed to delete proforma invoice.");
       setDeleteProformaError(errMsg);
       toast.error(errMsg);
     } finally {
       setIsDeletingProforma(false);
     }
-  };
+    });
 
   // Update Status Handler (PATCH /commerce/proformas/{id}/status)
-  const handleUpdateStatus = async (
-    id: string,
-    newStatus: "Open" | "Cancelled",
-  ) => {
+  const handleUpdateStatus = (id: string, newStatus: "Open" | "Cancelled") =>
+    runOnce(async () => {
+    if (!id) {
+      toast.error("This proforma invoice could not be found. Please refresh the list.");
+      return;
+    }
+    const current = proformaList.find((p) => p.id === id);
+    if (current) {
+      if (current.status === "Converted") {
+        toast.error(`Proforma ${current.proformaNo} is already converted and its status cannot be changed.`);
+        setActiveDropdownId(null);
+        setDropdownPos(null);
+        return;
+      }
+      if (current.status === newStatus) {
+        toast.info(`Proforma ${current.proformaNo} is already ${newStatus.toLowerCase()}.`);
+        setActiveDropdownId(null);
+        setDropdownPos(null);
+        return;
+      }
+    }
     try {
       await commerceProformaApi.updateStatus(id, { status: newStatus });
       dispatch(
@@ -2662,7 +2942,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       setActiveDropdownId(null);
       setDropdownPos(null);
     }
-  };
+    });
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
@@ -2869,6 +3149,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     };
   }, [displayProformas, isApiConnected, totalApiRecords]);
 
+  // KPI card metrics: prefer API summary, fall back to in-browser computation
+  const cardMetrics = apiSummary
+    ? {
+        totalVal: apiSummary.totalAmount,
+        convertedVal: apiSummary.convertedAmount,
+        openVal: apiSummary.openAmount,
+      }
+    : metrics;
+  const growthPercent =
+    apiSummary && typeof apiSummary.growthPercentVsLastMonth === "number"
+      ? apiSummary.growthPercentVsLastMonth
+      : null;
+
   // Paginated list
   const totalPages = Math.max(
     1,
@@ -2996,15 +3289,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       {editingProforma.proformaNo}
                     </span>
                   </>
-                ) : formData.proformaNo ? (
+                ) : (
                   <>
                     <span>New Proforma</span>
                     <span className="font-extrabold text-[#33077C] font-mono text-xs sm:text-[13px] bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200/80 shadow-2xs">
-                      {formData.proformaNo}
+                      {formData.proformaNo || "Auto-generated on save"}
                     </span>
                   </>
-                ) : (
-                  "Create a new customer proforma invoice"
                 )}
               </p>
             </div>
@@ -3027,11 +3318,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               {/* Left Column: Party (CRM Theme) */}
               <div className="lg:col-span-6 xl:col-span-5" ref={partySelectRef}>
                 <FormLabel required>Customer</FormLabel>
+                <div {...fieldAttr("customerId")}>
                 <CustomerSearchableSelect
                   value={formData.customerId}
                   allowNone
                   size="lg"
                   onChange={(val, cust) => {
+                    fe.clearError("customerId");
                     setFormData((prev) => ({
                       ...prev,
                       customerId: val,
@@ -3055,6 +3348,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   onAddNewCustomer={() => setIsAddCustomerModalOpen(true)}
                   placeholder="Select or search customer..."
                 />
+                </div>
+                <FormError message={fe.errors.customerId} />
 
                 
 
@@ -3090,7 +3385,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                     <input
                       type="date"
                       value={formData.date}
+                      {...fieldAttr("date")}
                       onChange={(e) => {
+                        fe.clearError("date");
+                        fe.clearError("validUntil");
                         const newDate = e.target.value;
                         const d = new Date(
                           newDate || new Date().toISOString().split("T")[0],
@@ -3105,10 +3403,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           validUntil: computedValidUntil,
                         }));
                       }}
-                      className="w-full h-9 px-3 bg-white border border-slate-200 hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                      className={`w-full h-9 px-3 bg-white border hover:border-slate-300 focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors ${fe.errors.date ? "border-rose-400" : "border-slate-200"}`}
                     />
                   </div>
                 </div>
+                <FormError message={fe.errors.date} />
 
                 {/* State of Supply */}
                 <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
@@ -3165,8 +3464,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                     <option value="120">120 Days</option>
                   </select>
                 </div>
+                <FormError message={fe.errors.validUntil} />
               </div>
             </div>
+            {(fe.errors.items || fe.errors.total) && (
+              <div className="mt-4" {...fieldAttr("items")}>
+                <FormError message={fe.errors.items || fe.errors.total} />
+              </div>
+            )}
 
             {/* 4. BILLING TABLE (THE GRID - CRM THEME) */}
             <div className="mt-6 overflow-x-auto border border-slate-200 rounded-xl min-h-[380px] pb-36">
@@ -3200,13 +3505,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                         DESCRIPTION
                       </th>
                     )}
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[120px] text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 min-w-[160px] text-white">
                       BATCH NO
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-20 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-28 min-w-[112px] text-white">
                       QTY
                     </th>
-                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 text-white">
+                    <th className="py-2.5 px-2 text-center border-r border-[#4309A2]/70 w-24 min-w-[96px] text-white">
                       UNIT
                     </th>
                     <th className="py-2.5 px-3 text-right border-r border-[#4309A2]/70 w-36 text-white">
@@ -3375,7 +3680,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   {formData.items.map((row, idx) => (
                     <tr
                       key={row.id}
-                      className="hover:bg-purple-50/20 transition-colors group"
+                      className="align-top hover:bg-purple-50/20 transition-colors group"
                     >
                       {/* Row Number */}
                       <td className="py-2 px-2 text-center font-bold text-slate-500 border-r border-slate-200 bg-slate-50/30">
@@ -3398,6 +3703,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             <input
                               type="text"
                               value={row.productName}
+                              {...fieldAttr(`items.${idx}.product`)}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenProductDropdownRow(idx);
@@ -3415,6 +3721,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                               }}
                               onChange={(e) => {
                                 const val = e.target.value;
+                                fe.clearError(`items.${idx}.product`);
                                 handleRowChange(idx, "productName", val);
                                 setProductSearchQuery(val);
                                 setOpenProductDropdownRow(idx);
@@ -3674,6 +3981,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             </div>
                           )}
                         </div>
+                        <FormError message={fe.errors[`items.${idx}.product`]} />
                       </td>
 
                       {/* ITEM CATEGORY (optional column) */}
@@ -3761,11 +4069,16 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             row.sku ||
                             cleanName.substring(0, 4) ||
                             "BAT";
-                          const batches =
-                            matchedProduct?.batches &&
-                            matchedProduct.batches.length > 0
-                              ? matchedProduct.batches
-                              : [{ batchNo: `BAT-${prefix}-01` }];
+                          // Option list: the selected product's own batches. The stock figure
+                          // shown comes only from the backend batch-stock hook.
+                          const hookBatches = batchStock.getBatches(row.productId);
+                          const batches: Array<{ batchNo: string }> =
+                            hookBatches.length > 0
+                              ? hookBatches.map((hb) => ({ batchNo: hb.batchNo }))
+                              : matchedProduct?.batches &&
+                                  matchedProduct.batches.length > 0
+                                ? matchedProduct.batches
+                                : [{ batchNo: `BAT-${prefix}-01` }];
 
                           // If the user selected to manually type a custom batch
                           if (row.isCustomBatch) {
@@ -3822,9 +4135,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                 {batches.map((b) => (
                                   <option key={b.batchNo} value={b.batchNo}>
                                     {b.batchNo}{" "}
-                                    {typeof b.quantity === "number"
-                                      ? `(${b.quantity} in stock)`
-                                      : ""}
+                                    {(() => {
+                                      const av = batchStock.getAvailable(
+                                        row.productId,
+                                        b.batchNo,
+                                      );
+                                      return av === null ? "" : `(${av} in stock)`;
+                                    })()}
                                   </option>
                                 ))}
                                 {row.batch &&
@@ -3863,16 +4180,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           type="number"
                           min="1"
                           value={row.quantity || ""}
+                          {...fieldAttr(`items.${idx}.quantity`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.quantity`);
                             handleRowChange(
                               idx,
                               "quantity",
                               Number(e.target.value),
-                            )
-                          }
-                          className="w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                            );
+                          }}
+                          className={`w-full h-8 px-2 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
                         />
+                        <FormError message={fe.errors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]} />
                       </td>
 
                       {/* UNIT */}
@@ -3889,6 +4209,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                               {u}
                             </option>
                           ))}
+                          {row.unit && !UNIT_OPTIONS.includes(row.unit) && (
+                            <option value={row.unit}>{row.unit}</option>
+                          )}
                         </select>
                       </td>
 
@@ -3900,16 +4223,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           min="0"
                           value={row.unitPrice === 0 ? "" : row.unitPrice}
                           placeholder="0.00"
+                          {...fieldAttr(`items.${idx}.price`)}
                           onKeyDown={handleNonNegativeKeyDown}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.price`);
                             handleRowChange(
                               idx,
                               "unitPrice",
                               Number(e.target.value),
-                            )
-                          }
-                          className="w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors"
+                            );
+                          }}
+                          className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.price`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-semibold text-slate-800 outline-none transition-colors`}
                         />
+                        <FormError message={fe.errors[`items.${idx}.price`]} />
                       </td>
 
                       {/* DISCOUNT % and AMOUNT (conditional) */}
@@ -3926,16 +4252,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                   : row.discountPercent
                               }
                               placeholder="0"
+                              {...fieldAttr(`items.${idx}.discountPercent`)}
                               onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                fe.clearError(`items.${idx}.discountPercent`);
                                 handleRowChange(
                                   idx,
                                   "discountPercent",
                                   Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
+                                );
+                              }}
+                              className={`w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountPercent`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
+                            <FormError message={fe.errors[`items.${idx}.discountPercent`]} />
                           </td>
 
                           <td className="p-1.5 border-r border-slate-200 w-24">
@@ -3949,16 +4278,19 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                   : row.discountAmount
                               }
                               placeholder="0.00"
+                              {...fieldAttr(`items.${idx}.discountAmount`)}
                               onKeyDown={handleNonNegativeKeyDown}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                fe.clearError(`items.${idx}.discountAmount`);
                                 handleRowChange(
                                   idx,
                                   "discountAmount",
                                   Number(e.target.value),
-                                )
-                              }
-                              className="w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors"
+                                );
+                              }}
+                              className={`w-full h-8 px-2 text-right bg-transparent hover:bg-slate-50 focus:bg-white border ${fe.errors[`items.${idx}.discountAmount`] ? "border-rose-400" : "border-transparent"} focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none transition-colors`}
                             />
+                            <FormError message={fe.errors[`items.${idx}.discountAmount`]} />
                           </td>
                         </>
                       )}
@@ -3967,13 +4299,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                       <td className="p-1.5 border-r border-slate-200 w-28">
                         <select
                           value={row.taxPercent}
-                          onChange={(e) =>
+                          {...fieldAttr(`items.${idx}.taxPercent`)}
+                          onChange={(e) => {
+                            fe.clearError(`items.${idx}.taxPercent`);
                             handleRowChange(
                               idx,
                               "taxPercent",
                               Number(e.target.value),
-                            )
-                          }
+                            );
+                          }}
                           className="w-full h-8 px-1.5 text-center bg-transparent hover:bg-slate-50 focus:bg-white border border-transparent focus:border-[#33077C] rounded-lg text-xs font-medium text-slate-700 outline-none cursor-pointer transition-colors"
                         >
                           {TAX_RATE_OPTIONS.map((t) => (
@@ -3982,6 +4316,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                             </option>
                           ))}
                         </select>
+                        <FormError message={fe.errors[`items.${idx}.taxPercent`]} />
                       </td>
 
                       {/* TAX AMOUNT */}
@@ -4673,6 +5008,20 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         </div>
       </div>
 
+      {convertStockError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+          <span>{convertStockError}</span>
+          <button
+            type="button"
+            onClick={() => setConvertStockError(null)}
+            className="text-rose-500 hover:text-rose-700 font-bold"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* 2. SUMMARY KPI CARD (Themed matching CRM design) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs max-w-sm">
         <div className="flex items-start justify-between">
@@ -4683,19 +5032,38 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             <div className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-1">
               <span>₹</span>
               <span>
-                {metrics.totalVal.toLocaleString("en-IN", {
+                {cardMetrics.totalVal.toLocaleString("en-IN", {
                   minimumFractionDigits: 2,
                 })}
               </span>
             </div>
           </div>
 
-          {/* Green Growth Pill */}
+          {/* Growth Pill */}
           <div className="flex flex-col items-end">
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black bg-emerald-50 text-emerald-600 border border-emerald-200/80">
-              <span>100%</span>
-              <TrendingUp className="w-3 h-3 stroke-[2.5]" />
-            </span>
+            {growthPercent === null ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black bg-emerald-50 text-emerald-600 border border-emerald-200/80">
+                <span>100%</span>
+                <TrendingUp className="w-3 h-3 stroke-[2.5]" />
+              </span>
+            ) : (
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black border ${
+                  growthPercent > 0
+                    ? "bg-emerald-50 text-emerald-600 border-emerald-200/80"
+                    : growthPercent < 0
+                      ? "bg-rose-50 text-rose-600 border-rose-200/80"
+                      : "bg-slate-50 text-slate-500 border-slate-200/80"
+                }`}
+              >
+                <span>{Math.abs(growthPercent).toFixed(1).replace(/\.0$/, "")}%</span>
+                {growthPercent > 0 ? (
+                  <TrendingUp className="w-3 h-3 stroke-[2.5]" />
+                ) : growthPercent < 0 ? (
+                  <TrendingDown className="w-3 h-3 stroke-[2.5]" />
+                ) : null}
+              </span>
+            )}
             <span className="text-[10px] text-slate-400 font-medium mt-0.5">
               vs last month
             </span>
@@ -4708,7 +5076,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             Converted:{" "}
             <strong className="text-slate-800 font-bold">
               ₹{" "}
-              {metrics.convertedVal.toLocaleString("en-IN", {
+              {cardMetrics.convertedVal.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </strong>
@@ -4718,7 +5086,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             Open:{" "}
             <strong className="text-slate-800 font-bold">
               ₹{" "}
-              {metrics.openVal.toLocaleString("en-IN", {
+              {cardMetrics.openVal.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </strong>

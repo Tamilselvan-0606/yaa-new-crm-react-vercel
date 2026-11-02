@@ -154,7 +154,7 @@ export const mapApiDeliveryChallanToRecord = (apiC: ApiDeliveryChallan): Deliver
 
   return {
     id: apiC.id,
-    challanNo: apiC.challanNo || 'DC-0000',
+    challanNo: apiC.challanNo || '',
     referenceNo: apiC.referenceNo || undefined,
     invoiceDate: dateStr,
     dueDate: dueDateStr,

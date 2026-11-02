@@ -7,6 +7,7 @@ import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
+import { RegisteredField } from '../common/FormField';
 import {
   useCreatePlatformLeadMutation,
   useUpdatePlatformLeadMutation,
@@ -657,74 +658,39 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             />
           </div>
 
-          <div>
-            <label className={labelClass}>
-              Lead Name <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('company')}
-              type="text"
-              placeholder="Lead / Company Name"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.company
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.company && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.company.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Lead Name"
+            required
+            registration={register("company")}
+            error={errors.company?.message}
+            placeholder="Lead / Company Name"
+          />
 
-          <div>
-            <label className={labelClass}>
-              Date <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('leadDate')}
-              type="date"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.leadDate
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.leadDate && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.leadDate.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Date"
+            required
+            type="date"
+            registration={register("leadDate")}
+            error={errors.leadDate?.message}
+          />
         </div>
 
         {/* Row 2: Contact Person Name | Designation | WhatsApp */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className={labelClass}>
-              Contact Person Name <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('name')}
-              type="text"
-              placeholder="Full Name"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.name
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.name && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.name.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Contact Person Name"
+            required
+            registration={register("name")}
+            error={errors.name?.message}
+            placeholder="Full Name"
+          />
 
-          <div>
-            <label className={labelClass}>Designation</label>
-            <input
-              {...register('designation')}
-              type="text"
-              placeholder="e.g. Founder, Ops Manager"
-              className={inputClass}
-            />
-          </div>
+          <RegisteredField
+            label="Designation"
+            registration={register("designation")}
+            error={errors.designation?.message}
+            placeholder="e.g. Founder, Ops Manager"
+          />
 
           <div>
             <label className={labelClass}>
@@ -760,43 +726,22 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
 
         {/* Row 3: Email | Address | Lead Source */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className={labelClass}>
-              Email <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('email')}
-              type="email"
-              placeholder="name@company.com"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.email
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.email && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.email.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Email"
+            required
+            type="email"
+            registration={register("email")}
+            error={errors.email?.message}
+            placeholder="name@company.com"
+          />
 
-          <div>
-            <label className={labelClass}>
-              Address <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('address')}
-              type="text"
-              placeholder="City, State, Address"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.address
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.address && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.address.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Address"
+            required
+            registration={register("address")}
+            error={errors.address?.message}
+            placeholder="City, State, Address"
+          />
 
           <div>
             <label className={labelClass}>Lead Source</label>

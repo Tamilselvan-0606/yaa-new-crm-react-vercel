@@ -116,11 +116,18 @@ export interface SalesReturnStatusPayload {
   rejectionReason?: string;
 }
 
+export interface SalesReturnSummary {
+  totalCount: number;
+  totalAmount: number;
+  balanceAmount: number;
+}
+
 export interface CommerceSalesReturnListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiSalesReturn[];
+  summary?: SalesReturnSummary;
   pagination?: {
     page: number;
     limit: number;

@@ -63,6 +63,20 @@ import {
 } from "../../../api";
 import { SupplierSchema, SupplierFormData } from "../../../validations";
 import { FormError } from "../../../components/common/FormError";
+import {
+  checkRequiredText,
+  checkEmail,
+  checkPhone,
+  checkPincode,
+  checkGstin,
+  checkPan,
+  checkNumber,
+  collectErrors,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  useSubmitGuard,
+} from "../../../utils/formValidation";
+import { isValidIndianPhone } from "../../../utils/validation";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -105,6 +119,7 @@ export const SupplierView: React.FC = () => {
   const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
   const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/commerce/supplierTypes").SupplierListResponse["summary"]> | null>(null);
   const [totalPages, setTotalPages] = useState<number>(1);
 
   // Search & Filter State
@@ -216,9 +231,34 @@ export const SupplierView: React.FC = () => {
     handleSubmit,
     reset,
     formState: { errors },
+    setError,
+    clearErrors,
   } = useForm<SupplierFormData>({
-    resolver: zodResolver(SupplierSchema),
-    mode: "onChange",
+    // Shared zod schema + friendly local rules layered on top.
+    resolver: (async (values: any, ctx: any, opts: any) => {
+      const base: any = await (zodResolver(SupplierSchema) as any)(values, ctx, opts);
+      const extra = collectErrors([
+        ["name", checkRequiredText(values.name, "supplier name", 2)],
+        ["phone", checkPhone(values.phone, isValidIndianPhone, true)],
+        ["email", checkEmail(values.email, true)],
+        ["address", checkRequiredText(values.address, "address")],
+        ["city", checkRequiredText(values.city, "city")],
+        ["state", checkRequiredText(values.state, "state")],
+        ["pincode", checkPincode(values.pincode, true)],
+        ["gstNumber", checkGstin(values.gstNumber)],
+        ["panNumber", checkPan(values.panNumber)],
+        ["creditLimit", checkNumber(values.creditLimit, "credit limit", { allowZero: true, optional: true })],
+      ]);
+      const errs: any = { ...(base.errors || {}) };
+      for (const k of ["name","phone","email","address","city","state","pincode","gstNumber","panNumber","creditLimit"]) {
+        if (extra[k]) errs[k] = { type: "validate", message: extra[k] };
+        else delete errs[k];
+      }
+      if (Object.keys(errs).length === 0) return { values: base.values ?? values, errors: {} };
+      return { values: {}, errors: errs };
+    }) as any,
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       supplierCode: "",
       name: "",
@@ -242,6 +282,11 @@ export const SupplierView: React.FC = () => {
       notes: "",
     },
   });
+
+  // Start every open/close of the form modal with no errors.
+  useEffect(() => {
+    clearErrors();
+  }, [isFormModalOpen, clearErrors]);
 
   // Load Suppliers from Live API with strict deduplication
   const loadSuppliers = useCallback(
@@ -281,6 +326,7 @@ export const SupplierView: React.FC = () => {
             setSuppliersList(mapped);
           }
 
+          setApiSummary(res.summary ?? null);
           if (res.pagination) {
             setTotalRecords(res.pagination.totalRecords ?? mapped.length);
             setTotalPages(
@@ -343,7 +389,7 @@ export const SupplierView: React.FC = () => {
   }, [displaySuppliers, currentPage, pageSize]);
 
   // Summary Metrics
-  const summary = useMemo(() => {
+  const localSummary = useMemo(() => {
     const totalCount = totalRecords || displaySuppliers.length;
     const activeCount = displaySuppliers.filter(
       (s) => s.status === "Active",
@@ -368,12 +414,12 @@ export const SupplierView: React.FC = () => {
       newSuppliersCount,
     };
   }, [displaySuppliers, totalRecords]);
+  const summary = apiSummary ?? localSummary;
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
-    const nextCode = `SUP-${Math.floor(1000 + Math.random() * 9000)}`;
     reset({
-      supplierCode: nextCode,
+      supplierCode: "",
       name: "",
       contactPerson: "",
       phone: "",
@@ -458,9 +504,8 @@ export const SupplierView: React.FC = () => {
   // Duplicate Supplier Handler
   const handleDuplicateSupplier = (sup: Supplier) => {
     setEditingSupplier(null);
-    const nextCode = `SUP-${Math.floor(1000 + Math.random() * 9000)}`;
     reset({
-      supplierCode: nextCode,
+      supplierCode: "",
       name: `${sup.name} (Copy)`,
       contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
@@ -488,13 +533,10 @@ export const SupplierView: React.FC = () => {
   };
 
   // Save / Update Supplier
-  const onSaveSupplier = async (data: SupplierFormData) => {
-    const creditLimitNum = Number(data.creditLimit || 0);
-    if (isNaN(creditLimitNum) || creditLimitNum < 0) {
-      toast.error("Credit Limit cannot be negative.");
-      return;
-    }
-
+  const { runOnce: runSupplierSaveOnce } = useSubmitGuard();
+  const onSaveSupplier = (data: SupplierFormData) =>
+    runSupplierSaveOnce(() => saveSupplierInner(data));
+  const saveSupplierInner = async (data: SupplierFormData) => {
     try {
       setIsSubmittingForm(true);
 
@@ -561,17 +603,17 @@ export const SupplierView: React.FC = () => {
       loadSuppliers(true);
     } catch (error: any) {
       console.error("Error saving supplier:", error);
-      const fieldErrors = error?.response?.data?.error?.fields;
-      let msg =
-        error?.response?.data?.error?.message ||
-        error?.response?.data?.message ||
-        error?.message ||
-        "Failed to save supplier. Please check required fields.";
-      if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
-        msg = fieldErrors
-          .map((f: any) => `${f.path?.join(".") || "field"}: ${f.message}`)
-          .join(" | ");
+      const apiFields = extractApiFieldErrors(error);
+      const formKeys = ["name", "phone", "email", "address", "city", "state", "pincode", "gstNumber", "panNumber", "paymentTerms", "country", "status"];
+      let mapped = false;
+      for (const [k, m] of Object.entries(apiFields)) {
+        if (formKeys.includes(k)) {
+          setError(k as any, { type: "server", message: m });
+          mapped = true;
+        }
       }
+      if (mapped) return;
+      const msg = getApiErrorMessage(error, "Failed to save supplier. Please try again.");
       toast.error(msg);
     } finally {
       setIsSubmittingForm(false);
@@ -587,7 +629,10 @@ export const SupplierView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteSupplier = async () => {
+  const { runOnce: runSupplierDeleteOnce } = useSubmitGuard();
+  const handleConfirmDeleteSupplier = () =>
+    runSupplierDeleteOnce(confirmDeleteSupplierInner);
+  const confirmDeleteSupplierInner = async () => {
     if (!deleteTargetSupplier) return;
     setIsDeletingSupplier(true);
     setDeleteSupplierError(null);
@@ -600,11 +645,7 @@ export const SupplierView: React.FC = () => {
       loadSuppliers(true);
     } catch (error: any) {
       console.error("Error deleting supplier:", error);
-      const msg =
-        error?.response?.data?.error?.message ||
-        error?.response?.data?.message ||
-        error?.message ||
-        "Failed to delete supplier.";
+      const msg = getApiErrorMessage(error, "Failed to delete supplier.");
       setDeleteSupplierError(msg);
       toast.error(msg);
     } finally {
@@ -1341,12 +1382,13 @@ export const SupplierView: React.FC = () => {
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <FormLabel required>Supplier Code</FormLabel>
+              <FormLabel>Supplier Code</FormLabel>
               <input
                 type="text"
                 readOnly
                 disabled
                 {...register("supplierCode")}
+                placeholder="Auto-generated on save"
                 className={FORM_INPUT_DISABLED_CLS}
               />
               <FormError message={errors.supplierCode?.message} />

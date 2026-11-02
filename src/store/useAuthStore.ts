@@ -38,6 +38,14 @@ interface AuthState {
 const notificationTypesFor = (type: 'SALES' | 'CLIENT', platformAdmin: boolean): AdminNotificationType[] =>
   platformAdmin ? ['SUPER_ADMIN', type] : [type];
 
+// De-duplicates notification refreshes: one shared in-flight request and a short cool-down.
+const REMINDER_MIN_INTERVAL_MS = 30_000;
+const reminderFetch: { key: string; at: number; promise: Promise<void> | null } = {
+  key: '',
+  at: 0,
+  promise: null,
+};
+
 const getRoleFlags = (role: Role | string | undefined) => {
   const normalized = (role || '').toString().toUpperCase();
   const isPlatformSuper = normalized === 'SUPER_ADMIN' || normalized === 'SUPERADMIN';
@@ -136,6 +144,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         toast.success(`Welcome back, ${res.user.name}`, {
           description: `Logged in as ${res.user.role} (${res.user.department})`,
         });
+        reminderFetch.at = 0; // a new session must not reuse the previous user's cool-down
         get().refreshReminders();
         return true;
       }
@@ -173,6 +182,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       console.warn('Backend logout error:', err);
     } finally {
       api.removeToken();
+      reminderFetch.at = 0;
       set({
         token: null,
         currentUser: null,
@@ -191,21 +201,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const reminderType = type ?? get().reminderType;
     set({ reminderType });
     if (!get().token) return;
-    try {
-      const { isSuperAdmin, isOrgSuperAdmin } = get();
-      const types = notificationTypesFor(reminderType, isSuperAdmin && !isOrgSuperAdmin);
-      const results = await Promise.all(types.map((t) => adminNotificationApi.list({ type: t, page_size: 100, sortOrder: 'desc' })));
-      const byId = new Map<string, ReminderItem>();
-      for (const res of results) for (const n of res.data || []) byId.set(n.id, mapNotificationToReminder(n));
-      // Shared (BOTH) rows are kept only where they belong, so Sales and Client Management each see their own.
-      const reminders = [...byId.values()]
-        .filter((r) => isRelevantTo(reminderType, r))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .slice(0, 100);
-      set({ reminders, unreadRemindersCount: reminders.filter((r) => !r.isRead).length });
-    } catch (error) {
-      console.warn('Failed to load notifications:', error);
-    }
+    const { isSuperAdmin, isOrgSuperAdmin } = get();
+    const platformAdmin = isSuperAdmin && !isOrgSuperAdmin;
+    const key = `${reminderType}:${platformAdmin}`;
+
+    // Several places ask for a refresh (login, header, reminders page, polling). Share one request,
+    // and skip the call when the same data was fetched moments ago.
+    if (reminderFetch.promise && reminderFetch.key === key) return reminderFetch.promise;
+    if (reminderFetch.key === key && Date.now() - reminderFetch.at < REMINDER_MIN_INTERVAL_MS) return;
+
+    const run = async () => {
+      try {
+        const types = notificationTypesFor(reminderType, platformAdmin);
+        const results = await Promise.all(types.map((t) => adminNotificationApi.list({ type: t, page_size: 100, sortOrder: 'desc' })));
+        const byId = new Map<string, ReminderItem>();
+        for (const res of results) for (const n of res.data || []) byId.set(n.id, mapNotificationToReminder(n));
+        // Shared (BOTH) rows are kept only where they belong, so Sales and Client Management each see their own.
+        const reminders = [...byId.values()]
+          .filter((r) => isRelevantTo(reminderType, r))
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, 100);
+        set({ reminders, unreadRemindersCount: reminders.filter((r) => !r.isRead).length });
+      } catch (error) {
+        console.warn('Failed to load notifications:', error);
+      } finally {
+        reminderFetch.at = Date.now();
+        reminderFetch.promise = null;
+      }
+    };
+    reminderFetch.key = key;
+    reminderFetch.promise = run();
+    return reminderFetch.promise;
   },
 
   markReminderCompleted: async (id: string) => {

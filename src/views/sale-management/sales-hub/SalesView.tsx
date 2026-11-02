@@ -99,6 +99,7 @@ import {
   mapApiInvoiceToSaleTransaction,
   mapSaleTransactionToInvoicePayload,
   InvoiceFilterParams,
+  CommerceInvoiceSummary,
   UUID_REGEX,
   customerApi,
   mapApiCustomerToSalesCustomer,
@@ -139,6 +140,31 @@ import {
   handleNonNegativeKeyDown,
 } from "../utils/formUtils";
 
+import { FormError } from "../../../components/common/FormError";
+import {
+  FieldErrors,
+  checkRequiredSelection,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkNumber,
+  checkMoney,
+  checkPaymentWithinBalance,
+  checkTotalConsistency,
+  checkGstSplit,
+  checkHasLineItems,
+  validateLineItems,
+  validateBatchStock,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  fieldAttr,
+  focusField,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
+import { parseNumericValue } from "../../../utils/validation";
+import { useBatchStock } from "../../../hooks/useBatchStock";
+
 import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
 
@@ -161,6 +187,228 @@ const ddmmyyyyToIso = (dmy?: string): string => {
   }
   return dmy;
 };
+
+// -----------------------------------------------------------------------------
+// Invoice form validation (pure, no API calls)
+// -----------------------------------------------------------------------------
+interface InvoiceFormInput {
+  customerName: string;
+  customerId: string;
+  saleDate: string;
+  dueDate: string;
+  items: SaleProductItem[];
+  withGst: boolean;
+  gstType: "intra_state" | "inter_state";
+  overallDiscount: number;
+  shippingCharges: number;
+  otherCharges: number;
+  paidAmount: number;
+  paymentSplits: PaymentSplitItem[];
+  roundMode?: "none" | "up" | "down";
+}
+
+interface InvoiceValidationContext {
+  /** Totals that are about to be submitted (calculatedTotals). */
+  totals: {
+    subtotal: number;
+    totalDiscount: number;
+    totalTax: number;
+    cgst: number;
+    sgst: number;
+    igst: number;
+    grandTotal: number;
+  };
+  /** Stock is only enforced when the invoice actually deducts stock (not for drafts). */
+  checkStock: boolean;
+  /** Resolves a line to a real product record id, or undefined when it cannot be matched. */
+  resolveProductId: (item: SaleProductItem) => string | undefined;
+  /** Backend stock of the chosen batch, or null/undefined when stock data is not loaded. */
+  availableStock: (item: SaleProductItem, index: number) => number | null | undefined;
+  /** Quantity this same saved invoice already holds for the line's product + batch (edit mode). */
+  stockCredit?: (item: SaleProductItem, index: number) => number | null | undefined;
+}
+
+const rupees = (n: number) =>
+  `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const isInvoiceRowBlank = (it: SaleProductItem) => !it.productId && !it.productName;
+
+/**
+ * Validates the whole invoice form. Returns a map keyed by field:
+ *   customer, saleDate, dueDate, items, items.{i}.{product|quantity|price|discountPercent|discountAmount|taxPercent},
+ *   shippingCharges, otherCharges, overallDiscount, paidAmount, paymentMethod, totals
+ */
+const validateInvoiceForm = (
+  form: InvoiceFormInput,
+  ctx: InvoiceValidationContext,
+): FieldErrors => {
+  const errors: FieldErrors = {};
+
+  // Customer (a typed customer name without a saved record is still supported by the API)
+  const customerErr = checkRequiredSelection((form.customerName || "").trim(), "customer");
+  if (customerErr) errors.customer = customerErr;
+
+  // Dates
+  const saleDateErr = checkRequiredDate(form.saleDate, "invoice date");
+  if (saleDateErr) errors.saleDate = saleDateErr;
+  if (form.dueDate) {
+    const dueErr =
+      checkRequiredDate(form.dueDate, "due date") ||
+      (saleDateErr ? null : checkDateNotBefore(form.dueDate, form.saleDate, "due date", "invoice date"));
+    if (dueErr) errors.dueDate = dueErr;
+  }
+
+  // Line items (blank rows are dropped on save, so they are ignored here too)
+  const lineInputs = form.items.map((it) =>
+    isInvoiceRowBlank(it)
+      ? {}
+      : {
+          productId: it.productId,
+          productName: it.productName,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          discountPercent: it.discountPercent,
+          discountAmount: it.discountAmount,
+          taxPercent: form.withGst ? it.taxPercent : undefined,
+        },
+  );
+  const noItemsErr = checkHasLineItems(lineInputs);
+  if (noItemsErr) errors.items = "Please add at least one product to the invoice.";
+
+  Object.assign(
+    errors,
+    validateLineItems(lineInputs, {
+      priceKey: "unitPrice",
+      allowZeroPrice: true,
+    }),
+  );
+  // Batch stock: all rows of the same product + batch are one combined demand on that batch.
+  if (ctx.checkStock) {
+    const stockErrs = validateBatchStock(
+      form.items.map((it) =>
+        isInvoiceRowBlank(it)
+          ? {}
+          : {
+              id: it.id,
+              productId: it.productId || ctx.resolveProductId(it),
+              productName: it.productName,
+              batch: it.batch,
+              quantity: it.quantity,
+            },
+      ),
+      {
+        getAvailable: (_l, i) => ctx.availableStock(form.items[i], i),
+        credit: ctx.stockCredit ? (_l, i) => ctx.stockCredit!(form.items[i], i) : undefined,
+      },
+    );
+    Object.entries(stockErrs).forEach(([k, v]) => {
+      if (!errors[k]) errors[k] = String(v);
+    });
+  }
+  form.items.forEach((it, i) => {
+    if (isInvoiceRowBlank(it)) return;
+    const key = `items.${i}.product`;
+    if (!errors[key] && !ctx.resolveProductId(it)) {
+      errors[key] = "Please choose the product from the list.";
+    }
+  });
+
+  // Charges / document discount (0 is fine, negatives are not)
+  const chargeChecks: Array<[string, unknown, string]> = [
+    ["shippingCharges", form.shippingCharges, "shipping charges"],
+    ["otherCharges", form.otherCharges, "other charges"],
+    ["overallDiscount", form.overallDiscount, "overall discount"],
+  ];
+  chargeChecks.forEach(([key, value, label]) => {
+    const e = checkNumber(value, label, { allowZero: true });
+    if (e) errors[key] = e;
+  });
+
+  // Payments
+  const paid = parseNumericValue(form.paidAmount);
+  if (form.paidAmount !== undefined && form.paidAmount !== null && String(form.paidAmount).trim() !== "") {
+    if (paid === null) {
+      errors.paidAmount = "Paid amount must be a valid number.";
+    } else if (paid < 0) {
+      errors.paidAmount = "Paid amount cannot be negative.";
+    } else if (paid > 0) {
+      const over = checkPaymentWithinBalance(paid, ctx.totals.grandTotal, "Paid amount");
+      if (over) errors.paidAmount = over;
+      else if (!(form.paymentSplits[0]?.method || "").trim()) {
+        errors.paymentMethod = "Please select a payment mode for the amount received.";
+      }
+    }
+  }
+  form.paymentSplits.forEach((p) => {
+    const n = parseNumericValue(p.amount);
+    if (n !== null && n < 0 && !errors.paidAmount) {
+      errors.paidAmount = "Payment amount cannot be negative.";
+    }
+  });
+
+  // Totals consistency with what will be submitted (only meaningful when the lines themselves are valid)
+  if (Object.keys(errors).length === 0) {
+    const rows = form.items.filter((it) => !isInvoiceRowBlank(it));
+    const doc = calculateDocumentTotals({
+      items: rows.map((it) => ({
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent,
+        taxPercent: it.taxPercent,
+      })),
+      withGst: form.withGst,
+      gstType: form.gstType,
+      overallDiscount: Number(form.overallDiscount) || 0,
+      shippingCharges: Number(form.shippingCharges) || 0,
+      otherCharges: Number(form.otherCharges) || 0,
+      roundMode: form.roundMode || "none",
+      paidAmount: Math.max(0, Number(form.paidAmount) || 0),
+    });
+    const tol = Math.max(0.05, 0.01 * rows.length);
+    const t = ctx.totals;
+    const totalsErr =
+      checkTotalConsistency(doc.subtotal, t.subtotal, "subtotal", tol) ||
+      checkTotalConsistency(doc.totalDiscount, t.totalDiscount, "discount total", tol) ||
+      checkTotalConsistency(doc.totalTax, t.totalTax, "tax total", tol) ||
+      checkTotalConsistency(doc.grandTotal, t.grandTotal, "grand total", tol);
+    if (totalsErr) {
+      errors.totals = totalsErr;
+    } else if (t.grandTotal < 0) {
+      errors.totals = "The grand total cannot be negative. Please reduce the discount.";
+    } else {
+      const gstErr = checkGstSplit(
+        { cgst: t.cgst, sgst: t.sgst, igst: t.igst, total: t.totalTax },
+        !form.withGst ? "exempt" : form.gstType === "intra_state" ? "intra" : "inter",
+      );
+      if (gstErr) errors.totals = gstErr;
+    }
+  }
+
+  return errors;
+};
+
+/** Maps backend field paths (e.g. `items.0.unitPrice`) to this form's error keys. */
+const mapInvoiceApiErrorKey = (path: string): string => {
+  const m = /^items\.(\d+)\.(\w+)$/.exec(path);
+  if (m) {
+    const field: Record<string, string> = {
+      productId: "product",
+      productName: "product",
+      quantity: "quantity",
+      unitPrice: "price",
+      discountPercent: "discountPercent",
+      discountAmount: "discountAmount",
+      taxPercent: "taxPercent",
+    };
+    return `items.${m[1]}.${field[m[2]] || "product"}`;
+  }
+  if (path === "customerId" || path === "customerName") return "customer";
+  if (path === "items") return "items";
+  if (/^paymentSplits|^paymentMethod|^paidAmount/.test(path)) return path === "paymentMethod" ? "paymentMethod" : "paidAmount";
+  return path;
+};
+
+const FORM_ERROR_INPUT_CLS = "!border-rose-400 !bg-rose-50/40";
 
 const formatDateTime = (
   dateStr?: string | null,
@@ -540,7 +788,6 @@ export const SalesView: React.FC = () => {
         sourceNo: convertData.sourceNo || convertData.referenceNo || "",
       };
 
-      const nextInvNum = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
       const resolvedItems: SaleProductItem[] = (convertData.items || []).map(
         (it: any, idx: number) => {
@@ -599,11 +846,8 @@ export const SalesView: React.FC = () => {
       const initialMethod = convertData.paymentMethod || "Bank Transfer";
 
       setFormData({
-        invoiceNo: nextInvNum,
-        referenceNo:
-          convertData.sourceNo ||
-          convertData.referenceNo ||
-          `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+        invoiceNo: "",
+        referenceNo: convertData.sourceNo || convertData.referenceNo || "",
         saleDate: new Date().toISOString().split("T")[0],
         dueDate:
           convertData.dueDate ||
@@ -646,6 +890,7 @@ export const SalesView: React.FC = () => {
       });
 
       setEditingSale(null);
+      resetFormErrors();
       setIsFormModalOpen(true);
       toast.info(
         `Loaded details from ${convertData.sourceType || "document"} ${convertData.sourceNo || ""}. Review payment calculations and confirm invoice.`,
@@ -922,10 +1167,12 @@ export const SalesView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [totalApiRecords, setTotalApiRecords] = useState(0);
+  const [apiSummary, setApiSummary] = useState<CommerceInvoiceSummary | null>(null);
   const [totalApiPages, setTotalApiPages] = useState(1);
 
-  // Helper to ensure Product UUID
-  const ensureProductUUID = async (item: SaleProductItem): Promise<string> => {
+  // Resolves a line to a real product record id. It never creates a product and never substitutes a
+  // different one: when nothing matches it returns undefined and the form asks the user to pick from the list.
+  const resolveProductId = (item: SaleProductItem): string | undefined => {
     if (item.productId && UUID_REGEX.test(item.productId)) {
       return item.productId;
     }
@@ -954,22 +1201,7 @@ export const SalesView: React.FC = () => {
     if (foundProd && UUID_REGEX.test(foundProd.id)) {
       return foundProd.id;
     }
-    try {
-      const createRes = await productApi.createProduct({
-        productName: item.productName || "Sale Item",
-        productCode: item.sku || `PRD-${Date.now().toString().slice(-6)}`,
-        unit: "PCS",
-        category: "General",
-        salePrice: item.unitPrice || 0,
-        purchasePrice: item.purchasePrice || 0,
-      });
-      if (createRes && createRes.data && createRes.data.id) {
-        return createRes.data.id;
-      }
-    } catch (err) {
-      console.warn("Auto-create product fallback:", err);
-    }
-    return item.productId || "a1b2c3d4-0000-4000-8000-000000000101";
+    return undefined;
   };
 
   // Helper to ensure Customer UUID
@@ -1067,6 +1299,7 @@ export const SalesView: React.FC = () => {
             }
           }
         });
+        setApiSummary(res.summary ?? null);
         if (res.pagination) {
           setTotalApiRecords(res.pagination.totalRecords ?? mapped.length);
           setTotalApiPages(Math.max(1, Math.ceil((res.pagination.totalRecords ?? mapped.length) / pageSize)));
@@ -1225,6 +1458,57 @@ export const SalesView: React.FC = () => {
     notes: "",
   });
 
+  // Inline validation state + double-submit protection for the invoice form and its actions
+  const invoiceFe = useFieldErrors();
+  const {
+    errors: formErrors,
+    validateAll: validateAllFields,
+    clearError: clearFormError,
+    clearGroup: clearFormGroup,
+    merge: mergeFormErrors,
+    reset: resetFormErrors,
+  } = invoiceFe;
+  const saveGuard = useSubmitGuard();
+  // Backend batch stock (per product, cached; fetched on product selection and refreshed on submit only).
+  const batchStock = useBatchStock();
+  const {
+    loadProduct: loadBatchStock,
+    refresh: refreshBatchStock,
+    forget: forgetBatchStock,
+    getBatches: getStockBatches,
+    getAvailable: getBatchAvailable,
+  } = batchStock;
+  // Products already on the form (opened for edit, prefilled by a conversion, or picked by the user)
+  // get their batch stock loaded once; cached products are not refetched.
+  const invoiceProductIdsKey = isFormModalOpen
+    ? Array.from(new Set(formData.items.map((it) => it.productId).filter(Boolean))).sort().join(",")
+    : "";
+  useEffect(() => {
+    if (!invoiceProductIdsKey) return;
+    invoiceProductIdsKey.split(",").forEach((id) => {
+      void loadBatchStock(id);
+    });
+  }, [invoiceProductIdsKey, loadBatchStock]);
+  // Every open/close of the invoice form or the Add Payment modal starts with a clean slate.
+  useEffect(() => {
+    resetFormErrors();
+  }, [isFormModalOpen, resetFormErrors]);
+  useEffect(() => {
+    paymentFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPaymentModalOpen]);
+  const paymentGuard = useSubmitGuard();
+  const cancelGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+  // Add Payment modal errors (shown only after the first submit attempt).
+  const paymentFe = useFieldErrors();
+  const paymentFormErrors = paymentFe.errors;
+  const setPaymentFormErrors = paymentFe.setErrors;
+  const assignFe = useFieldErrors();
+  const detailFe = useFieldErrors();
+  const assignRepError = assignFe.errors.assignRepId;
+  const detailRepError = detailFe.errors.detailRepId;
+
   // Close action & share dropdown on click outside or scroll
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -1286,6 +1570,9 @@ export const SalesView: React.FC = () => {
       cancelledCount,
     };
   }, [sales]);
+
+  // KPI card metrics: prefer API summary, fall back to in-browser computation
+  const cardSummary = apiSummary ?? summary;
 
   // Helper to extract batches for a product
   const getBatchesForProduct = useCallback(
@@ -1461,8 +1748,6 @@ export const SalesView: React.FC = () => {
 
   // Handle opening Create Modal
   const handleOpenCreateModal = () => {
-    const nextInvNum = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
     const initialItem: SaleProductItem = {
       id: `s_item_${Date.now()}`,
       productId: "",
@@ -1479,8 +1764,8 @@ export const SalesView: React.FC = () => {
     };
 
     setFormData({
-      invoiceNo: nextInvNum,
-      referenceNo: `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+      invoiceNo: "",
+      referenceNo: "",
       saleDate: new Date().toISOString().split("T")[0],
       dueDate: new Date(Date.now() + 15 * 86400000).toISOString().split("T")[0],
       customerId: "",
@@ -1533,6 +1818,7 @@ export const SalesView: React.FC = () => {
 
   // Handle opening Edit Modal
   const handleOpenEditModal = async (sale: SaleTransaction) => {
+    resetFormErrors();
     let targetSale = sale;
     if (UUID_REGEX.test(sale.id)) {
       try {
@@ -1558,8 +1844,7 @@ export const SalesView: React.FC = () => {
 
     setFormData({
       invoiceNo: sale.invoiceNo,
-      referenceNo:
-        sale.referenceNo || `REF-${Math.floor(1000 + Math.random() * 9000)}`,
+      referenceNo: sale.referenceNo || "",
       saleDate: sale.saleDate,
       dueDate: sale.dueDate,
       customerId: sale.customerId,
@@ -2072,6 +2357,7 @@ export const SalesView: React.FC = () => {
 
   // Customer Select Change
   const handleCustomerChange = (custId: string) => {
+    clearFormError("customer");
     const cust =
       (customers && customers.find((c) => c.id === custId)) ||
       customerList.find((c) => c.id === custId);
@@ -2114,6 +2400,7 @@ export const SalesView: React.FC = () => {
 
   // Line item updates
   const handleItemProductNameChange = (index: number, val: string) => {
+    clearFormError(`items.${index}.product`);
     setFormData((prev) => {
       const newItems = [...prev.items];
       newItems[index] = { ...newItems[index], productName: val };
@@ -2123,6 +2410,20 @@ export const SalesView: React.FC = () => {
 
   const handleItemProductChange = (index: number, prodId: string) => {
     const prod = availableProducts.find((p) => p.id === prodId);
+    ["product", "quantity", "price", "discountPercent", "discountAmount", "taxPercent"].forEach(
+      (f) => clearFormError(`items.${index}.${f}`),
+    );
+    clearFormError("items");
+    clearFormError("totals");
+    // The line's batch and stock belong to the old product: drop stale stock, then load the new one.
+    const oldProductId = formData.items[index]?.productId;
+    if (oldProductId && oldProductId !== prodId) {
+      const usedElsewhere = formData.items.some(
+        (o, i) => i !== index && o.productId === oldProductId,
+      );
+      if (!usedElsewhere) forgetBatchStock(oldProductId);
+    }
+    if (prod) void loadBatchStock(prod.id);
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index] };
@@ -2177,6 +2478,9 @@ export const SalesView: React.FC = () => {
   };
 
   const handleItemBatchChange = (index: number, batchNo: string) => {
+    clearFormError(`items.${index}.quantity`);
+    clearFormError(`items.${index}.price`);
+    clearFormError("totals");
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index] };
@@ -2215,6 +2519,12 @@ export const SalesView: React.FC = () => {
     val: number,
   ) => {
     const sanitizedVal = Math.max(0, val);
+    const errField: Record<string, string> = { unitPrice: "price" };
+    clearFormError(`items.${index}.${errField[field as string] || field}`);
+    if (field === "quantity" || field === "unitPrice") {
+      clearFormError(`items.${index}.discountAmount`);
+    }
+    clearFormError("totals");
     setFormData((prev) => {
       const newItems = [...prev.items];
       const item = { ...newItems[index] };
@@ -2281,6 +2591,7 @@ export const SalesView: React.FC = () => {
       discountType: "amount",
       total: 0,
     };
+    clearFormError("items");
     setFormData((prev) => ({
       ...prev,
       items: [...prev.items, newItem],
@@ -2292,6 +2603,9 @@ export const SalesView: React.FC = () => {
       toast.error("A sale must have at least one product line item.");
       return;
     }
+    // Row indices shift after removal, so stale per-row errors are dropped.
+    clearFormGroup("items.");
+    clearFormError("totals");
     setFormData((prev) => ({
       ...prev,
       items: prev.items.filter((_, i) => i !== index),
@@ -2374,69 +2688,131 @@ export const SalesView: React.FC = () => {
   }, [calculatedTotals.grandTotal]);
 
   // Generate Invoice Handler (Creates invoice on backend and local store)
-  const handleGenerateInvoice = async () => {
-    if (!formData.customerName.trim()) {
-      toast.error("Please select or specify a customer.");
-      return;
+  // Available stock of the line's chosen batch (null when stock data is not loaded for it).
+  // Other lines of this form using the same product + batch are deducted; when editing a saved
+  // invoice its own previously-deducted quantity is added back.
+  // Stock of the line's batch comes from the backend (useBatchStock), never from local/mock data.
+  const getLineAvailableStock = (it: SaleProductItem): number | null => {
+    const pid = it.productId || resolveProductId(it);
+    return getBatchAvailable(pid, it.batch);
+  };
+
+  // Stock this same saved (non-draft) invoice already holds for the line's product + batch: the
+  // backend deducted it when the invoice was posted, so an unchanged quantity must not be flagged.
+  const getLineStockCredit = (it: SaleProductItem): number => {
+    if (!editingSale || !UUID_REGEX.test(editingSale.id)) return 0;
+    if (editingSale.invoiceStatus === "Draft") return 0;
+    const pid = it.productId || resolveProductId(it);
+    return (editingSale.items || [])
+      .filter((o) => o.productId === pid && (o.batch || "") === (it.batch || ""))
+      .reduce((acc, o) => acc + (Number(o.quantity) || 0), 0);
+  };
+
+  const buildInvoiceValidationContext = (
+    checkStock: boolean,
+  ): InvoiceValidationContext => ({
+    totals: calculatedTotals,
+    checkStock,
+    resolveProductId,
+    availableStock: getLineAvailableStock,
+    stockCredit: getLineStockCredit,
+  });
+
+  // LIVE stock errors (explicit exception to submit-first): recomputed whenever quantities, products,
+  // batches or the loaded stock change, so the Qty cell reacts immediately. Never a toast.
+  const liveStockErrors = useMemo<FieldErrors>(() => {
+    if (!isFormModalOpen) return {};
+    return validateBatchStock(
+      formData.items.map((it) =>
+        isInvoiceRowBlank(it)
+          ? {}
+          : {
+              id: it.id,
+              productId: it.productId || resolveProductId(it),
+              productName: it.productName,
+              batch: it.batch,
+              quantity: it.quantity,
+            },
+      ),
+      {
+        getAvailable: (_l, i) => getLineAvailableStock(formData.items[i]),
+        credit: (_l, i) => getLineStockCredit(formData.items[i]),
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFormModalOpen, formData.items, editingSale, batchStock.version]);
+
+  // Submit-first: errors appear only after a submit attempt, then stay in sync with the values.
+  const lastCheckStockRef = useRef(true);
+  useRevalidateAfterSubmit(
+    invoiceFe,
+    () => validateInvoiceForm(formData, buildInvoiceValidationContext(lastCheckStockRef.current)),
+    [formData, calculatedTotals],
+  );
+
+  // Maps backend `error.fields` onto the form and shows a friendly toast for system errors.
+  const handleInvoiceSaveError = (err: any, fallback: string) => {
+    const raw = extractApiFieldErrors(err);
+    const mapped: FieldErrors = {};
+    Object.entries(raw).forEach(([k, v]) => {
+      const mk = mapInvoiceApiErrorKey(k);
+      if (!(mk in mapped)) mapped[mk] = v;
+    });
+    // A stock rejection from the backend is shown inline on the quantity field in friendly wording.
+    const stockWording = /stock|insufficient|not enough|available|quantity/i;
+    let stockRejected = false;
+    Object.keys(mapped).forEach((k) => {
+      if (/^items.d+.quantity$/.test(k) && stockWording.test(mapped[k])) {
+        mapped[k] = "Not enough stock is available in this batch. Please reduce the quantity.";
+        stockRejected = true;
+      }
+    });
+    if (stockRejected) {
+      // Stock changed since the form was opened: pull fresh figures for the next check.
+      void refreshBatchStock(formData.items.map((it) => it.productId));
     }
+    const keys = Object.keys(mapped);
+    if (keys.length > 0) {
+      mergeFormErrors(mapped);
+      requestAnimationFrame(() => focusField(keys[0]));
+      if (!stockRejected) {
+        toast.error(
+          getApiErrorMessage(err, "Please correct the highlighted fields and try again."),
+        );
+      }
+    } else {
+      toast.error(getApiErrorMessage(err, fallback));
+    }
+  };
+
+  const handleGenerateInvoice = async (): Promise<boolean> => {
+    const result = await saveGuard.runOnce(() => generateInvoiceInner());
+    return result === true;
+  };
+
+  const generateInvoiceInner = async (): Promise<boolean> => {
+    lastCheckStockRef.current = true;
+    // Stock may have changed since the form was opened: refetch each distinct product once, then
+    // run the full validation (every line) against the fresh batch stock.
+    await refreshBatchStock(
+      formData.items.map((it) => it.productId || resolveProductId(it)),
+    );
+    const errs = validateInvoiceForm(
+      formData,
+      buildInvoiceValidationContext(true),
+    );
+    if (!validateAllFields(errs)) return false;
+
     const rawValidItems = formData.items.filter(
       (it) => it.productId || it.productName,
     );
-    if (rawValidItems.length === 0) {
-      toast.error("Please select at least one valid product.");
-      return;
-    }
-    const hasInvalidQty = rawValidItems.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("All products must have a quantity greater than 0.");
-      return;
-    }
-    const hasInvalidPrice = rawValidItems.some(
-      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
-    );
-    if (hasInvalidPrice) {
-      toast.error("Product unit prices cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = rawValidItems.some(
-      (it) =>
-        it.discountPercent !== undefined &&
-        (it.discountPercent < 0 || it.discountPercent > 100),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
-    if (formData.overallDiscount !== undefined && formData.overallDiscount < 0) {
-      toast.error("Overall discount cannot be negative.");
-      return;
-    }
-    if (formData.paidAmount !== undefined && formData.paidAmount < 0) {
-      toast.error("Paid amount cannot be negative.");
-      return;
-    }
-    if (formData.paidAmount > calculatedTotals.grandTotal) {
-      toast.error(
-        `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-      );
-      return;
-    }
 
     setIsActionLoading(true);
     try {
-      const validItems: SaleProductItem[] = await Promise.all(
-        rawValidItems.map(async (it) => {
-          const validProdId = await ensureProductUUID(it);
-          return {
-            ...it,
-            productId: validProdId,
-          };
-        }),
-      );
+      const validItems: SaleProductItem[] = rawValidItems.map((it) => ({
+        ...it,
+        productId: resolveProductId(it) as string,
+      }));
 
       const resolvedCustomerId = ensureCustomerUUID(
         formData.customerId,
@@ -2536,7 +2912,7 @@ export const SalesView: React.FC = () => {
         } else {
           savedApiSale = {
             ...salePayload,
-            invoiceNo: formData.invoiceNo || `INV-${Date.now()}`,
+            invoiceNo: formData.invoiceNo || "",
           };
         }
       }
@@ -2546,6 +2922,17 @@ export const SalesView: React.FC = () => {
       }
 
       saveSale(savedApiSale);
+
+      // The backend posted the stock movement for this invoice: drop cached batch stock so the next
+      // form (and the Stock screens) read fresh figures.
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "Stock", id: "BATCHES" },
+          { type: "Stock", id: "LIST" },
+        ]),
+      );
+      validItems.forEach((it) => forgetBatchStock(it.productId));
+      editingSale?.items?.forEach((it) => forgetBatchStock(it.productId));
 
       // Execute inventory stock reduction & payment in recording for new sales
       if (!isEdit) {
@@ -2572,7 +2959,7 @@ export const SalesView: React.FC = () => {
         if (currentPaid > 0) {
           const newPaymentInRecord: SalePaymentIn = {
             id: `payin_${Date.now()}`,
-            receiptNo: `REC-${Date.now().toString().slice(-6)}`,
+            receiptNo: '',
             date:
               savedApiSale.saleDate || new Date().toISOString().split("T")[0],
             paymentDate:
@@ -2827,69 +3214,44 @@ export const SalesView: React.FC = () => {
       toast.success(
         `Invoice ${savedApiSale.invoiceNo} ${isEdit ? "updated" : "generated"} successfully! Payment Status: ${savedApiSale.paymentStatus.toUpperCase()}`,
       );
+      resetFormErrors();
       await fetchSalesInvoices();
+      return true;
     } catch (err: any) {
       console.error("Failed to generate invoice:", err);
-      toast.error(err?.message || "Failed to save invoice to server.");
+      // Entered values are kept; backend field errors are shown inline.
+      handleInvoiceSaveError(err, "Failed to save the invoice. Please try again.");
+      return false;
     } finally {
       setIsActionLoading(false);
     }
   };
 
   // Save Draft Sale Handler
-  const handleSaveDraft = async () => {
-    if (!formData.customerName.trim()) {
-      toast.error("Please select or specify a customer.");
-      return;
-    }
+  const handleSaveDraft = async (): Promise<boolean> => {
+    const result = await saveGuard.runOnce(() => saveDraftInner());
+    return result === true;
+  };
+
+  const saveDraftInner = async (): Promise<boolean> => {
+    // Drafts do not deduct stock, so stock availability is not enforced here.
+    lastCheckStockRef.current = false;
+    const errs = validateInvoiceForm(
+      formData,
+      buildInvoiceValidationContext(false),
+    );
+    if (!validateAllFields(errs)) return false;
+
     const rawValidItems = formData.items.filter(
       (it) => it.productId || it.productName,
     );
-    if (rawValidItems.length === 0) {
-      toast.error("Please select at least one valid product.");
-      return;
-    }
-    const hasInvalidQty = rawValidItems.some(
-      (it) => !it.quantity || it.quantity <= 0,
-    );
-    if (hasInvalidQty) {
-      toast.error("All products must have a quantity greater than 0.");
-      return;
-    }
-    const hasInvalidPrice = rawValidItems.some(
-      (it) => it.unitPrice !== undefined && it.unitPrice < 0,
-    );
-    if (hasInvalidPrice) {
-      toast.error("Product unit prices cannot be negative.");
-      return;
-    }
-    const hasInvalidDiscount = rawValidItems.some(
-      (it) =>
-        it.discountPercent !== undefined &&
-        (it.discountPercent < 0 || it.discountPercent > 100),
-    );
-    if (hasInvalidDiscount) {
-      toast.error(
-        "Discounts cannot be negative and discount percentage cannot exceed 100%.",
-      );
-      return;
-    }
-    if (formData.overallDiscount !== undefined && formData.overallDiscount < 0) {
-      toast.error("Overall discount cannot be negative.");
-      return;
-    }
 
     setIsActionLoading(true);
     try {
-      const validItems: SaleProductItem[] = await Promise.all(
-        rawValidItems.map(async (it) => {
-          const validProdId = await ensureProductUUID(it);
-          return {
-            ...it,
-            productId: validProdId,
-          };
-        }),
-      );
+      const validItems: SaleProductItem[] = rawValidItems.map((it) => ({
+        ...it,
+        productId: resolveProductId(it) as string,
+      }));
 
       const resolvedCustomerId = ensureCustomerUUID(
         formData.customerId,
@@ -2978,7 +3340,7 @@ export const SalesView: React.FC = () => {
         } else {
           savedApiSale = {
             ...salePayload,
-            invoiceNo: formData.invoiceNo || `INV-${Date.now()}`,
+            invoiceNo: formData.invoiceNo || "",
           };
         }
       }
@@ -2989,10 +3351,13 @@ export const SalesView: React.FC = () => {
       toast.success(
         `Draft invoice ${savedApiSale.invoiceNo} saved successfully!`,
       );
+      resetFormErrors();
       await fetchSalesInvoices();
+      return true;
     } catch (err: any) {
       console.error("Failed to save draft invoice:", err);
-      toast.error(err?.message || "Failed to save draft invoice to server.");
+      handleInvoiceSaveError(err, "Failed to save the draft invoice. Please try again.");
+      return false;
     } finally {
       setIsActionLoading(false);
     }
@@ -3000,6 +3365,18 @@ export const SalesView: React.FC = () => {
 
   // Void / Cancel Invoice
   const handleCancelInvoice = async (sale: SaleTransaction) => {
+    await cancelGuard.runOnce(() => cancelInvoiceInner(sale));
+  };
+
+  const cancelInvoiceInner = async (sale: SaleTransaction) => {
+    if (!(sale?.id || "").trim()) {
+      toast.error("This invoice could not be identified. Please refresh the page and try again.");
+      return;
+    }
+    if (String(sale.saleStatus).toLowerCase() === "cancelled") {
+      toast.warning(`Invoice ${sale.invoiceNo} is already cancelled.`);
+      return;
+    }
     setIsActionLoading(true);
     try {
       const cleanId = (sale.id || "").trim();
@@ -3009,6 +3386,13 @@ export const SalesView: React.FC = () => {
         !cleanId.startsWith("local_")
       ) {
         await commerceInvoiceApi.updateStatus(cleanId, "Cancelled");
+        // The backend posts the stock movement for the cancelled invoice: refresh stock figures.
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Stock", id: "BATCHES" },
+            { type: "Stock", id: "LIST" },
+          ]),
+        );
       }
       const updatedSale: SaleTransaction = {
         ...sale,
@@ -3020,7 +3404,7 @@ export const SalesView: React.FC = () => {
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to cancel invoice:", err);
-      toast.error(err?.message || "Failed to cancel invoice.");
+      toast.error(getApiErrorMessage(err, "Failed to cancel the invoice. Please try again."));
     } finally {
       setIsActionLoading(false);
     }
@@ -3036,7 +3420,15 @@ export const SalesView: React.FC = () => {
   };
 
   const handleConfirmDeleteSale = async () => {
+    await deleteGuard.runOnce(() => confirmDeleteSaleInner());
+  };
+
+  const confirmDeleteSaleInner = async () => {
     if (!deleteTargetSale) return;
+    if (!(deleteTargetSale.id || "").trim()) {
+      setDeleteSaleError("This invoice could not be identified. Please refresh the page and try again.");
+      return;
+    }
     setIsDeletingSale(true);
     setDeleteSaleError(null);
     try {
@@ -3072,6 +3464,8 @@ export const SalesView: React.FC = () => {
           { type: "SalesInvoice", id: deleteTargetSale.id },
           { type: "SalesInvoice", id: "LIST" },
           { type: "Customer", id: "LIST" },
+          { type: "Stock", id: "BATCHES" },
+          { type: "Stock", id: "LIST" },
           "Dashboard",
           "Collection",
         ]),
@@ -3082,10 +3476,10 @@ export const SalesView: React.FC = () => {
       await fetchSalesInvoices();
     } catch (err: any) {
       console.error("Failed to delete invoice:", err);
-      const errMsg =
-        err?.response?.data?.error?.message ||
-        err?.message ||
-        "Failed to delete invoice.";
+      const errMsg = getApiErrorMessage(
+        err,
+        "Failed to delete the invoice. Please try again.",
+      );
       setDeleteSaleError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -3094,12 +3488,14 @@ export const SalesView: React.FC = () => {
   };
 
   // General Save Sale Form Handler (legacy support for form submit)
-  const handleSaveSale = (mode: "draft" | "confirm" | "print" | "new") => {
+  const handleSaveSale = async (mode: "draft" | "confirm" | "print" | "new") => {
     if (mode === "draft") {
-      handleSaveDraft();
+      await handleSaveDraft();
       return;
     }
-    handleGenerateInvoice();
+    // Only continue to print / new when validation passed and the invoice was actually saved.
+    const saved = await handleGenerateInvoice();
+    if (!saved) return;
     if (mode === "print") {
       setIsFormModalOpen(false);
       setIsInvoiceModalOpen(true);
@@ -3175,9 +3571,7 @@ export const SalesView: React.FC = () => {
 
       targetSale = {
         id: `sale_${Date.now()}`,
-        invoiceNo:
-          formData.invoiceNo ||
-          `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+        invoiceNo: formData.invoiceNo || "",
         invoiceStatus: "Generated",
         referenceNo: formData.referenceNo,
         saleDate: formData.saleDate,
@@ -3235,6 +3629,7 @@ export const SalesView: React.FC = () => {
     ]);
     setPaymentModalDate(new Date().toISOString().split("T")[0]);
     setRecordNotes("");
+    paymentFe.reset();
     setIsPaymentModalOpen(true);
   };
 
@@ -3263,6 +3658,8 @@ export const SalesView: React.FC = () => {
       toast.error("At least one payment method row is required.");
       return;
     }
+    // Row indices shift; errors are recomputed by useRevalidateAfterSubmit after a submit attempt.
+    paymentFe.clearGroup("payment");
     setPaymentModalSplits((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -3279,26 +3676,72 @@ export const SalesView: React.FC = () => {
   };
 
   // Confirm Payment: Records payment against the SAME invoice and updates payment status
+  // Validates the Add Payment modal. Keys: payment.{i}.amount, payment.{i}.method, paymentDate, payments
+  const validatePaymentModal = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    if (!selectedSale) return errs;
+    const balance =
+      selectedSale.balance !== undefined
+        ? selectedSale.balance
+        : Math.max(0, selectedSale.grandTotal - (selectedSale.paidAmount || 0));
+
+    if (String(selectedSale.saleStatus).toLowerCase() === "cancelled") {
+      errs.payments = "Payments cannot be recorded against a cancelled invoice.";
+      return errs;
+    }
+
+    let total = 0;
+    paymentModalSplits.forEach((p, i) => {
+      const n = parseNumericValue(p.amount);
+      if (n === null) {
+        if (String(p.amount ?? "").trim() !== "") {
+          errs[`payment.${i}.amount`] = "Payment amount must be a valid number.";
+        }
+        return;
+      }
+      if (n < 0) {
+        errs[`payment.${i}.amount`] = "Payment amount cannot be negative.";
+        return;
+      }
+      if (n > 0) {
+        total += n;
+        if (!String(p.method || "").trim()) {
+          errs[`payment.${i}.method`] = "Please select a payment mode.";
+        }
+      }
+    });
+
+    if (Object.keys(errs).length === 0) {
+      if (total <= 0) {
+        errs["payment.0.amount"] = "Please enter a payment amount greater than zero.";
+      } else {
+        const over = checkPaymentWithinBalance(total, balance);
+        if (over) errs["payment.0.amount"] = over;
+      }
+    }
+
+    const dateErr = checkRequiredDate(paymentModalDate, "payment date");
+    if (dateErr) errs.paymentDate = dateErr;
+    return errs;
+  };
+
+  useRevalidateAfterSubmit(
+    paymentFe,
+    () => validatePaymentModal(),
+    [selectedSale, paymentModalSplits, paymentModalDate],
+  );
+
   const handleConfirmPayment = async () => {
+    await paymentGuard.runOnce(() => confirmPaymentInner());
+  };
+
+  const confirmPaymentInner = async () => {
     if (!selectedSale) return;
+    if (!paymentFe.validateAll(validatePaymentModal())) return;
     const totalAllocated = paymentModalSplits.reduce(
       (acc, p) => acc + (Number(p.amount) || 0),
       0,
     );
-    if (totalAllocated <= 0) {
-      toast.error("Payment amount must be greater than zero.");
-      return;
-    }
-    const currentBalance =
-      selectedSale.balance !== undefined
-        ? selectedSale.balance
-        : Math.max(0, selectedSale.grandTotal - (selectedSale.paidAmount || 0));
-    if (totalAllocated > currentBalance + 0.01) {
-      toast.error(
-        `Total payment (₹${totalAllocated.toLocaleString("en-IN")}) cannot exceed balance due (₹${currentBalance.toLocaleString("en-IN")}).`,
-      );
-      return;
-    }
 
     const primaryMethod = paymentModalSplits[0]?.method || "Bank Transfer";
     const now = new Date();
@@ -3333,21 +3776,40 @@ export const SalesView: React.FC = () => {
           "Collection",
         ]),
       );
-    } catch (apiErr) {
+    } catch (apiErr: any) {
       console.warn("Backend payment recording notice:", apiErr);
+      // A saved invoice must not show a payment that the server did not record: keep the modal open
+      // with the entered values. Unsaved/local invoices keep the previous local-only behaviour.
+      if (UUID_REGEX.test(selectedSale.id)) {
+        const apiFieldErrs = extractApiFieldErrors(apiErr);
+        const mapped: FieldErrors = {};
+        Object.entries(apiFieldErrs).forEach(([k, v]) => {
+          if (/amount/i.test(k)) mapped["payment.0.amount"] = v;
+          else if (/date/i.test(k)) mapped.paymentDate = v;
+          else if (/type|method/i.test(k)) mapped["payment.0.method"] = v;
+        });
+        if (Object.keys(mapped).length > 0) {
+          setPaymentFormErrors(mapped);
+          requestAnimationFrame(() => focusField(Object.keys(mapped)[0]));
+        }
+        toast.error(
+          getApiErrorMessage(apiErr, "Failed to record the payment. Please try again."),
+        );
+        return;
+      }
     }
 
     // Generate individual payment receipt records for this payment transaction
     const newRecords: SalePaymentRecord[] = paymentModalSplits
       .filter((p) => Number(p.amount) > 0)
       .map((p) => ({
-        id: `PAY-${String(Math.floor(100000 + Math.random() * 900000))}`,
+        id: `local_pay_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
         invoiceNo: selectedSale.invoiceNo,
         paymentDate: paymentDateStr,
         paymentTime: timeStr,
         method: p.method,
         referenceNo:
-          p.referenceNo || `TXN${Math.floor(100000 + Math.random() * 900000)}`,
+          p.referenceNo || '',
         amount: Number(p.amount),
         status: "Paid",
         recordedBy: "Org Super Administrator",
@@ -3461,9 +3923,24 @@ export const SalesView: React.FC = () => {
     appliedSalesRep,
   ]);
 
+  // Submit-first validation for the two assign-rep forms.
+  const validateAssignRep = (repId: string, key: string): FieldErrors =>
+    repId ? {} : { [key]: "Please select a sales representative before saving." };
+  useRevalidateAfterSubmit(assignFe, () => validateAssignRep(assignRepId, "assignRepId"), [assignRepId]);
+  useRevalidateAfterSubmit(detailFe, () => validateAssignRep(detailRepId, "detailRepId"), [detailRepId]);
+  useEffect(() => {
+    assignFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAssignInvoiceModalOpen]);
+  useEffect(() => {
+    detailFe.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInvoiceModalOpen, selectedSale?.id]);
+
   // Open Quick Assign Modal from Table Row Action
   const handleOpenAssignInvoiceModal = (sale: SaleTransaction) => {
     setAssignInvoiceTarget(sale);
+    assignFe.reset();
     const cust = customers.find((c) => c.id === sale.customerId);
     setAssignRepId(
       cust?.salesRepresentativeId || sale.salesRepresentativeId || "",
@@ -3476,10 +3953,7 @@ export const SalesView: React.FC = () => {
   // Save Quick Assignment
   const handleSaveQuickAssignInvoice = () => {
     if (!assignInvoiceTarget) return;
-    if (!assignRepId) {
-      toast.error("Please select a sales representative");
-      return;
-    }
+    if (!assignFe.validateAll(validateAssignRep(assignRepId, "assignRepId"))) return;
     const cust = customers.find((c) => c.id === assignInvoiceTarget.customerId);
     if (assignInvoiceTarget.customerId) {
       assignCustomerSalesRep(assignInvoiceTarget.customerId, assignRepId);
@@ -3499,10 +3973,7 @@ export const SalesView: React.FC = () => {
   // Save Assignment from Invoice Details Modal Card
   const handleSaveDetailAssignment = () => {
     if (!selectedSale) return;
-    if (!detailRepId) {
-      toast.error("Please select a sales representative");
-      return;
-    }
+    if (!detailFe.validateAll(validateAssignRep(detailRepId, "detailRepId"))) return;
     const cust = customers.find((c) => c.id === selectedSale.customerId);
     if (selectedSale.customerId) {
       assignCustomerSalesRep(selectedSale.customerId, detailRepId);
@@ -3909,9 +4380,11 @@ export const SalesView: React.FC = () => {
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                     Customer / Client <span className="text-slate-500">*</span>
                   </label>
+                  <div {...fieldAttr("customer")}>
                   <CustomerSearchableSelect
                     value={formData.customerId}
                     onChange={(val, cust) => {
+                      clearFormError("customer");
                       handleCustomerChange(val);
                       if (cust) {
                         setFormData((prev) => ({
@@ -3938,6 +4411,8 @@ export const SalesView: React.FC = () => {
                       setIsAddCustomerModalOpen(true);
                     }}
                   />
+                  </div>
+                  <FormError message={formErrors.customer} />
                 </div>
 
                 {/* Row 1, Col 2: Customer Name */}
@@ -3948,12 +4423,13 @@ export const SalesView: React.FC = () => {
                   <input
                     type="text"
                     value={formData.customerName}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      clearFormError("customer");
                       setFormData((prev) => ({
                         ...prev,
                         customerName: e.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     required
                     placeholder="Customer Name"
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
@@ -3963,19 +4439,13 @@ export const SalesView: React.FC = () => {
                 {/* Row 1, Col 3: Quotation Number / Sale Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Quotation Number <span className="text-slate-500">*</span>
+                    Quotation Number
                   </label>
                   <input
                     type="text"
-                    value={formData.invoiceNo}
-                    onChange={(e) =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        invoiceNo: e.target.value,
-                      }))
-                    }
-                    required
-                    placeholder="EST-14168"
+                    value={editingSale ? formData.invoiceNo : ""}
+                    readOnly
+                    placeholder="Auto-generated on save"
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
                 </div>
@@ -3983,7 +4453,7 @@ export const SalesView: React.FC = () => {
                 {/* Row 2, Col 1: Reference Number */}
                 <div>
                   <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                    Reference Number <span className="text-slate-500">*</span>
+                    Reference Number (Optional)
                   </label>
                   <input
                     type="text"
@@ -3994,8 +4464,7 @@ export const SalesView: React.FC = () => {
                         referenceNo: e.target.value,
                       }))
                     }
-                    required
-                    placeholder="REF-7122"
+                    placeholder="Optional"
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
                 </div>
@@ -4010,8 +4479,11 @@ export const SalesView: React.FC = () => {
                       type="text"
                       placeholder="dd/mm/yyyy"
                       value={isoToDdmmyyyy(formData.saleDate)}
+                      {...fieldAttr("saleDate")}
                       onChange={(e) => {
                         const iso = ddmmyyyyToIso(e.target.value);
+                        clearFormError("saleDate");
+                        clearFormError("dueDate");
                         setFormData((prev) => ({
                           ...prev,
                           saleDate: iso || e.target.value,
@@ -4027,6 +4499,8 @@ export const SalesView: React.FC = () => {
                         value={formData.saleDate}
                         onChange={(e) => {
                           if (e.target.value) {
+                            clearFormError("saleDate");
+                            clearFormError("dueDate");
                             setFormData((prev) => ({
                               ...prev,
                               saleDate: e.target.value,
@@ -4037,6 +4511,7 @@ export const SalesView: React.FC = () => {
                       />
                     </label>
                   </div>
+                  <FormError message={formErrors.saleDate} />
                 </div>
 
                 {/* Row 2, Col 3: Expiry Date */}
@@ -4049,8 +4524,10 @@ export const SalesView: React.FC = () => {
                       type="text"
                       placeholder="dd/mm/yyyy"
                       value={isoToDdmmyyyy(formData.dueDate)}
+                      {...fieldAttr("dueDate")}
                       onChange={(e) => {
                         const iso = ddmmyyyyToIso(e.target.value);
+                        clearFormError("dueDate");
                         setFormData((prev) => ({
                           ...prev,
                           dueDate: iso || e.target.value,
@@ -4066,6 +4543,7 @@ export const SalesView: React.FC = () => {
                         value={formData.dueDate}
                         onChange={(e) => {
                           if (e.target.value) {
+                            clearFormError("dueDate");
                             setFormData((prev) => ({
                               ...prev,
                               dueDate: e.target.value,
@@ -4076,6 +4554,7 @@ export const SalesView: React.FC = () => {
                       />
                     </label>
                   </div>
+                  <FormError message={formErrors.dueDate} />
                 </div>
 
                 {/* Row 3, Col 1: Email Communications */}
@@ -4400,6 +4879,7 @@ export const SalesView: React.FC = () => {
                                       type="text"
                                       placeholder="Type or select product item..."
                                       value={item.productName || ""}
+                                      {...fieldAttr(`items.${idx}.product`)}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setOpenProductDropdownRow(idx);
@@ -4641,6 +5121,7 @@ export const SalesView: React.FC = () => {
                                       </div>
                                     </div>
                                   )}
+                                  <FormError message={formErrors[`items.${idx}.product`]} />
                                 </div>
                               </td>
 
@@ -4660,9 +5141,15 @@ export const SalesView: React.FC = () => {
                                   const prod = availableProducts.find(
                                     (p) => p.id === item.productId,
                                   );
-                                  const batches = prod?.batches || [];
+                                  // Batches of THIS product from the backend stock; the local product
+                                  // list is only a fallback until the stock has loaded.
+                                  const stockBatches = getStockBatches(item.productId);
+                                  const batches: any[] =
+                                    stockBatches.length > 0 ? stockBatches : prod?.batches || [];
                                   if (batches.length > 0) {
+                                    const batchAvail = getBatchAvailable(item.productId, item.batch);
                                     return (
+                                      <>
                                       <SearchableSelect
                                         value={item.batch || ""}
                                         onChange={(val) =>
@@ -4679,6 +5166,12 @@ export const SalesView: React.FC = () => {
                                         size="md"
                                         triggerClassName="bg-purple-50/60 hover:bg-purple-50 text-[#33077C] font-bold border-purple-200 hover:border-purple-300"
                                       />
+                                      {batchAvail !== null && (
+                                        <p className="mt-1 text-[10px] font-semibold text-slate-500 text-center">
+                                          {batchAvail} in stock
+                                        </p>
+                                      )}
+                                      </>
                                     );
                                   }
                                   return (
@@ -4708,6 +5201,7 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="1"
                                   value={item.quantity}
+                                  {...fieldAttr(`items.${idx}.quantity`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
@@ -4716,8 +5210,9 @@ export const SalesView: React.FC = () => {
                                       Number(e.target.value),
                                     )
                                   }
-                                  className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                                  className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${(formErrors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]) ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
+                                <FormError message={formErrors[`items.${idx}.quantity`] || liveStockErrors[`items.${idx}.quantity`]} />
                               </td>
 
                               {/* 3. GST (%) */}
@@ -4728,6 +5223,7 @@ export const SalesView: React.FC = () => {
                                   max="100"
                                   disabled={!formData.withGst}
                                   value={formData.withGst ? item.taxPercent : 0}
+                                  {...fieldAttr(`items.${idx}.taxPercent`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
@@ -4742,6 +5238,7 @@ export const SalesView: React.FC = () => {
                                       : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed"
                                   }`}
                                 />
+                                <FormError message={formErrors[`items.${idx}.taxPercent`]} />
                               </td>
 
                               {/* 4. PRICE */}
@@ -4750,6 +5247,7 @@ export const SalesView: React.FC = () => {
                                   type="number"
                                   min="0"
                                   value={item.unitPrice}
+                                  {...fieldAttr(`items.${idx}.price`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
@@ -4758,8 +5256,9 @@ export const SalesView: React.FC = () => {
                                       Number(e.target.value),
                                     )
                                   }
-                                  className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-bold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                                  className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-bold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.price`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
+                                <FormError message={formErrors[`items.${idx}.price`]} />
                               </td>
 
                               {/* 5. DISCOUNT (%) */}
@@ -4769,6 +5268,7 @@ export const SalesView: React.FC = () => {
                                   min="0"
                                   max="100"
                                   value={item.discountPercent === 0 ? "" : (item.discountPercent || "")}
+                                  {...fieldAttr(`items.${idx}.discountPercent`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
@@ -4778,8 +5278,9 @@ export const SalesView: React.FC = () => {
                                     )
                                   }
                                   placeholder="0"
-                                  className="w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                                  className={`w-full h-10 px-1 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.discountPercent`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
+                                <FormError message={formErrors[`items.${idx}.discountPercent`]} />
                               </td>
 
                               {/* 6. DISCOUNT (AMOUNT) */}
@@ -4789,6 +5290,7 @@ export const SalesView: React.FC = () => {
                                   min="0"
                                   step="any"
                                   value={item.discountAmount === 0 ? "" : (item.discountAmount || "")}
+                                  {...fieldAttr(`items.${idx}.discountAmount`)}
                                   onKeyDown={handleNonNegativeKeyDown}
                                   onChange={(e) =>
                                     handleItemFieldChange(
@@ -4798,8 +5300,9 @@ export const SalesView: React.FC = () => {
                                     )
                                   }
                                   placeholder="0.00"
-                                  className="w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all"
+                                  className={`w-full h-10 px-2 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] rounded-xl text-xs font-semibold text-center text-slate-800 focus:ring-3 focus:ring-[#4309A2]/10 outline-none shadow-2xs transition-all ${formErrors[`items.${idx}.discountAmount`] ? FORM_ERROR_INPUT_CLS : ""}`}
                                 />
+                                <FormError message={formErrors[`items.${idx}.discountAmount`]} />
                               </td>
 
                               {/* 6. TOTAL */}
@@ -4846,6 +5349,9 @@ export const SalesView: React.FC = () => {
                     <Plus className="w-4 h-4 stroke-[2.5]" />
                     <span>Add Item</span>
                   </button>
+                  <div {...fieldAttr("items")}>
+                    <FormError message={formErrors.items} />
+                  </div>
                 </div>
               </div>
 
@@ -5016,8 +5522,11 @@ export const SalesView: React.FC = () => {
                             inputMode="decimal"
                             value={formData.shippingCharges === 0 ? "" : formData.shippingCharges}
                             placeholder="0"
+                            {...fieldAttr("shippingCharges")}
                             onKeyDown={handleNonNegativeKeyDown}
                             onChange={(e) => {
+                              clearFormError("shippingCharges");
+                              clearFormError("totals");
                               const raw = e.target.value.replace(/[^0-9.]/g, "");
                               if (raw === "") {
                                 setFormData((prev) => ({ ...prev, shippingCharges: 0 }));
@@ -5033,6 +5542,7 @@ export const SalesView: React.FC = () => {
                           />
                         </div>
                       </div>
+                      <FormError message={formErrors.shippingCharges} className="justify-end" />
 
                       {/* 3. Rounding Adjustment */}
                       <div className="pt-3 border-t border-slate-100 space-y-2">
@@ -5134,6 +5644,9 @@ export const SalesView: React.FC = () => {
                           })}
                         </span>
                       </div>
+                      <div {...fieldAttr("totals")}>
+                        <FormError message={formErrors.totals} />
+                      </div>
 
                       {/* 5. Paid Amount & Balance Due */}
                       <div className="pt-2 border-t border-slate-100 space-y-3">
@@ -5151,8 +5664,12 @@ export const SalesView: React.FC = () => {
                               inputMode="decimal"
                               value={formData.paidAmount === 0 ? "" : formData.paidAmount}
                               placeholder="0"
+                              {...fieldAttr("paidAmount")}
                               onKeyDown={handleNonNegativeKeyDown}
                               onChange={(e) => {
+                                clearFormError("paidAmount");
+                                clearFormError("paymentMethod");
+                                clearFormError("totals");
                                 const raw = e.target.value.replace(/[^0-9.]/g, "");
                                 if (raw === "") {
                                   setFormData((prev) => ({
@@ -5182,12 +5699,7 @@ export const SalesView: React.FC = () => {
                                 if (isNaN(newAmount) || newAmount < 0) {
                                   newAmount = 0;
                                 }
-                                if (newAmount > calculatedTotals.grandTotal) {
-                                  newAmount = calculatedTotals.grandTotal;
-                                  toast.warning(
-                                    `Paid amount cannot exceed Grand Total of ₹${calculatedTotals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
-                                  );
-                                }
+                                // Over-payment is reported inline on submit (no clamping / toast).
                                 setFormData((prev) => ({
                                   ...prev,
                                   paidAmount: cleanDecimals.endsWith(".") ? (cleanDecimals as any) : newAmount,
@@ -5206,7 +5718,8 @@ export const SalesView: React.FC = () => {
                               }}
                               onBlur={() => {
                                 const num = Math.max(0, parseFloat(String(formData.paidAmount)) || 0);
-                                const clamped = Math.min(calculatedTotals.grandTotal, num);
+                                // Normalise only; over-payment is reported inline on submit.
+                                const clamped = num;
                                 setFormData((prev) => ({
                                   ...prev,
                                   paidAmount: clamped,
@@ -5227,6 +5740,7 @@ export const SalesView: React.FC = () => {
                             />
                           </div>
                         </div>
+                        <FormError message={formErrors.paidAmount || formErrors.paymentMethod} className="justify-end" />
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
                           <span className="font-bold text-slate-800">Total Balance:</span>
@@ -5288,8 +5802,7 @@ export const SalesView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={isActionLoading}
-                    onClick={handleGenerateInvoice}
+                    disabled={isActionLoading || saveGuard.isSubmitting}
                     className="h-11 px-6 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     {isActionLoading ? (
@@ -5601,12 +6114,12 @@ export const SalesView: React.FC = () => {
               <div className="mt-3">
                 <div className="text-xl font-bold text-slate-900">
                   ₹
-                  {summary.totalSalesAmount.toLocaleString("en-IN", {
+                  {cardSummary.totalSalesAmount.toLocaleString("en-IN", {
                     minimumFractionDigits: 2,
                   })}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
-                  {summary.totalCount} total orders
+                  {cardSummary.totalCount} total orders
                 </div>
               </div>
             </div>
@@ -5624,12 +6137,12 @@ export const SalesView: React.FC = () => {
               <div className="mt-3">
                 <div className="text-xl font-bold text-slate-900">
                   ₹
-                  {summary.todayAmount.toLocaleString("en-IN", {
+                  {cardSummary.todayAmount.toLocaleString("en-IN", {
                     minimumFractionDigits: 2,
                   })}
                 </div>
                 <div className="text-xs text-emerald-600 font-medium mt-0.5">
-                  {summary.todayCount} generated today
+                  {cardSummary.todayCount} generated today
                 </div>
               </div>
             </div>
@@ -5647,7 +6160,7 @@ export const SalesView: React.FC = () => {
               <div className="mt-3">
                 <div className="text-xl font-bold text-amber-600">
                   ₹
-                  {summary.pendingPaymentsAmount.toLocaleString("en-IN", {
+                  {cardSummary.pendingPaymentsAmount.toLocaleString("en-IN", {
                     minimumFractionDigits: 2,
                   })}
                 </div>
@@ -5669,7 +6182,7 @@ export const SalesView: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-xl font-bold text-slate-900">
-                  {summary.completedCount}
+                  {cardSummary.completedCount}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   Delivered & finalized
@@ -5689,7 +6202,7 @@ export const SalesView: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-xl font-bold text-slate-900">
-                  {summary.cancelledCount}
+                  {cardSummary.cancelledCount}
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   Voided transactions
@@ -6214,11 +6727,10 @@ export const SalesView: React.FC = () => {
                                     label: "Duplicate",
                                     variant: "duplicate",
                                     onClick: () => {
-                                      const newInvoiceNo = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
                                       const duplicatedSale: SaleTransaction = {
                                         ...sale,
                                         id: `sale_${Date.now()}`,
-                                        invoiceNo: newInvoiceNo,
+                                        invoiceNo: "",
                                         saleDate: new Date()
                                           .toISOString()
                                           .split("T")[0],
@@ -6233,7 +6745,7 @@ export const SalesView: React.FC = () => {
                                       };
                                       saveSale(duplicatedSale);
                                       toast.success(
-                                        `Duplicated ${sale.invoiceNo} as new Invoice ${newInvoiceNo}!`,
+                                        `Duplicated ${sale.invoiceNo} as a new draft invoice!`,
                                       );
                                     },
                                   },
@@ -7034,7 +7546,10 @@ export const SalesView: React.FC = () => {
                   </label>
                   <select
                     value={detailRepId}
-                    onChange={(e) => setDetailRepId(e.target.value)}
+                    {...fieldAttr("detailRepId")}
+                    onChange={(e) => {
+                      setDetailRepId(e.target.value);
+                    }}
                     className="w-full h-10 px-3 bg-white rounded-xl border border-slate-200 font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-[#33077C]/20 focus:border-[#33077C] outline-none"
                   >
                     <option value="">-- Select Sales Rep --</option>
@@ -7044,6 +7559,7 @@ export const SalesView: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  <FormError message={detailRepError} />
                 </div>
 
                 {/* Outstanding Amount */}
@@ -7173,7 +7689,10 @@ export const SalesView: React.FC = () => {
               <FormLabel required>Sales Representative</FormLabel>
               <select
                 value={assignRepId}
-                onChange={(e) => setAssignRepId(e.target.value)}
+                {...fieldAttr("assignRepId")}
+                onChange={(e) => {
+                  setAssignRepId(e.target.value);
+                }}
                 className={FORM_SELECT_CLS}
               >
                 <option value="">-- Select Sales Representative --</option>
@@ -7183,6 +7702,7 @@ export const SalesView: React.FC = () => {
                   </option>
                 ))}
               </select>
+              <FormError message={assignRepError} />
             </div>
 
             {/* Collection Status */}
@@ -7226,7 +7746,6 @@ export const SalesView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                onClick={handleSaveQuickAssignInvoice}
                 className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center gap-1.5"
               >
                 <Check className="w-4 h-4 stroke-[2.5]" />
@@ -7308,6 +7827,7 @@ export const SalesView: React.FC = () => {
                         {/* Method Select */}
                         <div className="w-full sm:w-40 shrink-0">
                           <select
+                            {...fieldAttr(`payment.${sIdx}.method`)}
                             value={split.method}
                             onChange={(e) =>
                               handlePaymentModalSplitChange(
@@ -7325,6 +7845,7 @@ export const SalesView: React.FC = () => {
                             <option value="Cheque">Cheque</option>
                             <option value="Online Payment">Online Payment</option>
                           </select>
+                          <FormError message={paymentFormErrors[`payment.${sIdx}.method`]} />
                         </div>
 
                         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -7336,6 +7857,7 @@ export const SalesView: React.FC = () => {
                             <input
                               type="number"
                               min="0"
+                              {...fieldAttr(`payment.${sIdx}.amount`)}
                               value={split.amount || ""}
                               onChange={(e) =>
                                 handlePaymentModalSplitChange(
@@ -7382,6 +7904,13 @@ export const SalesView: React.FC = () => {
                         </div>
                       </div>
                     ))}
+                    {paymentModalSplits.map((split, sIdx) => (
+                      <FormError
+                        key={`amt_err_${split.id || sIdx}`}
+                        message={paymentFormErrors[`payment.${sIdx}.amount`]}
+                      />
+                    ))}
+                    <FormError message={paymentFormErrors.payments} />
                   </div>
                 </div>
 
@@ -7394,6 +7923,7 @@ export const SalesView: React.FC = () => {
                         type="text"
                         placeholder="dd/mm/yyyy"
                         value={isoToDdmmyyyy(paymentModalDate)}
+                        {...fieldAttr("paymentDate")}
                         onChange={(e) => {
                           const iso = ddmmyyyyToIso(e.target.value);
                           setPaymentModalDate(iso || e.target.value);
@@ -7407,13 +7937,15 @@ export const SalesView: React.FC = () => {
                           type="date"
                           value={paymentModalDate}
                           onChange={(e) => {
-                            if (e.target.value)
+                            if (e.target.value) {
                               setPaymentModalDate(e.target.value);
+                            }
                           }}
                           className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                         />
                       </label>
                     </div>
+                    <FormError message={paymentFormErrors.paymentDate} />
                   </div>
 
                   <div>
@@ -7646,7 +8178,7 @@ export const SalesView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                onClick={handleConfirmPayment}
+                disabled={paymentGuard.isSubmitting}
                 className="h-10 px-6 rounded-lg bg-[#33077C] hover:bg-[#4309A2] text-white text-xs sm:text-[13px] font-bold shadow-md shadow-[#33077C]/20 hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <Check className="w-4 h-4 stroke-[2.5]" />

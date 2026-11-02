@@ -136,11 +136,22 @@ export interface SaleOrderFilterParams {
 /**
  * Response for GET /commerce/orders
  */
+export interface SaleOrderSummary {
+  totalCount: number;
+  totalAmount: number;
+  openCount: number;
+  openAmount: number;
+  convertedCount: number;
+  convertedAmount: number;
+  cancelledCount: number;
+}
+
 export interface SaleOrderListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiSaleOrder[];
+  summary?: SaleOrderSummary;
   pagination?: SaleOrderPagination;
   meta?: {
     timestamp: string;

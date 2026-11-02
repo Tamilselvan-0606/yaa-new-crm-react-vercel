@@ -137,11 +137,23 @@ export interface DeliveryChallanFilterParams {
 /**
  * Response for GET /commerce/challans
  */
+export interface DeliveryChallanSummary {
+  totalCount: number;
+  totalAmount: number;
+  openCount: number;
+  openAmount: number;
+  convertedCount: number;
+  convertedAmount: number;
+  cancelledCount: number;
+  deliveredCount?: number;
+}
+
 export interface DeliveryChallanListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiDeliveryChallan[];
+  summary?: DeliveryChallanSummary;
   pagination?: DeliveryChallanPagination;
   meta?: {
     timestamp: string;

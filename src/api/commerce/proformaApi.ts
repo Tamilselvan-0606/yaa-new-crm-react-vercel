@@ -146,7 +146,7 @@ export const mapApiProformaToSaleProforma = (apiP: ApiProformaInvoice): SaleProf
 
   return {
     id: apiP.id,
-    proformaNo: apiP.proformaNo || (apiP as any).proformaNumber || (apiP as any).proformaCode || (apiP as any).code || (apiP as any).documentNo || 'PRO-2026-0001',
+    proformaNo: apiP.proformaNo || (apiP as any).proformaNumber || (apiP as any).proformaCode || (apiP as any).code || (apiP as any).documentNo || '',
     referenceNo: apiP.referenceNo || '',
     date: dateFormatted,
     validUntil: validUntilFormatted,

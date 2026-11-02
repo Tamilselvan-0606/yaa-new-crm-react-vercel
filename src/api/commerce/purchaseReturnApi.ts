@@ -73,7 +73,7 @@ export const mapApiPurchaseReturnToUi = (
 
   return {
     id: apiRet.id,
-    returnNo: apiRet.returnNo || `PRN-${Date.now()}`,
+    returnNo: apiRet.returnNo || '',
     purchaseId: apiRet.purchaseId || '',
     purchaseNo: apiRet.purchaseNo || '',
     supplierId: apiRet.supplierId || '',

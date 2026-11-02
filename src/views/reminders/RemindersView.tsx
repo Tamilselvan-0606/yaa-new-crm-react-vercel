@@ -12,7 +12,6 @@ import {
   Repeat,
   CheckSquare,
   CheckCheck,
-  Calendar,
   AlertTriangle,
   RotateCcw,
 } from 'lucide-react';
@@ -54,9 +53,9 @@ export const RemindersView: React.FC = () => {
   const handleMarkAllRead = async () => {
     try {
       setIsMarkingAll(true);
+      // markAllRemindersRead() already shows the success toast; do not add a second one here.
       await markAllRemindersRead();
       await refreshReminders(notificationType);
-      showToast?.('success', 'All Marked as Read', 'All notifications have been marked as read');
     } catch (e: any) {
       showToast?.('error', 'Failed to mark read', e.message || 'An error occurred');
     } finally {
@@ -67,9 +66,10 @@ export const RemindersView: React.FC = () => {
   const handleResolveReminder = async (id: string) => {
     try {
       setMarkingId(id);
+      // markReminderCompleted() shows its own success / failure toast (and does not throw on failure),
+      // so no extra success toast here: it would duplicate the message and also appear after a failure.
       await markReminderCompleted(id);
       await refreshReminders(notificationType);
-      showToast?.('success', 'Marked as Read', 'The notification has been marked as read');
     } catch (e: any) {
       showToast?.('error', 'Failed to resolve', e.message || 'An error occurred');
     } finally {
@@ -97,11 +97,26 @@ export const RemindersView: React.FC = () => {
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
       case 'Urgent':
-        return <Badge variant="danger" size="sm">Urgent</Badge>;
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-rose-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+            <span>Urgent</span>
+          </span>
+        );
       case 'High':
-        return <Badge variant="accent" size="sm">High Priority</Badge>;
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-amber-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+            <span>High Priority</span>
+          </span>
+        );
       default:
-        return <Badge variant="neutral" size="sm">Normal</Badge>;
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-slate-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
+            <span>Normal</span>
+          </span>
+        );
     }
   };
 
@@ -239,7 +254,7 @@ export const RemindersView: React.FC = () => {
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">PRIORITY</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">DATE & TIME</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center w-[150px] whitespace-nowrap">ACTIONS</th>
               </tr>
             </thead>
             <tbody className="text-sm">
@@ -285,10 +300,11 @@ export const RemindersView: React.FC = () => {
                       </td>
 
                       {/* 2. CATEGORY */}
-                      <td className="py-4 px-4 border border-slate-200 text-center">
-                        <Badge variant="purple" size="sm">
-                          {rem.category || rem.type}
-                        </Badge>
+                      <td className="py-4 px-4 border border-slate-200 text-center whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-purple-700">
+                          <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0" />
+                          <span>{rem.category || rem.type}</span>
+                        </span>
                       </td>
 
                       {/* 3. PRIORITY */}
@@ -297,11 +313,10 @@ export const RemindersView: React.FC = () => {
                       </td>
 
                       {/* 4. DUE DATE */}
-                      <td className="py-4 px-5 border border-slate-200 text-center">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{formatDateTimeAmPm(rem.dueDate)}</span>
-                        </div>
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
+                        <span className="text-slate-700 font-medium text-xs sm:text-[13px]">
+                          {formatDateTimeAmPm(rem.dueDate)}
+                        </span>
                       </td>
 
                       {/* 5. STATUS */}
@@ -318,9 +333,9 @@ export const RemindersView: React.FC = () => {
                       </td>
 
                       {/* 6. ACTIONS */}
-                      <td className="py-4 px-5 border border-slate-200 text-center">
+                      <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap w-[150px]">
                         {isResolved ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 whitespace-nowrap">
                             <CheckCircle2 className="w-4 h-4" />
                             Read
                           </span>
@@ -328,10 +343,10 @@ export const RemindersView: React.FC = () => {
                           <button
                             onClick={() => handleResolveReminder(rem.id)}
                             disabled={markingId === rem.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#33077C] hover:bg-[#4309A2] active:scale-[0.98] text-white text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#33077C] hover:bg-[#4309A2] active:scale-[0.98] text-white text-xs font-semibold rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>{markingId === rem.id ? 'Marking...' : 'Mark as Read'}</span>
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span className="whitespace-nowrap">{markingId === rem.id ? 'Marking...' : 'Mark as Read'}</span>
                           </button>
                         )}
                       </td>

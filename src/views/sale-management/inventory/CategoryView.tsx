@@ -36,6 +36,7 @@ import {
   ApiCategory,
 } from '../../../api/commerce/categoryApi';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUtils';
+import { useSubmitGuard, extractApiFieldErrors, getApiErrorMessage, checkRequiredSelection } from '../../../utils/formValidation';
 
 export type CategoryItem = CategoryItemModel;
 
@@ -97,9 +98,11 @@ export const CategoryView: React.FC = () => {
     reset,
     setValue,
     watch,
-    formState: { errors },
+    setError,
+    formState: { errors, isSubmitted },
   } = useForm<CategoryFormValues>({
-    mode: 'onChange',
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       categoryName: '',
       status: 'Active',
@@ -107,6 +110,14 @@ export const CategoryView: React.FC = () => {
   });
 
   const watchStatus = watch('status');
+
+  // Clear any errors when the modal closes so the next opening starts clean
+  useEffect(() => {
+    if (!isModalOpen) reset({ categoryName: '', status: 'Active' });
+  }, [isModalOpen, reset]);
+  const saveGuard = useSubmitGuard();
+  const toggleGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
   const handleTextOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -286,7 +297,7 @@ export const CategoryView: React.FC = () => {
     setSelectedCategoryDetail({
       id: cat.id,
       organizationId: '',
-      code: cat.code || `CAT-${cat.sNo.toString().padStart(4, '0')}`,
+      code: cat.code || '',
       categoryName: cat.categoryName,
       name: cat.categoryName,
       description: cat.description || null,
@@ -299,13 +310,21 @@ export const CategoryView: React.FC = () => {
   };
 
   // Save / Update Category (Calls POST or PUT only once button is clicked)
-  const handleSaveCategory = async (data: CategoryFormValues) => {
-    if (!data.categoryName.trim()) {
-      toast.error('Category name is required.');
+  const handleSaveCategory = (data: CategoryFormValues) => saveGuard.runOnce(async () => {
+    const nameTrimmed = (data.categoryName || '').trim();
+    if (!nameTrimmed) {
+      setError('categoryName', { type: 'manual', message: 'Please enter the category name.' });
       return;
     }
+    if (editingCategory) {
+      const idErr = checkRequiredSelection(editingCategory.id, 'category');
+      if (idErr) {
+        setError('root', { type: 'manual', message: 'This category could not be identified. Please close and reopen it.' });
+        return;
+      }
+    }
 
-    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    const finalStatus = data.status;
     setIsSubmitting(true);
 
     try {
@@ -326,8 +345,12 @@ export const CategoryView: React.FC = () => {
           }
         } catch (apiErr: any) {
           console.error('Remote category update failed:', apiErr);
-          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to update category.';
-          toast.error(errMsg);
+          const fe = extractApiFieldErrors(apiErr);
+          if (fe.categoryName || fe.name) {
+            setError('categoryName', { type: 'server', message: (fe.categoryName || fe.name) });
+          } else {
+            toast.error(getApiErrorMessage(apiErr, 'Failed to update category.'));
+          }
           return;
         }
       } else {
@@ -348,21 +371,30 @@ export const CategoryView: React.FC = () => {
           }
         } catch (apiErr: any) {
           console.error('Remote category create failed:', apiErr);
-          const errMsg = apiErr?.response?.data?.error?.message || apiErr?.response?.data?.message || apiErr?.message || 'Failed to create category.';
-          toast.error(errMsg);
+          const fe = extractApiFieldErrors(apiErr);
+          if (fe.categoryName || fe.name) {
+            setError('categoryName', { type: 'server', message: (fe.categoryName || fe.name) });
+          } else {
+            toast.error(getApiErrorMessage(apiErr, 'Failed to create category.'));
+          }
           return;
         }
       }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   // Toggle Category Status (PATCH /commerce/categories/:id)
-  const handleToggleStatus = async (item: CategoryItem) => {
+  const handleToggleStatus = (item: CategoryItem) => toggleGuard.runOnce(async () => {
     const nextStatus = item.status === 'Active' ? 'Inactive' : 'Active';
     setActiveDropdownId(null);
     setDropdownPos(null);
+
+    if (checkRequiredSelection(item?.id, 'category')) {
+      toast.error('This category could not be identified. Please refresh and try again.');
+      return;
+    }
 
     try {
       const res = await categoryApi.patchCategory(item.id, { status: nextStatus });
@@ -374,11 +406,10 @@ export const CategoryView: React.FC = () => {
       }
     } catch (apiErr: any) {
       console.warn('Remote status patch failed:', apiErr);
-      const errMsg = apiErr?.response?.data?.error?.message || apiErr?.message || 'Failed to update category status.';
-      toast.error(errMsg);
+      toast.error(getApiErrorMessage(apiErr, 'Failed to update category status.'));
       return;
     }
-  };
+  });
 
   // Open Delete Confirmation Modal
   const handleDeleteCategory = (item: CategoryItem) => {
@@ -389,9 +420,13 @@ export const CategoryView: React.FC = () => {
   };
 
   // Confirm and Execute Delete (DELETE /commerce/categories/:id)
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = () => deleteGuard.runOnce(async () => {
     if (!deleteConfirmItem) return;
     const { id, categoryName } = deleteConfirmItem;
+    if (checkRequiredSelection(id, 'category')) {
+      setDeleteError('This category could not be identified. Please refresh and try again.');
+      return;
+    }
     setIsDeleting(true);
     setDeleteError(null);
 
@@ -412,13 +447,13 @@ export const CategoryView: React.FC = () => {
       }
     } catch (apiErr: any) {
       console.warn('Remote category delete failed:', apiErr);
-      const errorMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to delete category. Please try again.';
+      const errorMsg = getApiErrorMessage(apiErr, 'Failed to delete category. Please try again.');
       setDeleteError(errorMsg);
       toast.error(errorMsg);
     } finally {
       setIsDeleting(false);
     }
-  };
+  });
 
   // Export to Excel
   const handleExport = () => {
@@ -430,7 +465,7 @@ export const CategoryView: React.FC = () => {
 
     const excelRows = dataToExport.map((c, idx) => ({
       sNo: idx + 1,
-      code: c.code || `CAT-${(idx + 1).toString().padStart(4, '0')}`,
+      code: c.code || '',
       categoryName: c.categoryName,
       status: c.status,
     }));
@@ -806,10 +841,9 @@ export const CategoryView: React.FC = () => {
                   type="text"
                   disabled={isSubmitting}
                   {...register('categoryName', {
-                    required: 'Category name is required',
-                    minLength: { value: 2, message: 'Category name must be at least 2 characters' },
+                    required: 'Please enter the category name.',
                     validate: (val) =>
-                      /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                      val.trim().length >= 2 || 'The category name must be at least 2 characters.',
                   })}
                   onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
@@ -834,12 +868,19 @@ export const CategoryView: React.FC = () => {
                     { label: 'Inactive', value: 'Inactive' },
                   ]}
                   value={watchStatus || 'Active'}
-                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+                  onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: isSubmitted })}
                   placeholder="Select status"
                   activeColor="brand"
                 />
               </div>
             </div>
+
+            {errors.root && (
+              <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{errors.root.message}</span>
+              </p>
+            )}
 
             <div className="pt-3 flex justify-end items-center gap-3 border-t border-slate-100">
               <button
@@ -949,7 +990,10 @@ export const CategoryView: React.FC = () => {
                           key={sub.id || idx}
                           className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between text-xs"
                         >
-                          <span className="font-semibold text-slate-800">{sub.subcategory || sub.name}</span>
+                          <span className="font-semibold text-slate-800">
+                            {sub.code && <span className="font-mono text-[10px] text-slate-500 mr-2">{sub.code}</span>}
+                            {sub.subcategory || sub.name}
+                          </span>
                           <span
                             className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                               sub.status === 'Active'

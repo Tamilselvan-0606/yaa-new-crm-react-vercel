@@ -8,6 +8,7 @@ import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUt
 import { categoryApi, ApiCategory } from '../../../api/commerce/categoryApi';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
+import { useSubmitGuard, extractApiFieldErrors, getApiErrorMessage } from '../../../utils/formValidation';
 
 export interface AddCategoryModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   onCategoryCreated,
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { runOnce } = useSubmitGuard();
 
   const {
     register,
@@ -34,9 +36,10 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     setValue,
     watch,
     setError,
-    formState: { errors },
+    formState: { errors, isSubmitted },
   } = useForm<CategoryFormValues>({
-    mode: 'onChange',
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       categoryName: '',
       status: 'Active',
@@ -46,12 +49,11 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   const watchStatus = watch('status');
 
   useEffect(() => {
-    if (isOpen) {
-      reset({
-        categoryName: '',
-        status: 'Active',
-      });
-    }
+    // Start clean every time the modal opens or closes (no errors carried over)
+    reset({
+      categoryName: '',
+      status: 'Active',
+    });
   }, [isOpen, reset]);
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
@@ -73,14 +75,10 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     }
   };
 
-  const handleSaveCategory = async (data: CategoryFormValues) => {
-    const trimmedName = data.categoryName.trim();
-    if (!trimmedName) {
-      setError('categoryName', { type: 'manual', message: 'Category name is required' });
-      return;
-    }
+  const handleSaveCategory = (data: CategoryFormValues) => runOnce(async () => {
+    const trimmedName = (data.categoryName || '').trim();
 
-    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    const finalStatus = data.status;
     setIsSubmitting(true);
 
     try {
@@ -109,16 +107,17 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
       onClose();
     } catch (apiErr: any) {
       console.error('Category creation failed:', apiErr);
-      const errMsg =
-        apiErr?.response?.data?.error?.message ||
-        apiErr?.response?.data?.message ||
-        apiErr?.message ||
-        'Failed to create category.';
-      toast.error(errMsg);
+      const fieldErrs = extractApiFieldErrors(apiErr);
+      const nameErr = fieldErrs.categoryName || fieldErrs.name;
+      if (nameErr) {
+        setError('categoryName', { type: 'server', message: nameErr });
+      } else {
+        toast.error(getApiErrorMessage(apiErr, 'Failed to create category.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   return (
     <Modal
@@ -141,10 +140,9 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
               disabled={isSubmitting}
               autoFocus
               {...register('categoryName', {
-                required: 'Category name is required',
-                minLength: { value: 2, message: 'Category name must be at least 2 characters' },
+                required: 'Please enter the category name.',
                 validate: (val) =>
-                  /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                  val.trim().length >= 2 || 'The category name must be at least 2 characters.',
               })}
               onKeyDown={handleTextOnlyKeyDown}
               onInput={(e) => {
@@ -169,7 +167,7 @@ export const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
                 { label: 'Inactive', value: 'Inactive' },
               ]}
               value={watchStatus || 'Active'}
-              onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+              onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: isSubmitted })}
               placeholder="Select status"
               activeColor="brand"
               disabled={isSubmitting}

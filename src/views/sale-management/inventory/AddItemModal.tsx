@@ -31,6 +31,23 @@ import { categoryApi, ApiCategory } from "../../../api/commerce/categoryApi";
 import { subcategoryApi } from "../../../api/commerce/subcategoryApi";
 import { unitApi, ApiUnit } from "../../../api/commerce/unitApi";
 import { toast } from "../../../utils/toast";
+import { FormError } from "../../../components/common/FormError";
+import {
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  fieldAttr,
+  collectErrors,
+  checkRequiredSelection,
+  checkMoney,
+  checkNotGreaterThan,
+  checkPercent,
+  checkNumber,
+  checkRequiredText,
+  checkDateNotBefore,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
 import { AddCategoryModal } from "./AddCategoryModal";
@@ -381,6 +398,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<"Pricing" | "Stock">("Pricing");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { runOnce } = useSubmitGuard();
+  const unitGuard = useSubmitGuard();
+  const fe = useFieldErrors();
 
   // Categories & Subcategories
   const [categories, setCategories] = useState<ApiCategory[]>([]);
@@ -398,6 +418,12 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   const [customUnitName, setCustomUnitName] = useState("");
   const [customUnitShortCode, setCustomUnitShortCode] = useState("");
   const [isCreatingUnit, setIsCreatingUnit] = useState(false);
+  // Inline errors for the custom-unit form appear only after "Create Custom Unit" was clicked
+  const [unitCreateAttempted, setUnitCreateAttempted] = useState(false);
+  const customUnitNameError = unitCreateAttempted && !customUnitName.trim() ? "Please enter the unit name." : null;
+  const customUnitCodeError = unitCreateAttempted && !customUnitShortCode.trim() ? "Please enter the unit short code." : null;
+  // Image file rejected on selection; shown inline once a submit has been attempted
+  const [imageFileError, setImageFileError] = useState<string | null>(null);
 
   // Image Upload
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -415,8 +441,11 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     watch,
     setValue,
     getValues,
-    formState: { errors },
+    setError,
+    formState: { errors, isSubmitted },
   } = useForm<ItemModalFormData>({
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       itemType: "Product",
       productName: "",
@@ -567,7 +596,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   }, []);
 
   const handleUnitChange = (val: string) => {
-    setValue("unit", val, { shouldValidate: true });
+    setValue("unit", val, { shouldValidate: isSubmitted });
     const matched = allAvailableUnits.find(
       (u) =>
         u.shortCode?.toUpperCase() === val.toUpperCase() ||
@@ -612,8 +641,12 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     );
   }, [formData.hsnCode]);
 
-  // Reset modal state upon opening
+  // Reset modal state upon opening; clear all errors on open and on close
   useEffect(() => {
+    fe.reset();
+    setUnitCreateAttempted(false);
+    setImageFileError(null);
+    if (!isOpen) reset();
     if (isOpen) {
       setActiveTab("Pricing");
       setItemImageState("");
@@ -651,42 +684,48 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     }
   }, [isOpen, reset]);
 
+  // Custom-unit form starts clean whenever the unit modal opens or closes
+  useEffect(() => {
+    setUnitCreateAttempted(false);
+  }, [isUnitModalOpen]);
+
   // Image Upload handler
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      toast.error("Only image files (.png, .jpg, .jpeg, .webp) are allowed");
+      setImageFileError("Only image files (.png, .jpg, .jpeg, .webp) are allowed.");
+      e.target.value = "";
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image size must be less than 5MB");
+      setImageFileError("Image size must be less than 5MB.");
+      e.target.value = "";
       return;
     }
+    setImageFileError(null);
 
     setIsUploadingImage(true);
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = reader.result as string;
       setItemImageState(base64);
-      setValue("itemImage", base64, { shouldValidate: true });
+      setValue("itemImage", base64, { shouldValidate: isSubmitted });
       setIsUploadingImage(false);
       toast.success("Image selected successfully");
     };
     reader.onerror = () => {
       setIsUploadingImage(false);
-      toast.error("Failed to read image file");
+      setImageFileError("Could not read the image file. Please choose another image.");
     };
     reader.readAsDataURL(file);
   };
 
   // Add Custom Unit handler
-  const handleAddCustomUnit = async () => {
-    if (!customUnitName.trim() || !customUnitShortCode.trim()) {
-      toast.error("Unit name and short code are required");
-      return;
-    }
+  const handleAddCustomUnit = () => unitGuard.runOnce(async () => {
+    setUnitCreateAttempted(true);
+    if (!customUnitName.trim() || !customUnitShortCode.trim()) return;
     setIsCreatingUnit(true);
     try {
       const res = await unitApi.createUnit({
@@ -699,19 +738,20 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         const formatted = `${customUnitName.toUpperCase()} (${customUnitShortCode.toUpperCase()})`;
         setSelectedBaseUnit(formatted);
         setValue("unit", customUnitShortCode.trim().toUpperCase(), {
-          shouldValidate: true,
+          shouldValidate: isSubmitted,
         });
         setValue("baseUnitId", res.data.id);
         setCustomUnitName("");
         setCustomUnitShortCode("");
+        setUnitCreateAttempted(false);
         setIsUnitModalOpen(false);
       }
     } catch (err: any) {
-      toast.error(err?.message || "Failed to create unit");
+      toast.error(getApiErrorMessage(err, "Failed to create unit."));
     } finally {
       setIsCreatingUnit(false);
     }
-  };
+  });
 
   // Apply Unit Selection
   const handleConfirmUnit = () => {
@@ -732,7 +772,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       baseUnitCode = selectedBaseUnit;
     }
 
-    setValue("unit", baseUnitCode, { shouldValidate: true });
+    setValue("unit", baseUnitCode, { shouldValidate: isSubmitted });
     setValue("baseUnitId", baseId);
 
     if (selectedSecondaryUnit && selectedSecondaryUnit !== "None") {
@@ -749,8 +789,81 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     setIsUnitModalOpen(false);
   };
 
+  // Validation for fields that are not registered with React Hook Form (controlled inputs).
+  const computeExtraErrors = (d: ItemModalFormData): Record<string, string> => {
+    const saleBase = Number(d.salePrice);
+    const discountErr = (() => {
+      if (d.discountValue === "" || d.discountValue === undefined) return null;
+      if (d.discountType === "Percentage") return checkPercent(d.discountValue, "discount percentage");
+      const base = checkMoney(d.discountValue, "discount amount", { allowZero: true });
+      if (base) return base;
+      if (d.salePrice !== "" && d.salePrice !== undefined && !isNaN(saleBase) && Number(d.discountValue) > saleBase) {
+        return "The discount cannot be more than the sale price.";
+      }
+      return null;
+    })();
+    const checks: Array<[string, string | null]> = [
+      ["unit", checkRequiredSelection(d.unit, "unit")],
+      ["salePrice", checkMoney(d.salePrice, "sale price", { allowZero: true, optional: true })],
+      ["discountValue", discountErr],
+      [
+        "purchasePrice",
+        checkMoney(d.purchasePrice, "purchase price", { allowZero: true, optional: true }) ||
+          checkNotGreaterThan(d.purchasePrice, d.salePrice, "purchase price", "sale price"),
+      ],
+      ["minStockAlert", checkNumber(d.minStockAlert, "minimum stock", { allowZero: true, optional: true, maxDecimals: 0 })],
+      [
+        "batchNo",
+        (d.mfgDate || d.expDate) && !(d.batchNo || "").trim() ? checkRequiredText("", "batch number") : null,
+      ],
+      ["expDate", checkDateNotBefore(d.expDate, d.mfgDate, "expiry date", "manufacturing date")],
+      ["itemImage", imageFileError],
+    ];
+    if (d.hasWholesale) {
+      checks.push(
+        [
+          "wholesalePrice",
+          checkMoney(d.wholesalePrice, "wholesale price", { allowZero: true, optional: true }) ||
+            checkNotGreaterThan(d.wholesalePrice, d.salePrice, "wholesale price", "sale price"),
+        ],
+        ["minWholesaleQty", checkNumber(d.minWholesaleQty, "minimum wholesale quantity", { allowZero: true, optional: true, maxDecimals: 0 })],
+      );
+    }
+    return collectErrors(checks);
+  };
+
+  const pricingKeys = ["salePrice", "discountValue", "wholesalePrice", "minWholesaleQty", "purchasePrice"];
+
+  // Errors appear only after the first Save attempt, then stay in sync as values change.
+  useRevalidateAfterSubmit(fe, () => computeExtraErrors(getValues()), [
+    formData.unit, formData.salePrice, formData.discountValue, formData.discountType,
+    formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
+    formData.purchasePrice, formData.minStockAlert, formData.batchNo, formData.mfgDate,
+    formData.expDate, imageFileError,
+  ]);
+
+  // Switch to the tab that holds the first non-RHF error so it is visible
+  const revealTab = (extra: Record<string, string>) => {
+    const keys = Object.keys(extra);
+    if (keys.length === 0 || keys[0] === "unit" || keys[0] === "itemImage") return;
+    setActiveTab(pricingKeys.includes(keys[0]) ? "Pricing" : "Stock");
+  };
+
+  // RHF fields invalid: also reveal the controlled-field errors in the same submit
+  const onInvalid = () => {
+    const extra = computeExtraErrors(getValues());
+    fe.validateAll(extra);
+    // Name/category fields are on top; only switch tabs when there are no top-level RHF errors
+    revealTab(extra);
+  };
+
   // Form submission to API
-  const onSubmit = async (data: ItemModalFormData) => {
+  const onSubmit = (data: ItemModalFormData) => runOnce(async () => {
+    const extraErrors = computeExtraErrors(data);
+    if (!fe.validateAll(extraErrors)) {
+      revealTab(extraErrors);
+      return;
+    }
     setIsSubmitting(true);
     try {
       const payload: Record<string, any> = {
@@ -842,16 +955,20 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         throw new Error(res?.message || "Failed to create product");
       }
     } catch (apiErr: any) {
-      const errMsg =
-        apiErr?.response?.data?.error?.message ||
-        apiErr?.response?.data?.message ||
-        apiErr?.message ||
-        "Failed to create item.";
-      toast.error(errMsg);
+      const apiFields = extractApiFieldErrors(apiErr);
+      const mapped: Record<string, string> = {};
+      for (const [k, v] of Object.entries(apiFields)) {
+        if (k === "productName" || k === "name") setError("productName", { type: "server", message: v });
+        else mapped[k] = v;
+      }
+      if (Object.keys(mapped).length > 0) fe.merge(mapped);
+      if (Object.keys(apiFields).length === 0) {
+        toast.error(getApiErrorMessage(apiErr, "Failed to create item."));
+      }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   if (!isOpen) return null;
 
@@ -865,7 +982,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       >
         <form
           noValidate
-          onSubmit={handleSubmit(onSubmit)}
+          onSubmit={handleSubmit(onSubmit, onInvalid)}
           className="relative w-full max-w-5xl bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh] my-auto animate-in zoom-in-95 duration-100"
         >
           {/* Modal Header matching Image 1 */}
@@ -916,7 +1033,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   label="Category"
                   value={formData.category}
                   onChange={(val) => {
-                    setValue("category", val, { shouldValidate: true });
+                    setValue("category", val, { shouldValidate: isSubmitted });
                     setValue("subcategory", "");
                   }}
                   options={categoryOptions}
@@ -954,14 +1071,10 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   placeholder="Enter Item Name"
                   disabled={isSubmitting}
                   {...register("productName", {
-                    required: "Item name is required",
-                    minLength: {
-                      value: 2,
-                      message: "Item name must be at least 2 characters",
-                    },
+                    required: "Please enter the item name.",
                     validate: (val) =>
-                      /^[A-Za-z0-9\s&'().\-\[\]{}/,+%#:*_"]+$/.test(String(val).trim()) ||
-                      "Item name can contain letters, numbers, spaces, brackets, and common symbols",
+                      String(val).trim().length >= 2 ||
+                      "The item name must be at least 2 characters.",
                   })}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
@@ -1019,7 +1132,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           <div
                             key={item.code}
                             onClick={() => {
-                              setValue("hsnCode", item.code, { shouldValidate: true });
+                              setValue("hsnCode", item.code, { shouldValidate: isSubmitted });
                               setIsHsnDropdownOpen(false);
                             }}
                             className={`w-full px-2.5 py-2 rounded-xl flex items-center justify-between gap-2 text-xs transition-colors cursor-pointer text-left ${
@@ -1072,6 +1185,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                     onClick: () => setIsUnitModalOpen(true),
                   }}
                 />
+                <FormError message={fe.errors.unit} showIcon />
               </div>
 
               {/* Add Item Image */}
@@ -1126,6 +1240,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                     <span>Add Item Image</span>
                   </button>
                 )}
+                <FormError message={fe.errors.itemImage} showIcon />
+                <span className="hidden" {...fieldAttr("itemImage")} />
               </div>
             </div>
 
@@ -1180,9 +1296,11 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               .replace(/[^0-9.]/g, "")
                               .replace(/(\..*?)\..*/g, "$1");
                             setValue("salePrice", val, {
-                              shouldValidate: true,
+                              shouldValidate: isSubmitted,
                             });
+                            fe.clearError("salePrice");
                           }}
+                          {...fieldAttr("salePrice")}
                           className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                         />
                         <select
@@ -1199,6 +1317,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           <option value="Included">Included</option>
                         </select>
                       </div>
+                      <FormError message={fe.errors.salePrice} showIcon />
                     </div>
 
                     {/* Disc. On Sale Price + Disc Type */}
@@ -1215,7 +1334,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               .replace(/[^0-9.]/g, "")
                               .replace(/(\..*?)\..*/g, "$1");
                             setValue("discountValue", val);
+                            fe.clearError("discountValue");
                           }}
+                          {...fieldAttr("discountValue")}
                           className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                         />
                         <select
@@ -1232,6 +1353,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           <option value="Amount">Amount (₹)</option>
                         </select>
                       </div>
+                      <FormError message={fe.errors.discountValue} showIcon />
                     </div>
                   </div>
 
@@ -1282,7 +1404,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                                   .replace(/[^0-9.]/g, "")
                                   .replace(/(\..*?)\..*/g, "$1");
                                 setValue("wholesalePrice", val);
+                                fe.clearError("wholesalePrice");
                               }}
+                              {...fieldAttr("wholesalePrice")}
                               className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                             />
                             <select
@@ -1299,6 +1423,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               <option value="Included">Included</option>
                             </select>
                           </div>
+                          <FormError message={fe.errors.wholesalePrice} showIcon />
                         </div>
 
                         {/* Minimum Wholesale Qty */}
@@ -1316,7 +1441,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                                   "",
                                 );
                                 setValue("minWholesaleQty", val);
+                                fe.clearError("minWholesaleQty");
                               }}
+                              {...fieldAttr("minWholesaleQty")}
                               className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                             />
                             <div
@@ -1326,6 +1453,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               <Info className="w-4 h-4" />
                             </div>
                           </div>
+                          <FormError message={fe.errors.minWholesaleQty} showIcon />
                         </div>
                       </div>
                     )}
@@ -1349,7 +1477,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                               .replace(/[^0-9.]/g, "")
                               .replace(/(\..*?)\..*/g, "$1");
                             setValue("purchasePrice", val);
+                            fe.clearError("purchasePrice");
                           }}
+                          {...fieldAttr("purchasePrice")}
                           className="flex-1 min-w-0 h-full px-3 sm:px-4 bg-transparent text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400 outline-none"
                         />
                         <select
@@ -1366,6 +1496,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           <option value="Included">Included</option>
                         </select>
                       </div>
+                      <FormError message={fe.errors.purchasePrice} showIcon />
                     </div>
                   </div>
 
@@ -1402,9 +1533,12 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                       onChange={(e) => {
                         const val = e.target.value.replace(/[^0-9]/g, "");
                         setValue("minStockAlert", val);
+                        fe.clearError("minStockAlert");
                       }}
+                      {...fieldAttr("minStockAlert")}
                       className={FORM_INPUT_CLS}
                     />
+                    <FormError message={fe.errors.minStockAlert} showIcon />
                   </div>
 
                   {/* Location */}
@@ -1447,9 +1581,14 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                           type="text"
                           placeholder="e.g. BAT-2026-001"
                           value={formData.batchNo ?? ""}
-                          onChange={(e) => setValue("batchNo", e.target.value)}
+                          onChange={(e) => {
+                            setValue("batchNo", e.target.value);
+                            fe.clearError("batchNo");
+                          }}
+                          {...fieldAttr("batchNo")}
                           className={`${FORM_INPUT_CLS} font-mono`}
                         />
+                        <FormError message={fe.errors.batchNo} showIcon />
                         <span className="text-[10px] text-slate-400 mt-1 block">
                           Batch code identifier
                         </span>
@@ -1461,7 +1600,11 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                         <input
                           type="date"
                           value={formData.mfgDate || ""}
-                          onChange={(e) => setValue("mfgDate", e.target.value)}
+                          onChange={(e) => {
+                            setValue("mfgDate", e.target.value);
+                            fe.clearError("expDate");
+                            fe.clearError("batchNo");
+                          }}
                           className={`${FORM_INPUT_CLS} cursor-pointer`}
                         />
                         <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1475,9 +1618,15 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                         <input
                           type="date"
                           value={formData.expDate || ""}
-                          onChange={(e) => setValue("expDate", e.target.value)}
+                          onChange={(e) => {
+                            setValue("expDate", e.target.value);
+                            fe.clearError("expDate");
+                            fe.clearError("batchNo");
+                          }}
+                          {...fieldAttr("expDate")}
                           className={`${FORM_INPUT_CLS} cursor-pointer`}
                         />
+                        <FormError message={fe.errors.expDate} showIcon />
                         <span className="text-[10px] text-slate-400 mt-1 block">
                           Expiry / Best before date
                         </span>
@@ -1608,20 +1757,26 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   Add Custom Unit
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Unit Name (e.g. Kilogram)"
-                    value={customUnitName}
-                    onChange={(e) => setCustomUnitName(e.target.value)}
-                    className={FORM_INPUT_CLS}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Short Code (e.g. KG)"
-                    value={customUnitShortCode}
-                    onChange={(e) => setCustomUnitShortCode(e.target.value)}
-                    className={FORM_INPUT_CLS}
-                  />
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Unit Name (e.g. Kilogram)"
+                      value={customUnitName}
+                      onChange={(e) => setCustomUnitName(e.target.value)}
+                      className={customUnitNameError ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    />
+                    <FormError message={customUnitNameError ?? undefined} showIcon />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Short Code (e.g. KG)"
+                      value={customUnitShortCode}
+                      onChange={(e) => setCustomUnitShortCode(e.target.value)}
+                      className={customUnitCodeError ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS}
+                    />
+                    <FormError message={customUnitCodeError ?? undefined} showIcon />
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -1707,7 +1862,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   <div
                     key={item.code}
                     onClick={() => {
-                      setValue("hsnCode", item.code, { shouldValidate: true });
+                      setValue("hsnCode", item.code, { shouldValidate: isSubmitted });
                       setIsHsnModalOpen(false);
                     }}
                     className="p-2.5 hover:bg-purple-50/60 rounded-xl cursor-pointer flex items-center justify-between transition-colors"
@@ -1743,7 +1898,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               createdCat.name || createdCat.categoryName || "";
             if (catName) {
               setCategories((prev) => [createdCat as ApiCategory, ...prev]);
-              setValue("category", catName, { shouldValidate: true });
+              setValue("category", catName, { shouldValidate: isSubmitted });
               setValue("subcategory", "");
             }
             loadCategories();
@@ -1767,7 +1922,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               "";
             if (subName) {
               setSubcategories((prev) => [createdSub, ...prev]);
-              setValue("subcategory", subName, { shouldValidate: true });
+              setValue("subcategory", subName, { shouldValidate: isSubmitted });
             }
             loadSubcategories();
           }}

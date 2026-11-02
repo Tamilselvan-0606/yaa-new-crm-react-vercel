@@ -151,6 +151,7 @@ export interface ExpenseSummary {
   amount: number;
   taxAmount: number;
   totalAmount: number;
+  categoryCount?: number;
 }
 
 export interface ExpenseFilterParams {

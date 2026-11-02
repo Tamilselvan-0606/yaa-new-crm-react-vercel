@@ -21,9 +21,6 @@ import {
   CheckSquare,
   ExternalLink,
   Search,
-  Phone,
-  MessageCircle,
-  Mail,
   Calendar,
   Clock,
   Pencil,
@@ -54,6 +51,10 @@ import { PlanFormModal } from '../../components/forms/PlanFormModal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
+import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
+import { PlanBadge, PlanStatusBadge, SubscriptionStatusBadge, dotColorFor } from '../../components/common/SubscriptionBadges';
+import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
+import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { Button } from '../../components/common/Button';
 import { Pagination } from '../../components/common/Pagination';
 import { ConfirmationModal } from '../../utils/confirmationModal';
@@ -153,68 +154,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [appliedSubStatus, setAppliedSubStatus] = useState('ALL');
   const [subsPage, setSubsPage] = useState(1);
   const [subsPageSize, setSubsPageSize] = useState(10);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const { copiedKey, copy: handleCopy } = useCopyToClipboard();
 
-  const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
-    e.stopPropagation();
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 2000);
-  };
 
-  // Action Dropdown Menu State for Plans Table
-  const [activePlanDropdownId, setActivePlanDropdownId] = useState<string | null>(null);
-  const [planDropdownPos, setPlanDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-
-  // Action Dropdown Menu State for Organization Subscriptions Table
-  const [activeOrgDropdownId, setActiveOrgDropdownId] = useState<string | null>(null);
-  const [orgDropdownPos, setOrgDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-
-  // Action Dropdown Menu State for Client Subscriptions Table (Admin)
-  const [activeClientSubDropdownId, setActiveClientSubDropdownId] = useState<string | null>(null);
-  const [clientSubDropdownPos, setClientSubDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
-
-  // Close plan, org & client sub dropdowns on window click/scroll
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.plan-action-dropdown-container') && !target.closest('.plan-action-dropdown-menu')) {
-        setActivePlanDropdownId(null);
-        setPlanDropdownPos(null);
-      }
-      if (!target.closest('.org-action-dropdown-container') && !target.closest('.org-action-dropdown-menu')) {
-        setActiveOrgDropdownId(null);
-        setOrgDropdownPos(null);
-      }
-      if (!target.closest('.client-sub-action-dropdown-container') && !target.closest('.client-sub-action-dropdown-menu')) {
-        setActiveClientSubDropdownId(null);
-        setClientSubDropdownPos(null);
-      }
-    };
-    const handleScroll = () => {
-      if (activePlanDropdownId) {
-        setActivePlanDropdownId(null);
-        setPlanDropdownPos(null);
-      }
-      if (activeOrgDropdownId) {
-        setActiveOrgDropdownId(null);
-        setOrgDropdownPos(null);
-      }
-      if (activeClientSubDropdownId) {
-        setActiveClientSubDropdownId(null);
-        setClientSubDropdownPos(null);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [activePlanDropdownId, activeOrgDropdownId, activeClientSubDropdownId]);
+  // One 3-dots row menu serves the plans, organization-subscription and client-subscription tables
+  const rowMenu = useRowActionMenu(240);
 
   // Modals for Plans
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
@@ -1219,38 +1163,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     }
   };
 
-  const getOrgPlanBadge = (planName: string) => {
-    const normalized = (planName || '').trim().toLowerCase();
-    let dotColor = 'bg-indigo-600';
-    let textColor = 'text-indigo-900';
-
-    if (normalized.includes('diamond')) {
-      dotColor = 'bg-cyan-500';
-      textColor = 'text-slate-900';
-    } else if (normalized.includes('platinum')) {
-      dotColor = 'bg-purple-600';
-      textColor = 'text-slate-900';
-    } else if (normalized.includes('gold')) {
-      dotColor = 'bg-amber-500';
-      textColor = 'text-slate-900';
-    } else if (normalized.includes('silver')) {
-      dotColor = 'bg-slate-400';
-      textColor = 'text-slate-900';
-    } else if (normalized.includes('bronze')) {
-      dotColor = 'bg-orange-500';
-      textColor = 'text-slate-900';
-    }
-
-    return (
-      <div className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-        <span className={`text-xs sm:text-[13px] font-bold ${textColor}`}>
-          {planName}
-        </span>
-      </div>
-    );
-  };
-
   // Map live API Organization Subscriptions into OrgSubscriptionItem format
   const mappedOrgSubs: OrgSubscriptionItem[] = useMemo(() => {
     return apiOrgSubs.map((item) => ({
@@ -1301,35 +1213,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     const cleanNum = rawId.replace(/[^0-9]/g, '');
     if (cleanNum) return `SUB-${cleanNum.length > 4 ? cleanNum.slice(-3) : cleanNum}`;
     return `SUB-${fallbackIdx}`;
-  };
-
-  const getProductDotColor = (name?: string): string => {
-    const lower = (name || '').toLowerCase();
-    if (lower.includes('yaa')) return 'bg-blue-600';
-    if (lower.includes('motez')) return 'bg-emerald-600';
-    if (lower.includes('dentq') || lower.includes('dent')) return 'bg-cyan-600';
-    if (lower.includes('aarudam') || lower.includes('ai')) return 'bg-purple-600';
-    if (lower.includes('turfy')) return 'bg-amber-600';
-    if (lower.includes('marketing') || lower.includes('digital')) return 'bg-rose-600';
-    return 'bg-indigo-600';
-  };
-
-  const getStatusBadgeClass = (status: string) => {
-    switch (status) {
-      case 'Active':
-        return 'bg-emerald-50 text-emerald-600 font-bold';
-      case 'Expiring Soon':
-        return 'bg-amber-50 text-amber-600 font-bold';
-      case 'Expired':
-        return 'bg-rose-50 text-rose-600 font-bold';
-      case 'Cancelled':
-        return 'bg-slate-100 text-slate-600 font-bold';
-      case 'Onboarding':
-      case 'Onboard':
-        return 'bg-cyan-50 text-cyan-600 font-bold';
-      default:
-        return 'bg-cyan-50 text-cyan-600 font-bold';
-    }
   };
 
   // -------------------------------------------------------------
@@ -1399,7 +1282,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     return apiClientSubs.map((item) => {
       const custName = item.customer?.company || item.customer?.name || 'Client';
       const prodName = item.product?.name || 'CRM Product';
-      const planName = item.plan?.name || item.billingCycle || 'Standard';
+      const planName = item.plan?.name || item.billingCycle || '-';
 
       return {
         id: item.id,
@@ -1669,7 +1552,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 2. Plan */}
                               <td className="py-4 px-5 border border-slate-200">
-                                {getOrgPlanBadge(sub.plan)}
+                                <PlanBadge planName={sub.plan} />
                               </td>
 
                               {/* 3. Start Date */}
@@ -1696,61 +1579,35 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 6. Status */}
                               <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
-                                <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs ${getStatusBadgeClass(sub.status)}`}>
-                                  {sub.status}
-                                </span>
+                                <SubscriptionStatusBadge status={sub.status} />
                               </td>
 
                               {/* 7. Action (3-Dots Menu) */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <div className="relative inline-block text-left org-action-dropdown-container">
+                                <div className="relative inline-block text-left" data-row-menu-trigger>
                                   <button
                                     type="button"
                                     title="Subscription Actions"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (activeOrgDropdownId === sub.id) {
-                                        setActiveOrgDropdownId(null);
-                                        setOrgDropdownPos(null);
-                                      } else {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const spaceBelow = window.innerHeight - rect.bottom;
-                                        const dropdownHeight = 160;
-                                        const rightPos = window.innerWidth - rect.right;
-
-                                        if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                          setOrgDropdownPos({
-                                            bottom: window.innerHeight - rect.top + 6,
-                                            right: rightPos,
-                                          });
-                                        } else {
-                                          setOrgDropdownPos({
-                                            top: rect.bottom + 6,
-                                            right: rightPos,
-                                          });
-                                        }
-                                        setActiveOrgDropdownId(sub.id);
-                                      }
-                                    }}
+                                    onClick={(e) => rowMenu.toggle(e, sub.id)}
                                     className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                                   >
                                     <MoreVertical className="w-4 h-4 fill-white" />
                                   </button>
 
                                   {/* Portal Dropdown Menu */}
-                                  {activeOrgDropdownId === sub.id && orgDropdownPos && (
+                                  {rowMenu.activeId === sub.id && rowMenu.pos && (
                                     <div
-                                      className="org-action-dropdown-menu fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
+                                      data-row-menu className="fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
                                       style={{
-                                        top: orgDropdownPos.top !== undefined ? `${orgDropdownPos.top}px` : undefined,
-                                        bottom: orgDropdownPos.bottom !== undefined ? `${orgDropdownPos.bottom}px` : undefined,
-                                        right: `${orgDropdownPos.right}px`,
+                                        top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : undefined,
+                                        bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : undefined,
+                                        right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveOrgDropdownId(null);
+                                          rowMenu.close();
                                           handleRenewOrgSubscription(sub);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1767,7 +1624,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveOrgDropdownId(null);
+                                          rowMenu.close();
                                           handleOpenEditOrgSub(sub);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1786,7 +1643,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveOrgDropdownId(null);
+                                          rowMenu.close();
                                           setSubConfirmAction({
                                             type: 'org_sub',
                                             title: 'Cancel Organization Subscription',
@@ -1958,58 +1815,14 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 2. Contact Info Actions */}
                               <td className="py-4 px-4 border border-slate-200">
-                                <div className="flex items-center justify-center gap-2">
-                                  {/* Phone */}
-                                  <div className="relative group">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleCopy(e, phone, `${sub.id}-phone`)}
-                                      className="w-8 h-8 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors cursor-pointer"
-                                    >
-                                      <Phone className="w-3.5 h-3.5" />
-                                    </button>
-                                    <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${sub.id}-phone`
-                                      ? 'opacity-100 bg-emerald-600 scale-100'
-                                      : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                      }`}>
-                                      {copiedKey === `${sub.id}-phone` ? 'Phone number copied' : phone}
-                                    </div>
-                                  </div>
-
-                                  {/* WhatsApp */}
-                                  <div className="relative group">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleCopy(e, whatsapp || phone, `${sub.id}-wa`)}
-                                      className="w-8 h-8 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-600 flex items-center justify-center transition-colors cursor-pointer"
-                                    >
-                                      <MessageCircle className="w-3.5 h-3.5" />
-                                    </button>
-                                    <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${sub.id}-wa`
-                                      ? 'opacity-100 bg-emerald-600 scale-100'
-                                      : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                      }`}>
-                                      {copiedKey === `${sub.id}-wa` ? 'WhatsApp number copied' : (whatsapp || phone)}
-                                    </div>
-                                  </div>
-
-                                  {/* Email */}
-                                  <div className="relative group">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleCopy(e, email, `${sub.id}-email`)}
-                                      className="w-8 h-8 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-600 flex items-center justify-center transition-colors cursor-pointer"
-                                    >
-                                      <Mail className="w-3.5 h-3.5" />
-                                    </button>
-                                    <div className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${copiedKey === `${sub.id}-email`
-                                      ? 'opacity-100 bg-emerald-600 scale-100'
-                                      : 'opacity-0 group-hover:opacity-100 bg-slate-900'
-                                      }`}>
-                                      {copiedKey === `${sub.id}-email` ? 'Email address copied' : email}
-                                    </div>
-                                  </div>
-                                </div>
+                                <ContactCopyButtons
+                                  id={sub.id}
+                                  phone={phone}
+                                  whatsapp={whatsapp || phone}
+                                  email={email}
+                                  copiedKey={copiedKey}
+                                  onCopy={handleCopy}
+                                />
                               </td>
 
                               {/* 3. Product & Offering */}
@@ -2019,7 +1832,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                   <span>Offering</span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-1">
-                                  <span className={`w-2 h-2 rounded-full shrink-0 ${getProductDotColor(prodName)}`} />
+                                  <span className={`w-2 h-2 rounded-full shrink-0 ${dotColorFor(prodName)}`} />
                                   <span className="font-bold text-slate-900 text-xs sm:text-[13px]">{prodName}</span>
                                 </div>
                               </td>
@@ -2034,9 +1847,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 5. Status & Priority / Cycle */}
                               <td className="py-4 px-5 border border-slate-200">
-                                <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs ${getStatusBadgeClass(sub.status)}`}>
-                                  {sub.status}
-                                </span>
+                                <SubscriptionStatusBadge status={sub.status} />
                                 <p className="text-[11px] text-slate-400 font-medium mt-1">
                                   Cycle: {sub.billingCycle}
                                 </p>
@@ -2055,54 +1866,30 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 7. Action (3-Dots Menu) */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <div className="relative inline-block text-left client-sub-action-dropdown-container">
+                                <div className="relative inline-block text-left" data-row-menu-trigger>
                                   <button
                                     type="button"
                                     title="Subscription Actions"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (activeClientSubDropdownId === sub.id) {
-                                        setActiveClientSubDropdownId(null);
-                                        setClientSubDropdownPos(null);
-                                      } else {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const spaceBelow = window.innerHeight - rect.bottom;
-                                        const dropdownHeight = 160;
-                                        const rightPos = window.innerWidth - rect.right;
-
-                                        if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                          setClientSubDropdownPos({
-                                            bottom: window.innerHeight - rect.top + 6,
-                                            right: rightPos,
-                                          });
-                                        } else {
-                                          setClientSubDropdownPos({
-                                            top: rect.bottom + 6,
-                                            right: rightPos,
-                                          });
-                                        }
-                                        setActiveClientSubDropdownId(sub.id);
-                                      }
-                                    }}
+                                    onClick={(e) => rowMenu.toggle(e, sub.id)}
                                     className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                                   >
                                     <MoreVertical className="w-4 h-4 fill-white" />
                                   </button>
 
                                   {/* Portal Dropdown Menu */}
-                                  {activeClientSubDropdownId === sub.id && clientSubDropdownPos && (
+                                  {rowMenu.activeId === sub.id && rowMenu.pos && (
                                     <div
-                                      className="client-sub-action-dropdown-menu fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
+                                      data-row-menu className="fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
                                       style={{
-                                        top: clientSubDropdownPos.top !== undefined ? `${clientSubDropdownPos.top}px` : undefined,
-                                        bottom: clientSubDropdownPos.bottom !== undefined ? `${clientSubDropdownPos.bottom}px` : undefined,
-                                        right: `${clientSubDropdownPos.right}px`,
+                                        top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : undefined,
+                                        bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : undefined,
+                                        right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveClientSubDropdownId(null);
+                                          rowMenu.close();
                                           handleRenewSubscription(sub);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2119,7 +1906,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveClientSubDropdownId(null);
+                                          rowMenu.close();
                                           handleOpenEditSubscription(sub);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2138,7 +1925,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActiveClientSubDropdownId(null);
+                                          rowMenu.close();
                                           setSubConfirmAction({
                                             type: 'client_sub',
                                             title: 'Remove Subscription',
@@ -2271,7 +2058,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       ) : (
                         pagedPlans.map((item) => {
                           const { plan, product } = item;
-                          const isDropdownOpen = activePlanDropdownId === plan.id;
+                          const isDropdownOpen = rowMenu.activeId === plan.id;
                           const currencySymbol = plan.currency || '\u20B9';
                           const isCustom = plan.customizablePrice;
                           const basePrice = plan.price || 0;
@@ -2339,66 +2126,35 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 7. Status Badge */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <span
-                                  className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold ${plan.status === 'Inactive'
-                                    ? 'bg-rose-50 text-rose-600'
-                                    : 'bg-emerald-50 text-emerald-600'
-                                    }`}
-                                >
-                                  {plan.status || 'Active'}
-                                </span>
+                                <PlanStatusBadge status={plan.status} />
                               </td>
 
                               {/* 8. Action (3-Dots Menu) */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <div className="relative inline-block text-left plan-action-dropdown-container">
+                                <div className="relative inline-block text-left" data-row-menu-trigger>
                                   <button
                                     type="button"
                                     title="Plan Actions"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (activePlanDropdownId === plan.id) {
-                                        setActivePlanDropdownId(null);
-                                        setPlanDropdownPos(null);
-                                      } else {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const spaceBelow = window.innerHeight - rect.bottom;
-                                        const dropdownHeight = 150;
-                                        const rightPos = window.innerWidth - rect.right;
-
-                                        if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                          setPlanDropdownPos({
-                                            bottom: window.innerHeight - rect.top + 6,
-                                            right: rightPos,
-                                          });
-                                        } else {
-                                          setPlanDropdownPos({
-                                            top: rect.bottom + 6,
-                                            right: rightPos,
-                                          });
-                                        }
-                                        setActivePlanDropdownId(plan.id);
-                                      }
-                                    }}
+                                    onClick={(e) => rowMenu.toggle(e, plan.id)}
                                     className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                                   >
                                     <MoreVertical className="w-4 h-4 fill-white" />
                                   </button>
 
                                   {/* Portal Dropdown Menu */}
-                                  {isDropdownOpen && planDropdownPos && (
+                                  {isDropdownOpen && rowMenu.pos && (
                                     <div
-                                      className="plan-action-dropdown-menu fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
+                                      data-row-menu className="fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
                                       style={{
-                                        top: planDropdownPos.top !== undefined ? `${planDropdownPos.top}px` : undefined,
-                                        bottom: planDropdownPos.bottom !== undefined ? `${planDropdownPos.bottom}px` : undefined,
-                                        right: `${planDropdownPos.right}px`,
+                                        top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : undefined,
+                                        bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : undefined,
+                                        right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           handleOpenEditPlan(product, plan);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2415,7 +2171,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           handleDuplicatePlan(product, plan);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2434,7 +2190,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           setSubConfirmAction({
                                             type: 'plan',
                                             title: 'Delete Subscription Plan',
@@ -2576,7 +2332,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       ) : (
                         pagedPlans.map((item) => {
                           const { plan, product } = item;
-                          const isDropdownOpen = activePlanDropdownId === plan.id;
+                          const isDropdownOpen = rowMenu.activeId === plan.id;
                           const currencySymbol = plan.currency || '₹';
                           const isCustom = plan.customizablePrice;
                           const basePrice = plan.price || 0;
@@ -2643,66 +2399,35 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
                               {/* 6. Status Badge */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <span
-                                  className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold ${plan.status === 'Inactive'
-                                    ? 'bg-rose-50 text-rose-600'
-                                    : 'bg-emerald-50 text-emerald-600'
-                                    }`}
-                                >
-                                  {plan.status || 'Active'}
-                                </span>
+                                <PlanStatusBadge status={plan.status} />
                               </td>
 
                               {/* 7. Action (3-Dots Menu) */}
                               <td className="py-4 px-5 border border-slate-200 text-center">
-                                <div className="relative inline-block text-left plan-action-dropdown-container">
+                                <div className="relative inline-block text-left" data-row-menu-trigger>
                                   <button
                                     type="button"
                                     title="Plan Actions"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (activePlanDropdownId === plan.id) {
-                                        setActivePlanDropdownId(null);
-                                        setPlanDropdownPos(null);
-                                      } else {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const spaceBelow = window.innerHeight - rect.bottom;
-                                        const dropdownHeight = 150;
-                                        const rightPos = window.innerWidth - rect.right;
-
-                                        if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
-                                          setPlanDropdownPos({
-                                            bottom: window.innerHeight - rect.top + 6,
-                                            right: rightPos,
-                                          });
-                                        } else {
-                                          setPlanDropdownPos({
-                                            top: rect.bottom + 6,
-                                            right: rightPos,
-                                          });
-                                        }
-                                        setActivePlanDropdownId(plan.id);
-                                      }
-                                    }}
+                                    onClick={(e) => rowMenu.toggle(e, plan.id)}
                                     className="w-8 h-8 rounded-lg bg-[#33077C] hover:bg-[#432fb3] flex items-center justify-center text-white shadow-xs transition-all hover:scale-105 active:scale-95 mx-auto cursor-pointer"
                                   >
                                     <MoreVertical className="w-4 h-4 fill-white" />
                                   </button>
 
                                   {/* Portal Dropdown Menu */}
-                                  {isDropdownOpen && planDropdownPos && (
+                                  {isDropdownOpen && rowMenu.pos && (
                                     <div
-                                      className="plan-action-dropdown-menu fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
+                                      data-row-menu className="fixed z-50 w-52 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 px-2 animate-in fade-in zoom-in-95 duration-100"
                                       style={{
-                                        top: planDropdownPos.top !== undefined ? `${planDropdownPos.top}px` : undefined,
-                                        bottom: planDropdownPos.bottom !== undefined ? `${planDropdownPos.bottom}px` : undefined,
-                                        right: `${planDropdownPos.right}px`,
+                                        top: rowMenu.pos.top !== undefined ? `${rowMenu.pos.top}px` : undefined,
+                                        bottom: rowMenu.pos.bottom !== undefined ? `${rowMenu.pos.bottom}px` : undefined,
+                                        right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           handleOpenEditPlan(product, plan);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2719,7 +2444,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           handleDuplicatePlan(product, plan);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2738,7 +2463,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setActivePlanDropdownId(null);
+                                          rowMenu.close();
                                           setSubConfirmAction({
                                             type: 'plan',
                                             title: 'Delete Subscription Plan',

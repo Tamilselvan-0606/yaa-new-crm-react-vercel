@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { salesReportApi, SalesReportSummary } from '../../../api/commerce/salesReportApi';
 import {
   BarChart3,
   TrendingUp,
@@ -211,6 +212,30 @@ export const SaleManagementReportsView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPartyFilter, setSelectedPartyFilter] = useState('ALL');
 
+  // Server-side KPI summary (falls back to in-browser computation until loaded)
+  const [apiSummary, setApiSummary] = useState<SalesReportSummary | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const params =
+      timeRange === 'custom'
+        ? {
+            from: customStartDate <= customEndDate ? customStartDate : customEndDate,
+            to: customStartDate <= customEndDate ? customEndDate : customStartDate,
+          }
+        : { period: timeRange };
+    salesReportApi
+      .getReportSummary(params)
+      .then((res) => {
+        if (!cancelled) setApiSummary(res?.success && res.data ? res.data : null);
+      })
+      .catch(() => {
+        if (!cancelled) setApiSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange, customStartDate, customEndDate]);
+
   // Preview Modal State
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -370,11 +395,11 @@ export const SaleManagementReportsView: React.FC = () => {
   }, [filteredSales, filteredPurchases, filteredSalesReturns, filteredPurchaseReturns]);
 
   // Overall KPIs
-  const totalSalesVal = useMemo(() => filteredSales.reduce((acc, s) => acc + s.grandTotal, 0), [filteredSales]);
+  const totalSalesVal = useMemo(() => apiSummary ? apiSummary.totalSales : filteredSales.reduce((acc, s) => acc + s.grandTotal, 0), [filteredSales, apiSummary]);
   const totalReceivedVal = useMemo(() => filteredSales.reduce((acc, s) => acc + s.paidAmount, 0), [filteredSales]);
-  const totalSalesDueVal = useMemo(() => filteredSales.reduce((acc, s) => acc + s.balance, 0), [filteredSales]);
-  const totalPurchaseVal = useMemo(() => filteredPurchases.reduce((acc, p) => acc + p.grandTotal, 0), [filteredPurchases]);
-  const totalStockVal = useMemo(() => stocks.reduce((acc, st) => acc + (st.inStock * (st.unitCost || 0)), 0), [stocks]);
+  const totalSalesDueVal = useMemo(() => apiSummary ? apiSummary.outstandingAmount : filteredSales.reduce((acc, s) => acc + s.balance, 0), [filteredSales, apiSummary]);
+  const totalPurchaseVal = useMemo(() => apiSummary ? apiSummary.totalPurchases : filteredPurchases.reduce((acc, p) => acc + p.grandTotal, 0), [filteredPurchases, apiSummary]);
+  const totalStockVal = useMemo(() => apiSummary ? apiSummary.stockValuation : stocks.reduce((acc, st) => acc + (st.inStock * (st.unitCost || 0)), 0), [stocks, apiSummary]);
 
   // Helper date formatter
   const formatToDDMMYYYY = (iso?: string) => {

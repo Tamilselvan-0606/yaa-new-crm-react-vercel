@@ -1,12 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import Snackbar from '@mui/material/Snackbar';
-import Alert from '@mui/material/Alert';
-import AlertTitle from '@mui/material/AlertTitle';
-import CircularProgress from '@mui/material/CircularProgress';
-import Stack from '@mui/material/Stack';
 
 /**
- * Drop-in replacement for `sonner`'s `toast`, rendered with MUI Snackbar + Alert.
+ * Drop-in replacement for `sonner`'s `toast`, rendered with Tailwind (no UI library).
  * Usage is unchanged: toast.success('Saved'), toast.error('Oops', { description: '...' }),
  * toast.loading('Working...', { id }) then toast.success('Done', { id }).
  * Mount <SnackbarHost /> once near the app root.
@@ -24,6 +19,7 @@ interface ToastOptions {
 
 interface ToastItem {
   id: ToastId;
+  createdAt: number;
   type: ToastType;
   message: ToastMessage;
   description?: React.ReactNode;
@@ -32,6 +28,8 @@ interface ToastItem {
 }
 
 const DEFAULT_DURATION = 4000;
+// An identical toast fired again within this window is dropped (two code paths reporting one event).
+const DUPLICATE_WINDOW_MS = 1500;
 const MAX_VISIBLE = 5;
 
 let items: ToastItem[] = [];
@@ -41,9 +39,22 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
 const show = (type: ToastType, message: ToastMessage, opts: ToastOptions = {}): ToastId => {
+  const now = Date.now();
+  if (opts.id === undefined && type !== 'loading') {
+    const dup = items.find(
+      (t) =>
+        t.open &&
+        t.type === type &&
+        t.message === message &&
+        t.description === opts.description &&
+        now - t.createdAt < DUPLICATE_WINDOW_MS,
+    );
+    if (dup) return dup.id;
+  }
   const id = opts.id ?? `toast_${++counter}`;
   const item: ToastItem = {
     id,
+    createdAt: now,
     type,
     message,
     description: opts.description,
@@ -80,6 +91,96 @@ export const toast = {
   dismiss,
 };
 
+// Same colours, sizes and shadow MUI's filled <Alert> used, so toasts look unchanged.
+const SEVERITY_BG: Record<Exclude<ToastType, 'loading'>, string> = {
+  success: 'bg-[#2e7d32]',
+  error: 'bg-[#d32f2f]',
+  info: 'bg-[#0288d1]',
+  warning: 'bg-[#ed6c02]',
+};
+
+const ICON_PATHS: Record<Exclude<ToastType, 'loading'>, string> = {
+  success:
+    'M20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4C12.76,4 13.5,4.11 14.2,4.31L15.77,2.74C14.61,2.26 13.34,2 12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12M7.91,10.08L6.5,11.5L11,16L21,6L19.59,4.58L11,13.17L7.91,10.08Z',
+  error:
+    'M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z',
+  warning: 'M12 5.99L19.53 19H4.47L12 5.99M12 2L1 21h22L12 2zm1 14h-2v2h2v-2zm0-6h-2v4h2v-4z',
+  info: 'M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z',
+};
+
+const CLOSE_PATH = 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z';
+
+const ToastIcon: React.FC<{ type: ToastType }> = ({ type }) =>
+  type === 'loading' ? (
+    <span className="block w-[18px] h-[18px] rounded-full border-2 border-current border-t-transparent animate-spin" />
+  ) : (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+      <path d={ICON_PATHS[type]} />
+    </svg>
+  );
+
+const EXIT_MS = 200;
+
+const ToastCard: React.FC<{ item: ToastItem }> = ({ item }) => {
+  const [hovered, setHovered] = useState(false);
+
+  // Auto-hide after `duration` (paused while the pointer is over the toast). A re-fired toast with the
+  // same id gets a new createdAt, which restarts the timer.
+  useEffect(() => {
+    if (!item.open || item.duration === null || hovered) return;
+    const timer = setTimeout(() => dismiss(item.id), item.duration);
+    return () => clearTimeout(timer);
+  }, [item.open, item.duration, item.id, item.createdAt, hovered]);
+
+  // Once closed, wait for the fade-out and then drop it from the list.
+  useEffect(() => {
+    if (item.open) return;
+    const timer = setTimeout(() => remove(item.id), EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [item.open, item.id]);
+
+  const severity = item.type === 'loading' ? 'info' : item.type;
+
+  return (
+    <div
+      role="alert"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className={`pointer-events-auto flex items-center w-full min-w-[280px] max-w-[420px] rounded px-4 py-1.5 text-sm leading-[1.43] text-white shadow-[0_3px_3px_-2px_rgba(0,0,0,0.2),0_3px_4px_0_rgba(0,0,0,0.14),0_1px_8px_0_rgba(0,0,0,0.12)] transition-all duration-200 ${SEVERITY_BG[severity]} ${
+        item.open ? 'opacity-100 scale-100 animate-in fade-in zoom-in-75' : 'opacity-0 scale-75'
+      }`}
+    >
+      <div className="flex py-[7px] mr-3 shrink-0 opacity-90">
+        <ToastIcon type={item.type} />
+      </div>
+      <div className="py-2 min-w-0 flex-1 overflow-auto">
+        {item.description ? (
+          <>
+            <div className="font-medium -mt-0.5 mb-0.5">{item.message}</div>
+            {item.description}
+          </>
+        ) : (
+          item.message
+        )}
+      </div>
+      {item.type !== 'loading' && (
+        <div className="pt-1 pl-4 ml-auto -mr-2 shrink-0">
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => dismiss(item.id)}
+            className="p-[5px] rounded-full text-inherit opacity-90 hover:opacity-100 hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+              <path d={CLOSE_PATH} />
+            </svg>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SnackbarHost: React.FC = () => {
   const [, force] = useState(0);
 
@@ -94,41 +195,10 @@ export const SnackbarHost: React.FC = () => {
   if (items.length === 0) return null;
 
   return (
-    <Stack
-      spacing={1}
-      sx={{ position: 'fixed', top: 16, right: 16, zIndex: 2000, maxWidth: 'calc(100vw - 32px)', pointerEvents: 'none' }}
-    >
+    <div className="fixed top-4 right-4 z-[2000] flex flex-col gap-2 max-w-[calc(100vw-32px)] pointer-events-none">
       {items.map((t) => (
-        <Snackbar
-          key={t.id}
-          open={t.open}
-          autoHideDuration={t.duration}
-          onClose={(_, reason) => {
-            if (reason === 'clickaway') return;
-            dismiss(t.id);
-          }}
-          slotProps={{ transition: { onExited: () => remove(t.id) } }}
-          // Render inline inside the stack instead of MUI's default fixed positioning
-          sx={{ position: 'static', transform: 'none', pointerEvents: 'auto' }}
-        >
-          <Alert
-            severity={t.type === 'loading' ? 'info' : t.type}
-            variant="filled"
-            icon={t.type === 'loading' ? <CircularProgress size={18} color="inherit" /> : undefined}
-            onClose={t.type === 'loading' ? undefined : () => dismiss(t.id)}
-            sx={{ width: '100%', minWidth: 280, maxWidth: 420, alignItems: 'center', boxShadow: 3 }}
-          >
-            {t.description ? (
-              <>
-                <AlertTitle sx={{ mb: 0.25 }}>{t.message}</AlertTitle>
-                {t.description}
-              </>
-            ) : (
-              t.message
-            )}
-          </Alert>
-        </Snackbar>
+        <ToastCard key={t.id} item={t} />
       ))}
-    </Stack>
+    </div>
   );
 };

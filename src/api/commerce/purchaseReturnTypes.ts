@@ -73,6 +73,7 @@ export interface PurchaseReturnListResponse {
   message: string;
   data: ApiPurchaseReturn[];
   pagination?: PurchaseReturnPagination;
+  summary?: { totalCount: number; pendingCount: number; approvedCount: number; completedCount: number; returnAmount: number };
   meta?: {
     timestamp: string;
     requestId: string;

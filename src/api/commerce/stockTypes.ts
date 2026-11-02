@@ -47,12 +47,56 @@ export interface StockFilterParams {
   lowStock?: boolean | string;
 }
 
+export interface StockMovementReportParams {
+  from?: string;
+  to?: string;
+  branchId?: string;
+  productId?: string;
+  categoryId?: string;
+  search?: string;
+}
+
+export interface StockMovementReportRow {
+  productId: string;
+  productName: string;
+  sku: string;
+  unit: string;
+  category: string;
+  openingStock: number;
+  stockIn: number;
+  stockOut: number;
+  available: number;
+}
+
+export interface StockMovementReportSummary {
+  totalIn: number;
+  totalOut: number;
+  totalAvailable: number;
+}
+
+export interface StockMovementReportResponse {
+  success: boolean;
+  statusCode?: number;
+  message?: string;
+  data: StockMovementReportRow[];
+  summary?: StockMovementReportSummary;
+}
+
+export interface StockListSummary {
+  totalItems: number;
+  healthyCount: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  totalValuation: number;
+}
+
 export interface StockListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiStockItem[];
   pagination?: StockPagination;
+  summary?: StockListSummary;
   meta?: {
     timestamp: string;
     requestId: string;

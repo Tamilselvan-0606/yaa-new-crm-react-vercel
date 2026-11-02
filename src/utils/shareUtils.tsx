@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import SendIcon from '@mui/icons-material/Send';
-import Popover from '@mui/material/Popover';
+import { Popover } from '../components/common/Popover';
 import { toast } from "./toast";
 
 /**
@@ -919,6 +918,19 @@ export interface ShareDropdownProps {
   title?: string;
 }
 
+const SendIcon: React.FC = () => (
+  <svg
+    viewBox="0 0 24 24"
+    width="18"
+    height="18"
+    fill="currentColor"
+    aria-hidden="true"
+    className="text-[#33077C] group-hover:text-[#4309A2]"
+  >
+    <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+  </svg>
+);
+
 export const DocumentSharePopover: React.FC<ShareDropdownProps> = ({
   id,
   activeShareId,
@@ -983,32 +995,14 @@ export const DocumentSharePopover: React.FC<ShareDropdownProps> = ({
         onClick={handleClick}
         className={buttonClassName}
       >
-        {icon || <SendIcon sx={{ fontSize: 18 }} className="text-[#33077C] group-hover:text-[#4309A2]" />}
+        {icon || <SendIcon />}
       </button>
 
       <Popover
         open={isOpen && Boolean(anchorEl)}
         anchorEl={anchorEl}
         onClose={handleClose}
-        anchorOrigin={{
-          vertical: 'bottom',
-          horizontal: 'right',
-        }}
-        transformOrigin={{
-          vertical: 'top',
-          horizontal: 'right',
-        }}
-        slotProps={{
-          paper: {
-            sx: {
-              borderRadius: '16px',
-              padding: '14px',
-              minWidth: '200px',
-              border: '1px solid rgba(226, 232, 240, 0.9)',
-              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-            },
-          },
-        }}
+        className="rounded-2xl p-[14px] min-w-[200px] border border-slate-200/90 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.1),0_8px_10px_-6px_rgba(0,0,0,0.1)]"
       >
         <div className="text-xs font-bold text-slate-800 mb-3 px-1 tracking-tight">
           Share

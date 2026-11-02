@@ -24,6 +24,7 @@ import {
 } from '../../api';
 import { useAppDispatch } from '../../hooks/redux';
 import { baseApi } from '../../api/baseApi';
+import { RegisteredField } from '../common/FormField';
 import { toast } from "../../utils/toast";
 import {
   Upload,
@@ -716,65 +717,32 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             />
           </div>
 
-          <div>
-            <label className={labelClass}>
-              Client Name <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('clientName')}
-              type="text"
-              placeholder="e.g. John Doe"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.clientName
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.clientName && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.clientName.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Client Name"
+            required
+            registration={register("clientName")}
+            error={errors.clientName?.message}
+            placeholder="e.g. John Doe"
+          />
 
-          <div>
-            <label className={labelClass}>
-              Client Business <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('businessName')}
-              type="text"
-              placeholder="Company / Business Name"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.businessName
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.businessName && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.businessName.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Client Business"
+            required
+            registration={register("businessName")}
+            error={errors.businessName?.message}
+            placeholder="Company / Business Name"
+          />
         </div>
 
         {/* Row 2: Contact Person | Phone Number | WhatsApp Number */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className={labelClass}>
-              Contact Person <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('contactPerson')}
-              type="text"
-              placeholder="Contact Person Full Name"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.contactPerson
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.contactPerson && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.contactPerson.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Contact Person"
+            required
+            registration={register("contactPerson")}
+            error={errors.contactPerson?.message}
+            placeholder="Contact Person Full Name"
+          />
 
           <div>
             <label className={labelClass}>
@@ -839,24 +807,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
         {/* Row 3: Email | GST Number | PAN Number */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className={labelClass}>
-              Email <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('email')}
-              type="email"
-              placeholder="client@company.com"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.email
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.email && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.email.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Email"
+            required
+            type="email"
+            registration={register("email")}
+            error={errors.email?.message}
+            placeholder="client@company.com"
+          />
 
           <div>
             <label className={labelClass}>
@@ -899,7 +857,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                 <input
                   type="text"
                   maxLength={10}
-                  placeholder="e.g. ABCDE1234F"
+                  placeholder="e.g. AAAAA0000A"
                   value={field.value || ''}
                   onChange={(e) => {
                     const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
@@ -921,24 +879,13 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
         {/* Row 4: Address | Product Selection (3 fields per row grid layout) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className={labelClass}>
-              Address <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <input
-              {...register('address')}
-              type="text"
-              placeholder="Street Address, City, State, Pincode"
-              className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                errors.address
-                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-              }`}
-            />
-            {errors.address && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.address.message}</p>
-            )}
-          </div>
+          <RegisteredField
+            label="Address"
+            required
+            registration={register("address")}
+            error={errors.address?.message}
+            placeholder="Street Address, City, State, Pincode"
+          />
 
           <div>
             <label className={labelClass}>

@@ -1,5 +1,15 @@
 import { z } from 'zod';
-import { isValidIndianPhone, INDIAN_PHONE_ERROR_MESSAGE } from '../utils/validation';
+import {
+  emailAddress,
+  indianMobile,
+  indianPhoneAnyFormat,
+  required,
+  validGst,
+  validPan,
+  zodValidate,
+} from '../utils/fieldValidators';
+
+const ALT_PHONE_MESSAGE = 'Enter a valid 10-digit Indian alternate phone number';
 
 export const LoginSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Invalid email address'),
@@ -15,29 +25,9 @@ export const LeadSchema = z.object({
   company: z.string().trim().min(1, 'Lead Name is required'),
   designation: z.string().optional(),
   phone: z.string().optional(),
-  whatsapp: z
-    .string()
-    .trim()
-    .min(1, 'WhatsApp number is required')
-    .refine(
-      (val) => {
-        const clean = val.replace(/\D/g, '');
-        return clean.length === 10;
-      },
-      'WhatsApp number must be exactly 10 digits'
-    ),
-  email: z
-    .string()
-    .trim()
-    .min(1, 'Email is required')
-    .email('Please enter a valid email address'),
-  alternatePhone: z
-    .string()
-    .optional()
-    .refine(
-      (val) => !val || !val.trim() || isValidIndianPhone(val),
-      'Enter a valid 10-digit Indian alternate phone number'
-    ),
+  whatsapp: z.string().trim().superRefine(zodValidate([required('WhatsApp number is required'), indianMobile('WhatsApp number')])),
+  email: z.string().trim().superRefine(zodValidate([required('Email is required'), emailAddress])),
+  alternatePhone: z.string().optional().superRefine(zodValidate([indianPhoneAnyFormat(ALT_PHONE_MESSAGE)])),
   address: z.string().trim().min(1, 'Address is required'),
   city: z.string().optional(),
   state: z.string().optional(),
@@ -123,66 +113,16 @@ export const CustomerSchema = z.object({
   clientName: z.string().trim().min(1, 'Client Name is required'),
   businessName: z.string().trim().min(1, 'Client Business is required'),
   contactPerson: z.string().trim().min(1, 'Contact Person is required'),
-  phone: z
-    .string()
-    .trim()
-    .min(1, 'Phone Number is required')
-    .refine(
-      (val) => {
-        const clean = val.replace(/\D/g, '');
-        return clean.length === 10;
-      },
-      'Phone Number must be exactly 10 digits'
-    ),
-  whatsapp: z
-    .string()
-    .optional()
-    .refine(
-      (val) => {
-        if (!val || !val.trim()) return true;
-        const clean = val.replace(/\D/g, '');
-        return clean.length === 10;
-      },
-      'WhatsApp Number must be exactly 10 digits'
-    ),
-  email: z
-    .string()
-    .trim()
-    .min(1, 'Email is required')
-    .email('Please enter a valid email address'),
-  gstNumber: z
-    .string()
-    .trim()
-    .min(1, 'GST Number is required')
-    .refine(
-      (val) => {
-        const clean = val.replace(/[^a-zA-Z0-9]/g, '');
-        return clean.length === 15;
-      },
-      'GST Number must be exactly 15 alphanumeric characters'
-    ),
-  panNumber: z
-    .string()
-    .trim()
-    .min(1, 'PAN Number is required')
-    .refine(
-      (val) => {
-        const clean = val.replace(/[^a-zA-Z0-9]/g, '');
-        return clean.length === 10;
-      },
-      'PAN Number must be exactly 10 alphanumeric characters'
-    ),
+  phone: z.string().trim().superRefine(zodValidate([required('Phone Number is required'), indianMobile('Phone Number')])),
+  whatsapp: z.string().optional().superRefine(zodValidate([indianMobile('WhatsApp Number')])),
+  email: z.string().trim().superRefine(zodValidate([required('Email is required'), emailAddress])),
+  gstNumber: z.string().trim().superRefine(zodValidate([required('GST Number is required'), validGst])),
+  panNumber: z.string().trim().superRefine(zodValidate([required('PAN Number is required'), validPan])),
   address: z.string().trim().min(1, 'Address is required'),
   city: z.string().optional(),
   state: z.string().optional(),
   pincode: z.string().optional(),
-  alternatePhone: z
-    .string()
-    .optional()
-    .refine(
-      (val) => !val || !val.trim() || isValidIndianPhone(val),
-      'Enter a valid 10-digit Indian alternate phone number'
-    ),
+  alternatePhone: z.string().optional().superRefine(zodValidate([indianPhoneAnyFormat(ALT_PHONE_MESSAGE)])),
 });
 
 export type CustomerFormData = z.infer<typeof CustomerSchema>;
@@ -201,21 +141,8 @@ export type EmployeeFormData = z.infer<typeof EmployeeSchema>;
 
 export const SalesRepresentativeSchema = z.object({
   name: z.string().min(2, 'Full name must be at least 2 characters'),
-  mobile: z
-    .string()
-    .min(1, 'Mobile number is required')
-    .refine(
-      (val) => {
-        if (!val) return false;
-        const clean = val.replace(/\D/g, '');
-        return /^[6-9]\d{9}$/.test(clean);
-      },
-      'Mobile number must be a valid 10-digit number starting with 6, 7, 8, or 9'
-    ),
-  email: z
-    .string()
-    .min(1, 'Email address is required')
-    .email('Enter a valid email address'),
+  mobile: z.string().superRefine(zodValidate([required('Mobile number is required'), indianMobile('Mobile number')])),
+  email: z.string().superRefine(zodValidate([required('Email address is required'), emailAddress])),
   designation: z.string().optional(),
   status: z.enum(['Active', 'Inactive']),
 });

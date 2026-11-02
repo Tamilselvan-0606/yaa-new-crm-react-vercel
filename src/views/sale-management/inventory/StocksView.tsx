@@ -4,6 +4,7 @@ import React, {
   useState,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useRef,
 } from "react";
@@ -57,6 +58,7 @@ import { exportTableToExcel } from "../../../utils/excelExport";
 import { printBusinessDocument, printTableReport, downloadBusinessDocument, downloadTableReport, DocumentPrintOptions } from "../../../utils/printUtils";
 import { toast } from "../../../utils/toast";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
+import type { StockListSummary } from "../../../api/commerce/stockTypes";
 import {
   stockApi,
   mapApiStockToInventoryStockItem,
@@ -69,6 +71,23 @@ import {
   categoryApi,
 } from "../../../api";
 import { getProductImageFromCache } from "./InventoryProductsView";
+import { FormError } from "../../../components/common/FormError";
+import {
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  fieldAttr,
+  collectErrors,
+  checkRequiredSelection,
+  checkRequiredText,
+  checkQuantity,
+  checkStockAvailable,
+  checkNumber,
+  checkMoney,
+  checkDateNotBefore,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+} from "../../../utils/formValidation";
 
 import { formatDate } from '../utils/dateUtils';
 export interface EditStockFormValues {
@@ -205,6 +224,7 @@ export const StocksView: React.FC = () => {
   const [isAdjusting, setIsAdjusting] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
+  const [apiSummary, setApiSummary] = useState<StockListSummary | null>(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
 
   // Request deduplication & Batch cache
@@ -301,7 +321,10 @@ export const StocksView: React.FC = () => {
 
   // Adjust Form State with Batch
   const [adjustType, setAdjustType] = useState<"add" | "deduct">("add");
-  const [adjustQty, setAdjustQty] = useState<number>(10);
+  const [adjustQty, setAdjustQty] = useState<string>("10");
+  const fe = useFieldErrors();
+  const adjustGuard = useSubmitGuard();
+  const editGuard = useSubmitGuard();
   const [adjustReason, setAdjustReason] = useState("Purchase Restock");
   const [adjustNotes, setAdjustNotes] = useState("");
   const [batchMode, setBatchMode] = useState<"existing" | "new">("existing");
@@ -352,9 +375,14 @@ export const StocksView: React.FC = () => {
     register: registerEdit,
     handleSubmit: handleSubmitEdit,
     reset: resetEdit,
-    formState: { errors: editErrors },
+    setError: setEditError,
+    clearErrors: clearEditErrors,
+    getValues: getEditValues,
+    watch: watchEdit,
+    formState: { errors: editErrors, isSubmitted: isEditSubmitted },
   } = useForm<EditStockFormValues>({
-    mode: "onChange",
+    mode: "onSubmit",
+    reValidateMode: "onChange",
     defaultValues: {
       productName: "",
       sku: "",
@@ -511,6 +539,7 @@ export const StocksView: React.FC = () => {
 
           setStocks(mapped);
           setIsApiConnected(true);
+          if (res.summary) setApiSummary(res.summary);
           if (res.pagination) {
             setTotalApiRecords(res.pagination.totalRecords);
             setTotalApiPages(res.pagination.totalPages);
@@ -590,6 +619,16 @@ export const StocksView: React.FC = () => {
       0,
     );
 
+    if (apiSummary) {
+      return {
+        totalItems: apiSummary.totalItems ?? totalItems,
+        healthyCount: apiSummary.healthyCount ?? healthyCount,
+        lowStockCount: apiSummary.lowStockCount ?? lowStockCount,
+        outOfStockCount: apiSummary.outOfStockCount ?? outOfStockCount,
+        totalValuation: apiSummary.totalValuation ?? totalValuation,
+      };
+    }
+
     return {
       totalItems,
       healthyCount,
@@ -597,52 +636,17 @@ export const StocksView: React.FC = () => {
       outOfStockCount,
       totalValuation,
     };
-  }, [stocks, totalApiRecords]);
+  }, [stocks, totalApiRecords, apiSummary]);
 
   // Open Adjust Modal
   const handleOpenAdjustModal = (
     stk?: InventoryStockItem,
     defaultQty?: number,
   ) => {
+    // No product given: open with nothing selected so the user must choose one.
+    // (Previously the first listed stock row was silently picked, which could adjust the wrong product.)
     let target = stk || null;
-    if (!target && stocks.length > 0) {
-      target = stocks[0];
-    } else if (!target && catalogProducts.length > 0) {
-      const p = catalogProducts[0];
-      const pBatches: StockBatch[] = [];
-      if (p.stockBatches && p.stockBatches.length > 0) {
-        pBatches.push(...p.stockBatches.map(mapApiStockBatchToStockBatch));
-      } else if (p.batchNo || p.initialBatchNo) {
-        const bCode = (p.batchNo || p.initialBatchNo || "").trim();
-        pBatches.push({
-          id: `bat_${p.id}_${bCode}`,
-          batchNo: bCode,
-          productId: p.id,
-          quantity: p.openingStock || 0,
-          costPrice: p.unitCost,
-          sellingPrice: p.unitPrice,
-          mfgDate: p.mfgDate,
-          expDate: p.expDate,
-          status: (p.openingStock || 0) > 0 ? "Active" : "Depleted",
-          receivedDate: new Date().toISOString().split("T")[0],
-        });
-      }
-      target = {
-        id: p.id,
-        productId: p.id,
-        productName: p.name,
-        sku: p.sku,
-        category: p.category,
-        subcategory: p.subcategory,
-        unit: p.unit,
-        inStock: p.openingStock || 0,
-        reorderLevel: 10,
-        unitCost: p.unitCost,
-        unitPrice: p.unitPrice,
-        lastUpdated: new Date().toISOString(),
-        batches: pBatches,
-      };
-    }
+    fe.reset();
 
     if (target && (!target.batches || target.batches.length === 0)) {
       const cat = catalogProducts.find(
@@ -681,14 +685,12 @@ export const StocksView: React.FC = () => {
 
     setSelectedStock(target);
     setAdjustType("add");
-    setAdjustQty(defaultQty && defaultQty > 0 ? defaultQty : 1);
+    setAdjustQty(String(defaultQty && defaultQty > 0 ? defaultQty : 1));
     setAdjustReason("Purchase Restock");
     setAdjustNotes("");
     const firstBatch = target?.batches?.[0]?.batchNo || "";
     setSelectedBatchNo(firstBatch);
-    setNewBatchNo(
-      `BAT-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
-    );
+    setNewBatchNo("");
     setBatchMode(firstBatch ? "existing" : "new");
     if (target?.batches?.[0]?.mfgDate) {
       setBatchMfgDate(target.batches[0].mfgDate);
@@ -722,28 +724,67 @@ export const StocksView: React.FC = () => {
   };
 
   // Save Edit Stock
-  const handleSaveEdit = async (data: EditStockFormValues) => {
+  const computeEditErrors = (data: EditStockFormValues) =>
+    collectErrors([
+      ["productName", checkRequiredText(data.productName, "product name", 2)],
+      ["sku", checkRequiredText(data.sku, "SKU")],
+      ["reorderLevel", checkNumber(data.reorderLevel, "reorder level", { allowZero: true, maxDecimals: 0 })],
+      ["unitCost", checkMoney(data.unitCost, "unit cost price", { allowZero: true })],
+      ["unitPrice", checkMoney(data.unitPrice, "unit selling price", { allowZero: true })],
+    ]);
+
+  // Edit form: nothing shows before the first Save. Afterwards the business-rule errors follow the
+  // values live (a field's error goes away only when the field is valid).
+  const editWatched = watchEdit();
+  useLayoutEffect(() => {
+    if (!isEditModalOpen || !isEditSubmitted) return;
+    const live = computeEditErrors(getEditValues());
+    (Object.keys(live) as Array<keyof EditStockFormValues>).forEach((key) => {
+      const current = editErrors[key];
+      if (!current || current.type === "manual" || current.type === "server") {
+        if (!current || current.message !== live[key]) {
+          setEditError(key, { type: "manual", message: live[key] });
+        }
+      }
+    });
+    (["productName", "sku", "reorderLevel", "unitCost", "unitPrice"] as const).forEach((key) => {
+      const current = editErrors[key];
+      if (!live[key] && current && (current.type === "manual" || current.type === "server")) {
+        clearEditErrors(key);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditModalOpen, isEditSubmitted, editWatched.productName, editWatched.sku, editWatched.reorderLevel, editWatched.unitCost, editWatched.unitPrice]);
+
+  // Clear edit-form errors whenever the modal closes
+  useEffect(() => {
+    if (!isEditModalOpen) clearEditErrors();
+  }, [isEditModalOpen, clearEditErrors]);
+
+  // Registered-rule errors present: show every business-rule error in the same submit
+  const handleInvalidEdit = (rhfErrors: Record<string, any>) => {
+    const extra = computeEditErrors(getEditValues());
+    Object.entries(extra).forEach(([k, msg]) => {
+      if (!rhfErrors[k]) setEditError(k as keyof EditStockFormValues, { type: "manual", message: msg });
+    });
+  };
+
+  const handleSaveEdit = (data: EditStockFormValues) => editGuard.runOnce(async () => {
     if (!selectedStock) return;
-    if (!data.productName.trim() || !data.sku.trim()) {
-      toast.error("Product Name and SKU are required.");
+    const editErrs = computeEditErrors(data);
+    if (checkRequiredSelection(selectedStock.productId, "product")) {
+      setEditError("root", { type: "manual", message: "This product could not be identified. Please close and reopen it." });
+      return;
+    }
+    if (Object.keys(editErrs).length > 0) {
+      Object.entries(editErrs).forEach(([k, msg]) =>
+        setEditError(k as keyof EditStockFormValues, { type: "manual", message: msg }),
+      );
       return;
     }
     const reorderLevelNum = Number(data.reorderLevel);
     const unitCostNum = Number(data.unitCost);
     const unitPriceNum = Number(data.unitPrice);
-
-    if (isNaN(reorderLevelNum) || reorderLevelNum < 0) {
-      toast.error("Reorder Level cannot be negative.");
-      return;
-    }
-    if (isNaN(unitCostNum) || unitCostNum < 0) {
-      toast.error("Unit Cost Price cannot be negative.");
-      return;
-    }
-    if (isNaN(unitPriceNum) || unitPriceNum < 0) {
-      toast.error("Unit Selling Price cannot be negative.");
-      return;
-    }
 
     const updated: InventoryStockItem = {
       ...selectedStock,
@@ -772,51 +813,88 @@ export const StocksView: React.FC = () => {
       setCurrentPage(1);
       loadStocks(true);
     } catch (err: any) {
-      updateStockItemInStore(updated);
-      toast.success(`Updated stock details for "${updated.productName}".`);
-      setIsEditModalOpen(false);
-      setCurrentPage(1);
-      loadStocks(true);
+      // Do not pretend the save worked: keep the modal open with the entered values.
+      const apiFields = extractApiFieldErrors(err);
+      const fieldMap: Record<string, keyof EditStockFormValues> = {
+        productName: "productName",
+        category: "category",
+        subcategory: "subcategory",
+        unit: "unit",
+        salePrice: "unitPrice",
+        purchasePrice: "unitCost",
+        minStockAlert: "reorderLevel",
+      };
+      let mappedAny = false;
+      for (const [k, v] of Object.entries(apiFields)) {
+        if (fieldMap[k]) {
+          setEditError(fieldMap[k], { type: "server", message: v });
+          mappedAny = true;
+        }
+      }
+      // Backend field errors are shown inline; anything else is an API error toast.
+      if (!mappedAny) {
+        toast.error(getApiErrorMessage(err, "Failed to update stock details. Please try again."));
+      }
     }
+  });
+
+  // Pure validator for the stock-adjust modal (used on Save and for live re-validation afterwards)
+  const computeAdjustErrors = (): Record<string, string> => {
+    const effectiveBatchNo =
+      adjustType === "add" && batchMode === "new"
+        ? newBatchNo.trim()
+        : selectedBatchNo.trim();
+    const qtyNum = Number(adjustQty);
+    const targetBatch =
+      adjustType === "deduct" && effectiveBatchNo
+        ? selectedStock?.batches?.find((b) => b.batchNo === effectiveBatchNo)
+        : undefined;
+    const checks: Array<[string, string | null]> = [
+      ["product", checkRequiredSelection(selectedStock?.productId, "product")],
+      ["quantity", checkQuantity(adjustQty, { integerOnly: true })],
+    ];
+    if (selectedStock && !checks[1][1] && adjustType === "deduct") {
+      const totalErr = checkStockAvailable(qtyNum, selectedStock.inStock, selectedStock.productName);
+      const batchErr = targetBatch
+        ? qtyNum > targetBatch.quantity
+          ? `Only ${targetBatch.quantity} ${selectedStock.unit} available in batch ${effectiveBatchNo}. Please reduce the quantity or choose another batch.`
+          : null
+        : null;
+      checks.push(["quantity", batchErr || totalErr]);
+    }
+    if (adjustType === "add" && batchMode === "new") {
+      checks.push(
+        ["newBatchNo", checkRequiredText(newBatchNo, "batch number")],
+        ["expDate", checkDateNotBefore(batchExpDate, batchMfgDate, "expiry date", "manufacturing date")],
+      );
+    }
+    return collectErrors(checks);
   };
 
-  const handleConfirmAdjust = async () => {
-    if (!selectedStock) {
-      toast.error("Please select a product to adjust.");
-      return;
-    }
-    if (adjustQty <= 0) {
-      toast.error("Adjustment quantity must be greater than zero.");
-      return;
-    }
+  // Errors appear only after the first Save click, then follow the values live.
+  useRevalidateAfterSubmit(fe, computeAdjustErrors, [
+    selectedStock, adjustType, adjustQty, batchMode, selectedBatchNo, newBatchNo, batchMfgDate, batchExpDate,
+  ]);
 
+  // Adjust modal starts clean every time it opens or closes
+  useEffect(() => {
+    fe.reset();
+  }, [isAdjustModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleConfirmAdjust = () => adjustGuard.runOnce(async () => {
     const effectiveBatchNo =
       adjustType === "add" && batchMode === "new"
         ? newBatchNo.trim()
         : selectedBatchNo.trim();
 
-    if (adjustType === "deduct") {
-      if (adjustQty > selectedStock.inStock) {
-        toast.error(
-          `Cannot deduct more than available total stock (${selectedStock.inStock} ${selectedStock.unit}).`,
-        );
-        return;
-      }
-      if (effectiveBatchNo) {
-        const targetBatch = selectedStock.batches?.find(
-          (b) => b.batchNo === effectiveBatchNo,
-        );
-        if (targetBatch && adjustQty > targetBatch.quantity) {
-          toast.error(
-            `Cannot deduct more than available in batch ${effectiveBatchNo} (${targetBatch.quantity} ${selectedStock.unit}).`,
-          );
-          return;
-        }
-      }
-    }
+    // Validate everything at once; nothing is sent to the server unless all checks pass.
+    const qtyNum = Number(adjustQty);
+    if (!fe.validateAll(computeAdjustErrors())) return;
+    if (!selectedStock) return;
 
     setIsAdjusting(true);
-    const delta = adjustType === "add" ? adjustQty : -adjustQty;
+    const adjustQtyValue = qtyNum;
+    const delta = adjustType === "add" ? adjustQtyValue : -adjustQtyValue;
     const isDamaged = adjustReason === "Damaged / Spoiled";
     const adjustmentType =
       adjustType === "deduct" ? (isDamaged ? "DAMAGED" : "OUTWARD") : "INWARD";
@@ -850,27 +928,25 @@ export const StocksView: React.FC = () => {
         loadStocks(true);
         return;
       }
+      toast.error("The stock adjustment could not be saved. Please try again.");
     } catch (err: any) {
-      console.warn(
-        "API adjust failed, using local update:",
-        err?.message || err,
-      );
-      adjustStockInStore(selectedStock.productId, delta, effectiveBatchNo, {
-        costPrice: selectedStock.unitCost,
-        sellingPrice: selectedStock.unitPrice,
-        mfgDate: batchMfgDate,
-        expDate: batchExpDate,
-      });
-      toast.success(
-        `Stock for "${selectedStock.productName}" updated locally (${delta > 0 ? `+${delta}` : delta} ${selectedStock.unit}).`,
-      );
-      setIsAdjustModalOpen(false);
-      setCurrentPage(1);
-      loadStocks(true);
+      // The server rejected the adjustment: keep the modal open and the entered values, and
+      // do NOT change local stock (the old code applied it locally and reported success).
+      console.warn("Stock adjust API failed:", err?.message || err);
+      const apiFields = extractApiFieldErrors(err);
+      const mapped: Record<string, string> = {};
+      if (apiFields.quantity) mapped.quantity = apiFields.quantity;
+      if (apiFields.batchNo) mapped[adjustType === "add" && batchMode === "new" ? "newBatchNo" : "batch"] = apiFields.batchNo;
+      if (apiFields.expDate) mapped.expDate = apiFields.expDate;
+      if (Object.keys(mapped).length > 0) {
+        fe.merge(mapped);
+      } else {
+        toast.error(getApiErrorMessage(err, "Failed to adjust stock. Please try again."));
+      }
     } finally {
       setIsAdjusting(false);
     }
-  };
+  });
 
   // Open Movement Ledger Modal with API Fetch
   const handleOpenMovementModal = async (stk: InventoryStockItem) => {
@@ -2024,6 +2100,7 @@ export const StocksView: React.FC = () => {
                 size="md"
                 placeholder="-- Select Product --"
               />
+              <FormError message={fe.errors.product} showIcon />
             </div>
 
             <div>
@@ -2068,6 +2145,7 @@ export const StocksView: React.FC = () => {
                 inputMode="numeric"
                 required
                 value={adjustQty}
+                {...fieldAttr("quantity")}
                 onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
                 onInput={(e) => {
                   e.currentTarget.value = e.currentTarget.value.replace(
@@ -2075,16 +2153,14 @@ export const StocksView: React.FC = () => {
                     "",
                   );
                 }}
-                onChange={(e) =>
-                  setAdjustQty(
-                    Math.max(
-                      1,
-                      Number(e.target.value.replace(/[^0-9]/g, "")) || 1,
-                    ),
-                  )
-                }
+                onChange={(e) => {
+                  // Keep exactly what the user typed (empty stays empty, it is not turned into 1).
+                  setAdjustQty(e.target.value.replace(/[^0-9]/g, ""));
+                  fe.clearError("quantity");
+                }}
                 className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
               />
+              <FormError message={fe.errors.quantity} showIcon />
             </div>
           </div>
 
@@ -2132,25 +2208,37 @@ export const StocksView: React.FC = () => {
                 <BatchSearchableSelect
                   productId={selectedStock?.productId || ""}
                   value={selectedBatchNo}
-                  onChange={(val) => setSelectedBatchNo(val)}
+                  onChange={(val) => {
+                    setSelectedBatchNo(val);
+                    fe.clearError("quantity");
+                    fe.clearError("batch");
+                  }}
                   allowCustomBatch={false}
                   placeholder="-- Auto FIFO / General Lot --"
                 />
+                <FormError message={fe.errors.batch} showIcon />
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-medium text-slate-600 block mb-1.5">
-                    New Batch Number <span className="text-rose-500">*</span>
+                    New Batch Number <span className="text-slate-400 font-normal">(optional)</span>
                   </label>
                   <input
                     type="text"
-                    required
+                    
                     value={newBatchNo}
                     onChange={(e) => setNewBatchNo(e.target.value)}
-                    placeholder="e.g. BAT-2026-09"
-                    className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
+                    {...fieldAttr("newBatchNo")}
+                    placeholder="Auto-generated if left blank"
+                    className={`w-full h-11 px-4 bg-white rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-4 transition-all ${
+                      fe.errors.newBatchNo
+                        ? "border border-rose-400 focus:border-rose-500 focus:ring-rose-500/10"
+                        : "border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-[#4309A2]/10"
+                    }`}
                   />
+                  <FormError message={fe.errors.newBatchNo} showIcon />
+                  <p className="mt-1 text-[11px] text-slate-400">Auto-generated if left blank</p>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-600 block mb-1.5">
@@ -2159,7 +2247,10 @@ export const StocksView: React.FC = () => {
                   <input
                     type="date"
                     value={batchMfgDate}
-                    onChange={(e) => setBatchMfgDate(e.target.value)}
+                    onChange={(e) => {
+                      setBatchMfgDate(e.target.value);
+                      fe.clearError("expDate");
+                    }}
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
                 </div>
@@ -2170,9 +2261,14 @@ export const StocksView: React.FC = () => {
                   <input
                     type="date"
                     value={batchExpDate}
-                    onChange={(e) => setBatchExpDate(e.target.value)}
+                    {...fieldAttr("expDate")}
+                    onChange={(e) => {
+                      setBatchExpDate(e.target.value);
+                      fe.clearError("expDate");
+                    }}
                     className="w-full h-11 px-4 bg-white border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-medium text-slate-700 outline-none focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10 transition-all"
                   />
+                  <FormError message={fe.errors.expDate} showIcon />
                 </div>
               </div>
             )}
@@ -2825,7 +2921,9 @@ export const StocksView: React.FC = () => {
         >
           <form
             noValidate
-            onSubmit={handleSubmitEdit(handleSaveEdit)}
+            onSubmit={handleSubmitEdit(handleSaveEdit, (rhfErrors) =>
+              handleInvalidEdit(rhfErrors as Record<string, any>),
+            )}
             className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs"
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2837,14 +2935,14 @@ export const StocksView: React.FC = () => {
                   type="text"
                   placeholder="e.g. Standard Widget"
                   {...registerEdit("productName", {
-                    required: "Product name is required",
+                    required: "Please enter the product name.",
                     minLength: {
                       value: 2,
-                      message: "Must be at least 2 characters",
+                      message: "The product name must be at least 2 characters.",
                     },
                     validate: (val) =>
                       /^[A-Za-z0-9\s&'().\-\[\]{}/,+%#:*_"]+$/.test(String(val).trim()) ||
-                      "Product name can contain letters, numbers, spaces, brackets, and common symbols",
+                      "The product name contains characters that are not allowed.",
                   })}
                   onInput={(e) => {
                     e.currentTarget.value = e.currentTarget.value.replace(
@@ -2873,7 +2971,7 @@ export const StocksView: React.FC = () => {
                 <input
                   type="text"
                   {...registerEdit("sku", {
-                    required: "SKU Code is required",
+                    required: "Please enter the SKU code.",
                   })}
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-semibold text-slate-800 outline-none transition-all font-mono ${
                     editErrors.sku
@@ -2899,11 +2997,11 @@ export const StocksView: React.FC = () => {
                   type="text"
                   placeholder="e.g. Software Solutions"
                   {...registerEdit("category", {
-                    required: "Category is required",
+                    required: "Please enter the category.",
                     validate: (val) =>
                       !val ||
                       /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "Only text characters (letters and spaces) are allowed",
+                      "The category can contain only letters and spaces.",
                   })}
                   onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
@@ -2934,11 +3032,11 @@ export const StocksView: React.FC = () => {
                   type="text"
                   placeholder="e.g. Enterprise Software"
                   {...registerEdit("subcategory", {
-                    required: "Subcategory is required",
+                    required: "Please enter the subcategory.",
                     validate: (val) =>
                       !val ||
                       /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "Only text characters (letters and spaces) are allowed",
+                      "The subcategory can contain only letters and spaces.",
                   })}
                   onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
@@ -2971,11 +3069,11 @@ export const StocksView: React.FC = () => {
                   type="text"
                   placeholder="e.g. Licenses, Units, Boxes"
                   {...registerEdit("unit", {
-                    required: "Unit is required",
+                    required: "Please enter the unit.",
                     validate: (val) =>
                       !val ||
                       /^[A-Za-z\s&'.-]+$/.test(String(val).trim()) ||
-                      "Only text characters (letters and spaces) are allowed",
+                      "The unit can contain only letters and spaces.",
                   })}
                   onKeyDown={handleTextOnlyKeyDown}
                   onInput={(e) => {
@@ -3011,7 +3109,7 @@ export const StocksView: React.FC = () => {
                       val === "" ||
                       val === undefined ||
                       Number(val) >= 0 ||
-                      "Must be a valid positive integer",
+                      "Please enter the reorder level as a whole number (0 or more).",
                   })}
                   onKeyDown={(e) => handleNumberOnlyKeyDown(e, false)}
                   onInput={(e) => {
@@ -3049,7 +3147,7 @@ export const StocksView: React.FC = () => {
                       val === "" ||
                       val === undefined ||
                       Number(val) >= 0 ||
-                      "Must be a valid positive number",
+                      "Please enter a valid unit cost price (0 or more).",
                   })}
                   onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
                   onInput={(e) => {
@@ -3085,7 +3183,7 @@ export const StocksView: React.FC = () => {
                       val === "" ||
                       val === undefined ||
                       Number(val) >= 0 ||
-                      "Must be a valid positive number",
+                      "Please enter a valid unit selling price (0 or more).",
                   })}
                   onKeyDown={(e) => handleNumberOnlyKeyDown(e, true)}
                   onInput={(e) => {
@@ -3107,6 +3205,8 @@ export const StocksView: React.FC = () => {
                 )}
               </div>
             </div>
+
+            <FormError message={editErrors.root?.message} showIcon />
 
             {/* Modal Action Buttons */}
             <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">

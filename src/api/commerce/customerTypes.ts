@@ -74,12 +74,21 @@ export interface CustomerPagination {
   hasPrevPage: boolean;
 }
 
+export interface CustomerListSummary {
+  totalCount: number;
+  activeCount: number;
+  withOutstandingCount: number;
+  totalReceivable: number;
+  newCount: number;
+}
+
 export interface CustomerListResponse {
   success: boolean;
   statusCode: number;
   message: string;
   data: ApiCustomer[];
   pagination: CustomerPagination;
+  summary?: CustomerListSummary;
   meta: {
     timestamp: string;
     requestId: string;
@@ -195,7 +204,7 @@ export interface CustomerFilterParams {
 export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustomer => {
   return {
     id: apiCust.id,
-    customerCode: apiCust.customerCode || 'CUST-0001',
+    customerCode: apiCust.customerCode || '',
     name: apiCust.name || 'Unnamed Customer',
     company: apiCust.company || '',
     customerType: (apiCust.customerType as CustomerType) || 'Business',
@@ -261,8 +270,7 @@ export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPa
     customerType: cust.customerType === 'Individual' ? 'Individual' : 'Business',
   };
 
-  const code = cleanStr(cust.customerCode);
-  if (code) payload.customerCode = code;
+  // customerCode is server-generated; never sent from the client
 
   const company = cleanStr(cust.company);
   if (company) payload.company = company;

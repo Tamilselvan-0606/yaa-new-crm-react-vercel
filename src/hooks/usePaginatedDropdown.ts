@@ -27,6 +27,16 @@ export function usePaginatedDropdown<T>({
   const isFetchingRef = useRef(false);
   const activeSearchRef = useRef('');
 
+  // Callers usually pass inline closures (fetchPage / getId), which are new on every render.
+  // Reading them through refs keeps executeFetch / handleSearch / loadInitial identities stable, so
+  // effects that depend on them do not re-fire (and re-call the API) on every render.
+  const fetchPageRef = useRef(fetchPage);
+  fetchPageRef.current = fetchPage;
+  const getIdRef = useRef(getId);
+  getIdRef.current = getId;
+  const itemsLengthRef = useRef(0);
+  itemsLengthRef.current = items.length;
+
   // Core fetch function
   const executeFetch = useCallback(
     async (targetPage: number, targetSearch: string, isAppend = false) => {
@@ -40,7 +50,7 @@ export function usePaginatedDropdown<T>({
       }
 
       try {
-        const result = await fetchPage({
+        const result = await fetchPageRef.current({
           page: targetPage,
           limit,
           search: targetSearch,
@@ -58,8 +68,9 @@ export function usePaginatedDropdown<T>({
             return newItems;
           }
           // Deduplicate by ID
-          const existingIds = new Set(prev.map(getId));
-          const filteredNew = newItems.filter((item) => !existingIds.has(getId(item)));
+          const idOf = getIdRef.current;
+          const existingIds = new Set(prev.map(idOf));
+          const filteredNew = newItems.filter((item) => !existingIds.has(idOf(item)));
           return [...prev, ...filteredNew];
         });
 
@@ -81,7 +92,7 @@ export function usePaginatedDropdown<T>({
         setIsLoadingMore(false);
       }
     },
-    [fetchPage, limit, getId]
+    [limit]
   );
 
   // Search handler (called by SearchableSelect onSearch)
@@ -107,11 +118,13 @@ export function usePaginatedDropdown<T>({
   }, [page, isLoading, isLoadingMore, hasMore, executeFetch]);
 
   // Initial load or onOpen
+  // Reads state through refs so its identity never changes: an empty result must not make an
+  // effect that depends on loadInitial re-run and fetch again in a loop.
   const loadInitial = useCallback(() => {
-    if (items.length === 0 && !isLoading && !isFetchingRef.current) {
+    if (itemsLengthRef.current === 0 && !isFetchingRef.current) {
       executeFetch(1, activeSearchRef.current, false);
     }
-  }, [items.length, isLoading, executeFetch]);
+  }, [executeFetch]);
 
   // Refresh helper
   const refresh = useCallback(() => {

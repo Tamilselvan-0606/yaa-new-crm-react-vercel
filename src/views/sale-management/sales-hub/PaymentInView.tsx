@@ -68,6 +68,26 @@ import {
 } from "../utils/formUtils";
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
+import {
+  isValidIndianPhone,
+  normalizeIndianPhoneTo10Digits,
+} from "../../../utils/validation";
+import {
+  checkRequiredText,
+  checkPhone,
+  checkMoney,
+  checkRequiredDate,
+  checkDateNotBefore,
+  checkPaymentWithinBalance,
+  collectErrors,
+  useFieldErrors,
+  useRevalidateAfterSubmit,
+  useSubmitGuard,
+  extractApiFieldErrors,
+  getApiErrorMessage,
+  type FieldErrors,
+} from "../../../utils/formValidation";
+import { FormError } from "../../../components/common/FormError";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
 import {
@@ -213,7 +233,17 @@ export const PaymentInView: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const payFE = useFieldErrors();
+  const quickFE = useFieldErrors();
+  const typeFE = useFieldErrors();
+  const saveGuard = useSubmitGuard();
+  const deleteGuard = useSubmitGuard();
+  const quickCustomerGuard = useSubmitGuard();
+  const [imageError, setImageError] = useState<string | null>(null);
   const [serverTotal, setServerTotal] = useState(0);
+  const [apiSummary, setApiSummary] = useState<
+    NonNullable<Awaited<ReturnType<typeof commercePaymentInApi.getPaymentIns>>["summary"]> | null
+  >(null);
   const isFetchingRef = useRef(false);
   const hasLoadedPrereqs = useRef(false);
 
@@ -388,6 +418,7 @@ export const PaymentInView: React.FC = () => {
       if (res?.success && Array.isArray(res.data)) {
         const mapped = res.data.map(mapApiPaymentInToSalePaymentIn);
         setPaymentIns(mapped);
+        setApiSummary(res.summary ?? null);
         if (res.pagination?.totalRecords !== undefined) {
           setServerTotal(res.pagination.totalRecords);
         } else {
@@ -570,18 +601,6 @@ export const PaymentInView: React.FC = () => {
     setCurrentPage(1);
   };
 
-  // Calculate Next Receipt Number
-  const getNextReceiptNo = useCallback((): string => {
-    if (paymentIns.length === 0) return `PAY-${new Date().getFullYear()}-0001`;
-    const numbers = paymentIns
-      .map((p) => {
-        const num = parseInt(p.receiptNo.replace(/\D/g, ""), 10);
-        return isNaN(num) ? 0 : num;
-      })
-      .filter((n) => n > 0);
-    const max = numbers.length > 0 ? Math.max(...numbers) : 0;
-    return `PAY-${new Date().getFullYear()}-${String(max + 1).padStart(4, "0")}`;
-  }, [paymentIns]);
 
   // Open Create Modal
   const handleOpenCreateModal = (customer?: SalesCustomer) => {
@@ -592,13 +611,14 @@ export const PaymentInView: React.FC = () => {
     setSelectedInvoiceNo("");
     setFormPartyQuery(customer ? customer.name : "");
     setFormPaymentType("Cash");
-    setFormReceiptNo(getNextReceiptNo());
+    setFormReceiptNo("");
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormReceivedAmount("");
     setFormReferenceNo("");
     setFormStatus("Completed");
     setFormDescription("");
     setImageAttachment(null);
+    payFE.reset();
     setIsCreateModalOpen(true);
   };
 
@@ -633,12 +653,15 @@ export const PaymentInView: React.FC = () => {
     setFormStatus((item.status as any) || "Completed");
     setFormDescription(item.description || item.notes || "");
     setImageAttachment(item.imageAttachment || null);
+    payFE.reset();
     setIsCreateModalOpen(true);
   };
 
   // Handle Linked Invoice selection change
   const handleInvoiceSelect = (invId: string) => {
     setSelectedInvoiceId(invId);
+    payFE.clearError("invoice");
+    payFE.clearError("amount");
     if (!invId) {
       setSelectedInvoiceNo("");
       return;
@@ -678,15 +701,24 @@ export const PaymentInView: React.FC = () => {
     );
   }, [customers, formPartyQuery]);
 
+  const validateQuickCustomer = (): FieldErrors =>
+    collectErrors([
+      ["quickName", checkRequiredText(newCustomerName, "customer name", 2)],
+      ["quickPhone", checkPhone(newCustomerPhone, isValidIndianPhone)],
+    ]);
+  useRevalidateAfterSubmit(quickFE, validateQuickCustomer, [newCustomerName, newCustomerPhone]);
+
+  // Every modal starts and ends clean: no stale errors from a previous open.
+  useEffect(() => {
+    quickFE.reset();
+  }, [isQuickCustomerOpen, quickFE.reset]);
+
   // Handle Create Quick Customer
   const handleCreateQuickCustomer = async () => {
-    if (!newCustomerName.trim()) {
-      toast.error("Customer name is required");
-      return;
-    }
+    if (!quickFE.validateAll(validateQuickCustomer())) return;
     const newCust: SalesCustomer = {
       id: `cust_${Date.now()}`,
-      customerCode: `CUS-${Math.floor(1000 + Math.random() * 9000)}`,
+      customerCode: "",
       name: newCustomerName.trim(),
       phone: newCustomerPhone.trim() || "N/A",
       email: "",
@@ -710,10 +742,13 @@ export const PaymentInView: React.FC = () => {
     };
 
     try {
+      const cleanPhone = newCustomerPhone.trim()
+        ? normalizeIndianPhoneTo10Digits(newCustomerPhone)
+        : undefined;
       const res = await customerApi.createCustomer({
-        name: newCust.name,
-        phone: newCust.phone !== "N/A" ? newCust.phone : undefined,
-        company: newCust.company || undefined,
+        name: newCustomerName.trim(),
+        phone: cleanPhone,
+        company: newCustomerCompany.trim() || undefined,
         customerType: "Business",
       });
       if (res?.success && res.data) {
@@ -722,37 +757,48 @@ export const PaymentInView: React.FC = () => {
         setSelectedCustomerId(mapped.id);
         setSelectedCustomerObj(mapped);
         setFormPartyQuery(mapped.name);
+        payFE.clearError("customer");
+        setIsQuickCustomerOpen(false);
+        setNewCustomerName("");
+        setNewCustomerPhone("");
+        setNewCustomerCompany("");
+        quickFE.reset();
+        toast.success(`Customer "${mapped.name}" added successfully`);
       } else {
-        saveCustomer(newCust);
-        setSelectedCustomerId(newCust.id);
-        setSelectedCustomerObj(newCust);
-        setFormPartyQuery(newCust.name);
+        // Never fabricate a local-only customer: a made-up id would later be treated as a real record.
+        toast.error(getApiErrorMessage(null, "We could not add the customer. Please try again."));
       }
-    } catch {
-      saveCustomer(newCust);
-      setSelectedCustomerId(newCust.id);
-      setSelectedCustomerObj(newCust);
-      setFormPartyQuery(newCust.name);
+    } catch (err: any) {
+      const apiFields = extractApiFieldErrors(err);
+      const mapped: Record<string, string> = {};
+      if (apiFields.name) mapped.quickName = apiFields.name;
+      if (apiFields.phone) mapped.quickPhone = apiFields.phone;
+      if (Object.keys(mapped).length > 0) {
+        quickFE.merge(mapped);
+        return;
+      }
+      toast.error(getApiErrorMessage(err, "We could not add the customer. Please try again."));
     }
-
-    setIsQuickCustomerOpen(false);
-    setNewCustomerName("");
-    setNewCustomerPhone("");
-    setNewCustomerCompany("");
-    toast.success(`Customer "${newCust.name}" added successfully`);
   };
 
   // Handle Add Custom Payment Type
-  const handleAddPaymentType = () => {
-    if (!newPaymentTypeName.trim()) {
-      toast.error("Payment type name is required");
-      return;
-    }
+  const validateTypeName = (): FieldErrors => {
     const formatted = newPaymentTypeName.trim();
-    if (availablePaymentTypes.includes(formatted)) {
-      toast.error("Payment type already exists");
-      return;
-    }
+    const typeErr =
+      checkRequiredText(formatted, "payment type name") ||
+      (availablePaymentTypes.some((t) => t.toLowerCase() === formatted.toLowerCase())
+        ? "This payment type already exists. Please choose it from the list."
+        : null);
+    return collectErrors([["typeName", typeErr]]);
+  };
+  useRevalidateAfterSubmit(typeFE, validateTypeName, [newPaymentTypeName, availablePaymentTypes]);
+  useEffect(() => {
+    typeFE.reset();
+  }, [isAddPaymentTypeOpen, typeFE.reset]);
+
+  const handleAddPaymentType = () => {
+    const formatted = newPaymentTypeName.trim();
+    if (!typeFE.validateAll(validateTypeName())) return;
     const updated = [...availablePaymentTypes, formatted];
     setAvailablePaymentTypes(updated);
     localStorage.setItem(
@@ -760,8 +806,10 @@ export const PaymentInView: React.FC = () => {
       JSON.stringify(updated),
     );
     setFormPaymentType(formatted as PaymentInType);
+    payFE.clearError("paymentType");
     setIsAddPaymentTypeOpen(false);
     setNewPaymentTypeName("");
+    typeFE.reset();
     toast.success(`Payment type "${formatted}" added`);
   };
 
@@ -769,10 +817,17 @@ export const PaymentInView: React.FC = () => {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File size must be under 5MB");
+    if (!file.type.startsWith("image/")) {
+      setImageError("Please attach an image file (JPG, PNG, etc.) as the receipt photo.");
+      e.target.value = "";
       return;
     }
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError("The image is larger than 5 MB. Please choose a smaller file.");
+      e.target.value = "";
+      return;
+    }
+    setImageError(null);
     const reader = new FileReader();
     reader.onload = () => {
       setImageAttachment(reader.result as string);
@@ -1078,8 +1133,8 @@ export const PaymentInView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeletePayment = async () => {
-    if (!deleteTargetPayment) return;
+  const handleConfirmDeletePayment = () => deleteGuard.runOnce(async () => {
+    if (!deleteTargetPayment?.id) return;
     setIsDeletingPayment(true);
     setDeletePaymentError(null);
     try {
@@ -1108,21 +1163,16 @@ export const PaymentInView: React.FC = () => {
       fetchPaymentIns();
     } catch (err: any) {
       console.error("Failed to void payment:", err);
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to void payment receipt";
+      const msg = getApiErrorMessage(err, "We could not void this payment receipt. Please try again.");
       setDeletePaymentError(msg);
       toast.error(msg);
     } finally {
       setIsDeletingPayment(false);
     }
-  };
+  });
 
   // Duplicate Payment Record
   const handleDuplicatePayment = (item: SalePaymentIn) => {
-    const nextNo = getNextReceiptNo();
     setEditingPaymentIn(null);
     setSelectedCustomerId(item.customerId || "");
     const foundCust = customers.find(
@@ -1141,45 +1191,111 @@ export const PaymentInView: React.FC = () => {
     if (!availablePaymentTypes.includes(initialPaymentType)) {
       setAvailablePaymentTypes((prev) => [...prev, initialPaymentType]);
     }
-    setFormReceiptNo(nextNo);
+    setFormReceiptNo("");
     setFormDate(new Date().toISOString().split("T")[0]);
     setFormReceivedAmount(String(item.receivedAmount));
     setFormReferenceNo("");
     setFormStatus("Completed");
     setFormDescription(item.description ? `Copy: ${item.description}` : "");
     setImageAttachment(null);
+    payFE.reset();
     setIsCreateModalOpen(true);
     toast.info(`Configuring duplicate of Receipt #${item.receiptNo}`);
   };
 
   // Save / Submit Payment-In (Create or Update via Backend API)
-  const handleSavePayment = useCallback(async () => {
-    if (!selectedCustomerId && !formPartyQuery.trim()) {
-      toast.error("Please select or enter a customer name");
-      return;
+  // Pure validation for the Payment-In form. Returns an error map keyed by field; empty map = valid.
+  const validatePaymentForm = (): FieldErrors => {
+    const errs: FieldErrors = {};
+    const resolvedCustomerId = selectedCustomerObj?.id || selectedCustomerId;
+    const isLegacyEdit = !!editingPaymentIn && !resolvedCustomerId && !!formPartyQuery.trim();
+
+    if (!resolvedCustomerId && !isLegacyEdit) {
+      errs.customer = "Please select a customer before saving the payment.";
+    } else if (resolvedCustomerId && !UUID_REGEX.test(resolvedCustomerId)) {
+      errs.customer = "Please choose the customer from the list.";
     }
-    const amountNum = parseFloat(formReceivedAmount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      toast.error("Please enter a valid received amount greater than zero");
-      return;
+
+    const receiptErr = checkRequiredText(formReceiptNo, "receipt number");
+    if (receiptErr) {
+      errs.receiptNo = receiptErr;
+    } else if (
+      paymentIns.some(
+        (p) =>
+          p.id !== editingPaymentIn?.id &&
+          (p.receiptNo || "").trim().toLowerCase() === formReceiptNo.trim().toLowerCase(),
+      )
+    ) {
+      errs.receiptNo = "This receipt number is already used. Please enter a different receipt number.";
     }
+
+    const dateErr = checkRequiredDate(formDate, "payment date");
+    if (dateErr) errs.date = dateErr;
+
+    if (!formPaymentType || !formPaymentType.trim()) {
+      errs.paymentType = "Please select a payment mode.";
+    } else if (!availablePaymentTypes.includes(formPaymentType)) {
+      errs.paymentType = "Please choose the payment mode from the list.";
+    }
+
+    const amountErr = checkMoney(formReceivedAmount, "received amount");
+    if (amountErr) errs.amount = amountErr;
+
     if (selectedInvoiceId) {
       const linkedInv = sales.find((s) => s.id === selectedInvoiceId);
-      if (
-        linkedInv &&
-        linkedInv.balance > 0 &&
-        amountNum > linkedInv.balance + 0.01
-      ) {
-        toast.error(
-          `Received amount (₹${amountNum.toLocaleString("en-IN")}) cannot exceed linked invoice balance of ₹${linkedInv.balance.toLocaleString("en-IN")}.`,
-        );
-        return;
+      const unchangedLinkedInvoice =
+        !!editingPaymentIn && editingPaymentIn.invoiceId === selectedInvoiceId;
+      if (!linkedInv && !unchangedLinkedInvoice) {
+        errs.invoice = "Please choose the invoice from the list.";
+      } else if (linkedInv) {
+        if (
+          resolvedCustomerId &&
+          linkedInv.customerId &&
+          UUID_REGEX.test(linkedInv.customerId) &&
+          linkedInv.customerId !== resolvedCustomerId
+        ) {
+          errs.invoice = "The selected invoice belongs to a different customer. Please choose the matching invoice or customer.";
+        }
+        if (!errs.invoice) {
+          const dErr = !dateErr
+            ? checkDateNotBefore(formDate, linkedInv.saleDate, "payment date", "invoice date")
+            : null;
+          if (dErr) errs.date = dErr;
+        }
+        if (!amountErr && linkedInv.balance > 0) {
+          // When editing, the invoice balance already excludes this payment's original amount.
+          const allowed =
+            linkedInv.balance + (unchangedLinkedInvoice ? editingPaymentIn!.receivedAmount || 0 : 0);
+          const balErr = checkPaymentWithinBalance(formReceivedAmount, allowed, "received amount");
+          if (balErr) errs.amount = balErr;
+        }
       }
     }
-    if (!formReceiptNo.trim()) {
-      toast.error("Receipt number is required");
-      return;
-    }
+    return errs;
+  };
+
+  useRevalidateAfterSubmit(payFE, validatePaymentForm, [
+    selectedCustomerObj,
+    selectedCustomerId,
+    formPartyQuery,
+    formReceiptNo,
+    formDate,
+    formPaymentType,
+    formReceivedAmount,
+    selectedInvoiceId,
+    paymentIns,
+    availablePaymentTypes,
+    sales,
+    editingPaymentIn,
+  ]);
+  useEffect(() => {
+    payFE.reset();
+    setImageError(null);
+  }, [isCreateModalOpen, payFE.reset]);
+
+  const handleSavePayment = useCallback(() => saveGuard.runOnce(async () => {
+    if (!payFE.validateAll(validatePaymentForm())) return;
+    const amountNum = parseFloat(formReceivedAmount);
 
     const partyName = selectedCustomerObj
       ? selectedCustomerObj.name
@@ -1196,7 +1312,6 @@ export const PaymentInView: React.FC = () => {
     setIsSaving(true);
     try {
       const payload = mapSalePaymentInToApiPayload({
-        receiptNo: formReceiptNo.trim(),
         customerId:
           matchedCustomer?.id && UUID_REGEX.test(matchedCustomer.id)
             ? matchedCustomer.id
@@ -1266,16 +1381,26 @@ export const PaymentInView: React.FC = () => {
       fetchPaymentIns();
     } catch (err: any) {
       console.error("Failed to save payment receipt:", err);
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to save payment receipt";
-      toast.error(msg);
+      const apiFields = extractApiFieldErrors(err);
+      const mappedErrs: FieldErrors = {};
+      if (apiFields.receiptNo) mappedErrs.receiptNo = apiFields.receiptNo;
+      if (apiFields.receivedAmount || apiFields.amount) mappedErrs.amount = apiFields.receivedAmount || apiFields.amount;
+      if (apiFields.customerId) mappedErrs.customer = apiFields.customerId;
+      if (apiFields.invoiceId) mappedErrs.invoice = apiFields.invoiceId;
+      if (apiFields.date || apiFields.paymentDate) mappedErrs.date = apiFields.date || apiFields.paymentDate;
+      if (apiFields.paymentType) mappedErrs.paymentType = apiFields.paymentType;
+      if (Object.keys(mappedErrs).length > 0) {
+        payFE.merge(mappedErrs);
+      } else {
+        toast.error(getApiErrorMessage(err, "We could not save the payment receipt. Please try again."));
+      }
     } finally {
       setIsSaving(false);
     }
-  }, [
+  }), [
+    sales,
+    paymentIns,
+    availablePaymentTypes,
     selectedCustomerId,
     formPartyQuery,
     formReceivedAmount,
@@ -1328,6 +1453,12 @@ export const PaymentInView: React.FC = () => {
       .filter((p) => p.paymentType !== "Cash")
       .reduce((acc, curr) => acc + (curr.receivedAmount || 0), 0);
   }, [paymentIns]);
+
+  // KPI card metrics: prefer API summary, fall back to in-browser computation
+  const cardTotalAmount = apiSummary ? apiSummary.totalAmount : totalAmount;
+  const cardTotalCount = apiSummary ? apiSummary.totalCount : paymentIns.length;
+  const cardCash = apiSummary ? apiSummary.cashAmount : cashCollections;
+  const cardOnline = apiSummary ? apiSummary.onlineAmount : onlineCollections;
 
   // Ensure list strictly respects pageSize if backend returned all items or merged local items
   const pagedPaymentIns = useMemo(() => {
@@ -1563,12 +1694,12 @@ export const PaymentInView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
               ₹
-              {totalAmount.toLocaleString("en-IN", {
+              {cardTotalAmount.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
             <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-              {paymentIns.length} recorded receipts
+              {cardTotalCount} recorded receipts
             </div>
           </div>
           <div className="w-11 h-11 rounded-2xl bg-purple-50 text-[#33077C] flex items-center justify-center font-bold">
@@ -1584,7 +1715,7 @@ export const PaymentInView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-emerald-600 mt-1">
               ₹
-              {cashCollections.toLocaleString("en-IN", {
+              {cardCash.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
@@ -1605,7 +1736,7 @@ export const PaymentInView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-blue-600 mt-1">
               ₹
-              {onlineCollections.toLocaleString("en-IN", {
+              {cardOnline.toLocaleString("en-IN", {
                 minimumFractionDigits: 2,
               })}
             </div>
@@ -1626,8 +1757,8 @@ export const PaymentInView: React.FC = () => {
             </div>
             <div className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
               ₹
-              {paymentIns.length > 0
-                ? (totalAmount / paymentIns.length).toLocaleString("en-IN", {
+              {cardTotalCount > 0
+                ? (cardTotalAmount / cardTotalCount).toLocaleString("en-IN", {
                     maximumFractionDigits: 0,
                   })
                 : "0"}
@@ -2084,6 +2215,7 @@ export const PaymentInView: React.FC = () => {
                       setSelectedCustomerId(val);
                       setSelectedCustomerObj((cust as any) || null);
                       setFormPartyQuery(cust ? cust.name : "");
+                      payFE.clearError("customer");
                     }}
                     selectedCustomer={
                       selectedCustomerObj
@@ -2099,18 +2231,21 @@ export const PaymentInView: React.FC = () => {
                     placeholder="Select or search customer..."
                     size="lg"
                   />
+                  <span data-field="customer" />
+                  <FormError message={payFE.errors.customer} />
                 </div>
 
                 {/* Receipt No */}
                 <div>
-                  <FormLabel required>Receipt Number</FormLabel>
+                  <FormLabel>Receipt Number</FormLabel>
                   <input
                     type="text"
-                    value={formReceiptNo}
-                    onChange={(e) => setFormReceiptNo(e.target.value)}
-                    placeholder="e.g. PAY-2026-0001"
+                    value={editingPaymentIn ? formReceiptNo : ""}
+                    readOnly
+                    placeholder="Auto-generated on save"
                     className={`${FORM_INPUT_CLS} font-mono font-bold text-[#33077C]`}
                   />
+                  <FormError message={payFE.errors.receiptNo} />
                 </div>
 
                 {/* Linked Invoice Selector */}
@@ -2118,6 +2253,7 @@ export const PaymentInView: React.FC = () => {
                   <FormLabel>Linked Invoice (Optional)</FormLabel>
                   <select
                     value={selectedInvoiceId}
+                    data-field="invoice"
                     onChange={(e) => handleInvoiceSelect(e.target.value)}
                     className={FORM_SELECT_CLS}
                   >
@@ -2128,6 +2264,7 @@ export const PaymentInView: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  <FormError message={payFE.errors.invoice} />
                 </div>
 
                 {/* Date */}
@@ -2136,9 +2273,14 @@ export const PaymentInView: React.FC = () => {
                   <input
                     type="date"
                     value={formDate}
-                    onChange={(e) => setFormDate(e.target.value)}
+                    data-field="date"
+                    onChange={(e) => {
+                      setFormDate(e.target.value);
+                      payFE.clearError("date");
+                    }}
                     className={FORM_INPUT_CLS}
                   />
+                  <FormError message={payFE.errors.date} />
                 </div>
 
                 {/* Payment Mode / Type */}
@@ -2160,9 +2302,11 @@ export const PaymentInView: React.FC = () => {
                   </div>
                   <select
                     value={formPaymentType}
-                    onChange={(e) =>
-                      setFormPaymentType(e.target.value as PaymentInType)
-                    }
+                    data-field="paymentType"
+                    onChange={(e) => {
+                      setFormPaymentType(e.target.value as PaymentInType);
+                      payFE.clearError("paymentType");
+                    }}
                     className={FORM_SELECT_CLS}
                   >
                     {availablePaymentTypes.map((type) => (
@@ -2171,6 +2315,7 @@ export const PaymentInView: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  <FormError message={payFE.errors.paymentType} />
                 </div>
               </div>
             </div>
@@ -2198,12 +2343,17 @@ export const PaymentInView: React.FC = () => {
                       min="0.01"
                       placeholder="0.00"
                       value={formReceivedAmount}
+                      data-field="amount"
                       onKeyDown={handleNonNegativeKeyDown}
-                      onChange={(e) => setFormReceivedAmount(e.target.value)}
+                      onChange={(e) => {
+                        setFormReceivedAmount(e.target.value);
+                        payFE.clearError("amount");
+                      }}
                       autoFocus
                       className={`${FORM_INPUT_CLS} pl-8 text-base font-extrabold text-[#33077C]`}
                     />
                   </div>
+                  <FormError message={payFE.errors.amount} />
                   {formReceivedAmount && parseFloat(formReceivedAmount) > 0 && (
                     <div className="text-xs text-slate-500 font-medium italic mt-1.5">
                       {numberToWords(parseFloat(formReceivedAmount))}
@@ -2257,6 +2407,7 @@ export const PaymentInView: React.FC = () => {
                     accept="image/*"
                     className="hidden"
                   />
+                  <FormError message={imageError ?? undefined} />
                   {!imageAttachment ? (
                     <button
                       type="button"
@@ -2353,10 +2504,15 @@ export const PaymentInView: React.FC = () => {
               <input
                 type="text"
                 value={newCustomerName}
-                onChange={(e) => setNewCustomerName(e.target.value)}
+                data-field="quickName"
+                onChange={(e) => {
+                  setNewCustomerName(e.target.value);
+                  quickFE.clearError("quickName");
+                }}
                 placeholder="e.g. Acme Technologies Pvt Ltd"
                 className={FORM_INPUT_CLS}
               />
+              <FormError message={quickFE.errors.quickName} />
             </div>
 
             <div>
@@ -2375,10 +2531,15 @@ export const PaymentInView: React.FC = () => {
               <input
                 type="text"
                 value={newCustomerPhone}
-                onChange={(e) => setNewCustomerPhone(e.target.value)}
+                data-field="quickPhone"
+                onChange={(e) => {
+                  setNewCustomerPhone(e.target.value);
+                  quickFE.clearError("quickPhone");
+                }}
                 placeholder="e.g. +91 98765 43210"
                 className={FORM_INPUT_CLS}
               />
+              <FormError message={quickFE.errors.quickPhone} />
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -2431,10 +2592,15 @@ export const PaymentInView: React.FC = () => {
               <input
                 type="text"
                 value={newPaymentTypeName}
-                onChange={(e) => setNewPaymentTypeName(e.target.value)}
+                data-field="typeName"
+                onChange={(e) => {
+                  setNewPaymentTypeName(e.target.value);
+                  typeFE.clearError("typeName");
+                }}
                 placeholder="e.g. RTGS / NEFT or Google Pay"
                 className={FORM_INPUT_CLS}
               />
+              <FormError message={typeFE.errors.typeName} />
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

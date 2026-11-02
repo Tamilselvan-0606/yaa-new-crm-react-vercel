@@ -83,8 +83,8 @@ export const mapApiSalesReturnToSalesReturn = (apiRet: ApiSalesReturn): SalesRet
 
   return {
     id: apiRet.id,
-    returnNo: apiRet.returnNo || `RET-${Date.now().toString().slice(-6)}`,
-    invoiceNo: apiRet.invoiceNo || apiRet.invoice?.invoiceNo || 'INV-0000',
+    returnNo: apiRet.returnNo || '',
+    invoiceNo: apiRet.invoiceNo || apiRet.invoice?.invoiceNo || '',
     saleId: apiRet.saleId || apiRet.invoiceId || apiRet.invoice?.id || '',
     customerId: apiRet.customerId || '',
     customerName: apiRet.customerName || 'Unnamed Customer',
@@ -144,9 +144,6 @@ export const mapSalesReturnToApiPayload = (
     returnStatus: ret.returnStatus || 'Approved',
   };
 
-  if (ret.returnNo && ret.returnNo.trim()) {
-    payload.returnNo = ret.returnNo.trim();
-  }
   if (ret.invoiceNo && ret.invoiceNo.trim()) {
     payload.invoiceNo = ret.invoiceNo.trim();
   }

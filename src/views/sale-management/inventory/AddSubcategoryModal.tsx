@@ -8,6 +8,7 @@ import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS } from '../utils/formUt
 import { subcategoryApi, ApiSubcategory, categoryApi } from '../../../api';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
+import { useSubmitGuard, extractApiFieldErrors, getApiErrorMessage } from '../../../utils/formValidation';
 
 export interface AddSubcategoryModalProps {
   isOpen: boolean;
@@ -40,6 +41,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [liveCategoryOptions, setLiveCategoryOptions] = useState<{ label: string; value: string }[]>([]);
+  const { runOnce } = useSubmitGuard();
 
   const {
     register,
@@ -48,9 +50,10 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
     setValue,
     watch,
     setError,
-    formState: { errors },
+    formState: { errors, isSubmitted },
   } = useForm<SubcategoryFormValues>({
-    mode: 'onChange',
+    mode: 'onSubmit',
+    reValidateMode: 'onChange',
     defaultValues: {
       category: initialCategory || 'General',
       subcategory: '',
@@ -60,6 +63,18 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
 
   const watchCategory = watch('category');
   const watchStatus = watch('status');
+
+  // Category is a custom select (not a native input): register its rules so submit and re-validation both use them
+  register('category', {
+    validate: (val) => {
+      const v = (val || '').trim();
+      if (!v) return 'Please select a category before continuing.';
+      if (liveCategoryOptions.length > 0 && !liveCategoryOptions.some((o) => o.value === v)) {
+        return 'Please choose the category from the list.';
+      }
+      return true;
+    },
+  });
 
   // Load fresh categories from API and merge with passed categories
   const loadCategories = async () => {
@@ -94,14 +109,13 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      reset({
-        category: initialCategory || 'General',
-        subcategory: '',
-        status: 'Active',
-      });
-      loadCategories();
-    }
+    // Start clean every time the modal opens or closes (no errors carried over)
+    reset({
+      category: initialCategory || 'General',
+      subcategory: '',
+      status: 'Active',
+    });
+    if (isOpen) loadCategories();
   }, [isOpen, initialCategory, reset]);
 
   // Keystroke sanitizer: disallow typing numeric characters in text-only fields
@@ -123,20 +137,12 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
     }
   };
 
-  const handleSaveSubcategory = async (data: SubcategoryFormValues) => {
-    const trimmedCat = data.category.trim();
-    const trimmedSub = data.subcategory.trim();
+  const handleSaveSubcategory = (data: SubcategoryFormValues) => runOnce(async () => {
+    const trimmedCat = (data.category || '').trim();
+    const trimmedSub = (data.subcategory || '').trim();
 
-    if (!trimmedCat) {
-      setError('category', { type: 'manual', message: 'Category is required' });
-      return;
-    }
-    if (!trimmedSub) {
-      setError('subcategory', { type: 'manual', message: 'Subcategory name is required' });
-      return;
-    }
 
-    const finalStatus = (data.status || 'Active') as 'Active' | 'Inactive';
+    const finalStatus = data.status;
     setIsSubmitting(true);
 
     try {
@@ -174,16 +180,17 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
       onClose();
     } catch (apiErr: any) {
       console.error('Subcategory creation failed:', apiErr);
-      const errMsg =
-        apiErr?.response?.data?.error?.message ||
-        apiErr?.response?.data?.message ||
-        apiErr?.message ||
-        'Failed to create subcategory.';
-      toast.error(errMsg);
+      const fieldErrs = extractApiFieldErrors(apiErr);
+      if (fieldErrs.subcategory || fieldErrs.category) {
+        if (fieldErrs.subcategory) setError('subcategory', { type: 'server', message: fieldErrs.subcategory });
+        if (fieldErrs.category) setError('category', { type: 'server', message: fieldErrs.category });
+      } else {
+        toast.error(getApiErrorMessage(apiErr, 'Failed to create subcategory.'));
+      }
     } finally {
       setIsSubmitting(false);
     }
-  };
+  });
 
   return (
     <Modal
@@ -204,7 +211,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
             <CustomSelect
               options={liveCategoryOptions}
               value={watchCategory}
-              onChange={(val) => setValue('category', val, { shouldValidate: true })}
+              onChange={(val) => setValue('category', val, { shouldValidate: isSubmitted })}
               placeholder="Select category"
               activeColor="brand"
               disabled={isSubmitting}
@@ -225,10 +232,9 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
               autoFocus
               placeholder="Enter subcategory name"
               {...register('subcategory', {
-                required: 'Subcategory name is required',
-                minLength: { value: 2, message: 'Subcategory name must be at least 2 characters' },
+                required: 'Please enter the subcategory name.',
                 validate: (val) =>
-                  /^[A-Za-z\s&'-]+$/.test(val.trim()) || 'Only text characters (letters and spaces) are allowed',
+                  val.trim().length >= 2 || 'The subcategory name must be at least 2 characters.',
               })}
               onKeyDown={handleTextOnlyKeyDown}
               onInput={(e) => {
@@ -252,7 +258,7 @@ export const AddSubcategoryModal: React.FC<AddSubcategoryModalProps> = ({
                 { label: 'Inactive', value: 'Inactive' },
               ]}
               value={watchStatus || 'Active'}
-              onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: true })}
+              onChange={(val) => setValue('status', val as 'Active' | 'Inactive', { shouldValidate: isSubmitted })}
               placeholder="Select status"
               activeColor="brand"
               disabled={isSubmitting}

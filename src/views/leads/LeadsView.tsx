@@ -10,8 +10,6 @@ import {
   Target,
   Eye,
   Search,
-  Phone,
-  Mail,
   MapPin,
   Calendar,
   Edit3,
@@ -24,7 +22,6 @@ import {
   CheckCircle2,
   Clock,
   FileText,
-  MessageCircle,
   Download,
   FolderUp,
   FolderDown,
@@ -62,6 +59,9 @@ import {
 } from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
 import { getStoredOrganizationId } from "../../api/config";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useRowActionMenu } from "../../hooks/useRowActionMenu";
+import { ContactCopyButtons } from "../../components/common/ContactCopyButtons";
 
 // Format ISO/Date string to DD/MM/YYYY
 const formatDateDMY = (dateStr?: string | null): string => {
@@ -109,13 +109,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     null,
   );
 
-  // 3-Dots Action Dropdown State
-  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
-  const [dropdownPos, setDropdownPos] = useState<{
-    top?: number;
-    bottom?: number;
-    right: number;
-  } | null>(null);
+  // 3-dots row menu + click-to-copy contact buttons (shared hooks)
+  const rowMenu = useRowActionMenu(200);
+  const { copiedKey, copy: handleCopy } = useCopyToClipboard();
 
   // Leads Search, Filter & Pagination State (Pending & Applied)
   const [pendingLeadSearch, setPendingLeadSearch] = useState("");
@@ -124,43 +120,6 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [appliedLeadStatus, setAppliedLeadStatus] = useState("All");
   const [leadPage, setLeadPage] = useState(1);
   const [leadLimit, setLeadLimit] = useState(10);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  // Close dropdown on outside click or scroll
-  useEffect(() => {
-    const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (
-        !target.closest(".lead-action-dropdown-btn") &&
-        !target.closest(".lead-action-dropdown-menu")
-      ) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    const handleScroll = () => {
-      if (activeDropdownId) {
-        setActiveDropdownId(null);
-        setDropdownPos(null);
-      }
-    };
-    window.addEventListener("mousedown", handleOutsideClick);
-    window.addEventListener("scroll", handleScroll, true);
-    return () => {
-      window.removeEventListener("mousedown", handleOutsideClick);
-      window.removeEventListener("scroll", handleScroll, true);
-    };
-  }, [activeDropdownId]);
-
-  const handleCopy = (e: React.MouseEvent, text: string, key: string) => {
-    e.stopPropagation();
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 2000);
-  };
 
   const [commerceCustomers, setCommerceCustomers] = useState<Customer[]>([]);
 
@@ -994,91 +953,15 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
                           {/* 4. Channels (Phone, WhatsApp, Mail with On-Hover Tooltips) */}
                           <td className="py-4 px-4 border border-slate-200">
-                            <div className="flex items-center justify-center gap-1.5">
-                              {/* Phone Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      phoneNum,
-                                      `client-${client.id}-phone`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <Phone className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `client-${client.id}-phone`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `client-${client.id}-phone`
-                                    ? "Phone number copied"
-                                    : phoneNum}
-                                </div>
-                              </div>
-
-                              {/* WhatsApp Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      whatsappNum || phoneNum,
-                                      `client-${client.id}-wa`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <MessageCircle className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `client-${client.id}-wa`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `client-${client.id}-wa`
-                                    ? "WhatsApp number copied"
-                                    : whatsappNum || phoneNum}
-                                </div>
-                              </div>
-
-                              {/* Mail Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      emailAddr,
-                                      `client-${client.id}-email`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-purple-50 hover:bg-[#33077C] text-[#33077C] hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <Mail className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `client-${client.id}-email`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `client-${client.id}-email`
-                                    ? "Email address copied"
-                                    : emailAddr}
-                                </div>
-                              </div>
-                            </div>
+                            <ContactCopyButtons
+                              variant="circle"
+                              id={`client-${client.id}`}
+                              phone={phoneNum}
+                              whatsapp={whatsappNum || phoneNum}
+                              email={emailAddr}
+                              copiedKey={copiedKey}
+                              onCopy={handleCopy}
+                            />
                           </td>
 
                           {/* 5. Status */}
@@ -1122,34 +1005,9 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                           <td className="py-4 px-4 border border-slate-200 text-center whitespace-nowrap">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === client.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 200;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 6,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 6,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(client.id);
-                                }
-                              }}
-                              className={`lead-action-dropdown-btn w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
-                                activeDropdownId === client.id
+                              onClick={(e) => rowMenu.toggle(e, client.id)}
+                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
+                                rowMenu.activeId === client.id
                                   ? "bg-[#4309A2] text-white ring-2 ring-[#4309A2]/20"
                                   : "bg-[#33077C] hover:bg-[#4309A2] text-white"
                               }`}
@@ -1239,22 +1097,25 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 <thead>
                   <tr className="bg-[#33077C] text-[12px] font-bold text-white tracking-wider uppercase">
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      LEAD CODE & PROSPECT
+                      LEAD NAME AND CODE
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      CONTACT INFO
+                      CONTACT PERSON
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      SOURCE & OFFERINGS
+                      CONTACT DETAILS
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      STATUS & PRIORITY
+                      LEAD SOURCE
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
-                      NEXT FOLLOW-UP
+                      PRODUCT INTEREST
+                    </th>
+                    <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white">
+                      STATUS
                     </th>
                     <th className="py-4 px-5 border border-[#3e0b96] bg-[#33077C] text-white text-center">
-                      ACTIONS
+                      ACTION
                     </th>
                   </tr>
                 </thead>
@@ -1262,7 +1123,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                   {filteredLeads.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="py-16 text-center text-slate-400 border border-slate-200"
                       >
                         <Sparkles className="w-9 h-9 mx-auto mb-2 opacity-30 text-orange-400" />
@@ -1285,131 +1146,54 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                           key={lead.id}
                           className="hover:bg-slate-50/70 transition-colors"
                         >
-                          {/* Lead Code & Business */}
+                          {/* Lead Name and Code */}
                           <td className="py-4 px-5 border border-slate-200">
-                            <div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
-                                  {lead.company || lead.name}
-                                </span>
-                                <span className="text-xs font-semibold text-orange-600">
-                                  (
-                                  {formatDisplayId(
-                                    "LD",
-                                    lead.leadId || lead.id,
-                                    101 + index,
-                                  )}
-                                  )
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                                {lead.name}{" "}
-                                {lead.designation
-                                  ? `- ${lead.designation}`
-                                  : ""}
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Contact Channels (Phone, WhatsApp, Mail with On-Hover Tooltips) */}
-                          <td className="py-4 px-5 border border-slate-200">
-                            <div className="flex items-center gap-1.5">
-                              {/* Phone Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      lead.phone || "",
-                                      `lead-${lead.id}-phone`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <Phone className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `lead-${lead.id}-phone`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `lead-${lead.id}-phone`
-                                    ? "Phone number copied"
-                                    : lead.phone || "No phone"}
-                                </div>
-                              </div>
-
-                              {/* WhatsApp Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      lead.whatsapp || lead.phone || "",
-                                      `lead-${lead.id}-wa`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <MessageCircle className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `lead-${lead.id}-wa`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `lead-${lead.id}-wa`
-                                    ? "WhatsApp number copied"
-                                    : lead.whatsapp ||
-                                      lead.phone ||
-                                      "No WhatsApp"}
-                                </div>
-                              </div>
-
-                              {/* Mail Icon & Tooltip */}
-                              <div className="relative group">
-                                <button
-                                  type="button"
-                                  onClick={(e) =>
-                                    handleCopy(
-                                      e,
-                                      lead.email || "",
-                                      `lead-${lead.id}-email`,
-                                    )
-                                  }
-                                  className="w-8.5 h-8.5 rounded-full bg-purple-50 hover:bg-[#33077C] text-[#33077C] hover:text-white flex items-center justify-center transition-all shadow-2xs hover:scale-105 active:scale-95 cursor-pointer"
-                                >
-                                  <Mail className="w-3.5 h-3.5" />
-                                </button>
-                                <div
-                                  className={`transition-all duration-200 pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2.5 py-1 text-white text-[11px] font-semibold rounded-lg shadow-lg whitespace-nowrap z-30 ${
-                                    copiedKey === `lead-${lead.id}-email`
-                                      ? "opacity-100 bg-emerald-600 scale-100"
-                                      : "opacity-0 group-hover:opacity-100 bg-slate-900"
-                                  }`}
-                                >
-                                  {copiedKey === `lead-${lead.id}-email`
-                                    ? "Email address copied"
-                                    : lead.email || "No email"}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Source & Offerings */}
-                          <td className="py-4 px-5 border border-slate-200">
-                            <div className="text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                              <Tag className="w-3.5 h-3.5 text-slate-400" />
-                              <span>
-                                {lead.leadSource || lead.source || "Website"}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900 text-xs sm:text-[13px] tracking-tight">
+                                {lead.company || lead.name}
+                              </span>
+                              <span className="text-xs font-semibold text-orange-600">
+                                (
+                                {formatDisplayId(
+                                  "LD",
+                                  lead.leadId || lead.id,
+                                  101 + index,
+                                )}
+                                )
                               </span>
                             </div>
+                          </td>
+
+                          {/* Contact Person */}
+                          <td className="py-4 px-5 border border-slate-200">
+                            <div className="font-semibold text-slate-900 text-xs sm:text-[13px]">
+                              {lead.name}
+                            </div>
+                          </td>
+
+                          {/* Contact Details (Phone, WhatsApp, Mail with On-Hover Tooltips) */}
+                          <td className="py-4 px-5 border border-slate-200">
+                            <ContactCopyButtons
+                              variant="circle"
+                              align="start"
+                              id={`lead-${lead.id}`}
+                              phone={lead.phone}
+                              whatsapp={lead.whatsapp || lead.phone}
+                              email={lead.email}
+                              copiedKey={copiedKey}
+                              onCopy={handleCopy}
+                            />
+                          </td>
+
+                          {/* Lead Source */}
+                          <td className="py-4 px-5 border border-slate-200">
+                            <span className="text-xs font-semibold text-slate-700">
+                              {lead.leadSource || lead.source || "Website"}
+                            </span>
+                          </td>
+
+                          {/* Product Interest */}
+                          <td className="py-4 px-5 border border-slate-200">
                             <div className="flex flex-col gap-1">
                               {(() => {
                                 const raw = (
@@ -1456,7 +1240,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                             </div>
                           </td>
 
-                          {/* Status & Priority */}
+                          {/* Status */}
                           <td className="py-4 px-5 border border-slate-200">
                             <div className="flex items-center gap-2">
                               <span
@@ -1472,55 +1256,13 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                             )}
                           </td>
 
-                          {/* Next Follow-Up */}
-                          <td className="py-4 px-5 border border-slate-200">
-                            <div className="flex items-center gap-1.5 text-slate-700 font-medium text-xs sm:text-[13px]">
-                              <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <span>
-                                {lead.nextFollowUpDate
-                                  ? formatDateDMY(lead.nextFollowUpDate)
-                                  : "Not Scheduled"}
-                              </span>
-                            </div>
-                            {lead.nextAction && (
-                              <div className="text-[11px] text-slate-500 truncate max-w-[150px] mt-0.5">
-                                {lead.nextAction}
-                              </div>
-                            )}
-                          </td>
-
                           {/* Actions */}
                           <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (activeDropdownId === lead.id) {
-                                  setActiveDropdownId(null);
-                                  setDropdownPos(null);
-                                } else {
-                                  const rect = (
-                                    e.currentTarget as HTMLElement
-                                  ).getBoundingClientRect();
-                                  const spaceBelow =
-                                    window.innerHeight - rect.bottom;
-                                  const dropdownHeight = 200;
-                                  if (spaceBelow < dropdownHeight) {
-                                    setDropdownPos({
-                                      bottom: window.innerHeight - rect.top + 6,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  } else {
-                                    setDropdownPos({
-                                      top: rect.bottom + 6,
-                                      right: window.innerWidth - rect.right,
-                                    });
-                                  }
-                                  setActiveDropdownId(lead.id);
-                                }
-                              }}
-                              className={`lead-action-dropdown-btn w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
-                                activeDropdownId === lead.id
+                              onClick={(e) => rowMenu.toggle(e, lead.id)}
+                              data-row-menu-trigger className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-95 mx-auto ${
+                                rowMenu.activeId === lead.id
                                   ? "bg-[#4309A2] text-white ring-2 ring-[#4309A2]/20"
                                   : "bg-[#33077C] hover:bg-[#4309A2] text-white"
                               }`}
@@ -1985,12 +1727,12 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
         }}
       />
       {/* 3-Dots Action Dropdown Menu Portal */}
-      {activeDropdownId &&
-        dropdownPos &&
+      {rowMenu.activeId &&
+        rowMenu.pos &&
         (() => {
-          const currentLead = leads.find((l) => l.id === activeDropdownId);
+          const currentLead = leads.find((l) => l.id === rowMenu.activeId);
           const currentClient = allCustomerSource.find(
-            (c) => c.id === activeDropdownId,
+            (c) => c.id === rowMenu.activeId,
           );
 
           if (!currentLead && !currentClient) return null;
@@ -2000,19 +1742,18 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
               <div
                 className="fixed inset-0 z-[9998]"
                 onClick={() => {
-                  setActiveDropdownId(null);
-                  setDropdownPos(null);
+                  rowMenu.close();
                 }}
               />
               <div
                 style={{
                   position: "fixed",
-                  ...(dropdownPos.bottom !== undefined
-                    ? { bottom: `${dropdownPos.bottom}px` }
-                    : { top: `${dropdownPos.top}px` }),
-                  right: `${Math.min(Math.max(8, dropdownPos.right), Math.max(8, window.innerWidth - 181))}px`,
+                  ...(rowMenu.pos.bottom !== undefined
+                    ? { bottom: `${rowMenu.pos.bottom}px` }
+                    : { top: `${rowMenu.pos.top}px` }),
+                  right: `${Math.min(Math.max(8, rowMenu.pos.right), Math.max(8, window.innerWidth - 181))}px`,
                 }}
-                className="lead-action-dropdown-menu w-[165px] max-w-[calc(100vw-1rem)] bg-white rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.08)] border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left flex flex-col gap-1 font-sans"
+                data-row-menu className="w-[165px] max-w-[calc(100vw-1rem)] bg-white rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.08)] border border-slate-100 p-2 z-[9999] animate-in fade-in zoom-in-95 duration-100 text-left flex flex-col gap-1 font-sans"
               >
                 {currentLead && (
                   <>
@@ -2022,8 +1763,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         handleEditLead(currentLead);
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2042,8 +1782,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         setSelectedLeadDetail(currentLead);
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2063,8 +1802,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         handleUpdateLeadStatus(currentLead.id, 'Inactive');
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2081,8 +1819,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         handleUpdateLeadStatus(currentLead.id, 'Lost');
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2099,8 +1836,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         handleConvertLeadToCustomer(currentLead);
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2121,8 +1857,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         setConfirmAction({
                           type: 'Delete',
                           category: 'lead',
@@ -2150,8 +1885,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         handleEditCustomer(currentClient);
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2168,8 +1902,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         setSelectedClientDetail(currentClient);
                       }}
                       className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left hover:bg-slate-50 transition-colors cursor-pointer"
@@ -2186,8 +1919,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         setConfirmAction({
                           type: 'Inactive',
                           category: 'client',
@@ -2212,8 +1944,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setActiveDropdownId(null);
-                        setDropdownPos(null);
+                        rowMenu.close();
                         setConfirmAction({
                           type: 'Delete',
                           category: 'client',

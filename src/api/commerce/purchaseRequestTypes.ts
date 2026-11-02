@@ -74,6 +74,7 @@ export interface PurchaseRequestListResponse {
   message: string;
   data: ApiPurchaseRequest[];
   pagination?: PurchaseRequestPagination;
+  summary?: { totalCount: number; draftCount: number; pendingCount: number; approvedCount: number; rejectedCount: number; completedCount: number };
   meta?: {
     timestamp: string;
     requestId: string;
