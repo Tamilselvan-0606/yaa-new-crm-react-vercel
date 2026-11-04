@@ -23,18 +23,32 @@ export * from './stockTypes';
  * Mapper: ApiStockBatch -> StockBatch
  */
 export const mapApiStockBatchToStockBatch = (b: ApiStockBatch): StockBatch => {
+  const anyB = b as any;
+  const rawBatchNo = String(
+    b.batchNo ||
+    anyB.batch ||
+    anyB.batch_no ||
+    anyB.batchNumber ||
+    anyB.batchCode ||
+    anyB.lotNo ||
+    anyB.lot_no ||
+    ''
+  ).trim();
+
+  const qty = Number(b.quantity ?? anyB.qty ?? anyB.stock ?? anyB.availableQty ?? 0);
+
   return {
-    id: b.id || `bat_${b.batchNo}`,
-    batchNo: b.batchNo,
-    productId: b.productId,
-    quantity: Number(b.quantity ?? 0),
-    costPrice: Number(b.costPrice ?? 0),
-    sellingPrice: Number(b.sellingPrice ?? 0),
-    mfgDate: b.mfgDate || undefined,
-    expDate: b.expDate || undefined,
-    supplierName: b.supplierName || undefined,
-    status: (b.status as any) || 'Active',
-    receivedDate: b.receivedDate || undefined,
+    id: b.id || anyB._id || (rawBatchNo ? `bat_${rawBatchNo}` : `bat_${b.productId || 'item'}`),
+    batchNo: rawBatchNo,
+    productId: b.productId || anyB.product_id,
+    quantity: isNaN(qty) ? 0 : qty,
+    costPrice: Number(b.costPrice ?? anyB.cost_price ?? anyB.purchasePrice ?? anyB.unitCost ?? 0),
+    sellingPrice: Number(b.sellingPrice ?? anyB.selling_price ?? anyB.salePrice ?? anyB.unitPrice ?? 0),
+    mfgDate: b.mfgDate || anyB.mfg_date || anyB.manufacturingDate || undefined,
+    expDate: b.expDate || anyB.exp_date || anyB.expiryDate || undefined,
+    supplierName: b.supplierName || anyB.supplier_name || anyB.supplier || undefined,
+    status: (b.status as any) || (qty > 0 ? 'Active' : 'Depleted'),
+    receivedDate: b.receivedDate || anyB.received_date || undefined,
   };
 };
 
@@ -59,39 +73,56 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
       ? anyItem.product.batches
       : [];
 
-  let mappedBatches: StockBatch[] = rawBatches.map(mapApiStockBatchToStockBatch);
+  let mappedBatches: StockBatch[] = rawBatches
+    .map(mapApiStockBatchToStockBatch)
+    .filter((b) => Boolean(b.batchNo));
 
-  // If no batch array is returned, check if the item has batch tracking properties
-  const hasBatchTracking = Boolean(anyItem.isBatchTracking ?? anyItem.is_batch_tracking ?? anyItem.product?.isBatchTracking);
-  const fallbackBatchNo = (
-    anyItem.batchNo ||
+  // Extract direct batch number from item or embedded product
+  const directBatchNo = String(
+    item.batchNo ||
+    anyItem.batch ||
+    anyItem.batch_no ||
+    anyItem.batchNumber ||
     anyItem.initialBatchNo ||
     anyItem.product?.batchNo ||
+    anyItem.product?.batch ||
+    anyItem.product?.batch_no ||
+    anyItem.product?.batchNumber ||
     anyItem.product?.initialBatchNo ||
     ''
   ).trim();
 
-  if (mappedBatches.length === 0 && (hasBatchTracking || fallbackBatchNo)) {
-    if (fallbackBatchNo) {
+  const hasBatchTracking = Boolean(
+    anyItem.isBatchTracking ??
+    anyItem.is_batch_tracking ??
+    anyItem.product?.isBatchTracking ??
+    anyItem.product?.is_batch_tracking ??
+    directBatchNo
+  );
+
+  // If batches array is empty or lacks the product's primary batch, ensure directBatchNo is represented
+  if (directBatchNo) {
+    const exists = mappedBatches.some(
+      (b) => b.batchNo.toLowerCase() === directBatchNo.toLowerCase()
+    );
+    if (!exists) {
       const fallbackQty = Number(
         rawStock !== null && rawStock !== undefined
           ? rawStock
           : (anyItem.openingStock ?? anyItem.product?.openingStock ?? 0)
       );
-      mappedBatches = [
-        {
-          id: `bat_${item.productId || item.id}_${fallbackBatchNo}`,
-          batchNo: fallbackBatchNo,
-          productId: item.productId || item.id,
-          quantity: fallbackQty,
-          costPrice: Number(item.unitCost ?? anyItem.purchasePrice ?? anyItem.costPrice ?? 0),
-          sellingPrice: Number(item.unitPrice ?? anyItem.salePrice ?? anyItem.sellingPrice ?? 0),
-          mfgDate: anyItem.mfgDate || anyItem.product?.mfgDate || undefined,
-          expDate: anyItem.expDate || anyItem.product?.expDate || undefined,
-          status: fallbackQty > 0 ? 'Active' : 'Depleted',
-          receivedDate: anyItem.createdAt ? anyItem.createdAt.split('T')[0] : undefined,
-        },
-      ];
+      mappedBatches.unshift({
+        id: `bat_${item.productId || item.id}_${directBatchNo}`,
+        batchNo: directBatchNo,
+        productId: item.productId || item.id,
+        quantity: isNaN(fallbackQty) ? 0 : fallbackQty,
+        costPrice: Number(item.unitCost ?? anyItem.purchasePrice ?? anyItem.costPrice ?? anyItem.product?.purchasePrice ?? anyItem.product?.costPrice ?? 0),
+        sellingPrice: Number(item.unitPrice ?? anyItem.salePrice ?? anyItem.sellingPrice ?? anyItem.product?.salePrice ?? anyItem.product?.sellingPrice ?? 0),
+        mfgDate: anyItem.mfgDate || anyItem.product?.mfgDate || undefined,
+        expDate: anyItem.expDate || anyItem.product?.expDate || undefined,
+        status: fallbackQty > 0 ? 'Active' : 'Depleted',
+        receivedDate: anyItem.createdAt ? anyItem.createdAt.split('T')[0] : undefined,
+      });
     }
   }
 
@@ -116,6 +147,8 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
     rawCreatedAt ||
     new Date().toISOString();
 
+  const primaryBatch = mappedBatches[0];
+
   return {
     id: item.id || item.productId,
     productId: item.productId || item.id,
@@ -131,6 +164,11 @@ export const mapApiStockToInventoryStockItem = (item: ApiStockItem): InventorySt
     lastUpdated: rawUpdatedAt,
     createdAt: rawCreatedAt || rawUpdatedAt,
     batches: mappedBatches,
+    isBatchTracking: hasBatchTracking,
+    batchNo: directBatchNo || primaryBatch?.batchNo || undefined,
+    initialBatchNo: directBatchNo || primaryBatch?.batchNo || undefined,
+    mfgDate: anyItem.mfgDate || anyItem.product?.mfgDate || primaryBatch?.mfgDate || undefined,
+    expDate: anyItem.expDate || anyItem.product?.expDate || primaryBatch?.expDate || undefined,
     itemImage: anyItem.itemImage || anyItem.image || anyItem.item_image || anyItem.product?.itemImage || anyItem.product?.image || anyItem.product?.item_image || undefined,
   };
 };

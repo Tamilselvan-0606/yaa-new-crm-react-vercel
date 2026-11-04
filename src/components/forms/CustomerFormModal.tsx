@@ -25,10 +25,14 @@ import {
 import { useAppDispatch } from '../../hooks/redux';
 import { baseApi } from '../../api/baseApi';
 import { RegisteredField } from '../common/FormField';
+import { PhoneField } from '../common/PhoneField';
+import { LocationFields, LocationMeta } from '../common/LocationFields';
 import {
   alphanumericUpper,
   digitsOnly,
   lettersOnly,
+  cleanPincode,
+  pincodeMatching,
   liveGstError,
   liveMobileStartError,
   livePanError,
@@ -223,12 +227,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({ stateRequired: true, districtRequired: true });
 
   const {
     register,
     handleSubmit,
     reset,
     control,
+    watch,
     setValue,
     setError,
     clearErrors,
@@ -246,6 +252,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       gstNumber: '',
       panNumber: '',
       address: '',
+      country: '',
+      countryId: '',
+      state: '',
+      stateId: '',
+      district: '',
+      districtId: '',
+      city: '',
+      pincode: '',
     },
   });
 
@@ -321,6 +335,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           gstNumber: (initialCustomer as any).gstNumber || initialCustomer.gstin || initialCustomer.taxId || '',
           panNumber: (initialCustomer as any).panNumber || initialCustomer.pan || '',
           address: initialCustomer.address || initialCustomer.location || '',
+          country: (initialCustomer as any).countryName || (initialCustomer as any).country || '',
+          state: (initialCustomer as any).stateName || (initialCustomer as any).state || '',
+          district: (initialCustomer as any).districtName || (initialCustomer as any).district || '',
+          city: (initialCustomer as any).city || initialCustomer.location || '',
+          countryId: '',
+          stateId: '',
+          districtId: '',
+          pincode: (initialCustomer as any).pincode || '',
         });
 
         const existingSubOrgId =
@@ -349,6 +371,14 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           gstNumber: '',
           panNumber: '',
           address: '',
+          country: '',
+          countryId: '',
+          state: '',
+          stateId: '',
+          district: '',
+          districtId: '',
+          city: '',
+          pincode: '',
         });
         setSelectedProductId('');
         setDocuments([]);
@@ -422,6 +452,15 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     if (!selectedProductId) {
       customErrors.product = 'Product Selection is required';
     }
+    if (!data.country) customErrors.country = 'Country is required';
+    if (!data.state && locationMeta.stateRequired) customErrors.state = 'State is required';
+    if (!data.district && locationMeta.districtRequired) customErrors.district = 'District is required';
+    if (!data.city && (locationMeta.cityRequired ?? true)) customErrors.city = 'City is required';
+    if (!data.pincode) customErrors.pincode = 'Pincode is required';
+    else {
+      const pinError = pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)(data.pincode);
+      if (pinError) customErrors.pincode = pinError;
+    }
 
     if (Object.keys(customErrors).length > 0) {
       setFormErrors(customErrors);
@@ -476,6 +515,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           whatsapp: data.whatsapp || data.phone,
           email: data.email,
           address: data.address,
+          city: data.city || undefined,
+          countryId: data.countryId || undefined,
+          stateId: data.stateId || undefined,
+          districtId: data.districtId || undefined,
+          pincode: data.pincode || undefined,
           gstNumber: data.gstNumber,
           panNumber: data.panNumber,
           registrationType: 'Pvt Ltd',
@@ -500,6 +544,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           gstNumber: data.gstNumber,
           panNumber: data.panNumber,
           address: data.address,
+          city: data.city || undefined,
+          countryId: data.countryId || undefined,
+          stateId: data.stateId || undefined,
+          districtId: data.districtId || undefined,
+          pincode: data.pincode || undefined,
           organizationId: effectiveOrgId,
           subOrganizationId: selectedSubOrgId || undefined,
           branchId: selectedBranchId || undefined,
@@ -573,7 +622,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           </div>
         )}
         {/* Row 0: Organization | Sub-Organization | Branch (Role-based) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-2 border-b border-slate-100">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Organization */}
           <div>
             <label className={labelClass}>
@@ -597,6 +646,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                       ? organizations.map((org) => ({ value: org.id, label: org.name }))
                       : [{ value: '', label: 'No Organizations found' }]
                   }
+                  optionVariant="strong"
                   placeholder="Select Organization"
                 />
                 {formErrors.organization && (
@@ -613,7 +663,6 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   title="Default organization cannot be modified"
                   className={`${inputClass} bg-slate-100/80 cursor-not-allowed text-slate-600 font-semibold`}
                 />
-                <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
               </div>
             )}
           </div>
@@ -662,9 +711,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   }}
                   options={
                     subOrganizations.length > 0
-                      ? subOrganizations.map((s) => ({ value: s.id, label: s.name }))
+                      ? subOrganizations.map((s) => ({ value: s.id, label: s.code ? `${s.name} (${s.code})` : s.name }))
                       : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations' }]
                   }
+                  optionVariant="strong"
                   placeholder={loadingSubOrgs ? 'Loading Sub-Organizations...' : 'Select Sub-Organization'}
                 />
                 {formErrors.subOrganization && (
@@ -705,10 +755,11 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                         : []),
                     ].map((b) => ({
                       value: b.id,
-                      label: `${b.name}${b.location ? ` - ${b.location}` : ''}`,
+                      label: `${b.name}${(b as any).code ? ` (${(b as any).code})` : ''}`,
                     }))
                   : [{ value: '', label: loadingBranches ? 'Loading branches...' : 'No branches found' }]
               }
+              optionVariant="strong"
               placeholder={loadingBranches ? 'Loading branches...' : 'Select Branch'}
             />
             )}
@@ -760,67 +811,34 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             placeholder="Contact Person Full Name"
           />
 
-          <div>
-            <label className={labelClass}>
-              Phone Number <span className="text-rose-500 font-bold">*</span>
-            </label>
-            <Controller
-              name="phone"
-              control={control}
-              render={({ field }) => (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="e.g. 9876543210"
-                  value={field.value || ''}
-                  onChange={(e) => {
-                    const clean = digitsOnly(e.target.value);
-                    field.onChange(clean);
-                    showLiveError('phone', liveMobileStartError('Phone Number', clean));
-                  }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    errors.phone
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
-                />
-              )}
-            />
-            {errors.phone && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.phone.message}</p>
+          <Controller
+            name="phone"
+            control={control}
+            render={({ field }) => (
+              <PhoneField
+                label="Phone Number"
+                required
+                value={field.value || ''}
+                onChange={field.onChange}
+                error={errors.phone?.message}
+                placeholder="e.g. 9876543210"
+              />
             )}
-          </div>
+          />
 
-          <div>
-            <label className={labelClass}>WhatsApp Number</label>
-            <Controller
-              name="whatsapp"
-              control={control}
-              render={({ field }) => (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="e.g. 9876543210"
-                  value={field.value || ''}
-                  onChange={(e) => {
-                    const clean = digitsOnly(e.target.value);
-                    field.onChange(clean);
-                    showLiveError('whatsapp', liveMobileStartError('WhatsApp Number', clean));
-                  }}
-                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
-                    errors.whatsapp
-                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
-                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
-                  }`}
-                />
-              )}
-            />
-            {errors.whatsapp && (
-              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.whatsapp.message}</p>
+          <Controller
+            name="whatsapp"
+            control={control}
+            render={({ field }) => (
+              <PhoneField
+                label="WhatsApp Number"
+                value={field.value || ''}
+                onChange={field.onChange}
+                error={errors.whatsapp?.message}
+                placeholder="e.g. 9876543210"
+              />
             )}
-          </div>
+          />
         </div>
 
         {/* Row 3: Email | GST Number | PAN Number */}
@@ -897,16 +915,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
           </div>
         </div>
 
-        {/* Row 4: Address | Product Selection (3 fields per row grid layout) */}
+        {/* Row 4: Product Selection | Country | State | District | City | Pincode | Address */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <RegisteredField
-            label="Address"
-            required
-            registration={register("address")}
-            error={errors.address?.message}
-            placeholder="Street Address, City, State, Pincode"
-          />
-
           <div>
             <label className={labelClass}>
               Product Selection <span className="text-rose-500 font-bold">*</span>
@@ -927,6 +937,48 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             />
             {formErrors.product && (
               <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.product}</p>
+            )}
+          </div>
+
+          <LocationFields
+            country={watch('country') || ''}
+            state={watch('state') || ''}
+            district={watch('district') || ''}
+            city={watch('city') || ''}
+            errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district, city: formErrors.city }}
+            onMeta={setLocationMeta}
+            onChange={(patch) => {
+              (Object.keys(patch) as (keyof typeof patch)[]).forEach((k) => setValue(k as any, patch[k] ?? ''));
+              setFormErrors((prev) => ({ ...prev, ...Object.fromEntries(Object.keys(patch).map((k) => [k, ''])) }));
+            }}
+          />
+
+          <RegisteredField
+            label="Pincode"
+            required
+            inputMode="numeric"
+            registration={register("pincode")}
+            transform={(v: string) => cleanPincode(v, locationMeta.pincodeRegex)}
+            error={errors.pincode?.message || formErrors.pincode}
+            placeholder="e.g. 600001"
+          />
+
+          <div className="md:col-span-3">
+            <label className={labelClass}>
+              Address <span className="text-rose-500 font-bold">*</span>
+            </label>
+            <textarea
+              rows={3}
+              {...register("address")}
+              placeholder="Street Address"
+              className={`w-full min-h-[88px] px-4 py-3 bg-white rounded-[4px] text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all resize-y ${
+                errors.address
+                  ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                  : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+              }`}
+            />
+            {errors.address && (
+              <p className="text-[11px] font-medium text-red-500 mt-1">{errors.address.message}</p>
             )}
           </div>
         </div>

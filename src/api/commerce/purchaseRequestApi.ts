@@ -384,7 +384,9 @@ export const commercePurchaseRequestApi = {
    */
   getPurchaseRequestById: async (id: string): Promise<PurchaseRequestSingleResponse> => {
     const response = await baseClient.get<PurchaseRequestSingleResponse>(
-      `/commerce/purchase-requests/${id}`
+      `/commerce/purchase-requests/${id}`,
+      // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View/Edit calls GET /purchase-requests/:id.
+      { timeout: 0 }
     );
     return response.data;
   },

@@ -335,7 +335,7 @@ export const commercePaymentInApi = {
    * GET /commerce/payments-in/{id}
    */
   getPaymentInById: async (id: string): Promise<CommercePaymentInSingleResponse> => {
-    const response = await baseClient.get<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`);
+    const response = await baseClient.get<CommercePaymentInSingleResponse>(`/commerce/payments-in/${id}`, { timeout: 0 });
     return response.data;
   },
 

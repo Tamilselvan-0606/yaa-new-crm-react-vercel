@@ -383,7 +383,9 @@ export const commercePurchaseReturnApi = {
    */
   getPurchaseReturnById: async (id: string): Promise<PurchaseReturnSingleResponse> => {
     const response = await baseClient.get<PurchaseReturnSingleResponse>(
-      `/commerce/purchase-returns/${id}`
+      `/commerce/purchase-returns/${id}`,
+      // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View calls GET /purchase-returns/:id.
+      { timeout: 0 }
     );
     return response.data;
   },

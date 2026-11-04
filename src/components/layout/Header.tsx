@@ -22,6 +22,7 @@ import {
   KeyRound,
   UsersRound,
   ShoppingCart,
+  RotateCcw,
 } from 'lucide-react';
 
 import { api } from '../../services/api';
@@ -348,6 +349,7 @@ export const Header: React.FC<HeaderProps> = ({
     const saved = localStorage.getItem(savedKey) || 'All';
     setSelectedSubOrg(saved);
     localStorage.setItem('active_sub_organization', saved);
+    syncAppliedRef.current = true;
   }, [isSalesMode]);
 
   // Resolve active sub-organization ID
@@ -357,38 +359,53 @@ export const Header: React.FC<HeaderProps> = ({
     return match && match.id !== 'all' ? match.id : undefined;
   }, [selectedSubOrg, subOrgOptions]);
 
+  /**
+   * The filter that is actually in effect (sent with API calls and broadcast to the pages). The dropdowns only
+   * change the draft (selectedSubOrg / selectedBranch / selectedProduct); Apply copies the draft here, Reset clears it.
+   */
+  const [applied, setApplied] = useState<{
+    sub?: string;
+    subName: string;
+    branch?: string;
+    branchName: string;
+    product?: string;
+    productName: string;
+  }>({ subName: 'All', branchName: 'All', productName: 'All' });
+  // True until the saved filter has been resolved to ids (first load, or after switching Sales / Client).
+  const syncAppliedRef = useRef(true);
+
   const lastBroadcastRef = useRef<{ id?: string; name?: string; isSales?: boolean }>({});
 
   // Keep active_sub_organization_id persisted and broadcast when resolved on mount/refresh
   useEffect(() => {
     if (isSuperAdmin) return;
     const last = lastBroadcastRef.current;
-    if (last.id === currentSubOrgId && last.name === selectedSubOrg && last.isSales === isSalesMode) {
+    if (last.id === applied.sub && last.name === applied.subName && last.isSales === isSalesMode) {
       return;
     }
-    lastBroadcastRef.current = { id: currentSubOrgId, name: selectedSubOrg, isSales: isSalesMode };
+    lastBroadcastRef.current = { id: applied.sub, name: applied.subName, isSales: isSalesMode };
 
-    if (currentSubOrgId) {
-      localStorage.setItem('active_sub_organization_id', currentSubOrgId);
+    if (applied.sub) {
+      localStorage.setItem('active_sub_organization_id', applied.sub);
       window.dispatchEvent(
         new CustomEvent('subOrgChanged', {
           detail: {
-            name: selectedSubOrg,
-            id: currentSubOrgId,
-            subOrganizationId: currentSubOrgId,
+            name: applied.subName,
+            id: applied.sub,
+            subOrganizationId: applied.sub,
             organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
           },
         })
       );
-    } else if (selectedSubOrg === 'All') {
+    } else if (applied.subName === 'All') {
       localStorage.removeItem('active_sub_organization_id');
     }
-  }, [currentSubOrgId, selectedSubOrg, isSalesMode, isSuperAdmin]);
+  }, [applied.sub, applied.subName, isSalesMode, isSuperAdmin]);
   useEffect(() => {
-    if (currentSubOrgId) {
-      localStorage.setItem('active_sub_organization_id', currentSubOrgId);
+    if (applied.sub) {
+      localStorage.setItem('active_sub_organization_id', applied.sub);
       if (isSalesMode) {
-        localStorage.setItem('active_sub_organization_id_sales', currentSubOrgId);
+        localStorage.setItem('active_sub_organization_id_sales', applied.sub);
       }
     } else {
       localStorage.removeItem('active_sub_organization_id');
@@ -396,7 +413,7 @@ export const Header: React.FC<HeaderProps> = ({
         localStorage.removeItem('active_sub_organization_id_sales');
       }
     }
-  }, [currentSubOrgId, isSalesMode]);
+  }, [applied.sub, isSalesMode]);
 
   // 3. Fetch API Branches filtered by active sub-organization (Real API only)
   const [apiBranches, setApiBranches] = useState<Branch[]>([]);
@@ -412,7 +429,6 @@ export const Header: React.FC<HeaderProps> = ({
             page_no: 1,
             page_size: 100,
             pagination_required: 'false',
-            sub_organization_id: currentSubOrgId,
             organization_id: activeOrgId || undefined,
           },
           activeOrgId || undefined
@@ -457,7 +473,7 @@ export const Header: React.FC<HeaderProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [currentSubOrgId, branchChangeTrigger, currentUser, isSalesMode, isSuperAdmin]);
+  }, [branchChangeTrigger, currentUser, isSalesMode, isSuperAdmin]); // not keyed on the draft: choosing a sub-organization filters this list locally, with no API call
 
   const branches = useMemo<Branch[]>(() => {
     const isMatch = (bTypeStr?: any) => {
@@ -507,6 +523,7 @@ export const Header: React.FC<HeaderProps> = ({
     const saved = localStorage.getItem(savedKey) || 'All';
     setSelectedBranch(saved);
     localStorage.setItem('active_branch', saved);
+    syncAppliedRef.current = true;
   }, [isSalesMode]);
 
   // Resolve active branch ID
@@ -522,10 +539,10 @@ export const Header: React.FC<HeaderProps> = ({
   }, [selectedBranch, branchOptions]);
 
   useEffect(() => {
-    if (currentBranchId) {
-      localStorage.setItem('active_branch_id', currentBranchId);
+    if (applied.branch) {
+      localStorage.setItem('active_branch_id', applied.branch);
       if (isSalesMode) {
-        localStorage.setItem('active_branch_id_sales', currentBranchId);
+        localStorage.setItem('active_branch_id_sales', applied.branch);
       }
     } else {
       localStorage.removeItem('active_branch_id');
@@ -533,7 +550,7 @@ export const Header: React.FC<HeaderProps> = ({
         localStorage.removeItem('active_branch_id_sales');
       }
     }
-  }, [currentBranchId, isSalesMode]);
+  }, [applied.branch, isSalesMode]);
 
   // 4. Fetch Products filtered by active branch & sub-organization (Real API only)
   const [productsList, setProductsList] = useState<any[]>([]);
@@ -549,8 +566,6 @@ export const Header: React.FC<HeaderProps> = ({
             page: 1,
             limit: 100,
             organizationId: activeOrgId || undefined,
-            subOrganizationId: currentSubOrgId,
-            branchId: currentBranchId,
           },
           activeOrgId || undefined
         );
@@ -568,12 +583,18 @@ export const Header: React.FC<HeaderProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [currentBranchId, currentSubOrgId, currentUser, isSuperAdmin, isSalesMode]);
+  }, [currentUser, isSuperAdmin, isSalesMode]); // loaded once; the branch / sub-organization choice filters it locally
 
   const productOptions = useMemo(() => {
     const list: { id: string; name: string }[] = [{ id: 'all', name: 'All' }];
     const seen = new Set<string>(['all']);
     productsList.forEach((item) => {
+      // Follow the draft choice in the header without another API call.
+      if (currentBranchId) {
+        if ((item.branchId || item.branch?.id) !== currentBranchId) return;
+      } else if (currentSubOrgId) {
+        if ((item.subOrganizationId || item.branch?.subOrganizationId) !== currentSubOrgId) return;
+      }
       const itemName = (item.name || '').trim();
       if (itemName && !seen.has(itemName.toLowerCase())) {
         seen.add(itemName.toLowerCase());
@@ -581,11 +602,17 @@ export const Header: React.FC<HeaderProps> = ({
       }
     });
     return list;
-  }, [productsList]);
+  }, [productsList, currentBranchId, currentSubOrgId]);
 
   const [selectedProduct, setSelectedProduct] = useState<string>(() => {
     return localStorage.getItem('active_product') || 'All';
   });
+
+  const currentProductId = useMemo(() => {
+    if (!selectedProduct || selectedProduct === 'All') return undefined;
+    const match = productOptions.find((x) => x.name.toLowerCase() === selectedProduct.toLowerCase());
+    return match && match.id !== 'all' ? match.id : undefined;
+  }, [selectedProduct, productOptions]);
 
   // Keep branch & product valid when options change
   useEffect(() => {
@@ -615,135 +642,145 @@ export const Header: React.FC<HeaderProps> = ({
     }
   }, [productOptions, selectedProduct]);
 
-  // Handlers for switching
+  // Dropdowns only change the draft; the filter takes effect when Apply is pressed.
   const handleSelectSubOrg = (subOrgName: string) => {
     setSelectedSubOrg(subOrgName);
-    localStorage.setItem('active_sub_organization', subOrgName);
-    if (isSalesMode) {
-      localStorage.setItem('active_sub_organization_sales', subOrgName);
-    } else {
-      localStorage.setItem('active_sub_organization_client', subOrgName);
-    }
-
-    // Reset branch and product
+    // The branch and product lists depend on the sub-organization, so they start over.
     setSelectedBranch('All');
-    localStorage.setItem('active_branch', 'All');
-    if (isSalesMode) {
-      localStorage.setItem('active_branch_sales', 'All');
-    } else {
-      localStorage.setItem('active_branch_client', 'All');
-    }
     setSelectedProduct('All');
-    localStorage.setItem('active_product', 'All');
-    localStorage.removeItem('active_product_id');
-
-    const matchedSub = subOrgOptions.find(
-      (s) => s.name.toLowerCase() === subOrgName.toLowerCase()
-    );
-    const subId = matchedSub && matchedSub.id !== 'all' ? matchedSub.id : undefined;
-
-    if (subId) {
-      localStorage.setItem('active_sub_organization_id', subId);
-    } else {
-      localStorage.removeItem('active_sub_organization_id');
-    }
-
     setIsSubOrgDropdownOpen(false);
-    showToast?.('success', 'Sub-Organization Switched', `Active sub-organization set to ${subOrgName}`);
-    window.dispatchEvent(
-      new CustomEvent('subOrgChanged', {
-        detail: {
-          name: subOrgName,
-          id: subId,
-          subOrganizationId: subId,
-          organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
-        },
-      })
-    );
-    window.dispatchEvent(
-      new CustomEvent('branchChanged', {
-        detail: { branch: 'All', name: 'All', id: undefined, branchId: undefined },
-      })
-    );
-    window.dispatchEvent(
-      new CustomEvent('productChanged', {
-        detail: { product: 'All', name: 'All', id: undefined, productId: undefined },
-      })
-    );
   };
 
   const handleSelectBranch = (branchName: string) => {
     setSelectedBranch(branchName);
-    localStorage.setItem('active_branch', branchName);
-    if (isSalesMode) {
-      localStorage.setItem('active_branch_sales', branchName);
-    } else {
-      localStorage.setItem('active_branch_client', branchName);
-    }
-
-    // Reset product
     setSelectedProduct('All');
-    localStorage.setItem('active_product', 'All');
-    localStorage.removeItem('active_product_id');
+    setIsBranchDropdownOpen(false);
+  };
 
-    const matchedBranch = branchOptions.find(
+  const handleSelectProduct = (productName: string) => {
+    setSelectedProduct(productName);
+    setIsProductDropdownOpen(false);
+  };
+
+  // Resolve the draft names to ids and make them the active filter.
+  const commitFilters = (subName: string, branchName: string, productName: string) => {
+    const subMatch = subOrgOptions.find((x) => x.name.toLowerCase() === subName.toLowerCase());
+    const subId = subMatch && subMatch.id !== 'all' ? subMatch.id : undefined;
+    const branchMatch = branchOptions.find(
       (b) =>
         b.name.toLowerCase() === branchName.toLowerCase() ||
         b.fullBranchName?.toLowerCase() === branchName.toLowerCase() ||
         (b.location && b.location.toLowerCase() === branchName.toLowerCase())
     );
-    const branchId = matchedBranch && matchedBranch.id !== 'all' ? matchedBranch.id : undefined;
+    const branchId = branchMatch && branchMatch.id !== 'all' ? branchMatch.id : undefined;
+    const prodMatch = productOptions.find((x) => x.name.toLowerCase() === productName.toLowerCase());
+    const prodId = prodMatch && prodMatch.id !== 'all' ? prodMatch.id : undefined;
 
-    if (branchId) {
-      localStorage.setItem('active_branch_id', branchId);
-    } else {
-      localStorage.removeItem('active_branch_id');
-    }
-
-    setIsBranchDropdownOpen(false);
-    showToast?.('success', 'Branch Switched', `Active branch set to ${branchName}`);
-    window.dispatchEvent(
-      new CustomEvent('branchChanged', {
-        detail: {
-          branch: branchName,
-          name: branchName,
-          id: branchId,
-          branchId: branchId,
-        },
-      })
-    );
-    window.dispatchEvent(
-      new CustomEvent('productChanged', {
-        detail: { product: 'All', name: 'All', id: undefined, productId: undefined },
-      })
-    );
-  };
-
-  const handleSelectProduct = (productName: string) => {
-    setSelectedProduct(productName);
+    const modeSuffix = isSalesMode ? 'sales' : 'client';
+    localStorage.setItem('active_sub_organization', subName);
+    localStorage.setItem(`active_sub_organization_${modeSuffix}`, subName);
+    localStorage.setItem('active_branch', branchName);
+    localStorage.setItem(`active_branch_${modeSuffix}`, branchName);
     localStorage.setItem('active_product', productName);
-    setIsProductDropdownOpen(false);
-    showToast?.('success', 'Product Switched', `Active product set to ${productName}`);
-    const matchedProduct = productOptions.find(
-      (p) => p.name.toLowerCase() === productName.toLowerCase()
-    );
-    const prodId = matchedProduct && matchedProduct.id !== 'all' ? matchedProduct.id : undefined;
-    if (prodId) {
-      localStorage.setItem('active_product_id', prodId);
-    } else {
-      localStorage.removeItem('active_product_id');
+    if (prodId) localStorage.setItem('active_product_id', prodId);
+    else localStorage.removeItem('active_product_id');
+    if (branchId) localStorage.setItem('active_branch_id', branchId);
+    else localStorage.removeItem('active_branch_id');
+    if (subId) localStorage.setItem('active_sub_organization_id', subId);
+    else localStorage.removeItem('active_sub_organization_id');
+
+    const subChanged = subId !== applied.sub || subName !== applied.subName;
+    const branchChanged = branchId !== applied.branch || branchName !== applied.branchName;
+    const productChanged = prodId !== applied.product || productName !== applied.productName;
+
+    setApplied({ sub: subId, subName, branch: branchId, branchName, product: prodId, productName });
+
+    if (subChanged) {
+      window.dispatchEvent(
+        new CustomEvent('subOrgChanged', {
+          detail: {
+            name: subName,
+            id: subId,
+            subOrganizationId: subId,
+            organizationType: isSalesMode ? 'Sales Management' : 'Client Management',
+          },
+        })
+      );
     }
-    window.dispatchEvent(
-      new CustomEvent('productChanged', {
-        detail: {
-          product: productName,
-          name: productName,
-          id: prodId,
-          productId: prodId,
-        },
-      })
-    );
+    if (subChanged || branchChanged) {
+      window.dispatchEvent(
+        new CustomEvent('branchChanged', {
+          detail: { branch: branchName, name: branchName, id: branchId, branchId },
+        })
+      );
+    }
+    if (subChanged || branchChanged || productChanged) {
+      window.dispatchEvent(
+        new CustomEvent('productChanged', {
+          detail: { product: productName, name: productName, id: prodId, productId: prodId },
+        })
+      );
+    }
+    return subChanged || branchChanged || productChanged;
   };
+
+  const handleApplyFilters = () => {
+    setIsSubOrgDropdownOpen(false);
+    setIsBranchDropdownOpen(false);
+    setIsProductDropdownOpen(false);
+    commitFilters(selectedSubOrg, selectedBranch, selectedProduct);
+  };
+
+  const handleResetFilters = () => {
+    setIsSubOrgDropdownOpen(false);
+    setIsBranchDropdownOpen(false);
+    setIsProductDropdownOpen(false);
+    setSelectedSubOrg('All');
+    setSelectedBranch('All');
+    setSelectedProduct('All');
+    commitFilters('All', 'All', 'All');
+  };
+
+  // Resolve the saved filter into the applied one on first load and after switching Sales / Client.
+  useEffect(() => {
+    if (!syncAppliedRef.current) return;
+    const subOk = selectedSubOrg === 'All' || !!currentSubOrgId;
+    const branchOk = selectedBranch === 'All' || !!currentBranchId;
+    const productOk = isSalesMode || isSuperAdmin || selectedProduct === 'All' || !!currentProductId;
+    if (!(subOk && branchOk && productOk)) return;
+    syncAppliedRef.current = false;
+    setApplied({
+      sub: currentSubOrgId,
+      subName: selectedSubOrg,
+      branch: currentBranchId,
+      branchName: selectedBranch,
+      product: currentProductId,
+      productName: selectedProduct,
+    });
+  }, [selectedSubOrg, selectedBranch, selectedProduct, currentSubOrgId, currentBranchId, currentProductId, isSalesMode, isSuperAdmin]);
+
+  const filterButtons = (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <button
+        type="button"
+        onClick={handleApplyFilters}
+        className="inline-flex items-center gap-1 h-8 sm:h-9 px-2.5 sm:px-3 bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+        title="Apply the selected sub-organization, branch and product"
+      >
+        <CheckCircle2 className="w-3.5 h-3.5" />
+        <span>Apply</span>
+      </button>
+      <button
+        type="button"
+        onClick={handleResetFilters}
+        className="inline-flex items-center gap-1 h-8 sm:h-9 px-2.5 sm:px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+        title="Reset to All"
+      >
+        <RotateCcw className="w-3.5 h-3.5" />
+        <span>Reset</span>
+      </button>
+    </div>
+  );
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
@@ -1133,6 +1170,8 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
             )}
+
+            {filterButtons}
           </>
         ) : (
           <>
@@ -1234,6 +1273,8 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
             )}
+
+            {!isSuperAdmin && filterButtons}
           </>
         )}
 

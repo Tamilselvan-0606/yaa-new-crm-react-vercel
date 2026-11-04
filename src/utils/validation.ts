@@ -1,3 +1,4 @@
+import { isValidPhoneNumber } from "libphonenumber-js";
 import React from 'react';
 
 /**
@@ -389,3 +390,40 @@ export const sanitizeNonNegativeInput = (raw: string, allowDecimal = true): stri
   return raw.replace(/[^0-9]/g, '');
 };
 
+
+/**
+ * Phone numbers with a country code (from the PhoneField dropdown), e.g. "+919876543210" or "+14155552671".
+ * Numbers without a "+" are treated as Indian (older records).
+ */
+export const isValidIntlPhone = (val?: string | null): boolean => {
+  const v = (val || "").toString().trim().replace(/[\s()-]/g, "");
+  if (!v) return false;
+  return v.startsWith("+") ? isValidPhoneNumber(v) : isValidIndianPhone(v);
+};
+
+/**
+ * Form check for a phone field that may carry a country code (PhoneField).
+ * Returns null when valid, otherwise a user-friendly message.
+ * `label` is a lower-case noun phrase, e.g. "phone number", "WhatsApp number".
+ */
+export const checkIntlPhone = (
+  value?: string | null,
+  required = false,
+  label = "phone number",
+): string | null => {
+  const v = (value ?? "").toString().trim();
+  if (!v) return required ? `Please enter the ${label}.` : null;
+  return isValidIntlPhone(v) ? null : `Please enter a valid ${label}.`;
+};
+
+/**
+ * Value stored/sent for a phone: always "+<country code><number>" (e.g. "+918484956848").
+ * A number without a "+" (older records) is treated as Indian.
+ */
+export const normalizePhoneForSave = (val?: string | null): string => {
+  if (!val) return "";
+  const v = val.toString().trim();
+  if (v.startsWith("+")) return `+${v.replace(/\D/g, "")}`;
+  const national = normalizeIndianPhoneTo10Digits(v);
+  return national ? `+91${national}` : "";
+};

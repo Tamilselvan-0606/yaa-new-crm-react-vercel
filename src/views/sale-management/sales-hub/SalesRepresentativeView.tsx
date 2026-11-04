@@ -604,6 +604,14 @@ export const SalesRepresentativeView: React.FC = () => {
     setActiveRepTab("customers");
     setIsDetailModalOpen(true);
     loadPortfolio(rep);
+    salesRepresentativeApi
+      .getById(rep.id)
+      .then((res) => {
+        if (res?.success && res.data) {
+          setSelectedRep((prev) => (prev && prev.id === rep.id ? { ...prev, ...res.data } : prev));
+        }
+      })
+      .catch((err) => console.warn("Could not fetch sales representative details:", err));
   };
 
   dupCheckRef.current = {
@@ -640,7 +648,14 @@ export const SalesRepresentativeView: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
-  const openEditModal = (rep: ApiSalesRepresentative) => {
+  const openEditModal = async (listRep: ApiSalesRepresentative) => {
+    let rep = listRep;
+    try {
+      const res = await salesRepresentativeApi.getById(listRep.id);
+      if (res?.success && res.data) rep = { ...listRep, ...res.data };
+    } catch (err) {
+      console.warn("Could not fetch sales representative details:", err);
+    }
     setEditingRep(rep);
     clearErrors();
     reset({

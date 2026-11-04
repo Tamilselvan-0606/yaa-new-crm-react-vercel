@@ -24,11 +24,16 @@ export const mapApiSupplierToSupplier = (apiSup: ApiSupplier): Supplier => {
     name: apiSup.name || 'Unnamed Supplier',
     contactPerson: apiSup.contactPerson || apiSup.name || '',
     phone: apiSup.phone || '',
+    whatsappNumber: apiSup.whatsapp || '',
     email: apiSup.email || '',
     address: apiSup.address || '',
     city: apiSup.city || '',
     state: apiSup.state || '',
     country: apiSup.country || 'India',
+    countryId: apiSup.countryId || undefined,
+    stateId: apiSup.stateId || undefined,
+    districtId: apiSup.districtId || undefined,
+    cityId: apiSup.cityId || undefined,
     pincode: apiSup.pincode || '',
     gstNumber: apiSup.gstNumber || '',
     panNumber: apiSup.panNumber || '',
@@ -55,10 +60,15 @@ export const mapSupplierToPayload = (sup: Supplier | Partial<Supplier>): CreateS
   const payload: CreateSupplierPayload = {
     name: sup.name?.trim() || '',
     phone: sup.phone?.trim() || '',
+    whatsapp: sup.whatsappNumber?.trim() || undefined,
     address: sup.address?.trim() || '',
     city: sup.city?.trim() || '',
     state: sup.state?.trim() || '',
     country: sup.country?.trim() || 'India',
+    countryId: sup.countryId || undefined,
+    stateId: sup.stateId || undefined,
+    districtId: sup.districtId || undefined,
+    cityId: sup.cityId || undefined,
     pincode: sup.pincode?.trim() || '',
     status: sup.status || 'Active',
   };
@@ -207,7 +217,8 @@ export const supplierApi = {
   },
 
   getSupplierById: async (id: string): Promise<SupplierSingleResponse> => {
-    const response = await baseClient.get<SupplierSingleResponse>(`/work/suppliers/${encodeURIComponent(id)}`);
+    // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View/Edit really calls GET /suppliers/:id.
+    const response = await baseClient.get<SupplierSingleResponse>(`/work/suppliers/${encodeURIComponent(id)}`, { timeout: 0 });
     return response.data;
   },
 

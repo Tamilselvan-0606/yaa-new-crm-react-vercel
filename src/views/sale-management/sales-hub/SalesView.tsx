@@ -1894,12 +1894,12 @@ export const SalesView: React.FC = () => {
         ? "amber"
         : "rose",
     referenceNo: sale.referenceNo,
-    companyName: companyProfile.companyName || "YAA SALES & MART",
-    companySubtitle: companyProfile.companySubtitle || "Supermarket & Retail Groceries Distribution",
-    companyAddress: companyProfile.companyAddress || "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
-    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
-    companyPhone: companyProfile.companyPhone || "+91 98765 43210",
-    companyEmail: companyProfile.companyEmail || "billing@yaamart.com",
+    companyName: companyProfile.companyName,
+    companySubtitle: companyProfile.companySubtitle,
+    companyAddress: companyProfile.companyAddress,
+    companyGstin: companyProfile.companyGstin,
+    companyPhone: companyProfile.companyPhone,
+    companyEmail: companyProfile.companyEmail,
     partyTitle: "Billed To",
     partyName: sale.customerName,
     partyCompany: sale.customerCompany,
@@ -1972,8 +1972,6 @@ export const SalesView: React.FC = () => {
         docDate: record.paymentDate,
         status: "Received",
         statusColor: "emerald",
-        companyName: "YAA SALES & MART",
-        companySubtitle: "Enterprise FMCG & Retail Distribution",
         partyTitle: "Received From (Customer)",
         partyName: (record as any).customerName || parentSale?.customerName || "Customer",
         extraMeta: [
@@ -2074,11 +2072,11 @@ export const SalesView: React.FC = () => {
             <!-- Header -->
             <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #33077C; padding-bottom: 20px; margin-bottom: 20px;">
               <div>
-                <h1 style="font-size: 22px; font-weight: 800; color: #33077C; margin-bottom: 4px;">YAA SALES &amp; MART</h1>
+                <h1 style="font-size: 22px; font-weight: 800; color: #33077C; margin-bottom: 4px;">${companyProfile.companyName}</h1>
                 <p style="font-size: 12px; color: #64748b; line-height: 1.4;">
-                  Supermarket &amp; Retail Groceries Distribution<br/>
-                  GSTIN: 33AAAAA0000A1Z5 | Phone: +91 98765 43210<br/>
-                  Email: billing@yaamart.com
+                  ${companyProfile.companyAddress || ""}<br/>
+                  GSTIN: ${companyProfile.companyGstin || ""} | Phone: ${companyProfile.companyPhone || ""}<br/>
+                  Email: ${companyProfile.companyEmail || ""}
                 </p>
               </div>
               <div style="text-align: right;">
@@ -2225,7 +2223,7 @@ export const SalesView: React.FC = () => {
       ? sale.customerPhone.replace(/[^0-9]/g, "")
       : "";
     const text = encodeURIComponent(
-      `*YAA SALES & MART - INVOICE*\n` +
+      `*INVOICE*\n` +
         `--------------------------------\n` +
         `*Invoice #:* ${sale.invoiceNo}\n` +
         `*Customer:* ${sale.customerName}\n` +
@@ -7083,6 +7081,10 @@ export const SalesView: React.FC = () => {
           title={`Sales Invoice: ${selectedSale.invoiceNo}`}
           subtitle="View full invoice details and printable breakdown"
           maxWidth="4xl"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setIsInvoiceModalOpen(false)}
         >
           <div className="space-y-6 pt-2" id="printable-invoice">
             {/* Top Toolbar */}
@@ -8250,6 +8252,10 @@ export const SalesView: React.FC = () => {
           title={`Payment History: ${selectedSale.invoiceNo}`}
           subtitle={`Transaction logs and payment settlements for ${selectedSale.customerName}`}
           maxWidth="2xl"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setIsPaymentHistoryModalOpen(false)}
         >
           <div className="space-y-5 p-2 sm:p-4 text-xs animate-in fade-in duration-150">
             {/* Top Metric Cards */}
@@ -8576,6 +8582,10 @@ export const SalesView: React.FC = () => {
           title={`Payment Receipt: ${selectedPaymentRecord.id}`}
           subtitle={`Payment details for Invoice ${selectedPaymentRecord.invoiceNo}`}
           maxWidth="lg"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setIsPaymentDetailsModalOpen(false)}
         >
           <div
             className="space-y-4 p-2 sm:p-4 text-xs animate-in fade-in duration-150"

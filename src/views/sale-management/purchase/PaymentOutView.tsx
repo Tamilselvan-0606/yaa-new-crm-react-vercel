@@ -1,3 +1,4 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -514,6 +515,21 @@ export const PaymentOutView: React.FC = () => {
   }, [isApiConnected, livePayments, paymentOuts, mergedPurchases]);
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
+  // Open detail view with fresh data (GET /payments-out/:id)
+  const openPaymentDetail = async (listPo: PaymentOut) => {
+    setSelectedPayment(listPo);
+    setIsDetailModalOpen(true);
+    try {
+      const res = await workPaymentOutApi.getPaymentOutById(listPo.id);
+      if (res?.data) {
+        const fresh = mapApiPaymentOutToUi(res.data);
+        setSelectedPayment((prev) => (prev && prev.id === listPo.id ? { ...prev, ...fresh } : prev));
+      }
+    } catch (err) {
+      console.warn('Could not fetch payment details:', err);
+    }
+  };
+
   const handleOpenEditModal = (po: PaymentOut) => {
     setReceiptError(null);
     loadFormMasterData();
@@ -1512,20 +1528,16 @@ export const PaymentOutView: React.FC = () => {
                           {/* 3-dots Actions Dropdown */}
                           <SaleActionDropdown
                             items={[
-                              po.status === 'Cancelled'
-                                ? {
-                                    label: 'View Voucher',
-                                    variant: 'view',
-                                    onClick: () => {
-                                      setSelectedPayment(po);
-                                      setIsDetailModalOpen(true);
-                                    },
-                                  }
-                                : {
-                                    label: 'View/Edit',
-                                    variant: 'edit',
-                                    onClick: () => handleOpenEditModal(po),
-                                  },
+                              {
+                                label: 'View',
+                                variant: 'view',
+                                onClick: () => openPaymentDetail(po),
+                              },
+                              po.status !== 'Cancelled' && {
+                                label: 'Edit',
+                                variant: 'edit',
+                                onClick: () => handleOpenEditModal(po),
+                              },
                               {
                                 label: 'Duplicate',
                                 variant: 'duplicate',
@@ -1540,14 +1552,6 @@ export const PaymentOutView: React.FC = () => {
                                 label: 'Download Voucher',
                                 variant: 'download',
                                 onClick: () => handleDownloadPaymentOut(po),
-                              },
-                              {
-                                label: 'Preview',
-                                variant: 'preview',
-                                onClick: () => {
-                                  setSelectedPayment(po);
-                                  setIsDetailModalOpen(true);
-                                },
                               },
                               {
                                 label: 'View History',
@@ -1932,11 +1936,16 @@ export const PaymentOutView: React.FC = () => {
       <Modal
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
-        title="Payment Voucher Details"
-        maxWidth="md"
+        title={selectedPayment ? `Payment Voucher: ${selectedPayment.paymentNo}` : 'Payment Voucher Details'}
+        subtitle="Voucher amount, supplier, payment mode, and reference details"
+        maxWidth="3xl"
+        headerGradient={true}
+        showBackIcon={true}
+        hideCloseButton={true}
+        onBack={() => setIsDetailModalOpen(false)}
       >
         {selectedPayment && (
-          <div className="space-y-5">
+          <div className="space-y-5 p-2 sm:p-4 max-h-[75vh] overflow-y-auto">
             {/* Header Voucher Card */}
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between">
               <div>
@@ -2006,18 +2015,18 @@ export const PaymentOutView: React.FC = () => {
             )}
 
             {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setIsDetailModalOpen(false)}
-                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs whitespace-nowrap"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => handlePrintPaymentOut(selectedPayment)}
-                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Voucher</span>
@@ -2026,7 +2035,7 @@ export const PaymentOutView: React.FC = () => {
                 type="button"
                 disabled={isDownloadingPayment}
                 onClick={() => handleDownloadPaymentOut(selectedPayment)}
-                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
               >
                 {isDownloadingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 <span>{isDownloadingPayment ? 'Generating...' : 'Download Voucher'}</span>
@@ -2047,71 +2056,60 @@ export const PaymentOutView: React.FC = () => {
             : 'Complete lifecycle progression and timeline audit log'
         }
         maxWidth="md"
+        headerGradient={true}
+        showBackIcon={true}
+        hideCloseButton={true}
+        onBack={() => setIsHistoryModalOpen(false)}
       >
         {selectedPayment && (
-          <div className="space-y-4">
-            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl flex items-center justify-between">
-              <div>
-                <span className="text-xs font-semibold text-slate-500">Voucher Reference</span>
-                <div className="font-bold text-slate-900 text-sm">{selectedPayment.paymentNo}</div>
-              </div>
-              <div className="text-right">
-                <span className="text-xs font-semibold text-slate-500">Amount</span>
-                <div className="font-bold text-[#33077C] text-sm">
-                  ₹{selectedPayment.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </div>
-              </div>
-            </div>
-
-            {/* Timeline */}
-            <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-              {/* Event 1: Payment Recorded */}
-              <div className="relative">
-                <div className="absolute -left-6 top-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center">
-                  <Check className="w-3 h-3 text-white stroke-[3]" />
-                </div>
-                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800">Payment Out Recorded</span>
-                    <span className="text-[11px] text-slate-400 font-medium">{formatDate(selectedPayment.paymentDate)}</span>
-                  </div>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Voucher disbursed via <strong className="text-slate-800">{selectedPayment.paymentMode}</strong> to{' '}
-                    <strong className="text-slate-800">{selectedPayment.supplierName}</strong>.
-                  </p>
-                </div>
-              </div>
-
-              {/* Event 2: Creation & Timestamp */}
-              <div className="relative">
-                <div className="absolute -left-6 top-1 w-5 h-5 rounded-full bg-[#33077C] border-2 border-white flex items-center justify-center">
-                  <History className="w-2.5 h-2.5 text-white" />
-                </div>
-                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800">System Log Entry</span>
-                    <span className="text-[11px] text-slate-400 font-medium">
-                      {selectedPayment.createdAt ? new Date(selectedPayment.createdAt).toLocaleString() : 'System'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Status marked as <span className="font-semibold text-emerald-600">Completed</span> with reference{' '}
-                    <span className="font-mono text-slate-700">{selectedPayment.referenceNo || 'Direct Entry'}</span>.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end pt-3 border-t border-slate-200">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => setIsHistoryModalOpen(false)}
-              >
-                Close History
-              </Button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            isLoading={isLoadingHistory}
+            eyebrow="Voucher No"
+            title={selectedPayment.paymentNo}
+            subtitle={
+              <>
+                Supplier: <span className="font-semibold text-slate-800">{selectedPayment.supplierName}</span>
+                {selectedPayment.purchaseNo ? ` • Bill ${selectedPayment.purchaseNo}` : ""}
+              </>
+            }
+            amount={{ label: "Amount Paid", value: `₹${Number(selectedPayment.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[
+              { label: selectedPayment.status, tone: selectedPayment.status === "Completed" ? "success" : selectedPayment.status === "Cancelled" || selectedPayment.status === "Failed" ? "danger" : "warning" },
+              { label: selectedPayment.paymentMode, tone: "primary" },
+            ]}
+            facts={[
+              { label: "Payment Date", value: selectedPayment.paymentDate ? formatDate(selectedPayment.paymentDate) : "" },
+              { label: "Reference No", value: selectedPayment.referenceNo },
+              { label: "Linked Bill", value: selectedPayment.purchaseNo },
+            ]}
+            events={[
+              {
+                title: "Payment Voucher Recorded",
+                at: selectedPayment.createdAt || selectedPayment.paymentDate,
+                tone: "primary",
+                description: `Payment disbursed to ${selectedPayment.supplierName}.`,
+                details: [
+                  { label: "Mode", value: selectedPayment.paymentMode },
+                  { label: "Reference", value: selectedPayment.referenceNo },
+                  { label: "Payment Date", value: selectedPayment.paymentDate ? formatDate(selectedPayment.paymentDate) : "" },
+                ],
+              },
+              ...(selectedPayment.purchaseNo
+                ? [{ title: "Applied to Purchase Bill", tone: "info" as const, description: `Settlement posted against bill ${selectedPayment.purchaseNo}.` }]
+                : []),
+              {
+                title: `Status: ${selectedPayment.status}`,
+                at: selectedPayment.updatedAt && selectedPayment.updatedAt !== selectedPayment.createdAt ? selectedPayment.updatedAt : undefined,
+                tone: selectedPayment.status === "Completed" ? "success" : selectedPayment.status === "Cancelled" || selectedPayment.status === "Failed" ? "danger" : "warning",
+                description: selectedPayment.status === "Cancelled" ? "This voucher was cancelled and no longer counts toward settlement." : "Current state of the payment voucher.",
+              },
+              ...(selectedPayment.notes
+                ? [{ title: "Remarks", tone: "info" as const, description: `"${selectedPayment.notes}"` }]
+                : []),
+            ]}
+            updatedAt={selectedPayment.updatedAt}
+            onClose={() => setIsHistoryModalOpen(false)}
+          />
         )}
       </Modal>
 

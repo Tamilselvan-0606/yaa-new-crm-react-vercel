@@ -863,8 +863,9 @@ export const PlanFormModal: React.FC<PlanFormModalProps> = ({
                   onChange={(val) => !initialPlan && handleProductChange(val)}
                   options={products.map((p) => ({
                     value: p.id,
-                    label: p.name,
+                    label: p.code ? `${p.name} (${p.code})` : p.name,
                   }))}
+                  optionVariant="strong"
                   placeholder="Select Product"
                   activeColor="brand"
                 />

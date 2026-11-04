@@ -39,6 +39,7 @@ import { useAppDispatch } from '../../hooks/redux';
 import { EstimatePDFDocument, SellerInfo } from '../../components/quotes/EstimatePDFDocument';
 import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
+import { CustomerFormModal } from '../../components/forms/CustomerFormModal';
 import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { ConfirmationModal } from '../../utils/confirmationModal';
@@ -105,6 +106,8 @@ export interface AvailableClient {
   id: string;
   name: string;
   company: string;
+  /** Organization code, e.g. CO-001 (shown next to the name in the dropdown). */
+  code?: string;
   contactPerson?: string;
   email: string;
   phone: string;
@@ -432,6 +435,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
               id: o.id,
               name: o.contactPerson || o.user?.name || o.name,
               company: o.name,
+              code: o.code || '',
               contactPerson: o.contactPerson || o.user?.name || '',
               email: o.email || '',
               phone: o.phone || '',
@@ -458,6 +462,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   // so it loads the first time the form opens (not when the quotations list opens). If the organization or
   // sub-organization changes afterwards it is refreshed.
   const formClientsRequested = useRef(false);
+  const [isAddClientModalOpen, setIsAddClientModalOpen] = useState(false);
   const loadFormClients = async () => {
     if (isSuperAdmin && !isOrgSuperAdmin) return;
     const orgId = currentUser?.organizationId || getStoredOrganizationId();
@@ -474,6 +479,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             id: c.id,
             name: c.contactPerson || displayName,
             company: displayName,
+            code: (c as any).code || '',
             contactPerson: c.contactPerson || '',
             email: c.email || '',
             phone: c.phone || c.whatsapp || '',
@@ -1926,12 +1932,15 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                               if (formErrors.organization) setFormErrors((prev) => ({ ...prev, organization: '' }));
                               setIsCompanyProductDropdownOpen(false);
                             }}
-                            className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs sm:text-[13px] transition-colors cursor-pointer flex items-center justify-between ${isSelected
+                            className={`w-full text-left px-3.5 py-2.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
                                 ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
-                                : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                                : 'hover:bg-slate-50 text-slate-800 font-medium'
                               }`}
                           >
-                            <span>{client.company || client.name}</span>
+                            <span className="truncate block font-semibold text-slate-800">
+                              {client.company || client.name}
+                              {client.code ? ` (${client.code})` : ''}
+                            </span>
                             {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5]" />}
                           </button>
                         );
@@ -2484,6 +2493,17 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         Client &amp; Billing Party
                       </h2>
                     </div>
+                    <div className="flex items-center gap-2">
+                    {!(isSuperAdmin && !isOrgSuperAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAddClientModalOpen(true)}
+                        className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                        Add Client
+                      </button>
+                    )}
                     {selectedClientId && (
                       <button
                         type="button"
@@ -2503,6 +2523,14 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                         Clear
                       </button>
                     )}
+                    <CustomerFormModal
+                      isOpen={isAddClientModalOpen}
+                      onClose={() => {
+                        setIsAddClientModalOpen(false);
+                        void loadFormClients(); // show the client that was just added
+                      }}
+                    />
+                    </div>
                   </div>
 
                   {/* Card Body */}
@@ -2595,6 +2623,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                     !q ||
                                     c.name.toLowerCase().includes(q) ||
                                     c.company.toLowerCase().includes(q) ||
+                                    (c.code || '').toLowerCase().includes(q) ||
                                     c.email.toLowerCase().includes(q)
                                 );
                                 if (list.length === 0) {
@@ -2624,7 +2653,10 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                                       }`}
                                     >
                                       <div className="truncate">
-                                        <div className="font-semibold text-slate-900 truncate">{displayName}</div>
+                                        <div className="font-semibold text-slate-800 truncate">
+                                          {displayName}
+                                          {client.code ? ` (${client.code})` : ''}
+                                        </div>
                                       </div>
                                       {isSelected && <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />}
                                     </button>
@@ -3375,8 +3407,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       </div>
 
       {/* Pagination */}
-      {totalRecords > 0 && (
-        <Pagination
+      <Pagination
           total={totalRecords}
           currentPage={currentPage}
           pageSize={pageSize}
@@ -3387,7 +3418,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
             setCurrentPage(1);
           }}
         />
-      )}
       {/* Action Dropdown Menu Portal / Fixed Overlay */}
       {openActionMenuId && actionDropdownPos && (() => {
         const targetQuote = quotes.find((q) => q.id === openActionMenuId);

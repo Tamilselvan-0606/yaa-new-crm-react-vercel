@@ -22,6 +22,8 @@ interface CustomSelectProps {
   error?: boolean;
   /** Shows a search box at the top of the menu (long lists such as countries). */
   searchable?: boolean;
+  /** 'strong': larger, semi-bold options (the look of the invoice client / organization dropdown). */
+  optionVariant?: 'default' | 'strong';
 }
 
 export const CustomSelect: React.FC<CustomSelectProps> = ({
@@ -38,6 +40,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   disabled = false,
   error = false,
   searchable = false,
+  optionVariant = 'default',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -242,13 +245,15 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
                 <div
                   key={opt.value}
                   onClick={() => handleSelect(opt.value)}
-                  className={`px-2.5 py-1.5 text-[11.5px] transition-all cursor-pointer flex items-center justify-between ${
+                  className={`${optionVariant === 'strong' ? 'px-3.5 py-2.5 text-xs gap-3' : 'px-2.5 py-1.5 text-[11.5px]'} transition-all cursor-pointer flex items-center justify-between ${
                     isSelected
                       ? activeColor === 'brand'
                         ? 'bg-[#33077C]/10 text-[#33077C] font-bold'
                         : activeColor === 'orange'
                         ? 'bg-orange-50 text-[#4309A2] font-bold'
                         : 'bg-emerald-50 text-emerald-700 font-bold'
+                      : optionVariant === 'strong'
+                      ? 'text-slate-800 font-semibold hover:bg-slate-50'
                       : 'text-slate-700 font-medium hover:bg-purple-50/60 hover:text-[#33077C]'
                   }`}
                   style={{ borderRadius: '4px' }}

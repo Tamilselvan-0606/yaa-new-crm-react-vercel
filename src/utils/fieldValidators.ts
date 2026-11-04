@@ -95,6 +95,18 @@ export const indianMobile =
     return null;
   };
 
+/** Phone / WhatsApp number: digits only, 10 to 15 digits (international numbers allowed). */
+export const PHONE_MAX_DIGITS = 15;
+export const phoneNumber =
+  (label: string): Validator =>
+  (v) => {
+    if (isEmpty(v)) return null;
+    const digits = v.replace(/\D/g, '');
+    if (digits.length < 10) return `${label} must be at least 10 digits`;
+    if (digits.length > PHONE_MAX_DIGITS) return `${label} must be at most ${PHONE_MAX_DIGITS} digits`;
+    return null;
+  };
+
 /** Looser phone check that also accepts +91 / 0 prefixes (used for alternate phone numbers). */
 export const indianPhoneAnyFormat =
   (message: string): Validator =>

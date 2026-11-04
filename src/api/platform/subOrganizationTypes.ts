@@ -23,14 +23,20 @@ export interface SubOrganizationApiItem {
   state?: string;
   district?: string;
   pincode?: string;
+  countryName?: string;
+  stateName?: string;
+  districtName?: string;
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   organizationType?: string;
   /** 1 = client management, 2 = sales management, 3 = both. */
   subOrganizationType?: number | string | null;
   industry?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   address?: string;
   contactPerson?: string;
   email?: string;
@@ -114,9 +120,12 @@ export interface CreateSubOrganizationRequest {
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   organizationType?: string;
   industry?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   address?: string;
   contactPerson?: string;
   phone?: string;
@@ -150,9 +159,12 @@ export interface UpdateSubOrganizationRequest {
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   organizationType?: string;
   industry?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   address?: string;
   contactPerson?: string;
   phone?: string;

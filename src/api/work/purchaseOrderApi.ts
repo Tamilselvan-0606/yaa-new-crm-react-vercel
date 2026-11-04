@@ -603,7 +603,9 @@ export const workPurchaseOrderApi = {
    */
   getPurchaseOrderById: async (id: string): Promise<PurchaseOrderSingleResponse> => {
     const response = await baseClient.get<PurchaseOrderSingleResponse>(
-      `/work/purchase-orders/${id}`
+      `/work/purchase-orders/${id}`,
+      // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View calls GET /purchase-orders/:id.
+      { timeout: 0 }
     );
     return response.data;
   },

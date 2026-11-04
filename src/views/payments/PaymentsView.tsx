@@ -571,8 +571,7 @@ export const PaymentsView: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {totalRecords > 0 && (
-        <Pagination
+      <Pagination
           total={totalRecords}
           currentPage={safePage}
           pageSize={pageSize}
@@ -583,7 +582,6 @@ export const PaymentsView: React.FC = () => {
             setPage(1);
           }}
         />
-      )}
 
       {/* REACT HOOK FORM + ZOD PAYMENT MODAL */}
       <PaymentFormModal

@@ -75,7 +75,7 @@ export const checkPhone = (
   required = false,
 ): string | null => {
   if (isBlank(value)) return required ? 'Please enter the mobile number.' : null;
-  return isValidPhone(String(value)) ? null : 'Please enter a valid 10-digit mobile number.';
+  return isValidPhone(String(value)) ? null : 'Please enter a valid mobile number.';
 };
 
 export const checkGstin = (value: unknown): string | null =>

@@ -1,3 +1,4 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -411,7 +412,7 @@ export const PurchaseReturnView: React.FC = () => {
     }
   }, [isCreateModalOpen, handleProductSearch]);
 
-  // Product options combining searched API products, returnItems, and local stocks
+  // Product options: searched API products plus items already on this return
   const productOptions = useMemo(() => {
     const map = new Map<string, { value: string; label: string; subLabel?: string; badge?: string }>();
     availableProducts.forEach((p) => {
@@ -430,18 +431,9 @@ export const PurchaseReturnView: React.FC = () => {
         });
       }
     });
-    stocks.forEach((stk) => {
-      if (!map.has(stk.productId)) {
-        map.set(stk.productId, {
-          value: stk.productId,
-          label: stk.productName,
-          subLabel: stk.sku ? `SKU: ${stk.sku}` : undefined,
-          badge: stk.sku || undefined,
-        });
-      }
-    });
+    // Only products returned by the products API are selectable (no stale inventory-store fallback).
     return Array.from(map.values());
-  }, [availableProducts, returnItems, stocks]);
+  }, [availableProducts, returnItems]);
 
   // If navigated from Purchase Bills (Convert to Return) - open creation modal with pre-filled items
   useEffect(() => {
@@ -903,7 +895,32 @@ export const PurchaseReturnView: React.FC = () => {
   };
 
   // Open Edit Modal
+  // Open the view modal, then load the latest record (GET /purchase-returns/:id)
+  const handleOpenViewModal = async (pret: PurchaseReturn) => {
+    setSelectedReturn(pret);
+    setIsDetailModalOpen(true);
+    try {
+      if (pret.id) {
+        const res = await commercePurchaseReturnApi.getPurchaseReturnById(pret.id);
+        if (res?.data) {
+          const fresh = mapApiPurchaseReturnToUi(res.data);
+          setSelectedReturn((prev) => (prev && prev.id === pret.id ? { ...prev, ...fresh } : prev));
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch purchase return details:', err);
+    }
+  };
+
   const handleOpenEditModal = (pret: PurchaseReturn) => {
+    // Completed / returned / cancelled returns are locked: show the read-only view instead of the edit form.
+    if (['Completed', 'Returned', 'Cancelled'].includes(pret.returnStatus as string)) {
+      toast.warning(
+        `Purchase return ${pret.returnNo} is ${String(pret.returnStatus).toLowerCase()} and locked from modifications.`,
+      );
+      handleOpenViewModal(pret);
+      return;
+    }
     retErr.reset();
     setEditingReturn(pret);
     setSelectedPurchaseId(pret.purchaseId || '');
@@ -1786,10 +1803,7 @@ export const PurchaseReturnView: React.FC = () => {
                         </div>
                         <div>
                           <span
-                            onClick={() => {
-                              setSelectedReturn(pret);
-                              setIsDetailModalOpen(true);
-                            }}
+                            onClick={() => handleOpenViewModal(pret)}
                             className="font-bold text-[#33077C] hover:underline cursor-pointer block text-sm leading-snug"
                           >
                             {pret.returnNo}
@@ -1884,7 +1898,12 @@ export const PurchaseReturnView: React.FC = () => {
                         <SaleActionDropdown
                           items={[
                             {
-                              label: 'View / Edit',
+                              label: 'View',
+                              variant: 'view',
+                              onClick: () => handleOpenViewModal(pret),
+                            },
+                            {
+                              label: 'Edit',
                               variant: 'edit',
                               onClick: () => handleOpenEditModal(pret),
                             },
@@ -1912,14 +1931,6 @@ export const PurchaseReturnView: React.FC = () => {
                               label: 'Mark as Approved',
                               variant: 'approve',
                               onClick: () => handleQuickStatusChange(pret, 'Approved'),
-                            },
-                            {
-                              label: 'Preview',
-                              variant: 'preview',
-                              onClick: () => {
-                                setSelectedReturn(pret);
-                                setIsDetailModalOpen(true);
-                              },
                             },
                             {
                               label: 'View History',
@@ -2438,18 +2449,18 @@ export const PurchaseReturnView: React.FC = () => {
             </div>
 
             {/* Footer Buttons */}
-            <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setIsDetailModalOpen(false)}
-                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs whitespace-nowrap"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => handlePrintDebitNote(selectedReturn)}
-                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Debit Note</span>
@@ -2458,7 +2469,7 @@ export const PurchaseReturnView: React.FC = () => {
                 type="button"
                 disabled={isDownloadingReturn}
                 onClick={() => handleDownloadPurchaseReturn(selectedReturn)}
-                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
               >
                 {isDownloadingReturn ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 <span>{isDownloadingReturn ? 'Generating...' : 'Download Debit Note'}</span>
@@ -2487,140 +2498,59 @@ export const PurchaseReturnView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setHistoryReturn(null)}
         >
-          <div className="space-y-4 text-xs font-sans">
-            {/* Header Card */}
-            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
-                  Debit Note / Return No
-                </div>
-                <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                  {historyReturn.returnNo}
-                </div>
-                <div className="text-xs text-slate-600 font-medium mt-0.5">
-                  Supplier: <span className="font-semibold text-slate-800">{historyReturn.supplierName}</span>
-                </div>
-                {historyReturn.purchaseNo && (
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    Original PO: {historyReturn.purchaseNo}
-                  </div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Adjustment Value
-                </div>
-                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
-                  ₹{(Number(historyReturn.returnAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </div>
-                <div className="mt-1.5 flex justify-end">
-                  <span
-                    className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      historyReturn.returnStatus === 'Completed'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : historyReturn.returnStatus === 'Approved'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-amber-100 text-amber-700'
-                    }`}
-                  >
-                    {historyReturn.returnStatus}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Audit Timeline */}
-            <div className="space-y-3 pt-1">
-              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Lifecycle & Activity Timeline
-              </div>
-
-              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
-                {/* Event 1: Return Created */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Debit Note Issued
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Return Date: <span className="font-medium text-slate-700">{formatDate(historyReturn.returnDate)}</span>
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Items Returned: {historyReturn.items.length} product item(s)
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 2: Return Status */}
-                <div className="relative">
-                  <div
-                    className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
-                      historyReturn.returnStatus === 'Completed'
-                        ? 'bg-emerald-500 ring-4 ring-emerald-100'
-                        : historyReturn.returnStatus === 'Approved'
-                        ? 'bg-blue-500 ring-4 ring-blue-100'
-                        : 'bg-amber-500 ring-4 ring-amber-100'
-                    }`}
-                  />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Status: {historyReturn.returnStatus}
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      {historyReturn.returnStatus === 'Completed'
-                        ? 'Refund / Credit note finalized with vendor ledger adjustment.'
-                        : historyReturn.returnStatus === 'Approved'
-                        ? 'Return verified and acknowledged by vendor.'
-                        : 'Return submitted, awaiting vendor confirmation.'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 3: Reason */}
-                {(historyReturn.notes || (historyReturn.items && historyReturn.items[0]?.reason)) && (
-                  <div className="relative">
-                    <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 ring-4 ring-amber-100" />
-                    <div>
-                      <div className="font-bold text-slate-800 text-xs">
-                        Return Reason / Notes
-                      </div>
-                      <div className="text-slate-600 text-[11px] mt-0.5 italic">
-                        "{historyReturn.notes || historyReturn.items[0]?.reason}"
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Event 4: System Audit Log */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-400 ring-4 ring-slate-100" />
-                  <div>
-                    <div className="font-bold text-slate-700 text-xs">
-                      System Audit Log Entry
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Record ID: <span className="font-mono text-slate-600">{historyReturn.id}</span>
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Last Verified: {new Date(historyReturn.updatedAt || Date.now()).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex justify-end pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setHistoryReturn(null)}
-                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            isLoading={isLoadingHistory}
+            eyebrow="Debit Note No"
+            title={historyReturn.returnNo}
+            subtitle={
+              <>
+                Supplier: <span className="font-semibold text-slate-800">{historyReturn.supplierName}</span>
+                {historyReturn.purchaseNo ? ` • Against Bill ${historyReturn.purchaseNo}` : ""}
+              </>
+            }
+            amount={{ label: "Return Amount", value: `₹${Number(historyReturn.returnAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[
+              { label: historyReturn.returnStatus, tone: historyReturn.returnStatus === "Completed" || historyReturn.returnStatus === "Returned" ? "success" : historyReturn.returnStatus === "Rejected" || historyReturn.returnStatus === "Cancelled" ? "danger" : historyReturn.returnStatus === "Approved" || historyReturn.returnStatus === "Dispatched" ? "info" : "warning" },
+              { label: historyReturn.refundStatus, tone: historyReturn.refundStatus === "Refunded" ? "success" : historyReturn.refundStatus === "Pending" ? "warning" : "primary" },
+            ]}
+            facts={[
+              { label: "Return Date", value: historyReturn.returnDate ? formatDate(historyReturn.returnDate) : "" },
+              { label: "Items Returned", value: String(historyReturn.items?.length || 0) },
+              { label: "Stock Deducted", value: historyReturn.stockDeducted ? "Yes" : "No" },
+            ]}
+            events={[
+              {
+                title: "Purchase Return Requested",
+                at: historyReturn.createdAt || historyReturn.returnDate,
+                tone: "primary",
+                description: `${historyReturn.items?.length || 0} item(s) returned to ${historyReturn.supplierName}.`,
+                details: [
+                  { label: "Return Date", value: historyReturn.returnDate ? formatDate(historyReturn.returnDate) : "" },
+                  { label: "Against Bill", value: historyReturn.purchaseNo },
+                ],
+              },
+              {
+                title: `Return Status: ${historyReturn.returnStatus}`,
+                at: historyReturn.returnStatus === "Requested" ? undefined : historyReturn.updatedAt,
+                tone: historyReturn.returnStatus === "Completed" || historyReturn.returnStatus === "Returned" ? "success" : historyReturn.returnStatus === "Rejected" || historyReturn.returnStatus === "Cancelled" ? "danger" : historyReturn.returnStatus === "Approved" || historyReturn.returnStatus === "Dispatched" ? "info" : "warning",
+                description: "Current stage of the return in the approval and dispatch flow.",
+              },
+              {
+                title: `Settlement: ${historyReturn.refundStatus}`,
+                tone: historyReturn.refundStatus === "Refunded" ? "success" : historyReturn.refundStatus === "Pending" ? "warning" : "primary",
+                description: "How the returned value is settled with the supplier.",
+                details: [{ label: "Debit Amount", value: `₹${Number(historyReturn.returnAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }],
+              },
+              ...(historyReturn.stockDeducted
+                ? [{ title: "Stock Deducted", tone: "success" as const, description: "Returned quantities were deducted from inventory." }]
+                : []),
+              ...(historyReturn.notes
+                ? [{ title: "Remarks", tone: "info" as const, description: `"${historyReturn.notes}"` }]
+                : []),
+            ]}
+            updatedAt={historyReturn.updatedAt}
+            onClose={() => setHistoryReturn(null)}
+          />
         </Modal>
       )}
 

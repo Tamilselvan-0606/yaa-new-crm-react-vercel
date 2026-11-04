@@ -1,3 +1,4 @@
+import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import React, { useState, useMemo, useEffect } from 'react';
 import { salesReportApi, SalesReportSummary } from '../../../api/commerce/salesReportApi';
 import {
@@ -186,6 +187,7 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
 ];
 
 export const SaleManagementReportsView: React.FC = () => {
+  const companyProfile = useCompanyDocumentProfile();
   const {
     sales = [],
     salesReturns = [],
@@ -2451,10 +2453,10 @@ export const SaleManagementReportsView: React.FC = () => {
             <div className="header flex justify-between border-b-2 border-[#33077C] pb-4 mb-5">
               <div>
                 <div className="brand-name text-[22px] font-extrabold text-[#33077C] tracking-tight">
-                  YAA SALES &amp; MART
+                  {companyProfile.companyName}
                 </div>
-                <div className="text-xs text-slate-500 mt-0.5">Wholesale &amp; FMCG Distribution</div>
-                <div className="text-[11px] text-slate-600">GSTIN: 33AAAAA0000A1Z5 • Phone: +91 98400 12345</div>
+                <div className="text-xs text-slate-500 mt-0.5">{companyProfile.companySubtitle}</div>
+                <div className="text-[11px] text-slate-600">GSTIN: {companyProfile.companyGstin} • Phone: {companyProfile.companyPhone}</div>
               </div>
               <div className="text-right">
                 <div className="doc-title text-lg sm:text-xl font-extrabold text-slate-900 uppercase tracking-wide">

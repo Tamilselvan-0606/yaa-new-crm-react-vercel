@@ -456,10 +456,12 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       email: pc.email || "",
       alternatePhone: "",
       address: pc.address || pc.location || "",
-      location: pc.location || "",
-      city: pc.location || "",
-      state: "",
-      pincode: "",
+      location: (pc as any).city || pc.location || "",
+      city: (pc as any).city || pc.location || "",
+      country: (pc as any).countryName || (pc as any).country || "",
+      state: (pc as any).stateName || (pc as any).state || "",
+      district: (pc as any).districtName || (pc as any).district || "",
+      pincode: (pc as any).pincode || "",
       industry: pc.industry || "Technology & Logistics",
       status: pc.status || (pc.active ? "Active" : "Inactive"),
       active: pc.active,
@@ -545,10 +547,12 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       email: pl.email,
       alternatePhone: "",
       address: pl.location || "",
-      city: pl.location || "",
-      state: "",
-      pincode: "",
-      location: pl.location || "",
+      city: (pl as any).city || pl.location || "",
+      country: (pl as any).countryName || (pl as any).country || "",
+      state: (pl as any).stateName || (pl as any).state || "",
+      district: (pl as any).districtName || (pl as any).district || "",
+      pincode: (pl as any).pincode || "",
+      location: (pl as any).city || pl.location || "",
       leadSource: pl.source || "Website",
       source: pl.source || "Website",
       interestedProducts: pl.planInterest ? [pl.planInterest] : ["YaaConnect"],
@@ -1512,6 +1516,34 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Country</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedClientDetail as any).country as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">State</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedClientDetail as any).state as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">District</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedClientDetail as any).district as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">City</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedClientDetail as any).city || (selectedClientDetail as any).location as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
                   <span className="text-slate-400 font-medium shrink-0">Address</span>
                   <span className="font-bold text-slate-800 text-right">
                     {selectedClientDetail.address || selectedClientDetail.location || "-"}
@@ -1723,6 +1755,34 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       : selectedLeadDetail.createdAt
                         ? formatDateDMY(selectedLeadDetail.createdAt)
                         : "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">Country</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedLeadDetail as any).country as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">State</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedLeadDetail as any).state as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">District</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedLeadDetail as any).district as any) || "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 text-xs sm:text-[13px] pt-2.5 border-t border-slate-100">
+                  <span className="text-slate-400 font-medium shrink-0">City</span>
+                  <span className="font-bold text-slate-800 text-right">
+                    {((selectedLeadDetail as any).city || (selectedLeadDetail as any).location as any) || "-"}
                   </span>
                 </div>
 

@@ -27,6 +27,14 @@ export interface MasterDistrict {
   districtCode?: string;
 }
 
+export interface MasterCity {
+  id: string;
+  countryId: string;
+  stateId: string;
+  districtId: string;
+  cityName: string;
+}
+
 const PAGE_LIMIT = 100; // the API maximum
 
 /** Reads every page of a master list. */
@@ -55,6 +63,14 @@ const once = <T>(key: string, load: () => Promise<T>): Promise<T> => {
 };
 
 export const masterApi = {
+  getCities: (districtId: string, stateId?: string, countryId?: string) =>
+    once(`cities:${districtId}`, () =>
+      fetchAll<MasterCity>('/master/cities', {
+        districtId,
+        ...(stateId ? { stateId } : {}),
+        ...(countryId ? { countryId } : {}),
+      })
+    ),
   getCountries: () => once('countries', () => fetchAll<MasterCountry>('/master/countries')),
   getStates: (countryId: string) =>
     once(`states:${countryId}`, () => fetchAll<MasterState>('/master/states', { countryId })),

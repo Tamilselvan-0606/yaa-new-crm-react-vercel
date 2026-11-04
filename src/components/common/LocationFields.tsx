@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CustomSelect } from './CustomSelect';
-import { masterApi, MasterCountry, MasterDistrict, MasterState } from '../../api/platform/masterApi';
+import { masterApi, MasterCity, MasterCountry, MasterDistrict, MasterState } from '../../api/platform/masterApi';
 
 export interface LocationMeta {
   /** False when the chosen country has no states in the master data (State is then optional). */
   stateRequired: boolean;
   /** False when the chosen state has no districts (District is then optional). */
   districtRequired: boolean;
+  /** False when the chosen district has no cities in the master data. */
+  cityRequired?: boolean;
   /** Postal code rule of the chosen country, when the master data has one. */
   pincodeRegex?: string | null;
   pincodeFormat?: string | null;
@@ -16,6 +18,7 @@ interface LocationFieldsProps {
   country: string;
   state: string;
   district: string;
+  city: string;
   /** Names are for display; the ids are what the API payloads carry (countryId / stateId / districtId). */
   onChange: (patch: {
     country?: string;
@@ -24,9 +27,11 @@ interface LocationFieldsProps {
     stateId?: string;
     district?: string;
     districtId?: string;
+    city?: string;
+    cityId?: string;
   }) => void;
   onMeta?: (meta: LocationMeta) => void;
-  errors?: { country?: string; state?: string; district?: string };
+  errors?: { country?: string; state?: string; district?: string; city?: string };
   required?: boolean;
 }
 
@@ -48,6 +53,7 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
   country,
   state,
   district,
+  city,
   onChange,
   onMeta,
   errors = {} as NonNullable<LocationFieldsProps["errors"]>,
@@ -58,6 +64,8 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
   const [districts, setDistricts] = useState<MasterDistrict[]>([]);
   const [statesLoaded, setStatesLoaded] = useState(false);
   const [districtsLoaded, setDistrictsLoaded] = useState(false);
+  const [cities, setCities] = useState<MasterCity[]>([]);
+  const [citiesLoaded, setCitiesLoaded] = useState(false);
 
   const selectedCountry = useMemo(() => countries.find((c) => c.name === country), [countries, country]);
   const selectedState = useMemo(() => states.find((s) => s.stateName === state), [states, state]);
@@ -91,6 +99,8 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
     };
   }, [selectedCountry?.id]);
 
+  const selectedDistrict = useMemo(() => districts.find((d) => d.districtName === district), [districts, district]);
+
   useEffect(() => {
     let alive = true;
     setDistricts([]);
@@ -109,15 +119,42 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
     };
   }, [selectedState?.id]);
 
+  useEffect(() => {
+    let alive = true;
+    setCities([]);
+    setCitiesLoaded(false);
+    if (!selectedDistrict) return;
+    masterApi
+      .getCities(selectedDistrict.id, selectedDistrict.stateId, selectedDistrict.countryId)
+      .then((c) => {
+        if (!alive) return;
+        setCities(c);
+        setCitiesLoaded(true);
+      })
+      .catch(() => alive && setCitiesLoaded(false));
+    return () => {
+      alive = false;
+    };
+  }, [selectedDistrict?.id]);
+
+  const selectedCity = useMemo(() => cities.find((c) => c.cityName === city), [cities, city]);
+
+  // Report the resolved ids (also for saved records, where only names are known) so forms can send them.
+  useEffect(() => {
+    onChange({ countryId: selectedCountry?.id ?? '', stateId: selectedState?.id ?? '', districtId: selectedDistrict?.id ?? '', cityId: selectedCity?.id ?? '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCountry?.id, selectedState?.id, selectedDistrict?.id, selectedCity?.id]);
+
+  const cityRequired = !(selectedDistrict && citiesLoaded && cities.length === 0);
   const stateRequired = !(selectedCountry && statesLoaded && states.length === 0);
   const districtRequired = !(selectedState && districtsLoaded && districts.length === 0);
   const pincodeRegex = selectedCountry?.postalCodeRegex ?? null;
   const pincodeFormat = selectedCountry?.postalCodeFormat ?? null;
 
   useEffect(() => {
-    onMeta?.({ stateRequired, districtRequired, pincodeRegex, pincodeFormat });
+    onMeta?.({ stateRequired, districtRequired, cityRequired, pincodeRegex, pincodeFormat });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stateRequired, districtRequired, pincodeRegex, pincodeFormat]);
+  }, [stateRequired, districtRequired, cityRequired, pincodeRegex, pincodeFormat]);
 
   return (
     <>
@@ -135,6 +172,8 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
               stateId: '',
               district: '',
               districtId: '',
+              city: '',
+              cityId: '',
             })
           }
           options={withCurrent(countries.map((c) => c.name), country)}
@@ -156,6 +195,8 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
               stateId: states.find((x) => x.stateName === v)?.id ?? '',
               district: '',
               districtId: '',
+              city: '',
+              cityId: '',
             })
           }
           options={withCurrent(states.map((s) => s.stateName), state)}
@@ -172,13 +213,32 @@ export const LocationFields: React.FC<LocationFieldsProps> = ({
           error={!!errors.district}
           disabled={!state}
           onChange={(v) =>
-            onChange({ district: v, districtId: districts.find((d) => d.districtName === v)?.id ?? '' })
+            onChange({
+              district: v,
+              districtId: districts.find((d) => d.districtName === v)?.id ?? '',
+              city: '',
+              cityId: '',
+            })
           }
           options={withCurrent(districts.map((d) => d.districtName), district)}
           placeholder={state ? 'Select district' : 'Select state first'}
           activeColor="brand"
         />
         {errors.district && <p className="text-[11px] font-medium text-red-500 mt-1">{errors.district}</p>}
+      </div>
+      <div>
+        <Label text="City" required={required && cityRequired} />
+        <CustomSelect
+          searchable
+          value={city}
+          error={!!errors.city}
+          disabled={!district}
+          onChange={(v) => onChange({ city: v, cityId: cities.find((c) => c.cityName === v)?.id ?? '' })}
+          options={withCurrent(cities.map((c) => c.cityName), city)}
+          placeholder={district ? 'Select city' : 'Select district first'}
+          activeColor="brand"
+        />
+        {errors.city && <p className="text-[11px] font-medium text-red-500 mt-1">{errors.city}</p>}
       </div>
     </>
   );

@@ -23,7 +23,7 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     company: apiCust.company || '',
     customerType: (apiCust.customerType as CustomerType) || 'Business',
     phone: apiCust.phone || '',
-    alternatePhone: apiCust.alternatePhone || '',
+    alternatePhone: apiCust.whatsapp || apiCust.alternatePhone || '',
     email: apiCust.email || '',
     gender: apiCust.gender || 'Not Specified',
     dateOfBirth: apiCust.dateOfBirth || '',
@@ -31,6 +31,10 @@ export const mapApiCustomerToSalesCustomer = (apiCust: ApiCustomer): SalesCustom
     city: apiCust.city || '',
     state: apiCust.state || '',
     country: apiCust.country || 'India',
+    countryId: apiCust.countryId || undefined,
+    stateId: apiCust.stateId || undefined,
+    districtId: apiCust.districtId || undefined,
+    cityId: apiCust.cityId || undefined,
     pincode: apiCust.pincode || '',
     gstNumber: apiCust.gstNumber || '',
     panNumber: apiCust.panNumber || '',
@@ -157,7 +161,7 @@ export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPa
   if (company) payload.company = company;
 
   const altPhone = cleanStr(cust.alternatePhone);
-  if (altPhone) payload.alternatePhone = altPhone;
+  if (altPhone) payload.whatsapp = altPhone;
 
   const email = cleanStr(cust.email);
   if (email) payload.email = email;
@@ -179,6 +183,10 @@ export const mapSalesCustomerToPayload = (cust: SalesCustomer): CreateCustomerPa
 
   const country = cleanStr(cust.country);
   if (country) payload.country = country;
+  if (cust.countryId) payload.countryId = cust.countryId;
+  if (cust.stateId) payload.stateId = cust.stateId;
+  if (cust.districtId) payload.districtId = cust.districtId;
+  if (cust.cityId) payload.cityId = cust.cityId;
 
   const pin = cleanStr(cust.pincode);
   if (pin) payload.pincode = pin;

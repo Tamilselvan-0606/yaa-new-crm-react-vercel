@@ -732,7 +732,9 @@ export const workExpenseApi = {
    */
   getExpenseById: async (id: string): Promise<ExpenseSingleResponse> => {
     const response = await baseClient.get<ExpenseSingleResponse>(
-      `/work/expenses/${id}`
+      `/work/expenses/${id}`,
+      // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View calls GET /work/expenses/:id.
+      { timeout: 0 }
     );
     return response.data;
   },

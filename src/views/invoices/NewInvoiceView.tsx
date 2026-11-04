@@ -215,6 +215,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   const [platformClients, setPlatformClients] = useState<PlatformClientItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Bumped after a client is added so the client list is loaded again.
+  const [clientsReload, setClientsReload] = useState(0);
   useEffect(() => {
     let isMounted = true;
     const fetchAllData = async () => {
@@ -355,13 +357,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       window.removeEventListener('orgChanged', handleOrgOrSubOrgChanged);
       window.removeEventListener('storage', handleOrgOrSubOrgChanged);
     };
-  }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
+  }, [isSuperAdmin, isOrgSuperAdmin, currentUser, clientsReload]);
 
   const mappedPlatformClients: Customer[] = (isSuperAdmin && !isOrgSuperAdmin)
     ? platformOrgs.map((org: any) => ({
       id: org.id,
       name: org.name,
       company: org.name,
+      code: org.code || '',
       email: org.email || '',
       phone: org.phone || '',
       location: org.location || '',
@@ -375,6 +378,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       id: client.id,
       name: client.contactPerson || client.name,
       company: client.name || client.legalName || 'Client',
+      code: (client as any).code || '',
       email: client.email || '',
       phone: client.phone || client.whatsapp || '',
       location: client.address || client.location || '',
@@ -572,7 +576,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     return (
       c.company?.toLowerCase().includes(q) ||
       c.name?.toLowerCase().includes(q) ||
-      c.email?.toLowerCase().includes(q)
+      c.email?.toLowerCase().includes(q) ||
+      ((c as any).code || '').toLowerCase().includes(q)
     );
   });
 
@@ -1178,6 +1183,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 {isSuperAdmin && !isOrgSuperAdmin ? 'Organization / Bill To' : 'Client & Billing Party'}
               </h2>
             </div>
+            <div className="flex items-center gap-2">
+            {!(isSuperAdmin && !isOrgSuperAdmin) && (
+              <button
+                type="button"
+                onClick={() => setIsAddClientModalOpen(true)}
+                className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                Add Client
+              </button>
+            )}
             {selectedCustomer && (
               <button
                 type="button"
@@ -1191,6 +1207,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 Clear
               </button>
             )}
+            </div>
           </div>
 
           {/* Card Body */}
@@ -1277,7 +1294,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                                 : 'hover:bg-slate-50 text-slate-800 font-medium'
                                 }`}
                             >
-                              <span className="truncate block font-semibold text-slate-800">{displayName}</span>
+                              <span className="truncate block font-semibold text-slate-800">
+                                {displayName}
+                                {(cust as any).code ? ` (${(cust as any).code})` : ''}
+                              </span>
                               {isSelected && (
                                 <Check className="w-4 h-4 text-[#33077C] stroke-[2.5] shrink-0" />
                               )}
@@ -1891,7 +1911,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             dueDate: dueDate || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
                             discountTotal: totalDiscount,
                             billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
-                            gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                            gstin: (selectedCustomer as any).gstin || '',
                             pan: (selectedCustomer as any).pan || 'AAAAA0000A',
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
@@ -1923,7 +1943,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                             branchId: activeBranchId || undefined,
                             discountTotal: totalDiscount,
                             billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
-                            gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                            gstin: (selectedCustomer as any).gstin || '',
                             pan: (selectedCustomer as any).pan || 'AAAAA0000A',
                             notes: invoiceDescription || undefined,
                             items: items.map((it, idx) => ({
@@ -2020,7 +2040,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                           status: 'Sent',
                           discountTotal: totalDiscount,
                           billingAddress: selectedCustomer.address || selectedCustomer.location || 'Plot No 42, High-Tech Zone, Madhapur, Hyderabad, TG 500081',
-                          gstin: (selectedCustomer as any).gstin || '33AAAAA0000A1Z5',
+                          gstin: (selectedCustomer as any).gstin || '',
                           pan: (selectedCustomer as any).pan || 'AAAAA0000A',
                           notes: invoiceDescription || undefined,
                           items: items.map((it, idx) => ({
@@ -2367,7 +2387,10 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* ========================================================================= */}
       <CustomerFormModal
         isOpen={isAddClientModalOpen}
-        onClose={() => setIsAddClientModalOpen(false)}
+        onClose={() => {
+          setIsAddClientModalOpen(false);
+          setClientsReload((n) => n + 1);
+        }}
       />
 
       {/* ========================================================================= */}

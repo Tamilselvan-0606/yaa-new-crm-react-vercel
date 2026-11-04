@@ -3450,12 +3450,12 @@ export const EstimateQuotationView: React.FC = () => {
             ? "rose"
             : "slate",
     referenceNo: quot.referenceNo,
-    companyName: companyProfile.companyName || "YAA SALES & MART",
-    companySubtitle: companyProfile.companySubtitle || "Wholesale & FMCG Distribution",
-    companyAddress: companyProfile.companyAddress || "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
-    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
-    companyPhone: companyProfile.companyPhone || "+91 98400 12345",
-    companyEmail: companyProfile.companyEmail || "billing@yaacreations.com",
+    companyName: companyProfile.companyName,
+    companySubtitle: companyProfile.companySubtitle,
+    companyAddress: companyProfile.companyAddress,
+    companyGstin: companyProfile.companyGstin,
+    companyPhone: companyProfile.companyPhone,
+    companyEmail: companyProfile.companyEmail,
     partyTitle: "Estimate For (Party Details)",
     partyName: quot.partyName,
     partyCompany: quot.customerCompany,
@@ -3557,9 +3557,9 @@ export const EstimateQuotationView: React.FC = () => {
         <body>
           <div class="header">
             <div>
-              <div class="brand-name">${companyProfile.companyName || "YAA SALES & MART"}</div>
-              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle || "Wholesale & FMCG Distribution"}</div>
-              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin || "33AAAAA0000A1Z5"} • Phone: ${companyProfile.companyPhone || "+91 98400 12345"}</div>
+              <div class="brand-name">${companyProfile.companyName}</div>
+              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle}</div>
+              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin} • Phone: ${companyProfile.companyPhone}</div>
             </div>
             <div>
               <div class="doc-title">ESTIMATE / QUOTATION</div>
@@ -5926,13 +5926,18 @@ export const EstimateQuotationView: React.FC = () => {
           onClose={() => setPreviewQuotation(null)}
           title={`Estimate Preview - ${previewQuotation.quotationNo}`}
           maxWidth="3xl"
+          subtitle="Estimate details, line items, and totals"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setPreviewQuotation(null)}
         >
           <div className="p-1 sm:p-2 space-y-5 text-slate-800">
             {/* Header info */}
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 border-b border-slate-200 pb-4">
               <div>
                 <h3 className="text-lg font-bold text-[#33077C]">
-                  YAA SALES & MART
+                  {companyProfile.companyName}
                 </h3>
                 <p className="text-xs text-slate-500">Estimate / Quotation</p>
                 <div className="mt-2 text-xs">
@@ -6017,7 +6022,7 @@ export const EstimateQuotationView: React.FC = () => {
             </div>
 
             {/* Modal Actions */}
-            <div className="flex flex-wrap items-center justify-end gap-2.5 sm:gap-3 pt-4 border-t border-slate-200">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <Button
                 variant="secondary"
                 size="md"

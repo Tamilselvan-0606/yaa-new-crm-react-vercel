@@ -337,12 +337,12 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
     status = 'Active',
     statusColor = 'purple',
     referenceNo,
-    companyName = 'YAA SALES & MART',
-    companySubtitle = 'Wholesale & Retail Enterprise FMCG Distribution',
-    companyAddress = '128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu',
-    companyGstin = '33AAAAA0000A1Z5',
-    companyPhone = '+91 98765 43210',
-    companyEmail = 'billing@yaacreations.com',
+    companyName = '',
+    companySubtitle = '',
+    companyAddress = '',
+    companyGstin = '',
+    companyPhone = '',
+    companyEmail = '',
     partyTitle = 'Billed To',
     partyName,
     partyCompany,
@@ -395,10 +395,14 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
           <View style={styles.companyCol}>
             <Text style={styles.companyName}>{companyName}</Text>
             {companySubtitle ? <Text style={styles.companySubtitle}>{companySubtitle}</Text> : null}
-            <Text style={styles.companyDetails}>{companyAddress}</Text>
-            <Text style={styles.companyDetails}>
-              GSTIN: {companyGstin} | Phone: {companyPhone}
-            </Text>
+            {companyAddress ? <Text style={styles.companyDetails}>{companyAddress}</Text> : null}
+            {companyGstin || companyPhone ? (
+              <Text style={styles.companyDetails}>
+                {[companyGstin ? `GSTIN: ${companyGstin}` : '', companyPhone ? `Phone: ${companyPhone}` : '']
+                  .filter(Boolean)
+                  .join(' | ')}
+              </Text>
+            ) : null}
             {companyEmail ? <Text style={styles.companyDetails}>Email: {companyEmail}</Text> : null}
           </View>
           <View style={styles.docMetaCol}>

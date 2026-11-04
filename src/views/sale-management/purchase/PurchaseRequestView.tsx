@@ -1,3 +1,4 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -334,6 +335,23 @@ export const PurchaseRequestView: React.FC = () => {
       loadSuppliers();
     }
   }, [isCreateModalOpen, handleProductSearch, loadSuppliers]);
+
+  // Open the view modal, then load the latest record (GET /purchase-requests/:id)
+  const handleOpenViewModal = async (req: PurchaseRequest) => {
+    setSelectedRequest(req);
+    setIsViewModalOpen(true);
+    try {
+      if (req.id) {
+        const res = await commercePurchaseRequestApi.getPurchaseRequestById(req.id);
+        if (res?.data) {
+          const fresh = mapApiPurchaseRequestToUi(res.data);
+          setSelectedRequest((prev) => (prev && prev.id === req.id ? { ...prev, ...fresh } : prev));
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch purchase request details:', err);
+    }
+  };
 
   const handleOpenHistory = async (req: PurchaseRequest) => {
     setActiveDropdownId(null);
@@ -1521,10 +1539,7 @@ export const PurchaseRequestView: React.FC = () => {
                         </div>
                         <span
                           className="font-bold text-[#33077C] text-xs sm:text-[14px] cursor-pointer hover:underline"
-                          onClick={() => {
-                            setSelectedRequest(req);
-                            setIsViewModalOpen(true);
-                          }}
+                          onClick={() => handleOpenViewModal(req)}
                         >
                           {req.requestNo}
                         </span>
@@ -1632,7 +1647,12 @@ export const PurchaseRequestView: React.FC = () => {
                         <SaleActionDropdown
                           items={[
                             {
-                              label: 'View/Edit',
+                              label: 'View',
+                              variant: 'view',
+                              onClick: () => handleOpenViewModal(req),
+                            },
+                            {
+                              label: 'Edit',
                               variant: 'edit',
                               onClick: () => handleOpenEditModal(req),
                             },
@@ -1650,14 +1670,6 @@ export const PurchaseRequestView: React.FC = () => {
                               label: 'Duplicate',
                               variant: 'duplicate',
                               onClick: () => handleDuplicateRequest(req),
-                            },
-                            {
-                              label: 'Preview',
-                              variant: 'preview',
-                              onClick: () => {
-                                setSelectedRequest(req);
-                                setIsViewModalOpen(true);
-                              },
                             },
                             {
                               label: 'View History',
@@ -2158,7 +2170,7 @@ export const PurchaseRequestView: React.FC = () => {
               </div>
             )}
 
-            <div className="pt-4 flex flex-col-reverse sm:flex-row justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               {isPendingApproval(selectedRequest.status) && (
                 <>
                   <button
@@ -2168,7 +2180,7 @@ export const PurchaseRequestView: React.FC = () => {
                       setRejectionReason(''); setRejectionError(null);
                       setRejectionModalOpen(true);
                     }}
-                    className="h-10 px-4 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    className="h-10 px-4 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs sm:text-[13px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap"
                   >
                     <Ban className="w-4 h-4" />
                     <span>Reject</span>
@@ -2177,7 +2189,7 @@ export const PurchaseRequestView: React.FC = () => {
                     type="button"
                     disabled={isApproving}
                     onClick={() => handleApproveRequest(selectedRequest)}
-                    className="h-10 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-60"
+                    className="h-10 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-[13px] font-bold shadow-md transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
                   >
                     {isApproving ? (
                       <>
@@ -2201,7 +2213,7 @@ export const PurchaseRequestView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleConvertToPurchase(selectedRequest)}
-                  className="h-10 px-4 rounded-lg border border-purple-200 hover:border-purple-300 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center justify-center gap-2"
+                  className="h-10 px-4 rounded-lg border border-purple-200 hover:border-purple-300 text-xs sm:text-[13px] font-bold text-[#33077C] hover:bg-purple-50 transition-all cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
                 >
                   <ShoppingBag className="w-4 h-4" />
                   <span>Generate Purchase Order</span>
@@ -2211,7 +2223,7 @@ export const PurchaseRequestView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsViewModalOpen(false)}
-                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs whitespace-nowrap"
               >
                 Close
               </button>
@@ -2219,7 +2231,7 @@ export const PurchaseRequestView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handlePrintPurchaseRequest(selectedRequest)}
-                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
+                className="h-10 px-5 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Request</span>
@@ -2228,7 +2240,7 @@ export const PurchaseRequestView: React.FC = () => {
                 type="button"
                 disabled={isDownloadingRequest}
                 onClick={() => handleDownloadPurchaseRequest(selectedRequest)}
-                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                className="h-10 px-5 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs sm:text-[13px] font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap"
               >
                 {isDownloadingRequest ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 <span>{isDownloadingRequest ? 'Generating...' : 'Download Request'}</span>
@@ -2320,155 +2332,61 @@ export const PurchaseRequestView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setHistoryRequest(null)}
         >
-          <div className="space-y-4 text-xs font-sans">
-            {/* Header Card */}
-            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
-                  Requisition No
-                </div>
-                <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                  {historyRequest.requestNo}
-                </div>
-                <div className="text-xs text-slate-600 font-medium mt-0.5">
-                  Requested By: <span className="font-semibold text-slate-800">{historyRequest.requestedBy}</span> ({historyRequest.department})
-                </div>
-                {historyRequest.supplierName && (
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    Preferred Vendor: {historyRequest.supplierName}
-                  </div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Est. Total Amount
-                </div>
-                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
-                  ₹{(Number(historyRequest.totalEstimatedAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </div>
-                <div className="flex items-center gap-1.5 justify-end mt-1.5 flex-wrap">
-                  <span
-                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      historyRequest.priority === 'Urgent'
-                        ? 'bg-rose-100 text-rose-700'
-                        : historyRequest.priority === 'High'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-blue-100 text-blue-700'
-                    }`}
-                  >
-                    {historyRequest.priority} Priority
-                  </span>
-                  <span
-                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      historyRequest.status === 'Approved'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : historyRequest.status === 'Purchase Created'
-                        ? 'bg-purple-100 text-purple-700'
-                        : historyRequest.status === 'Rejected'
-                        ? 'bg-rose-100 text-rose-700'
-                        : 'bg-amber-100 text-amber-700'
-                    }`}
-                  >
-                    {historyRequest.status}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Audit Timeline */}
-            <div className="space-y-3 pt-1">
-              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Lifecycle & Activity Timeline
-              </div>
-
-              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
-                {/* Event 1: Creation */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Purchase Requisition Raised
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Request Date: <span className="font-medium text-slate-700">{formatDate(historyRequest.requestDate)}</span> • Required By: <span className="font-medium text-slate-700">{formatDate(historyRequest.requiredDate, 'N/A')}</span>
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Items: {historyRequest.items.length} material(s) requested for {historyRequest.department}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 2: Approval State */}
-                <div className="relative">
-                  <div
-                    className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
-                      historyRequest.status === 'Approved' || historyRequest.status === 'Purchase Created'
-                        ? 'bg-emerald-500 ring-4 ring-emerald-100'
-                        : historyRequest.status === 'Rejected'
-                        ? 'bg-rose-500 ring-4 ring-rose-100'
-                        : 'bg-amber-500 ring-4 ring-amber-100'
-                    }`}
-                  />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Status: {historyRequest.status}
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      {historyRequest.status === 'Purchase Created'
-                        ? 'Requisition converted into a formal Purchase Order.'
-                        : historyRequest.status === 'Approved'
-                        ? 'Authorized and approved by management; ready to convert to PO.'
-                        : historyRequest.status === 'Rejected'
-                        ? `Rejected: ${historyRequest.rejectionReason || 'Declined during review'}`
-                        : 'Pending managerial approval and review.'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 3: Notes & Purpose */}
-                {historyRequest.notes && (
-                  <div className="relative">
-                    <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-blue-500 ring-4 ring-blue-100" />
-                    <div>
-                      <div className="font-bold text-slate-800 text-xs">
-                        Department Purpose / Remarks
-                      </div>
-                      <div className="text-slate-600 text-[11px] mt-0.5 italic">
-                        "{historyRequest.notes}"
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Event 4: System Audit Log */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-400 ring-4 ring-slate-100" />
-                  <div>
-                    <div className="font-bold text-slate-700 text-xs">
-                      System Audit Log Entry
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Record ID: <span className="font-mono text-slate-600">{historyRequest.id}</span>
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Last Verified: {new Date(historyRequest.updatedAt || Date.now()).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex justify-end pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setHistoryRequest(null)}
-                className="h-10 px-5 rounded-lg border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            isLoading={isLoadingHistory}
+            eyebrow="Requisition No"
+            title={historyRequest.requestNo}
+            subtitle={
+              <>
+                Requested By: <span className="font-semibold text-slate-800">{historyRequest.requestedBy}</span> ({historyRequest.department})
+                {historyRequest.supplierName ? ` • Preferred Vendor: ${historyRequest.supplierName}` : ""}
+              </>
+            }
+            amount={{ label: "Est. Total Amount", value: `₹${Number(historyRequest.totalEstimatedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[
+              { label: `${historyRequest.priority} Priority`, tone: historyRequest.priority === "Urgent" ? "danger" : historyRequest.priority === "High" ? "warning" : "info" },
+              { label: historyRequest.status, tone: historyRequest.status === "Approved" ? "success" : historyRequest.status === "Purchase Created" ? "primary" : historyRequest.status === "Rejected" ? "danger" : "warning" },
+            ]}
+            facts={[
+              { label: "Request Date", value: historyRequest.requestDate ? formatDate(historyRequest.requestDate) : "" },
+              { label: "Required By", value: historyRequest.requiredDate ? formatDate(historyRequest.requiredDate) : "" },
+              { label: "Items", value: `${historyRequest.items?.length || 0} material(s)` },
+            ]}
+            events={[
+              {
+                title: "Purchase Requisition Raised",
+                at: historyRequest.createdAt || historyRequest.requestDate,
+                tone: "primary",
+                description: `${historyRequest.items?.length || 0} material(s) requested for ${historyRequest.department}.`,
+                details: [
+                  { label: "Request Date", value: historyRequest.requestDate ? formatDate(historyRequest.requestDate) : "" },
+                  { label: "Required By", value: historyRequest.requiredDate ? formatDate(historyRequest.requiredDate) : "" },
+                ],
+              },
+              {
+                title: `Status: ${historyRequest.status}`,
+                at: historyRequest.approvedAt || (historyRequest.status === "Pending Approval" ? undefined : historyRequest.updatedAt),
+                tone: historyRequest.status === "Approved" || historyRequest.status === "Purchase Created" ? "success" : historyRequest.status === "Rejected" ? "danger" : "warning",
+                description:
+                  historyRequest.status === "Purchase Created"
+                    ? "Requisition converted into a formal Purchase Order."
+                    : historyRequest.status === "Approved"
+                      ? "Authorized and approved by management; ready to convert to PO."
+                      : historyRequest.status === "Rejected"
+                        ? `Rejected: ${historyRequest.rejectionReason || "Declined during review"}`
+                        : "Pending managerial approval and review.",
+                details: historyRequest.approvedBy ? [{ label: "Approved By", value: historyRequest.approvedBy }] : undefined,
+              },
+              ...(historyRequest.createdPurchaseId
+                ? [{ title: "Purchase Order Created", tone: "primary" as const, description: "A purchase order was generated from this requisition.", details: [{ label: "Purchase ID", value: historyRequest.createdPurchaseId }] }]
+                : []),
+              ...(historyRequest.notes
+                ? [{ title: "Department Purpose / Remarks", tone: "info" as const, description: `"${historyRequest.notes}"` }]
+                : []),
+            ]}
+            updatedAt={historyRequest.updatedAt}
+            onClose={() => setHistoryRequest(null)}
+          />
         </Modal>
       )}
 

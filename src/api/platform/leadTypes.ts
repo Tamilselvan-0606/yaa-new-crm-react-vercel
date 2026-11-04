@@ -138,6 +138,12 @@ export interface CreatePlatformLeadRequest {
   planInterest?: string;
   industry?: string;
   location?: string;
+  city?: string;
+  address?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
+  pincode?: string;
   assignedTo?: string;
   followUpDate?: string;
   notes?: string;

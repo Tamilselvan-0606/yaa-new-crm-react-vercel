@@ -10,15 +10,21 @@ export interface OrganizationApiItem {
   state?: string;
   district?: string;
   pincode?: string;
+  countryName?: string;
+  stateName?: string;
+  districtName?: string;
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   registrationType?: string;
   subscriptionPlan?: string;
   gstNumber?: string;
   panNumber?: string;
   industry?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   address?: string;
   contactPerson?: string;
   email?: string;
@@ -94,6 +100,7 @@ export interface CreateOrganizationRequest {
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   gstNumber?: string;
   panNumber?: string;
   email?: string;
@@ -103,6 +110,8 @@ export interface CreateOrganizationRequest {
   status?: string;
   subscriptionPlan?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   contactPerson?: string;
   address?: string;
   registrationType?: string;
@@ -123,6 +132,7 @@ export interface UpdateOrganizationRequest {
   countryId?: string;
   stateId?: string;
   districtId?: string;
+  cityId?: string;
   organizationType?: number | string;
   registrationType?: string;
   subscriptionPlan?: string;
@@ -130,6 +140,8 @@ export interface UpdateOrganizationRequest {
   panNumber?: string;
   industry?: string;
   location?: string;
+  city?: string;
+  cityName?: string;
   address?: string;
   contactPerson?: string;
   email?: string;

@@ -55,7 +55,8 @@ import {
   digitsOnly,
   emailAddress,
   validGst,
-  indianMobile,
+  phoneNumber,
+  PHONE_MAX_DIGITS,
   liveGstError,
   livePanError,
   liveMobileStartError,
@@ -71,7 +72,8 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { ORGANIZATION_STATUS_TONES, StatusBadge } from '../../components/common/StatusBadge';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
-import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { ReadOnlyField, TextAreaField, TextField } from '../../components/common/FormField';
+import { PhoneField } from '../../components/common/PhoneField';
 import { LocationFields, LocationMeta } from '../../components/common/LocationFields';
 import { getApiErrorMessage } from '../../utils/apiErrorMessage';
 
@@ -146,18 +148,22 @@ const STATUS_OPTIONS: ('Active' | 'Inactive' | 'Suspend')[] = [
   'Suspend',
 ];
 
+/** City of a record: the API's city (name or object), falling back to the older `location` field. */
+const cityOf = (r: any): string =>
+  (typeof r?.city === 'string' ? r.city : r?.city?.cityName || r?.city?.name) || r?.cityName || r?.location || '';
+
 const mapApiOrgToItem = (apiOrg: OrganizationApiItem): OrganizationItem => {
   return {
     id: apiOrg.id,
     name: apiOrg.name || 'Unnamed Organization',
     code: apiOrg.code || 'ORG',
-    country: apiOrg.country || '',
-    state: apiOrg.state || '',
-    district: apiOrg.district || '',
+    country: apiOrg.countryName || apiOrg.country || '',
+    state: apiOrg.stateName || apiOrg.state || '',
+    district: apiOrg.districtName || apiOrg.district || '',
     pincode: apiOrg.pincode || '',
     organizationType: formatOrganizationTypeName(apiOrg.organizationType),
     industry: apiOrg.industry || '',
-    location: apiOrg.location || '',
+    location: cityOf(apiOrg),
     subscriptionPlan: apiOrg.subscriptionPlan || '',
     branchesCount: apiOrg.branchesCount ?? 0,
     membersCount: apiOrg.membersCount ?? 0,
@@ -191,14 +197,14 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     id: sub.id,
     name: sub.name || 'Unnamed Sub-Organization',
     code: sub.code || 'SUB-01',
-    country: sub.country || '',
-    state: sub.state || '',
-    district: sub.district || '',
+    country: sub.countryName || sub.country || '',
+    state: sub.stateName || sub.state || '',
+    district: sub.districtName || sub.district || '',
     pincode: sub.pincode || '',
     subOrganizationType: sub.subOrganizationType,
     organizationType: formatOrganizationTypeName(sub.organizationType),
     industry: sub.industry || '',
-    location: sub.location || sub.address || '',
+    location: cityOf(sub) || sub.address || '',
     subscriptionPlan: sub.subscriptionPlan || '',
     branchesCount: sub.branchesCount ?? 0,
     membersCount: sub.membersCount ?? 0,
@@ -440,7 +446,7 @@ export const OrganizationView: React.FC = () => {
           if (Array.isArray(d.branches)) patch.branchesCount = d.branches.length;
           if (d.name) patch.name = d.name;
           if (d.code) patch.code = d.code;
-          if (d.location) patch.location = d.location;
+          if (cityOf(d)) patch.location = cityOf(d);
           if (d.subscriptionPlan) patch.subscriptionPlan = d.subscriptionPlan;
           if (d.status) patch.status = mapSubOrgToItem(d).status;
           return { id: d.id, patch };
@@ -547,6 +553,7 @@ export const OrganizationView: React.FC = () => {
   const [countryId, setCountryId] = useState('');
   const [stateId, setStateId] = useState('');
   const [districtId, setDistrictId] = useState('');
+  const [cityId, setCityId] = useState('');
   const [pincode, setPincode] = useState('');
   const [locationMeta, setLocationMeta] = useState<LocationMeta>({ stateRequired: true, districtRequired: true });
   const [organizationType, setOrganizationType] = useState('');
@@ -612,6 +619,7 @@ export const OrganizationView: React.FC = () => {
     setCountryId('');
     setStateId('');
     setDistrictId('');
+    setCityId('');
     setPincode('');
     setOrganizationType(isOrgSuperAdmin ? (isSaleManagement ? 'Sales Management' : 'Client Management') : '');
     setIndustry('');
@@ -645,6 +653,7 @@ export const OrganizationView: React.FC = () => {
     setCountryId('');
     setStateId('');
     setDistrictId('');
+    setCityId('');
     setPincode(org.pincode || '');
     const resolvedType = formatOrganizationTypeName(org.organizationType);
     setOrganizationType(resolvedType); // 0 = All is shown as All, not swapped for the active suite
@@ -808,10 +817,10 @@ export const OrganizationView: React.FC = () => {
       ['state', stateName, requiredWhen(create && locationMeta.stateRequired, 'State is required')],
       ['district', district, requiredWhen(create && locationMeta.districtRequired, 'District is required')],
       ['pincode', pincode, requiredWhen(create, 'Pincode is required', [pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)])],
-      ['location', location, requiredWhen(create, 'Location / HQ City is required', [alphabetsOnly('Location / HQ City')])],
+      ['location', location, requiredWhen(create && (locationMeta.cityRequired ?? true), 'City is required')],
       ['contactPerson', contactPerson, requiredWhen(create, 'Contact Person Name is required', [alphabetsOnly('Contact Person Name')])],
-      ['phone', phone, requiredWhen(create, 'Contact Phone is required', [indianMobile('Contact Phone')])],
-      ['whatsapp', whatsapp, [indianMobile('WhatsApp Number')]],
+      ['phone', phone, requiredWhen(create, 'Contact Phone is required', [phoneNumber('Contact Phone')])],
+      ['whatsapp', whatsapp, [phoneNumber('WhatsApp Number')]],
       ['email', email, requiredWhen(create, 'Official Email is required', [emailAddress])],
       ['password', password, requiredWhen(create, 'Password is required')],
       ['address', address, requiredWhen(create, 'Address is required')],
@@ -954,7 +963,7 @@ export const OrganizationView: React.FC = () => {
                 </th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUBSCRIPTION PLANS</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CITY</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTION</th>
@@ -1044,7 +1053,7 @@ export const OrganizationView: React.FC = () => {
                         </div>
                       </td>
 
-                      {/* 4. Location */}
+                      {/* 4. City */}
                       <td className="py-4 px-5 border border-slate-200">
                         <div className="flex items-center gap-2 font-medium text-slate-900">
                           {org.location ? (
@@ -1299,9 +1308,6 @@ export const OrganizationView: React.FC = () => {
                 onValueChange={fieldHandler(setName, 'name')}
               />
 
-              {/* Field 3: Code */}
-              <ReadOnlyField label={`${entityLabel} Code`} value={code} placeholder="Auto-generated" />
-
               {/* Field 4: Organization Type / Suite */}
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
@@ -1323,32 +1329,8 @@ export const OrganizationView: React.FC = () => {
                 )}
               </div>
 
-              {/* Field 5: Country / State / District (master data) */}
-              <LocationFields
-                country={country}
-                state={stateName}
-                district={district}
-                errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district }}
-                onMeta={setLocationMeta}
-                onChange={(patch) => {
-                  if (patch.countryId !== undefined) setCountryId(patch.countryId);
-                  if (patch.stateId !== undefined) setStateId(patch.stateId);
-                  if (patch.districtId !== undefined) setDistrictId(patch.districtId);
-                  if (patch.country !== undefined) { setCountry(patch.country); clearFieldError('country'); }
-                  if (patch.state !== undefined) { setStateName(patch.state); clearFieldError('state'); }
-                  if (patch.district !== undefined) { setDistrict(patch.district); clearFieldError('district'); }
-                }}
-              />
-              <TextField
-                label="Pincode"
-                required
-                inputMode="numeric"
-                maxLength={10}
-                value={pincode}
-                error={formErrors.pincode}
-                placeholder="e.g. 600001"
-                onValueChange={fieldHandler(setPincode, 'pincode', (v) => cleanPincode(v, locationMeta.pincodeRegex))}
-              />
+              {/* Field 3: Code */}
+              <ReadOnlyField label={`${entityLabel} Code`} value={code} placeholder="Auto-generated" />
 
               {/* Field 6: Company Registration Type */}
               <div>
@@ -1362,48 +1344,6 @@ export const OrganizationView: React.FC = () => {
                   placeholder="Select company registration type"
                   activeColor="brand"
                 />
-              </div>
-
-              {/* Field 7: Status */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Status <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <CustomSelect
-                  value={formStatus}
-                  onChange={(val) => {
-                    setFormStatus(val as 'Active' | 'Inactive' | 'Suspend');
-                    clearFieldError('status');
-                  }}
-                  options={STATUS_OPTIONS}
-                  placeholder="Select status"
-                  activeColor="brand"
-                  error={!!formErrors.status}
-                />
-                {formErrors.status && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
-                )}
-              </div>
-
-              {/* Field 8: Subscription Plan */}
-              <div>
-                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                  Subscription Plan <span className="text-rose-500 font-bold">*</span>
-                </label>
-                <CustomSelect
-                  value={subscriptionPlan}
-                  onChange={(val) => {
-                    setSubscriptionPlan(val);
-                    clearFieldError('subscriptionPlan');
-                  }}
-                  options={subscriptionPlanOptions}
-                  placeholder="Select subscription plan"
-                  activeColor="brand"
-                  error={!!formErrors.subscriptionPlan}
-                />
-                {formErrors.subscriptionPlan && (
-                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subscriptionPlan}</p>
-                )}
               </div>
 
               {/* Field 9: GST Number */}
@@ -1438,15 +1378,26 @@ export const OrganizationView: React.FC = () => {
                 onValueChange={setIndustry}
               />
 
-              {/* Field 12: Location / HQ City */}
-              <TextField
-                label="Location / HQ City"
-                required
-                value={location}
-                error={formErrors.location}
-                placeholder="e.g. Chennai"
-                onValueChange={fieldHandler(setLocation, 'location', lettersOnly)}
-              />
+              {/* Field 8: Subscription Plan */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Subscription Plan <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <CustomSelect
+                  value={subscriptionPlan}
+                  onChange={(val) => {
+                    setSubscriptionPlan(val);
+                    clearFieldError('subscriptionPlan');
+                  }}
+                  options={subscriptionPlanOptions}
+                  placeholder="Select subscription plan"
+                  activeColor="brand"
+                  error={!!formErrors.subscriptionPlan}
+                />
+                {formErrors.subscriptionPlan && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.subscriptionPlan}</p>
+                )}
+              </div>
 
               {/* Field 13: Contact Person Name */}
               <TextField
@@ -1459,26 +1410,22 @@ export const OrganizationView: React.FC = () => {
               />
 
               {/* Field 14: Contact Phone */}
-              <TextField
+              <PhoneField
                 label="Contact Phone"
                 required
-                inputMode="numeric"
-                maxLength={10}
                 value={phone}
                 error={formErrors.phone}
                 placeholder="e.g. 9876543210"
-                onValueChange={fieldHandler(setPhone, 'phone', digitsOnly, (v) => liveMobileStartError('Contact Phone', v))}
+                onChange={fieldHandler(setPhone, 'phone')}
               />
 
               {/* Field 15: WhatsApp Number */}
-              <TextField
+              <PhoneField
                 label="WhatsApp Number"
-                inputMode="numeric"
-                maxLength={10}
                 value={whatsapp}
                 error={formErrors.whatsapp}
                 placeholder="e.g. 9876543210"
-                onValueChange={fieldHandler(setWhatsapp, 'whatsapp', digitsOnly, (v) => liveMobileStartError('WhatsApp Number', v))}
+                onChange={fieldHandler(setWhatsapp, 'whatsapp')}
               />
 
               {/* Field 16: Official Email */}
@@ -1525,15 +1472,26 @@ export const OrganizationView: React.FC = () => {
                 )}
               </div>
 
-              {/* Field 18: Address */}
-              <TextField
-                label="Address"
-                required
-                value={address}
-                error={formErrors.address}
-                placeholder="Enter complete address"
-                onValueChange={fieldHandler(setAddress, 'address')}
-              />
+              {/* Field 7: Status */}
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Status <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <CustomSelect
+                  value={formStatus}
+                  onChange={(val) => {
+                    setFormStatus(val as 'Active' | 'Inactive' | 'Suspend');
+                    clearFieldError('status');
+                  }}
+                  options={STATUS_OPTIONS}
+                  placeholder="Select status"
+                  activeColor="brand"
+                  error={!!formErrors.status}
+                />
+                {formErrors.status && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
+                )}
+              </div>
 
               {/* Field 19: Sub-Organization Support (Parent Org SuperAdmin only) */}
               {isSuperAdmin && !isSubOrgMode && (
@@ -1562,6 +1520,48 @@ export const OrganizationView: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Field 5: Country / State / District (master data) */}
+              <LocationFields
+                country={country}
+                state={stateName}
+                district={district}
+                city={location}
+                errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district, city: formErrors.location }}
+                onMeta={setLocationMeta}
+                onChange={(patch) => {
+                  if (patch.countryId !== undefined) setCountryId(patch.countryId);
+                  if (patch.stateId !== undefined) setStateId(patch.stateId);
+                  if (patch.districtId !== undefined) setDistrictId(patch.districtId);
+                  if (patch.cityId !== undefined) setCityId(patch.cityId);
+                  if (patch.city !== undefined) { setLocation(patch.city); clearFieldError('location'); }
+                  if (patch.country !== undefined) { setCountry(patch.country); clearFieldError('country'); }
+                  if (patch.state !== undefined) { setStateName(patch.state); clearFieldError('state'); }
+                  if (patch.district !== undefined) { setDistrict(patch.district); clearFieldError('district'); }
+                }}
+              />
+
+              <TextField
+                label="Pincode"
+                required
+                inputMode="numeric"
+                maxLength={10}
+                value={pincode}
+                error={formErrors.pincode}
+                placeholder="e.g. 600001"
+                onValueChange={fieldHandler(setPincode, 'pincode', (v) => cleanPincode(v, locationMeta.pincodeRegex))}
+              />
+
+              {/* Field 18: Address */}
+              <TextAreaField
+                className="md:col-span-3"
+                label="Address"
+                required
+                value={address}
+                error={formErrors.address}
+                placeholder="Enter complete address"
+                onValueChange={fieldHandler(setAddress, 'address')}
+              />
             </div>
 
             <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
@@ -1692,7 +1692,7 @@ export const OrganizationView: React.FC = () => {
                     <span className="font-bold text-slate-800 text-right leading-snug">{viewingOrg.industry || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
-                    <span className="text-slate-400 font-medium shrink-0">Location / HQ City</span>
+                    <span className="text-slate-400 font-medium shrink-0">City</span>
                     <span className="font-bold text-slate-800 text-right">{viewingOrg.location || '-'}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
@@ -1754,15 +1754,10 @@ export const OrganizationView: React.FC = () => {
                   </div>
 
                   {/* Login user of the sub-organization (from the detail call) */}
-                  {viewingSubOrg && (viewingOrg.adminEmail || viewingOrg.adminName) && (
+                  {viewingSubOrg && viewingOrg.adminEmail && (
                     <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
                       <span className="text-slate-400 font-medium shrink-0">Admin Login</span>
-                      <span className="font-bold text-slate-800 text-right leading-snug break-all">
-                        {viewingOrg.adminName || '-'}
-                        {viewingOrg.adminEmail && (
-                          <span className="block text-[11px] font-medium text-slate-500">{viewingOrg.adminEmail}</span>
-                        )}
-                      </span>
+                      <span className="font-bold text-slate-800 text-right leading-snug break-all">{viewingOrg.adminEmail}</span>
                     </div>
                   )}
                   {viewingSubOrg && (

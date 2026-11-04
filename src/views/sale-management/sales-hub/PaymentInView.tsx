@@ -1,3 +1,4 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
@@ -628,7 +629,32 @@ export const PaymentInView: React.FC = () => {
   };
 
   // Open Edit Modal
-  const handleOpenEditModal = (item: SalePaymentIn) => {
+  // Open the history dialog, then load the latest record (GET /payments-in/:id)
+  const handleOpenHistory = async (item: SalePaymentIn) => {
+    setHistoryPaymentIn(item);
+    try {
+      if (UUID_REGEX.test(item.id)) {
+        const res = await commercePaymentInApi.getPaymentInById(item.id);
+        if (res?.success && res.data) {
+          const fresh = mapApiPaymentInToSalePaymentIn(res.data);
+          setHistoryPaymentIn((prev) => (prev && prev.id === item.id ? { ...prev, ...fresh } : prev));
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch payment history:", err);
+    }
+  };
+
+  const handleOpenEditModal = async (listItem: SalePaymentIn) => {
+    let item = listItem;
+    if (UUID_REGEX.test(listItem.id)) {
+      try {
+        const res = await commercePaymentInApi.getPaymentInById(listItem.id);
+        if (res?.success && res.data) item = mapApiPaymentInToSalePaymentIn(res.data);
+      } catch (err) {
+        console.warn("Could not fetch payment receipt details:", err);
+      }
+    }
     setEditingPaymentIn(item);
     setSelectedCustomerId(item.customerId || "");
     const foundCust = customers.find(
@@ -852,16 +878,14 @@ export const PaymentInView: React.FC = () => {
     status: item.status || "Completed",
     statusColor: "emerald",
     referenceNo: item.referenceNo,
-    companyName: companyProfile.companyName || "YAA CREATIONS CRM",
+    companyName: companyProfile.companyName,
     companySubtitle:
-      companyProfile.companySubtitle ||
-      "Enterprise Sales Hub & Accounts Receivable",
+      companyProfile.companySubtitle,
     companyAddress:
-      companyProfile.companyAddress ||
-      "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
-    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
-    companyPhone: companyProfile.companyPhone || "+91 98400 12345",
-    companyEmail: companyProfile.companyEmail || "payments@yaacreations.com",
+      companyProfile.companyAddress,
+    companyGstin: companyProfile.companyGstin,
+    companyPhone: companyProfile.companyPhone,
+    companyEmail: companyProfile.companyEmail,
     partyTitle: "Received From (Customer)",
     partyName: item.partyName,
     partyPhone: item.customerPhone,
@@ -2118,7 +2142,7 @@ export const PaymentInView: React.FC = () => {
                                 {
                                   label: "View History",
                                   variant: "view",
-                                  onClick: () => setHistoryPaymentIn(item),
+                                  onClick: () => handleOpenHistory(item),
                                 },
                                 {
                                   label: "Void / Delete",
@@ -2763,108 +2787,57 @@ export const PaymentInView: React.FC = () => {
           onClose={() => setHistoryPaymentIn(null)}
           title={`Payment History - Receipt #${historyPaymentIn.receiptNo}`}
           maxWidth="md"
+          subtitle="Complete lifecycle progression and timeline audit log"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryPaymentIn(null)}
         >
-          <div className="p-1 sm:p-2 space-y-4 text-xs font-sans">
-            <div className="p-4 bg-purple-50/60 rounded-2xl border border-purple-100 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
-                  Receipt No
-                </div>
-                <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                  #{historyPaymentIn.receiptNo}
-                </div>
-                <div className="text-xs text-slate-500 font-medium">
-                  {historyPaymentIn.partyName}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Amount
-                </div>
-                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
-                  ₹{" "}
-                  {historyPaymentIn.receivedAmount.toLocaleString("en-IN", {
-                    minimumFractionDigits: 2,
-                  })}
-                </div>
-                <span className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">
-                  {historyPaymentIn.paymentType}
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Activity Timeline
-              </div>
-
-              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
-                {/* Event 1 */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      Payment-In Recorded
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Date: {isoToDdmmyyyy(historyPaymentIn.date)} • Mode:{" "}
-                      {historyPaymentIn.paymentType}
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Recorded via CRM Sales Hub
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 2 */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100" />
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      Receipt Voucher Generated
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Voucher #{historyPaymentIn.receiptNo} marked as{" "}
-                      {historyPaymentIn.status || "Completed"}
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Timestamp:{" "}
-                      {new Date(
-                        historyPaymentIn.createdAt || Date.now(),
-                      ).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 3 */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-300 ring-4 ring-slate-100" />
-                  <div>
-                    <div className="font-bold text-slate-700">
-                      Last Synchronized
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Updated:{" "}
-                      {new Date(
-                        historyPaymentIn.updatedAt || Date.now(),
-                      ).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-4 border-t border-slate-100">
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                onClick={() => setHistoryPaymentIn(null)}
-              >
-                Close
-              </Button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            eyebrow="Receipt No"
+            title={`#${historyPaymentIn.receiptNo}`}
+            subtitle={historyPaymentIn.partyName}
+            amount={{ label: "Amount Received", value: `₹${Number(historyPaymentIn.receivedAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[
+              { label: historyPaymentIn.status || "Completed", tone: historyPaymentIn.status === "Cancelled" ? "danger" : historyPaymentIn.status === "Pending" || historyPaymentIn.status === "In Process" ? "warning" : "success" },
+              { label: String(historyPaymentIn.paymentType), tone: "primary" },
+            ]}
+            facts={[
+              { label: "Receipt Date", value: isoToDdmmyyyy(historyPaymentIn.date) },
+              { label: "Invoice", value: historyPaymentIn.invoiceNo },
+              { label: "Reference No", value: historyPaymentIn.referenceNo },
+              { label: "Firm", value: historyPaymentIn.firmName },
+              { label: "Sales Rep", value: historyPaymentIn.salesRepresentativeName },
+            ]}
+            events={[
+              {
+                title: "Payment-In Recorded",
+                at: historyPaymentIn.createdAt || historyPaymentIn.date,
+                tone: "primary",
+                description: `Payment received from ${historyPaymentIn.partyName}.`,
+                details: [
+                  { label: "Date", value: isoToDdmmyyyy(historyPaymentIn.date) },
+                  { label: "Mode", value: String(historyPaymentIn.paymentType) },
+                  { label: "Reference", value: historyPaymentIn.referenceNo },
+                ],
+              },
+              ...(historyPaymentIn.invoiceNo
+                ? [{ title: "Applied to Invoice", tone: "info" as const, description: `Receipt settled against invoice ${historyPaymentIn.invoiceNo}.` }]
+                : []),
+              {
+                title: "Receipt Voucher Generated",
+                at: historyPaymentIn.updatedAt && historyPaymentIn.updatedAt !== historyPaymentIn.createdAt ? historyPaymentIn.updatedAt : undefined,
+                tone: historyPaymentIn.status === "Cancelled" ? "danger" : "success",
+                description: `Voucher #${historyPaymentIn.receiptNo} marked as ${historyPaymentIn.status || "Completed"}.`,
+              },
+              ...((historyPaymentIn.description || historyPaymentIn.notes)
+                ? [{ title: "Remarks", tone: "muted" as const, description: `"${historyPaymentIn.description || historyPaymentIn.notes}"` }]
+                : []),
+            ]}
+            recordId={historyPaymentIn.id}
+            updatedAt={historyPaymentIn.updatedAt}
+            onClose={() => setHistoryPaymentIn(null)}
+          />
         </Modal>
       )}
 

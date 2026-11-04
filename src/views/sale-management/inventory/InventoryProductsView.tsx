@@ -5898,22 +5898,25 @@ export const InventoryProductsView: React.FC = () => {
           <div className="relative w-full max-w-2xl bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92dvh] my-auto">
             {/* Header */}
             <div
-              className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 text-white shrink-0"
+              className="flex items-center gap-2 sm:gap-3 px-4 sm:px-6 py-3 sm:py-4.5 text-white shrink-0"
               style={{ background: "#33077C" }}
             >
-              <div className="flex items-center gap-2.5">
-                <Package className="w-5 h-5 text-white" />
-                <h3 className="text-base sm:text-lg font-bold text-white">
-                  Item Details
-                </h3>
-              </div>
               <button
                 type="button"
                 onClick={() => setIsDetailModalOpen(false)}
-                className="p-1 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="p-1.5 -ml-1 rounded-xl text-white hover:bg-white/20 active:scale-95 transition-all cursor-pointer flex items-center justify-center shrink-0"
+                title="Go back"
               >
-                <X className="w-5 h-5" />
+                <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
               </button>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg sm:text-xl font-bold tracking-tight text-white truncate">
+                  Item Details
+                </h3>
+                <p className="text-xs sm:text-[13px] text-white/80 font-medium truncate">
+                  Product information, pricing, stock, and batch details
+                </p>
+              </div>
             </div>
 
             {/* Body */}

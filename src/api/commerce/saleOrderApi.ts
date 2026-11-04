@@ -518,7 +518,7 @@ export const commerceSaleOrderApi = {
    * GET /commerce/orders/{id}
    */
   getOrderById: async (id: string): Promise<SaleOrderSingleResponse> => {
-    const response = await baseClient.get<SaleOrderSingleResponse>(`/commerce/orders/${id}`);
+    const response = await baseClient.get<SaleOrderSingleResponse>(`/commerce/orders/${id}`, { timeout: 0 }); // timeout: 0 (axios default) => non-cacheable, every View/History hits the API
     return response.data;
   },
 

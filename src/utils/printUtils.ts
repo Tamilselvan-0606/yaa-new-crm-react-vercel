@@ -3,6 +3,7 @@ import { pdf } from '@react-pdf/renderer';
 import { toast } from './toast';
 import { BusinessPDFDocument } from '../components/common/pdf/BusinessPDFDocument';
 import { TableReportPDF } from '../components/common/pdf/TableReportPDF';
+import { fetchOrganizationDocumentProfile } from '../hooks/useCompanyDocumentProfile';
 
 /**
  * Universal Printing & PDF Export Utility for YAA CRM
@@ -500,12 +501,34 @@ export interface DocumentPrintOptions {
  * Standardized Business Document Printer
  * Generates an isolated, print-perfect document view that avoids all application web chrome.
  */
-export function printBusinessDocument(options: DocumentPrintOptions): void {
+/**
+ * Fills any company fields the caller did not supply from the organization API profile
+ * (no hardcoded fallbacks).
+ */
+export async function withCompanyProfile(options: DocumentPrintOptions): Promise<DocumentPrintOptions> {
+  try {
+    const p = await fetchOrganizationDocumentProfile();
+    return {
+      ...options,
+      companyName: options.companyName || p.companyName,
+      companySubtitle: options.companySubtitle ?? p.companySubtitle,
+      companyAddress: options.companyAddress || p.companyAddress,
+      companyGstin: options.companyGstin || p.companyGstin,
+      companyPhone: options.companyPhone || p.companyPhone,
+      companyEmail: options.companyEmail || p.companyEmail,
+    };
+  } catch {
+    return options;
+  }
+}
+
+export async function printBusinessDocument(rawOptions: DocumentPrintOptions): Promise<void> {
   const printWindow = window.open('', '_blank', 'width=850,height=900');
   if (!printWindow) {
     toast.warning('Please allow popups in your browser to view the printable document.');
     return;
   }
+  const options = await withCompanyProfile(rawOptions);
 
   const {
     docTypeTitle,
@@ -515,12 +538,12 @@ export function printBusinessDocument(options: DocumentPrintOptions): void {
     status,
     statusColor = 'purple',
     referenceNo,
-    companyName = 'YAA SALES & MART',
-    companySubtitle = 'Wholesale & Retail Enterprise FMCG Distribution',
-    companyAddress = '128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu',
-    companyGstin = '33AAAAA0000A1Z5',
-    companyPhone = '+91 98765 43210',
-    companyEmail = 'billing@yaacreations.com',
+    companyName = '',
+    companySubtitle = '',
+    companyAddress = '',
+    companyGstin = '',
+    companyPhone = '',
+    companyEmail = '',
     partyTitle = 'Billed To',
     partyName,
     partyCompany,
@@ -665,9 +688,12 @@ export function printBusinessDocument(options: DocumentPrintOptions): void {
             <div>
               <div class="company-title">${companyName}</div>
               <div class="company-sub">
-                ${companySubtitle}<br/>
-                ${companyAddress}<br/>
-                GSTIN: <strong>${companyGstin}</strong> | Phone: ${companyPhone} | Email: ${companyEmail}
+                ${[companySubtitle, companyAddress].filter(Boolean).join('<br/>')}${companySubtitle || companyAddress ? '<br/>' : ''}
+                ${[
+                  companyGstin ? `GSTIN: <strong>${companyGstin}</strong>` : '',
+                  companyPhone ? `Phone: ${companyPhone}` : '',
+                  companyEmail ? `Email: ${companyEmail}` : '',
+                ].filter(Boolean).join(' | ')}
               </div>
             </div>
             <div class="doc-header">
@@ -829,9 +855,10 @@ export function printBusinessDocument(options: DocumentPrintOptions): void {
  * Generates an authentic binary PDF blob and triggers automatic download.
  */
 export async function downloadBusinessDocument(
-  options: DocumentPrintOptions,
+  rawOptions: DocumentPrintOptions,
   filename?: string
 ): Promise<void> {
+  const options = await withCompanyProfile(rawOptions);
   const blob = await pdf(React.createElement(BusinessPDFDocument, { options }) as any).toBlob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

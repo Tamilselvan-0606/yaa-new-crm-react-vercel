@@ -1,4 +1,10 @@
-import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
+import { PhoneField } from "../../../components/common/PhoneField";
+import {
+  LocationFields,
+  LocationMeta,
+} from "../../../components/common/LocationFields";
+import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import React, {
   useState,
   useMemo,
@@ -75,7 +81,13 @@ import {
   getApiErrorMessage,
   useSubmitGuard,
 } from "../../../utils/formValidation";
-import { isValidIndianPhone, normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
+import {
+  isValidIndianPhone,
+  normalizePhoneForSave,
+  isValidIntlPhone,
+  checkIntlPhone,
+  normalizeIndianPhoneTo10Digits,
+} from "../../../utils/validation";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -84,7 +96,10 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FilterDropdown } from "../../../components/common/FilterDropdown";
 import { exportTableToExcel } from "../../../utils/excelExport";
-import { printBusinessDocument, printTableReport } from "../../../utils/printUtils";
+import {
+  printBusinessDocument,
+  printTableReport,
+} from "../../../utils/printUtils";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -96,8 +111,18 @@ import {
 import { SaleActionDropdown } from "../utils/SaleActionDropdown";
 import { toast } from "../../../utils/toast";
 
-import { formatDate } from '../utils/dateUtils';
+import { formatDate } from "../utils/dateUtils";
+
 export const SupplierView: React.FC = () => {
+  const [locationDistrict, setLocationDistrict] = useState("");
+  const [locationIds, setLocationIds] = useState<{ countryId?: string; stateId?: string; districtId?: string; cityId?: string }>({});
+  const [districtError, setDistrictError] = useState<string | undefined>();
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({
+    stateRequired: true,
+    districtRequired: true,
+    cityRequired: true,
+  });
+  // country/state/city are driven by LocationFields (setValue); keep them registered with the form
   const {
     suppliers: storeSuppliers,
     purchases,
@@ -108,7 +133,9 @@ export const SupplierView: React.FC = () => {
   } = useSalesManagementStore();
 
   // The selected supplier's purchase bills as the API reports them (with paid amount and balance)
-  const [apiSupplierBills, setApiSupplierBills] = useState<PurchaseOrder[] | null>(null);
+  const [apiSupplierBills, setApiSupplierBills] = useState<
+    PurchaseOrder[] | null
+  >(null);
 
   // API State
   const [apiSuppliers, setApiSuppliers] = useState<Supplier[]>([]);
@@ -118,7 +145,9 @@ export const SupplierView: React.FC = () => {
   const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
   const [totalRecords, setTotalRecords] = useState<number>(0);
-  const [apiSummary, setApiSummary] = useState<NonNullable<import("../../../api/commerce/supplierTypes").SupplierListResponse["summary"]> | null>(null);
+  const [apiSummary, setApiSummary] = useState<NonNullable<
+    import("../../../api/commerce/supplierTypes").SupplierListResponse["summary"]
+  > | null>(null);
   const [totalPages, setTotalPages] = useState<number>(1);
 
   // Search & Filter State
@@ -187,9 +216,12 @@ export const SupplierView: React.FC = () => {
 
   // Delete Modal State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [deleteTargetSupplier, setDeleteTargetSupplier] = useState<Supplier | null>(null);
+  const [deleteTargetSupplier, setDeleteTargetSupplier] =
+    useState<Supplier | null>(null);
   const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
-  const [deleteSupplierError, setDeleteSupplierError] = useState<string | null>(null);
+  const [deleteSupplierError, setDeleteSupplierError] = useState<string | null>(
+    null,
+  );
 
   // Open History Modal with live API sync
   const handleOpenHistory = async (sup: Supplier) => {
@@ -219,6 +251,7 @@ export const SupplierView: React.FC = () => {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
     setError,
     clearErrors,
@@ -226,25 +259,74 @@ export const SupplierView: React.FC = () => {
   } = useForm<SupplierFormData>({
     // Shared zod schema + friendly local rules layered on top.
     resolver: (async (values: any, ctx: any, opts: any) => {
-      const base: any = await (zodResolver(SupplierSchema) as any)(values, ctx, opts);
+      const base: any = await (zodResolver(SupplierSchema) as any)(
+        values,
+        ctx,
+        opts,
+      );
       const extra = collectErrors([
         ["name", checkRequiredText(values.name, "supplier name", 2)],
-        ["phone", checkPhone(values.phone, isValidIndianPhone, true)],
+        ["phone", checkIntlPhone(values.phone, true, "phone number")],
+        [
+          "whatsappNumber",
+          checkIntlPhone(values.whatsappNumber, true, "WhatsApp number"),
+        ],
+        [
+          "gstNumber",
+          String(values.gstNumber ?? "").trim()
+            ? checkGstin(values.gstNumber)
+            : "Please enter the GST number.",
+        ],
+        [
+          "panNumber",
+          String(values.panNumber ?? "").trim()
+            ? checkPan(values.panNumber)
+            : "Please enter the PAN number.",
+        ],
         ["email", checkEmail(values.email, true)],
         ["address", checkRequiredText(values.address, "address")],
-        ["city", checkRequiredText(values.city, "city")],
-        ["state", checkRequiredText(values.state, "state")],
+        ["country", values.country?.trim() ? null : "Please select a country"],
+        [
+          "city",
+          locationMeta.cityRequired
+            ? checkRequiredText(values.city, "city")
+            : null,
+        ],
+        [
+          "state",
+          locationMeta.stateRequired
+            ? checkRequiredText(values.state, "state")
+            : null,
+        ],
         ["pincode", checkPincode(values.pincode, true)],
-        ["gstNumber", checkGstin(values.gstNumber)],
-        ["panNumber", checkPan(values.panNumber)],
-        ["creditLimit", checkNumber(values.creditLimit, "credit limit", { allowZero: true, optional: true })],
+        [
+          "creditLimit",
+          checkNumber(values.creditLimit, "credit limit", {
+            allowZero: true,
+            optional: true,
+          }),
+        ],
       ]);
       const errs: any = { ...(base.errors || {}) };
-      for (const k of ["name","phone","email","address","city","state","pincode","gstNumber","panNumber","creditLimit"]) {
+      for (const k of [
+        "name",
+        "phone",
+        "whatsappNumber",
+        "email",
+        "address",
+        "country",
+        "city",
+        "state",
+        "pincode",
+        "gstNumber",
+        "panNumber",
+        "creditLimit",
+      ]) {
         if (extra[k]) errs[k] = { type: "validate", message: extra[k] };
         else delete errs[k];
       }
-      if (Object.keys(errs).length === 0) return { values: base.values ?? values, errors: {} };
+      if (Object.keys(errs).length === 0)
+        return { values: base.values ?? values, errors: {} };
       return { values: {}, errors: errs };
     }) as any,
     mode: "onSubmit",
@@ -254,11 +336,12 @@ export const SupplierView: React.FC = () => {
       name: "",
       contactPerson: "",
       phone: "",
+      whatsappNumber: "",
       email: "",
       address: "",
       city: "",
       state: "",
-      country: "India",
+      country: "",
       pincode: "",
       gstNumber: "",
       panNumber: "",
@@ -278,6 +361,21 @@ export const SupplierView: React.FC = () => {
     clearErrors();
   }, [isFormModalOpen, clearErrors]);
 
+  useEffect(() => {
+    register("country");
+    register("phone");
+    register("whatsappNumber");
+    register("state");
+    register("city");
+  }, [register]);
+
+  useEffect(() => {
+    if (!isFormModalOpen) {
+      setLocationDistrict("");
+      setDistrictError(undefined);
+    }
+  }, [isFormModalOpen]);
+
   // Load Suppliers from Live API with strict deduplication
   const loadSuppliers = useCallback(
     async (
@@ -286,11 +384,13 @@ export const SupplierView: React.FC = () => {
         search?: string;
         status?: string;
         page?: number;
-      }
+      },
     ) => {
       const targetPage = overrides?.page ?? currentPage;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetSearch =
+        overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus =
+        overrides?.status !== undefined ? overrides.status : appliedStatus;
       const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
 
       // Prevent concurrent calls or redundant re-fetching of identical parameters
@@ -423,11 +523,12 @@ export const SupplierView: React.FC = () => {
       name: "",
       contactPerson: "",
       phone: "",
+      whatsappNumber: "",
       email: "",
       address: "",
       city: "",
       state: "",
-      country: "India",
+      country: "",
       pincode: "",
       gstNumber: "",
       panNumber: "",
@@ -451,6 +552,7 @@ export const SupplierView: React.FC = () => {
       name: sup.name,
       contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
+      whatsappNumber: sup.whatsappNumber || "",
       email: sup.email || "",
       address: sup.address || "",
       city: sup.city || "",
@@ -486,7 +588,9 @@ export const SupplierView: React.FC = () => {
       setIsDetailLoading(true);
       const [res, bills] = await Promise.all([
         supplierApi.getSupplierById(sup.id),
-        supplierApi.getSupplierPurchaseBills(sup.id, { limit: 100 }).catch(() => null),
+        supplierApi
+          .getSupplierPurchaseBills(sup.id, { limit: 100 })
+          .catch(() => null),
       ]);
       if (res && res.data) {
         setSelectedSupplier(mapApiSupplierToSupplier(res.data));
@@ -509,6 +613,7 @@ export const SupplierView: React.FC = () => {
       name: `${sup.name} (Copy)`,
       contactPerson: sup.contactPerson || sup.name,
       phone: sup.phone,
+      whatsappNumber: sup.whatsappNumber || "",
       email: sup.email ? `copy_${sup.email}` : "",
       address: sup.address,
       city: sup.city,
@@ -555,8 +660,15 @@ export const SupplierView: React.FC = () => {
 
   // Save / Update Supplier
   const { runOnce: runSupplierSaveOnce } = useSubmitGuard();
-  const onSaveSupplier = (data: SupplierFormData) =>
-    runSupplierSaveOnce(() => saveSupplierInner(data));
+  const isDistrictMissing = () =>
+    locationMeta.districtRequired && !locationDistrict.trim();
+  const onSaveSupplier = (data: SupplierFormData) => {
+    if (isDistrictMissing()) {
+      setDistrictError("Please select a district");
+      return;
+    }
+    return runSupplierSaveOnce(() => saveSupplierInner(data));
+  };
   const saveSupplierInner = async (data: SupplierFormData) => {
     try {
       setIsSubmittingForm(true);
@@ -564,18 +676,28 @@ export const SupplierView: React.FC = () => {
       if (editingSupplier) {
         const payload: UpdateSupplierPayload = {
           name: data.name.trim(),
-          phone: normalizeIndianPhoneTo10Digits(data.phone) || data.phone.trim(),
+          phone:
+            normalizePhoneForSave(data.phone) || data.phone.trim(),
+          whatsapp:
+            normalizePhoneForSave(data.whatsappNumber) ||
+            data.whatsappNumber.trim(),
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
           country: data.country?.trim() || "India",
+          countryId: locationIds.countryId || undefined,
+          stateId: locationIds.stateId || undefined,
+          districtId: locationIds.districtId || undefined,
+          cityId: locationIds.cityId || undefined,
           pincode: data.pincode.trim(),
           status: data.status || "Active",
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
-        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim().toUpperCase();
-        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim().toUpperCase();
+        if (data.gstNumber?.trim())
+          payload.gstNumber = data.gstNumber.trim().toUpperCase();
+        if (data.panNumber?.trim())
+          payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
 
@@ -594,18 +716,28 @@ export const SupplierView: React.FC = () => {
       } else {
         const payload: CreateSupplierPayload = {
           name: data.name.trim(),
-          phone: normalizeIndianPhoneTo10Digits(data.phone) || data.phone.trim(),
+          phone:
+            normalizePhoneForSave(data.phone) || data.phone.trim(),
+          whatsapp:
+            normalizePhoneForSave(data.whatsappNumber) ||
+            data.whatsappNumber.trim(),
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
           country: data.country?.trim() || "India",
+          countryId: locationIds.countryId || undefined,
+          stateId: locationIds.stateId || undefined,
+          districtId: locationIds.districtId || undefined,
+          cityId: locationIds.cityId || undefined,
           pincode: data.pincode.trim(),
           status: data.status || "Active",
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
-        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim().toUpperCase();
-        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim().toUpperCase();
+        if (data.gstNumber?.trim())
+          payload.gstNumber = data.gstNumber.trim().toUpperCase();
+        if (data.panNumber?.trim())
+          payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
 
@@ -625,7 +757,21 @@ export const SupplierView: React.FC = () => {
     } catch (error: any) {
       console.error("Error saving supplier:", error);
       const apiFields = extractApiFieldErrors(error);
-      const formKeys = ["name", "phone", "email", "address", "city", "state", "pincode", "gstNumber", "panNumber", "paymentTerms", "country", "status"];
+      const formKeys = [
+        "name",
+        "phone",
+        "whatsappNumber",
+        "email",
+        "address",
+        "city",
+        "state",
+        "pincode",
+        "gstNumber",
+        "panNumber",
+        "paymentTerms",
+        "country",
+        "status",
+      ];
       let mapped = false;
       for (const [k, m] of Object.entries(apiFields)) {
         if (formKeys.includes(k)) {
@@ -634,7 +780,10 @@ export const SupplierView: React.FC = () => {
         }
       }
       if (mapped) return;
-      const msg = getApiErrorMessage(error, "Failed to save supplier. Please try again.");
+      const msg = getApiErrorMessage(
+        error,
+        "Failed to save supplier. Please try again.",
+      );
       toast.error(msg);
     } finally {
       setIsSubmittingForm(false);
@@ -660,7 +809,9 @@ export const SupplierView: React.FC = () => {
     try {
       setIsDeletingId(deleteTargetSupplier.id);
       await supplierApi.deleteSupplier(deleteTargetSupplier.id);
-      toast.success(`Supplier "${deleteTargetSupplier.name}" deleted successfully.`);
+      toast.success(
+        `Supplier "${deleteTargetSupplier.name}" deleted successfully.`,
+      );
       setIsDeleteModalOpen(false);
       setDeleteTargetSupplier(null);
       loadSuppliers(true);
@@ -678,7 +829,10 @@ export const SupplierView: React.FC = () => {
   // Supplier Details Data Links
   const supplierPurchases = useMemo(() => {
     if (!selectedSupplier) return [];
-    return apiSupplierBills ?? purchases.filter((p) => p.supplierId === selectedSupplier.id);
+    return (
+      apiSupplierBills ??
+      purchases.filter((p) => p.supplierId === selectedSupplier.id)
+    );
   }, [apiSupplierBills, purchases, selectedSupplier]);
 
   const supplierReturns = useMemo(() => {
@@ -786,12 +940,17 @@ export const SupplierView: React.FC = () => {
   // Print Supplier Statement / Profile via universal printUtils
   const handlePrintSupplierStatement = (sup: Supplier) => {
     printBusinessDocument({
-      docTypeTitle: 'SUPPLIER STATEMENT / VENDOR PROFILE',
+      docTypeTitle: "SUPPLIER STATEMENT / VENDOR PROFILE",
       docNo: sup.supplierCode || sup.id.slice(0, 8).toUpperCase(),
-      docDate: new Date().toISOString().split('T')[0],
+      docDate: new Date().toISOString().split("T")[0],
       status: sup.status,
-      statusColor: sup.status === 'Active' ? 'emerald' : sup.status === 'Blocked' ? 'rose' : 'slate',
-      partyTitle: 'Supplier / Vendor Details',
+      statusColor:
+        sup.status === "Active"
+          ? "emerald"
+          : sup.status === "Blocked"
+            ? "rose"
+            : "slate",
+      partyTitle: "Supplier / Vendor Details",
       partyName: sup.name,
       partyCompany: (sup as any).company || sup.name,
       partyPhone: sup.phone || (sup as any).mobile,
@@ -799,35 +958,40 @@ export const SupplierView: React.FC = () => {
       partyAddress: (sup as any).billingAddress || sup.address,
       partyGstin: sup.gstNumber,
       extraMeta: [
-        { label: 'Contact Person', value: sup.contactPerson || 'N/A' },
-        { label: 'Payment Terms', value: sup.paymentTerms || 'Net 30 Days' },
-        { label: 'Credit Limit', value: `₹${(sup.creditLimit || 0).toLocaleString('en-IN')}` },
-        ...(sup.bankName ? [{ label: 'Bank Name', value: sup.bankName }] : []),
-        ...(sup.accountNumber ? [{ label: 'Account Number', value: sup.accountNumber }] : []),
-        ...(sup.ifscCode ? [{ label: 'IFSC Code', value: sup.ifscCode }] : []),
+        { label: "Contact Person", value: sup.contactPerson || "N/A" },
+        { label: "Payment Terms", value: sup.paymentTerms || "Net 30 Days" },
+        {
+          label: "Credit Limit",
+          value: `₹${(sup.creditLimit || 0).toLocaleString("en-IN")}`,
+        },
+        ...(sup.bankName ? [{ label: "Bank Name", value: sup.bankName }] : []),
+        ...(sup.accountNumber
+          ? [{ label: "Account Number", value: sup.accountNumber }]
+          : []),
+        ...(sup.ifscCode ? [{ label: "IFSC Code", value: sup.ifscCode }] : []),
       ],
       columns: [
-        { header: 'Metric', width: '50%' },
-        { header: 'Financial Value (₹)', align: 'right', width: '50%' },
+        { header: "Metric", width: "50%" },
+        { header: "Financial Value (₹)", align: "right", width: "50%" },
       ],
       items: [
         {
-          name: 'Total Cumulative Purchases',
-          remarks: 'Sum of all historical purchase bills from this supplier',
+          name: "Total Cumulative Purchases",
+          remarks: "Sum of all historical purchase bills from this supplier",
           quantity: 1,
           unitPrice: Number(sup.totalPurchase || 0),
           total: Number(sup.totalPurchase || 0),
         },
         {
-          name: 'Total Disbursed / Paid Amount',
-          remarks: 'Total payments made to vendor',
+          name: "Total Disbursed / Paid Amount",
+          remarks: "Total payments made to vendor",
           quantity: 1,
           unitPrice: Number(sup.paid || 0),
           total: Number(sup.paid || 0),
         },
         {
-          name: 'Outstanding Balance Payable',
-          remarks: 'Current pending payment liability',
+          name: "Outstanding Balance Payable",
+          remarks: "Current pending payment liability",
           quantity: 1,
           unitPrice: Number(sup.payable || 0),
           total: Number(sup.payable || 0),
@@ -837,50 +1001,62 @@ export const SupplierView: React.FC = () => {
       grandTotal: Number(sup.totalPurchase || 0),
       paidAmount: Number(sup.paid || 0),
       balance: Number(sup.payable || 0),
-      paidAmountLabel: 'Total Disbursed',
-      balanceLabel: 'Net Payable Outstanding',
-      notes: sup.notes || 'Vendor account maintained under active compliance.',
+      paidAmountLabel: "Total Disbursed",
+      balanceLabel: "Net Payable Outstanding",
+      notes: sup.notes || "Vendor account maintained under active compliance.",
     });
   };
 
   // Print Table Report for Suppliers
   const handlePrintTableReport = () => {
     if (displaySuppliers.length === 0) {
-      toast.info('No supplier records available to print.');
+      toast.info("No supplier records available to print.");
       return;
     }
 
     const printRows = displaySuppliers.map((sup) => ({
       supplierCode: sup.supplierCode,
       name: sup.name,
-      contactPerson: sup.contactPerson || '—',
-      phone: sup.phone || (sup as any).mobile || '—',
-      city: sup.city || '—',
+      contactPerson: sup.contactPerson || "—",
+      phone: sup.phone || (sup as any).mobile || "—",
+      city: sup.city || "—",
       totalPurchase: Number(sup.totalPurchase || 0),
       payable: Number(sup.payable || 0),
       status: sup.status,
     }));
 
     printTableReport({
-      title: 'Suppliers & Vendor Directory Report',
+      title: "Suppliers & Vendor Directory Report",
       subtitle: `Total Vendors: ${totalRecords || displaySuppliers.length} | Status Filter: ${pendingStatus}`,
       columns: [
-        { header: 'Code', key: 'supplierCode', width: '12%' },
-        { header: 'Supplier Name', key: 'name', width: '25%' },
-        { header: 'Contact Person', key: 'contactPerson', width: '16%' },
-        { header: 'Phone', key: 'phone', width: '14%' },
-        { header: 'Status', key: 'status', align: 'center', width: '11%' },
-        { header: 'Purchases (₹)', key: 'totalPurchase', align: 'right', type: 'currency', width: '11%' },
-        { header: 'Payable (₹)', key: 'payable', align: 'right', type: 'currency', width: '11%' },
+        { header: "Code", key: "supplierCode", width: "12%" },
+        { header: "Supplier Name", key: "name", width: "25%" },
+        { header: "Contact Person", key: "contactPerson", width: "16%" },
+        { header: "Phone", key: "phone", width: "14%" },
+        { header: "Status", key: "status", align: "center", width: "11%" },
+        {
+          header: "Purchases (₹)",
+          key: "totalPurchase",
+          align: "right",
+          type: "currency",
+          width: "11%",
+        },
+        {
+          header: "Payable (₹)",
+          key: "payable",
+          align: "right",
+          type: "currency",
+          width: "11%",
+        },
       ],
       data: printRows,
       metrics: [
-        { label: 'Total Suppliers', value: summary.totalCount },
-        { label: 'Total Accounts Payable', value: summary.totalPayables },
-        { label: 'Active Suppliers', value: summary.activeCount },
+        { label: "Total Suppliers", value: summary.totalCount },
+        { label: "Total Accounts Payable", value: summary.totalPayables },
+        { label: "Active Suppliers", value: summary.activeCount },
       ],
       summaryRow: {
-        supplierCode: 'Total',
+        supplierCode: "Total",
         payable: summary.totalPayables,
       },
     });
@@ -1113,17 +1289,17 @@ export const SupplierView: React.FC = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse border border-slate-200 min-w-[950px]">
             <CommonTableHead
-                columns={[
-                  { label: "SUPPLIER & CODE", align: "left", minWidth: "180px" },
-                  { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
-                  { label: "CONTACT INFO", align: "left", minWidth: "160px" },
-                  { label: "LOCATION", align: "left", minWidth: "150px" },
-                  { label: "TOTAL PURCHASE", align: "right", minWidth: "130px" },
-                  { label: "PAID / PAYABLE", align: "right", minWidth: "140px" },
-                  { label: "STATUS", align: "center", minWidth: "110px" },
-                  { label: "ACTIONS", align: "center", minWidth: "120px" },
-                ]}
-              />
+              columns={[
+                { label: "SUPPLIER & CODE", align: "left", minWidth: "180px" },
+                { label: "CONTACT PERSON", align: "left", minWidth: "160px" },
+                { label: "CONTACT INFO", align: "left", minWidth: "160px" },
+                { label: "LOCATION", align: "left", minWidth: "150px" },
+                { label: "TOTAL PURCHASE", align: "right", minWidth: "130px" },
+                { label: "PAID / PAYABLE", align: "right", minWidth: "140px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
+                { label: "ACTIONS", align: "center", minWidth: "120px" },
+              ]}
+            />
             <tbody className="text-sm">
               {isLoading ? (
                 <tr>
@@ -1308,30 +1484,29 @@ export const SupplierView: React.FC = () => {
                       {/* 8. Actions */}
                       <td className="py-4 px-5 border border-slate-200 text-center whitespace-nowrap">
                         <div className="flex items-center justify-center gap-1.5">
-                          
-
                           {/* 3-dots Actions Dropdown */}
                           <SaleActionDropdown
                             items={[
                               {
-                                label: "View/Edit",
+                                label: "View",
+                                variant: "view",
+                                onClick: () => handleOpenDetailModal(sup),
+                              },
+                              {
+                                label: "Edit",
                                 variant: "edit",
                                 onClick: () => handleOpenEditModal(sup),
                               },
                               {
                                 label: "Print Statement",
                                 variant: "print",
-                                onClick: () => handlePrintSupplierStatement(sup),
+                                onClick: () =>
+                                  handlePrintSupplierStatement(sup),
                               },
                               {
                                 label: "Duplicate",
                                 variant: "duplicate",
                                 onClick: () => handleDuplicateSupplier(sup),
-                              },
-                              {
-                                label: "Preview",
-                                variant: "preview",
-                                onClick: () => handleOpenDetailModal(sup),
                               },
                               {
                                 label: "View History",
@@ -1393,7 +1568,12 @@ export const SupplierView: React.FC = () => {
       >
         <form
           noValidate
-          onSubmit={handleSubmit(onSaveSupplier)}
+          onSubmit={(e) => {
+            setDistrictError(
+              isDistrictMissing() ? "Please select a district" : undefined,
+            );
+            return handleSubmit(onSaveSupplier)(e);
+          }}
           className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto animate-in fade-in duration-150 text-xs"
         >
           {/* Row 1: Supplier Code | Supplier Name | Contact Person */}
@@ -1434,28 +1614,22 @@ export const SupplierView: React.FC = () => {
 
           {/* Row 2: Phone Number | Email Address | Street Address */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-            <div>
-              <FormLabel required>Phone Number</FormLabel>
-              <input
-                type="tel"
-                maxLength={10}
-                {...register("phone", {
-                  onChange: (e) => {
-                    const clean = normalizeIndianPhoneTo10Digits(e.target.value);
-                    setValue("phone", clean, { shouldValidate: true });
-                  },
-                })}
-                onKeyDown={handleNumberOnlyKeyDown}
-                onInput={(e) => {
-                  e.currentTarget.value = normalizeIndianPhoneTo10Digits(
-                    e.currentTarget.value,
-                  );
-                }}
-                placeholder="e.g. 9988776655"
-                className={getFormInputCls(!!errors.phone)}
-              />
-              <FormError message={errors.phone?.message} />
-            </div>
+            <PhoneField
+              label="Phone Number"
+              required
+              value={watch("phone") || ""}
+              error={errors.phone?.message as string | undefined}
+              placeholder="e.g. 9988776655"
+              onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+            />
+            <PhoneField
+              label="WhatsApp Number"
+              required
+              value={watch("whatsappNumber") || ""}
+              error={errors.whatsappNumber?.message as string | undefined}
+              placeholder="e.g. 9988776655"
+              onChange={(v) => setValue("whatsappNumber" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+            />
             <div>
               <FormLabel required>Email Address</FormLabel>
               <input
@@ -1466,10 +1640,10 @@ export const SupplierView: React.FC = () => {
               />
               <FormError message={errors.email?.message} />
             </div>
-            <div>
-              <FormLabel required>Street Address</FormLabel>
-              <input
-                type="text"
+            <div className="md:col-span-3">
+              <FormLabel required>Address</FormLabel>
+              <textarea
+                rows={3}
                 {...register("address")}
                 placeholder="e.g. 45 Industrial Area, Phase 2"
                 className={getFormInputCls(!!errors.address)}
@@ -1478,28 +1652,52 @@ export const SupplierView: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 3: City | State | Pincode */}
+          {/* Row 3: Country | State | District | City (master data) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+            <LocationFields
+              country={watch("country") || ""}
+              state={watch("state") || ""}
+              district={locationDistrict}
+              city={watch("city") || ""}
+              onMeta={setLocationMeta}
+              errors={{
+                country: errors.country?.message as string | undefined,
+                state: errors.state?.message as string | undefined,
+                district: districtError,
+                city: errors.city?.message as string | undefined,
+              }}
+              onChange={(patch) => {
+                setLocationIds((prev) => ({
+                  countryId: patch.countryId !== undefined ? patch.countryId : prev.countryId,
+                  stateId: patch.stateId !== undefined ? patch.stateId : prev.stateId,
+                  districtId: patch.districtId !== undefined ? patch.districtId : prev.districtId,
+                  cityId: patch.cityId !== undefined ? patch.cityId : prev.cityId,
+                }));
+                if (patch.country !== undefined)
+                  setValue("country", patch.country, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+                if (patch.state !== undefined)
+                  setValue("state", patch.state, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+                if (patch.district !== undefined) {
+                  setLocationDistrict(patch.district);
+                  setDistrictError(undefined);
+                }
+                if (patch.city !== undefined)
+                  setValue("city", patch.city, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+              }}
+            />
+          </div>
+
+          {/* Row 4: Pincode | GST/VAT Number | PAN Number */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-            <div>
-              <FormLabel required>City</FormLabel>
-              <input
-                type="text"
-                {...register("city")}
-                placeholder="e.g. Delhi"
-                className={getFormInputCls(!!errors.city)}
-              />
-              <FormError message={errors.city?.message} />
-            </div>
-            <div>
-              <FormLabel required>State</FormLabel>
-              <input
-                type="text"
-                {...register("state")}
-                placeholder="e.g. Delhi"
-                className={getFormInputCls(!!errors.state)}
-              />
-              <FormError message={errors.state?.message} />
-            </div>
             <div>
               <FormLabel required>Pincode</FormLabel>
               <input
@@ -1517,21 +1715,8 @@ export const SupplierView: React.FC = () => {
               />
               <FormError message={errors.pincode?.message} />
             </div>
-          </div>
-
-          {/* Row 4: Country | GST/VAT Number | PAN Number */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
-              <FormLabel>Country</FormLabel>
-              <input
-                type="text"
-                {...register("country")}
-                className={getFormInputCls(!!errors.country)}
-              />
-              <FormError message={errors.country?.message} />
-            </div>
-            <div>
-              <FormLabel>GST Number</FormLabel>
+              <FormLabel required>GST Number</FormLabel>
               <input
                 type="text"
                 maxLength={15}
@@ -1551,7 +1736,7 @@ export const SupplierView: React.FC = () => {
               <FormError message={errors.gstNumber?.message} />
             </div>
             <div>
-              <FormLabel>PAN Number</FormLabel>
+              <FormLabel required>PAN Number</FormLabel>
               <input
                 type="text"
                 maxLength={10}
@@ -1576,10 +1761,7 @@ export const SupplierView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
             <div>
               <FormLabel>Payment Terms</FormLabel>
-              <select
-                {...register("paymentTerms")}
-                className={FORM_SELECT_CLS}
-              >
+              <select {...register("paymentTerms")} className={FORM_SELECT_CLS}>
                 <option value="Immediate">Immediate / Advance</option>
                 <option value="15 Days">15 Days</option>
                 <option value="30 Days">30 Days</option>
@@ -1933,7 +2115,7 @@ export const SupplierView: React.FC = () => {
 
                       <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
                         <span className="text-slate-400 font-medium shrink-0">
-                          Street Address
+                          Address
                         </span>
                         <span className="font-bold text-slate-800 text-right leading-snug">
                           {[
@@ -2209,197 +2391,60 @@ export const SupplierView: React.FC = () => {
           hideCloseButton={true}
           onBack={() => setHistorySupplier(null)}
         >
-          <div className="space-y-4 text-xs font-sans">
-            {/* Header Card */}
-            <div className="p-4 bg-purple-50/70 rounded-2xl border border-purple-100 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
-                  Supplier Code
-                </div>
-                <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                  {historySupplier.supplierCode}
-                </div>
-                <div className="text-xs text-slate-700 font-bold mt-0.5">
-                  {historySupplier.name}
-                </div>
-                {historySupplier.contactPerson && (
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    Contact:{" "}
-                    <span className="font-semibold text-slate-700">
-                      {historySupplier.contactPerson}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Outstanding Payable
-                </div>
-                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
-                  ₹
-                  {(Number(historySupplier.payable) || 0).toLocaleString(
-                    "en-IN",
-                    { minimumFractionDigits: 2 },
-                  )}
-                </div>
-                <div className="mt-1.5 flex justify-end">
-                  <span
-                    className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      historySupplier.status === "Active"
-                        ? "bg-emerald-100 text-emerald-700"
-                        : historySupplier.status === "Blocked"
-                          ? "bg-rose-100 text-rose-700"
-                          : "bg-slate-100 text-slate-700"
-                    }`}
-                  >
-                    {historySupplier.status}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Audit Timeline */}
-            <div className="space-y-3 pt-1">
-              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Lifecycle & Activity Timeline
-              </div>
-
-              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
-                {/* Event 1: Onboarded */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Supplier Onboarded & Master Record Created
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Code:{" "}
-                      <span className="font-medium text-slate-700">
-                        {historySupplier.supplierCode}
-                      </span>{" "}
-                      • Status:{" "}
-                      <span className="font-medium text-slate-700">
-                        {historySupplier.status}
-                      </span>
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Location:{" "}
-                      {[
-                        historySupplier.city,
-                        historySupplier.state,
-                        historySupplier.country || "India",
-                      ]
-                        .filter(Boolean)
-                        .join(", ")}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 2: Tax & Compliance */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-blue-500 ring-4 ring-blue-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Tax & Statutory Compliance
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      GSTIN:{" "}
-                      <span className="font-mono text-slate-700 font-semibold">
-                        {historySupplier.gstNumber ||
-                          "Not Registered / Unspecified"}
-                      </span>
-                    </div>
-                    {historySupplier.panNumber && (
-                      <div className="text-slate-400 text-[10px] mt-0.5">
-                        PAN:{" "}
-                        <span className="font-mono text-slate-700">
-                          {historySupplier.panNumber}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Event 3: Banking & Terms */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-4 ring-emerald-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Commercial & Settlement Terms
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Payment Terms:{" "}
-                      <span className="font-semibold text-slate-700">
-                        {historySupplier.paymentTerms || "Net 30 Days"}
-                      </span>{" "}
-                      • Credit Limit:{" "}
-                      <span className="font-semibold text-slate-700">
-                        ₹
-                        {(
-                          Number(historySupplier.creditLimit) || 0
-                        ).toLocaleString("en-IN")}
-                      </span>
-                    </div>
-                    {historySupplier.bankName && (
-                      <div className="text-slate-400 text-[10px] mt-0.5">
-                        Bank: {historySupplier.bankName} (A/C:{" "}
-                        {historySupplier.accountNumber
-                          ? `••••${historySupplier.accountNumber.slice(-4)}`
-                          : "N/A"}
-                        )
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Event 4: Procurement Summary */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-amber-500 ring-4 ring-amber-100" />
-                  <div>
-                    <div className="font-bold text-slate-800 text-xs">
-                      Procurement & Ledger Summary
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Total Purchases:{" "}
-                      <span className="font-semibold text-slate-800">
-                        ₹
-                        {(
-                          Number(historySupplier.totalPurchase) || 0
-                        ).toLocaleString("en-IN")}
-                      </span>{" "}
-                      • Total Paid:{" "}
-                      <span className="font-semibold text-emerald-600">
-                        ₹
-                        {(Number(historySupplier.paid) || 0).toLocaleString(
-                          "en-IN",
-                        )}
-                      </span>
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Current Payable:{" "}
-                      <span className="font-semibold text-amber-600">
-                        ₹
-                        {(Number(historySupplier.payable) || 0).toLocaleString(
-                          "en-IN",
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-end">
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => setHistorySupplier(null)}
-              >
-                Close History
-              </Button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            isLoading={isLoadingHistory}
+            eyebrow="Supplier"
+            title={historySupplier.name}
+            subtitle={
+              <>
+                {historySupplier.supplierCode}
+                {historySupplier.contactPerson ? ` • ${historySupplier.contactPerson}` : ""}
+              </>
+            }
+            amount={{ label: "Payable Balance", value: `₹${Number(historySupplier.payable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[{ label: historySupplier.status, tone: historySupplier.status === "Active" ? "success" : historySupplier.status === "Blocked" ? "danger" : "warning" }]}
+            facts={[
+              { label: "Total Purchases", value: `₹${Number(historySupplier.totalPurchase || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: "Total Paid", value: `₹${Number(historySupplier.paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: "Payment Terms", value: historySupplier.paymentTerms },
+              { label: "Credit Limit", value: `₹${Number(historySupplier.creditLimit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: "Location", value: [historySupplier.city, historySupplier.state].filter(Boolean).join(", ") },
+              { label: "GSTIN", value: historySupplier.gstNumber },
+            ]}
+            events={[
+              {
+                title: "Supplier Registered",
+                at: historySupplier.createdAt,
+                tone: "primary",
+                description: `${historySupplier.name} was added as a vendor.`,
+                details: [
+                  { label: "Code", value: historySupplier.supplierCode },
+                  { label: "Phone", value: historySupplier.phone },
+                  { label: "Email", value: historySupplier.email },
+                ],
+              },
+              ...(historySupplier.updatedAt && historySupplier.updatedAt !== historySupplier.createdAt
+                ? [{ title: "Profile Updated", at: historySupplier.updatedAt, tone: "info" as const, description: "Supplier details were last modified." }]
+                : []),
+              {
+                title: "Procurement Summary",
+                tone: historySupplier.payable > 0 ? "warning" : "success",
+                description: historySupplier.payable > 0 ? "Outstanding amount is payable to this supplier." : "No outstanding payable to this supplier.",
+                details: [
+                  { label: "Purchased", value: `₹${Number(historySupplier.totalPurchase || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                  { label: "Paid", value: `₹${Number(historySupplier.paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                  { label: "Payable", value: `₹${Number(historySupplier.payable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                ],
+              },
+              {
+                title: `Account Status: ${historySupplier.status}`,
+                tone: historySupplier.status === "Active" ? "success" : historySupplier.status === "Blocked" ? "danger" : "warning",
+                description: historySupplier.notes || "Current standing of the supplier account.",
+              },
+            ]}
+            updatedAt={historySupplier.updatedAt}
+            onClose={() => setHistorySupplier(null)}
+          />
         </Modal>
       )}
 

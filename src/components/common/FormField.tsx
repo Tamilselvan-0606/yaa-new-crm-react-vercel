@@ -43,6 +43,40 @@ export const TextField: React.FC<TextFieldProps> = ({
   </div>
 );
 
+interface TextAreaFieldProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange' | 'className'> {
+  label: string;
+  required?: boolean;
+  error?: string;
+  onValueChange: (value: string) => void;
+  /** Wrapper classes, e.g. "md:col-span-3" to span a whole grid row. */
+  className?: string;
+}
+
+/** Label + multi-line text box + error message (addresses, notes). */
+export const TextAreaField: React.FC<TextAreaFieldProps> = ({
+  label,
+  required,
+  error,
+  onValueChange,
+  className = '',
+  rows = 3,
+  ...areaProps
+}) => (
+  <div className={className}>
+    <label className={FIELD_LABEL_CLASS}>
+      {label} {required && <span className="text-rose-500 font-bold">*</span>}
+    </label>
+    <textarea
+      rows={rows}
+      {...areaProps}
+      onChange={(e) => onValueChange(e.target.value)}
+      className={fieldClass(!!error, 'h-auto py-3 resize-y min-h-[88px]')}
+      style={{ borderRadius: '4px' }}
+    />
+    {error && <p className="text-[11px] font-medium text-red-500 mt-1">{error}</p>}
+  </div>
+);
+
 /** Greyed-out, non-editable field (auto-generated codes, locked defaults). */
 export const ReadOnlyField: React.FC<{ label: string; value: string; placeholder?: string }> = ({ label, value, placeholder }) => (
   <div>

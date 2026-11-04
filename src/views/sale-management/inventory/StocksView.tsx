@@ -242,6 +242,41 @@ export const StocksView: React.FC = () => {
   // Catalog products & categories from API for modal dropdowns and filters
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductItem[]>([]);
   const catalogProductsRef = useRef<CatalogProductItem[]>([]);
+
+  // Load Catalog products from API for authoritative batch matching & product metadata
+  const loadCatalogProducts = useCallback(async () => {
+    try {
+      const res = await productApi.getProducts({
+        pagination_required: false,
+        page_size: 200,
+      });
+      if (res && res.success && Array.isArray(res.data)) {
+        const items: CatalogProductItem[] = res.data.map((p) => ({
+          id: p.id,
+          name: p.productName || p.name || 'Unnamed',
+          sku: p.productCode || p.sku || 'N/A',
+          category: p.category || 'General',
+          subcategory: p.subcategory || 'General',
+          unit: p.unit || 'Units',
+          unitCost: Number(p.purchasePrice || (p as any).unitCost || 0),
+          unitPrice: Number(p.salePrice || (p as any).unitPrice || 0),
+          reorderLevel: Number(p.minStockAlert || p.reorderLevel || 10),
+          isBatchTracking: Boolean(p.isBatchTracking || (p as any).is_batch_tracking),
+          batchNo: p.batchNo || (p as any).batch || undefined,
+          initialBatchNo: p.batchNo || (p as any).batch || (p as any).initialBatchNo || undefined,
+          mfgDate: p.mfgDate || undefined,
+          expDate: p.expDate || undefined,
+          itemImage: p.itemImage || (p as any).image || undefined,
+        }));
+        setCatalogProducts(items);
+        catalogProductsRef.current = items;
+        return items;
+      }
+    } catch (err) {
+      console.warn('Failed to load catalog products for batch matching:', err);
+    }
+    return [];
+  }, []);
   const [apiCategories, setApiCategories] = useState<string[]>([]);
 
   // Movement Ledger API State
@@ -407,6 +442,9 @@ export const StocksView: React.FC = () => {
       setIsLoading(true);
 
       try {
+        if (catalogProductsRef.current.length === 0) {
+          await loadCatalogProducts();
+        }
         const isLowStock = targetStatus === "Low Stock";
         const res = await stockApi.getStocks({
           page_no: targetPage,
@@ -461,23 +499,42 @@ export const StocksView: React.FC = () => {
                 ? stk.inStock
                 : (storeItem?.inStock ?? 0);
 
-            // If local store has enacted deductions (e.g. from local sale / return before backend sync), respect the deduction
-            if (
-              storeItem &&
-              typeof storeItem.inStock === 'number' &&
-              storeItem.inStock >= 0 &&
-              storeItem.inStock < effectiveInStock
-            ) {
-              // Keep authoritative API stock count without stale localStorage override
+            // Determine authoritative batch from product master data or API stock item
+            // The stock API response is the source of truth. Catalog batch data is only a
+            // fallback when the API returned no batches for this item.
+            const authoritativeBatchNo = (
+              (stk as any).batchNo ||
+              (stk as any).initialBatchNo ||
+              (itemBatches.length === 0 ? cat?.batchNo || cat?.initialBatchNo : '') ||
+              ''
+            ).trim();
+
+            // Only synthesize a batch when the API gave none
+            if (authoritativeBatchNo && itemBatches.length === 0) {
+              const hasAuthBatch = itemBatches.some(
+                (b) => b.batchNo.toLowerCase() === authoritativeBatchNo.toLowerCase()
+              );
+              if (!hasAuthBatch) {
+                itemBatches.unshift({
+                  id: `bat_${stk.productId}_${authoritativeBatchNo}`,
+                  batchNo: authoritativeBatchNo,
+                  productId: stk.productId,
+                  quantity: effectiveInStock,
+                  costPrice: stk.unitCost || cat?.unitCost || 0,
+                  sellingPrice: stk.unitPrice || cat?.unitPrice || 0,
+                  mfgDate: cat?.mfgDate || (stk as any).mfgDate,
+                  expDate: cat?.expDate || (stk as any).expDate,
+                  status: effectiveInStock > 0 ? 'Active' : 'Depleted',
+                  receivedDate: new Date().toISOString().split('T')[0],
+                });
+              }
             }
 
-            // If no batches exist for this item, create at most one single fallback batch representing the available stock
+            // If no batches exist for this item, create at most one fallback batch
             if (itemBatches.length === 0) {
               const fallbackBatchNo = (
-                cat?.batchNo ||
-                cat?.initialBatchNo ||
+                authoritativeBatchNo ||
                 storeItem?.batches?.[0]?.batchNo ||
-                (stk as any).batchNo ||
                 ''
               ).trim();
               if (fallbackBatchNo) {
@@ -494,15 +551,8 @@ export const StocksView: React.FC = () => {
                   receivedDate: new Date().toISOString().split('T')[0],
                 });
               }
-            } else if (itemBatches.length === 1) {
-              // Ensure single batch quantity strictly mirrors available in-stock count
-              itemBatches[0] = {
-                ...itemBatches[0],
-                quantity: effectiveInStock,
-                status: effectiveInStock > 0 ? 'Active' : 'Depleted',
-              };
-            } else {
-              // Multiple batches from API: ensure their sum doesn't exceed effectiveInStock
+            } else if (itemBatches.length > 1) {
+              // If multiple batches, and total batch qty exceeds effective stock, adjust gracefully
               const batchTotal = itemBatches.reduce((acc, b) => acc + (b.quantity || 0), 0);
               if (batchTotal > effectiveInStock && effectiveInStock >= 0) {
                 let remaining = effectiveInStock;
@@ -565,8 +615,9 @@ export const StocksView: React.FC = () => {
   );
 
   useEffect(() => {
+    loadCatalogProducts();
     loadStocks();
-  }, [loadStocks]);
+  }, [loadCatalogProducts, loadStocks]);
 
   // Extract unique categories directly from loaded stocks (no redundant category API call on mount)
   const categories = useMemo(() => {

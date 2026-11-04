@@ -391,7 +391,7 @@ export const commerceSalesReturnApi = {
    * GET /commerce/returns/{id}
    */
   getSalesReturnById: async (id: string): Promise<CommerceSalesReturnSingleResponse> => {
-    const response = await baseClient.get<CommerceSalesReturnSingleResponse>(`/commerce/returns/${id}`);
+    const response = await baseClient.get<CommerceSalesReturnSingleResponse>(`/commerce/returns/${id}`, { timeout: 0 });
     return response.data;
   },
 

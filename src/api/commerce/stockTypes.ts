@@ -19,6 +19,11 @@ export interface ApiStockItem {
   lastUpdated?: string;
   createdAt?: string;
   batches?: ApiStockBatch[];
+  batchNo?: string;
+  initialBatchNo?: string;
+  isBatchTracking?: boolean;
+  mfgDate?: string;
+  expDate?: string;
   shortage?: number;
   outOfStock?: boolean;
 }

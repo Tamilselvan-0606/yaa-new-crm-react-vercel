@@ -42,7 +42,8 @@ import {
   alphabetsOnly,  lettersOnly,
   digitsOnly,
   emailAddress,
-  indianMobile,
+  phoneNumber,
+  PHONE_MAX_DIGITS,
   liveMobileStartError,
   minLength,
   required,
@@ -56,6 +57,7 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { PhoneField } from '../../components/common/PhoneField';
 import { LocationFields, LocationMeta } from '../../components/common/LocationFields';
 import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
@@ -80,9 +82,9 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
     email: item.email || item.user?.email || '',
     location: item.location || item.city || item.address || '',
     city: item.city || item.location || '',
-    country: item.country || '',
-    state: item.state || '',
-    district: item.district || '',
+    country: (item as any).countryName || item.country || '',
+    state: (item as any).stateName || item.state || '',
+    district: (item as any).districtName || item.district || '',
     pincode: item.pincode || '',
     address: item.address || item.location || '',
     gstNumber: item.gstNumber || '',
@@ -186,6 +188,7 @@ export const BranchesView: React.FC = () => {
     countryId: '',
     stateId: '',
     districtId: '',
+    cityId: '',
     pincode: '',
     status: 'Active' as BranchStatus,
   });
@@ -492,6 +495,7 @@ export const BranchesView: React.FC = () => {
       countryId: '',
       stateId: '',
       districtId: '',
+      cityId: '',
       pincode: '',
       status: 'Active',
     });
@@ -522,6 +526,7 @@ export const BranchesView: React.FC = () => {
       countryId: '',
       stateId: '',
       districtId: '',
+      cityId: '',
       pincode: branch.pincode || '',
       status: branch.status || 'Active',
     });
@@ -542,9 +547,9 @@ export const BranchesView: React.FC = () => {
       ['organizationId', formData.organizationId || defaultOrgName, [required('Select Organization is required')]],
       ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
       ['contactPerson', formData.contactPerson, [required('Contact Person Name is required'), alphabetsOnly('Contact Person Name')]],
-      ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
-      ['whatsapp', formData.whatsapp, [indianMobile('WhatsApp Number')]],
-      ['location', formData.location, [required('Location is required'), alphabetsOnly('Location')]],
+      ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), phoneNumber('Mobile Number')]],
+      ['whatsapp', formData.whatsapp, [phoneNumber('WhatsApp Number')]],
+      ['location', formData.location, requiredWhen(locationMeta.cityRequired ?? true, 'City is required')],
       ['country', formData.country, [required('Country is required')]],
       ['state', formData.state, requiredWhen(locationMeta.stateRequired, 'State is required')],
       ['district', formData.district, requiredWhen(locationMeta.districtRequired, 'District is required')],
@@ -879,7 +884,7 @@ export const BranchesView: React.FC = () => {
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">SUB-ORGANIZATION & TYPE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CONTACT PERSON</th>
                 <th className="py-4 px-4 border border-[#33077C]/30 bg-[#33077C] text-white text-center">CONTACT INFO</th>
-                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">LOCATION</th>
+                <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CITY</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">STATUS</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white">CREATED DATE</th>
                 <th className="py-4 px-5 border border-[#33077C]/30 bg-[#33077C] text-white text-center">ACTIONS</th>
@@ -968,7 +973,7 @@ export const BranchesView: React.FC = () => {
                         />
                       </td>
 
-                      {/* 4. LOCATION */}
+                      {/* 4. CITY */}
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                         <div className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
                           <MapPin className="w-3.5 h-3.5 text-[#33077C] shrink-0" />
@@ -1136,8 +1141,7 @@ export const BranchesView: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {totalRecords > 0 && (
-        <Pagination
+      <Pagination
           total={totalRecords}
           currentPage={safePage}
           pageSize={pageSize}
@@ -1148,7 +1152,6 @@ export const BranchesView: React.FC = () => {
             setPage(1);
           }}
         />
-      )}
 
       {/* 4. Add / Edit Branch Modal */}
       <Modal
@@ -1188,10 +1191,8 @@ export const BranchesView: React.FC = () => {
                   }`}
                 />
               </div>
-              {formErrors.organizationId ? (
+              {formErrors.organizationId && (
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organizationId}</p>
-              ) : (
-                <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
               )}
             </div>
 
@@ -1213,6 +1214,7 @@ export const BranchesView: React.FC = () => {
                       }))
                     : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
                 }
+                optionVariant="strong"
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
               />
@@ -1242,34 +1244,24 @@ export const BranchesView: React.FC = () => {
               placeholder="Enter contact person name"
               onValueChange={(v) => updateField('contactPerson', lettersOnly(v))}
             />
-            <TextField
+            <PhoneField
               label="Mobile Number"
               required
-              inputMode="numeric"
-              maxLength={10}
               placeholder="e.g. 9876543210"
               value={formData.mobileNumber}
               error={formErrors.mobileNumber}
-              onValueChange={(v) => {
-                const digits = digitsOnly(v);
-                updateField('mobileNumber', digits, liveMobileStartError('Mobile Number', digits));
-              }}
+              onChange={(v) => updateField('mobileNumber', v)}
             />
           </div>
 
-          {/* Row 3: WhatsApp Number | Email | Location */}
+          {/* Row 3: WhatsApp Number | Email | Password */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <TextField
+            <PhoneField
               label="WhatsApp Number"
-              inputMode="numeric"
-              maxLength={10}
               placeholder="e.g. 9876543210"
               value={formData.whatsapp}
               error={formErrors.whatsapp}
-              onValueChange={(v) => {
-                const digits = digitsOnly(v);
-                updateField('whatsapp', digits, liveMobileStartError('WhatsApp Number', digits));
-              }}
+              onChange={(v) => updateField('whatsapp', v)}
             />
             <TextField
               label="Email"
@@ -1280,65 +1272,6 @@ export const BranchesView: React.FC = () => {
               placeholder="e.g. branch@organization.com"
               onValueChange={(v) => updateField('email', v)}
             />
-            <TextField
-              label="Location"
-              required
-              value={formData.location}
-              error={formErrors.location}
-              placeholder="e.g. Chennai"
-              onValueChange={(v) => updateField('location', lettersOnly(v))}
-            />
-          </div>
-
-          {/* Row 3b: Country | State | District | Pincode */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <LocationFields
-              country={formData.country}
-              state={formData.state}
-              district={formData.district}
-              errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district }}
-              onMeta={setLocationMeta}
-              onChange={(patch) => {
-                setFormData((prev) => ({ ...prev, ...patch }));
-                setFormErrors((prev) => ({ ...prev, ...Object.fromEntries(Object.keys(patch).map((k) => [k, ''])) }));
-              }}
-            />
-            <TextField
-              label="Pincode"
-              required
-              inputMode="numeric"
-              maxLength={10}
-              value={formData.pincode}
-              error={formErrors.pincode}
-              placeholder="e.g. 600001"
-              onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
-            />
-          </div>
-
-          {/* Row 4: Status | Password */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
-                Status <span className="text-rose-500 font-bold">*</span>
-              </label>
-              <CustomSelect
-                value={formData.status}
-                onChange={(val) => {
-                  setFormData({ ...formData, status: val as BranchStatus });
-                  if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
-                }}
-                options={[
-                  { label: 'Active', value: 'Active' },
-                  { label: 'Inactive', value: 'Inactive' },
-                  { label: 'Suspended', value: 'Suspended' },
-                ]}
-                placeholder="Select Status"
-                error={!!formErrors.status}
-              />
-              {formErrors.status && (
-                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
-              )}
-            </div>
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Password {!editingBranch && <span className="text-rose-500 font-bold">*</span>}
@@ -1371,6 +1304,58 @@ export const BranchesView: React.FC = () => {
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.password}</p>
               )}
             </div>
+          </div>
+
+          {/* Row 4-5: Status | Country | State | District | City | Pincode */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Status <span className="text-rose-500 font-bold">*</span>
+              </label>
+              <CustomSelect
+                value={formData.status}
+                onChange={(val) => {
+                  setFormData({ ...formData, status: val as BranchStatus });
+                  if (formErrors.status) setFormErrors((prev) => ({ ...prev, status: '' }));
+                }}
+                options={[
+                  { label: 'Active', value: 'Active' },
+                  { label: 'Inactive', value: 'Inactive' },
+                  { label: 'Suspended', value: 'Suspended' },
+                ]}
+                placeholder="Select Status"
+                error={!!formErrors.status}
+              />
+              {formErrors.status && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.status}</p>
+              )}
+            </div>
+            <LocationFields
+              country={formData.country}
+              state={formData.state}
+              district={formData.district}
+              city={formData.location}
+              errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district, city: formErrors.location }}
+              onMeta={setLocationMeta}
+              onChange={(patch) => {
+                const { city, ...rest } = patch;
+                setFormData((prev) => ({ ...prev, ...rest, ...(city !== undefined ? { location: city } : {}) }));
+                setFormErrors((prev) => ({
+                  ...prev,
+                  ...Object.fromEntries(Object.keys(patch).map((k) => [k === 'city' ? 'location' : k, ''])),
+                }));
+              }}
+            />
+            <TextField
+              label="Pincode"
+              required
+              inputMode="numeric"
+              maxLength={10}
+              value={formData.pincode}
+              error={formErrors.pincode}
+              placeholder="e.g. 600001"
+              onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
+            />
           </div>
 
           {/* Footer Submit Buttons */}
@@ -1545,7 +1530,7 @@ export const BranchesView: React.FC = () => {
                     <span className="font-bold text-slate-800 text-right break-all">{viewBranch.email || '-'}</span>
                   </div>
                   <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
-                    <span className="text-slate-400 font-medium shrink-0">Location</span>
+                    <span className="text-slate-400 font-medium shrink-0">City</span>
                     <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.location || viewBranch.city || viewBranch.address || '-'}</span>
                   </div>
                   <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">

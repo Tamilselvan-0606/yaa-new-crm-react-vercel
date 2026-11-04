@@ -151,7 +151,12 @@ export interface CreatePlatformClientRequest {
   contactPerson?: string;
   industry?: string;
   location?: string;
+  city?: string;
   address?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
+  pincode?: string;
   gstNumber?: string;
   panNumber?: string;
   registrationType?: string;
@@ -177,7 +182,12 @@ export interface UpdatePlatformClientRequest {
   contactPerson?: string;
   industry?: string;
   location?: string;
+  city?: string;
   address?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
+  pincode?: string;
   gstNumber?: string;
   panNumber?: string;
   registrationType?: string;

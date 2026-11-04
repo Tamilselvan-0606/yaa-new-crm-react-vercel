@@ -51,6 +51,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../../../components/common/Button';
 import { Modal } from '../../../components/common/Modal';
+import { HistoryTimelineView } from '../../../components/common/HistoryTimelineView';
 import { DeleteConfirmationModal } from '../../../components/common/DeleteConfirmationModal';
 import { Pagination } from '../../../components/common/Pagination';
 import { SearchBar } from '../../../components/common/SearchBar';
@@ -394,7 +395,10 @@ export const ExpenseView: React.FC = () => {
   const [receiptImageState, setReceiptImageState] = useState<string>('');
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [failedBillImageSrc, setFailedBillImageSrc] = useState<string | null>(null);
+  const [failedDetailImageSrc, setFailedDetailImageSrc] = useState<string | null>(null);
   const [selectedBillExpense, setSelectedBillExpense] = useState<ExpenseItem | null>(null);
+  const [historyExpense, setHistoryExpense] = useState<ExpenseItem | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoadingBillReceipt, setIsLoadingBillReceipt] = useState(false);
 
   // Delete Modal State
@@ -569,6 +573,24 @@ export const ExpenseView: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
+  // Open the history dialog, then load the latest record (GET /expenses/:id)
+  const handleOpenHistory = async (exp: ExpenseItem) => {
+    setHistoryExpense(exp);
+    if (!isValidUuid(exp.id)) return;
+    setIsLoadingHistory(true);
+    try {
+      const res = await workExpenseApi.getExpenseById(exp.id);
+      if (res?.data) {
+        const fresh = mapApiExpenseToUi(res.data);
+        setHistoryExpense((prev) => (prev && prev.id === exp.id ? { ...prev, ...fresh } : prev));
+      }
+    } catch (err) {
+      console.warn('Could not fetch expense history:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
   // Open Edit Modal
   const handleOpenEditModal = (exp: ExpenseItem) => {
     setReceiptError(null);
@@ -635,9 +657,13 @@ export const ExpenseView: React.FC = () => {
     setSelectedExpense(updatedExp);
     setIsDetailModalOpen(true);
 
-    if (!currentReceipt && exp.id && isValidUuid(exp.id)) {
+    if (exp.id && isValidUuid(exp.id)) {
       try {
         const detail = await workExpenseApi.getExpenseById(exp.id);
+        if (detail?.data) {
+          const fresh = mapApiExpenseToUi(detail.data);
+          setSelectedExpense((prev) => (prev && prev.id === exp.id ? { ...prev, ...fresh, receiptImage: fresh.receiptImage || prev.receiptImage } : prev));
+        }
         const fetchedImage =
           (detail.data as any)?.receiptImage ||
           (detail.data as any)?.receiptUrl ||
@@ -1305,7 +1331,7 @@ export const ExpenseView: React.FC = () => {
       </div>
 
       {/* Summary Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -1428,7 +1454,7 @@ export const ExpenseView: React.FC = () => {
           });
         }}
         filterSlot={
-          <div className="flex items-center gap-2 flex-nowrap">
+          <div className="flex items-center gap-2 flex-wrap">
             {/* Filter by Label */}
             <span className="text-xs sm:text-[13px] font-semibold text-slate-700 whitespace-nowrap shrink-0">
               Filter by :
@@ -1493,7 +1519,7 @@ export const ExpenseView: React.FC = () => {
           </div>
         }
         rightSlot={
-          <div className="flex items-center gap-3 pr-1 whitespace-nowrap">
+          <div className="flex items-center gap-3 pr-1 whitespace-nowrap shrink-0">
             <span className="text-xs font-semibold text-slate-500">
               Total Records :{' '}
               <span className="text-[#33077C] font-bold">
@@ -1669,7 +1695,12 @@ export const ExpenseView: React.FC = () => {
                         <SaleActionDropdown
                           items={[
                             {
-                              label: 'View/Edit',
+                              label: 'View',
+                              variant: 'view',
+                              onClick: () => handleOpenDetailModal(exp),
+                            },
+                            {
+                              label: 'Edit',
                               variant: 'edit',
                               onClick: () => handleOpenEditModal(exp),
                             },
@@ -1684,11 +1715,6 @@ export const ExpenseView: React.FC = () => {
                               onClick: () => handleDownloadExpense(exp),
                             },
                             {
-                              label: 'Preview',
-                              variant: 'preview',
-                              onClick: () => handleOpenDetailModal(exp),
-                            },
-                            {
                               label: 'View Attached Bill',
                               variant: 'preview',
                               onClick: () => handleOpenBillModal(exp),
@@ -1697,6 +1723,11 @@ export const ExpenseView: React.FC = () => {
                               label: 'Duplicate',
                               variant: 'duplicate',
                               onClick: () => handleDuplicateExpense(exp),
+                            },
+                            {
+                              label: 'View History',
+                              variant: 'view',
+                              onClick: () => handleOpenHistory(exp),
                             },
                             {
                               label: 'Delete',
@@ -2145,10 +2176,15 @@ export const ExpenseView: React.FC = () => {
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
         title={selectedExpense ? `Expense Voucher: ${selectedExpense.expenseNo}` : 'Expense Details'}
-        maxWidth="md"
+        subtitle="Expense breakdown, payment details, and attached receipt"
+        maxWidth="3xl"
+        headerGradient={true}
+        showBackIcon={true}
+        hideCloseButton={true}
+        onBack={() => setIsDetailModalOpen(false)}
       >
         {selectedExpense && (
-          <div className="space-y-4">
+          <div className="space-y-4 p-2 sm:p-4 max-h-[75vh] overflow-y-auto">
             <div className="bg-purple-50/60 border border-purple-100 rounded-2xl p-4 flex items-center justify-between">
               <div>
                 <span
@@ -2221,51 +2257,62 @@ export const ExpenseView: React.FC = () => {
                   className="block cursor-pointer hover:opacity-95"
                   title="Click to open receipt in new tab"
                 >
-                  <img
-                    src={selectedExpense.receiptImage}
-                    alt="Receipt"
-                    className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-white"
-                  />
+                  {failedDetailImageSrc === selectedExpense.receiptImage ? (
+                    <div className="text-center space-y-1.5 p-5 rounded-lg border border-dashed border-slate-200 bg-white">
+                      <Receipt className="w-8 h-8 text-slate-300 mx-auto stroke-[1.5]" />
+                      <p className="text-xs font-bold text-slate-700">Receipt preview is not available</p>
+                      <p className="text-[11px] text-slate-500">
+                        The file could not be loaded here (it may be private). Use "Open in new tab" to try the link directly.
+                      </p>
+                    </div>
+                  ) : (
+                    <img
+                      src={selectedExpense.receiptImage}
+                      alt="Receipt"
+                      onError={() => setFailedDetailImageSrc(selectedExpense.receiptImage || null)}
+                      className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-white"
+                    />
+                  )}
                 </a>
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-400">
-              <span>Created: {formatDate(selectedExpense.createdAt)}</span>
-              <div className="flex items-center gap-2">
+            <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-slate-400">
+              <span className="text-center sm:text-left">Created: {formatDate(selectedExpense.createdAt)}</span>
+              <div className="flex flex-col-reverse sm:flex-row sm:flex-wrap items-stretch sm:items-center sm:justify-end gap-2.5 sm:gap-3">
                 <Button
                   variant="secondary"
                   onClick={() => {
                     setIsDetailModalOpen(false);
                     handleOpenEditModal(selectedExpense);
                   }}
-                  className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+                  className="h-10 px-5 text-xs sm:text-[13px] rounded-lg cursor-pointer whitespace-nowrap"
                 >
-                  <Edit2 className="w-3.5 h-3.5 mr-1" />
+                  <Edit2 className="w-4 h-4 mr-1" />
                   Edit
                 </Button>
                 <button
                   type="button"
                   onClick={() => setIsDetailModalOpen(false)}
-                  className="h-8.5 px-4 rounded-lg border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
+                  className="h-10 px-5 rounded-lg whitespace-nowrap sm:text-[13px] border border-slate-200 hover:border-slate-300 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer flex items-center justify-center shadow-2xs"
                 >
                   Close
                 </button>
                 <button
                   type="button"
                   onClick={() => handlePrintExpense(selectedExpense)}
-                  className="h-8.5 px-4 rounded-lg bg-[#33077C] hover:bg-[#26055d] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5"
+                  className="h-10 px-5 rounded-lg whitespace-nowrap sm:text-[13px] bg-[#33077C] hover:bg-[#26055d] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5"
                 >
-                  <Printer className="w-3.5 h-3.5" />
+                  <Printer className="w-4 h-4" />
                   <span>Print Expense Voucher</span>
                 </button>
                 <button
                   type="button"
                   disabled={isDownloadingExpense}
                   onClick={() => handleDownloadExpense(selectedExpense)}
-                  className="h-8.5 px-4 rounded-lg bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  className="h-10 px-5 rounded-lg whitespace-nowrap sm:text-[13px] bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  {isDownloadingExpense ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  {isDownloadingExpense ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                   <span>{isDownloadingExpense ? 'Generating...' : 'Download Voucher'}</span>
                 </button>
               </div>
@@ -2273,6 +2320,93 @@ export const ExpenseView: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* EXPENSE HISTORY & AUDIT TRAIL */}
+      {historyExpense && (
+        <Modal
+          isOpen={Boolean(historyExpense)}
+          onClose={() => setHistoryExpense(null)}
+          title={`Expense History & Audit Trail: ${historyExpense.expenseNo}`}
+          subtitle={
+            isLoadingHistory
+              ? 'Syncing live history from Work API...'
+              : 'Complete lifecycle progression and timeline audit log'
+          }
+          maxWidth="md"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryExpense(null)}
+        >
+          <HistoryTimelineView
+            isLoading={isLoadingHistory}
+            eyebrow="Expense No"
+            title={historyExpense.expenseNo}
+            subtitle={
+              <>
+                <span className="font-semibold text-slate-800">{historyExpense.title}</span>
+                {historyExpense.payee ? ` • Payee: ${historyExpense.payee}` : ''}
+              </>
+            }
+            amount={{ label: 'Total Amount', value: `₹${Number(historyExpense.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[
+              { label: historyExpense.status, tone: historyExpense.status === 'Paid' ? 'success' : historyExpense.status === 'Approved' ? 'info' : 'warning' },
+              { label: historyExpense.paymentMode, tone: 'primary' },
+            ]}
+            facts={[
+              { label: 'Expense Date', value: historyExpense.expenseDate ? formatDate(historyExpense.expenseDate) : '' },
+              { label: 'Category', value: historyExpense.category },
+              { label: 'Reference No', value: historyExpense.referenceNo },
+              { label: 'Base Amount', value: `₹${Number(historyExpense.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: 'Tax', value: `${historyExpense.taxPercent || 0}% (${`₹${Number(historyExpense.taxAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`})` },
+              { label: 'Receipt', value: historyExpense.receiptImage ? 'Attached' : 'Not attached' },
+            ]}
+            events={[
+              {
+                title: 'Expense Recorded',
+                at: historyExpense.createdAt || historyExpense.expenseDate,
+                tone: 'primary',
+                description: `${historyExpense.title} recorded under ${historyExpense.category || 'Uncategorized'}.`,
+                details: [
+                  { label: 'Expense Date', value: historyExpense.expenseDate ? formatDate(historyExpense.expenseDate) : '' },
+                  { label: 'Payee', value: historyExpense.payee },
+                  { label: 'Payment Mode', value: historyExpense.paymentMode },
+                  { label: 'Reference', value: historyExpense.referenceNo },
+                ],
+              },
+              {
+                title: 'Tax & Total Calculated',
+                tone: 'info',
+                description: 'Tax was applied on the base amount to arrive at the voucher total.',
+                details: [
+                  { label: 'Base', value: `₹${Number(historyExpense.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                  { label: 'Tax', value: `${historyExpense.taxPercent || 0}% • ${`₹${Number(historyExpense.taxAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}` },
+                  { label: 'Total', value: `₹${Number(historyExpense.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                ],
+              },
+              ...(historyExpense.receiptImage
+                ? [{ title: 'Receipt Attached', tone: 'success' as const, description: 'A bill / receipt image is attached to this voucher.' }]
+                : []),
+              {
+                title: `Status: ${historyExpense.status}`,
+                at: historyExpense.updatedAt && historyExpense.updatedAt !== historyExpense.createdAt ? historyExpense.updatedAt : undefined,
+                tone: historyExpense.status === 'Paid' ? 'success' : historyExpense.status === 'Approved' ? 'info' : 'warning',
+                description:
+                  historyExpense.status === 'Paid'
+                    ? 'Expense has been paid out.'
+                    : historyExpense.status === 'Approved'
+                      ? 'Expense approved and awaiting payment.'
+                      : 'Expense is pending approval / payment.',
+              },
+              ...(historyExpense.notes
+                ? [{ title: 'Remarks', tone: 'muted' as const, description: `"${historyExpense.notes}"` }]
+                : []),
+            ]}
+            updatedAt={historyExpense.updatedAt}
+            onClose={() => setHistoryExpense(null)}
+          />
+        </Modal>
+      )}
 
       {/* DEDICATED ATTACHED BILL VIEWER MODAL */}
       <Modal
@@ -2285,6 +2419,12 @@ export const ExpenseView: React.FC = () => {
         subtitle={selectedBillExpense ? `${selectedBillExpense.expenseNo} • ${selectedBillExpense.title} • ₹${selectedBillExpense.totalAmount.toLocaleString('en-IN')}` : 'Expense Bill Viewer'}
         maxWidth="3xl"
         headerGradient={true}
+        showBackIcon={true}
+        hideCloseButton={true}
+        onBack={() => {
+          setIsBillModalOpen(false);
+          setSelectedBillExpense(null);
+        }}
       >
         {selectedBillExpense && (
           <div className="space-y-4 p-2 sm:p-4">

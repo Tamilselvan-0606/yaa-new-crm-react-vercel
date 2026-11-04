@@ -1,3 +1,8 @@
+import { PhoneField } from "../../../components/common/PhoneField";
+import {
+  LocationFields,
+  LocationMeta,
+} from "../../../components/common/LocationFields";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import {
@@ -22,6 +27,9 @@ import { SalesRepSearchableSelect } from "./SalesRepSearchableSelect";
 import {
   normalizeIndianPhoneTo10Digits,
   isValidIndianPhone,
+  normalizePhoneForSave,
+  isValidIntlPhone,
+  checkIntlPhone,
 } from "../../../utils/validation";
 import {
   checkRequiredText,
@@ -90,6 +98,7 @@ interface CustomerFormData {
   salesRepresentativeId?: string;
 }
 
+
 export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   isOpen,
   onClose,
@@ -102,9 +111,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     setSalesRepresentativesList,
   } = useSalesManagementStore();
   const { isSubmitting, runOnce } = useSubmitGuard();
-  const [liveSalesReps, setLiveSalesReps] = useState<
-    ApiSalesRepresentative[]
-  >([]);
+  const [liveSalesReps, setLiveSalesReps] = useState<ApiSalesRepresentative[]>(
+    [],
+  );
   const [isSalesRepsLoading, setIsSalesRepsLoading] = useState(false);
 
   // Available sales representatives (active API list prioritized, fallback to central store)
@@ -130,8 +139,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     defaultValues: {
       customerType: "Business",
       status: "Active",
-      country: "India",
-      state: "Tamil Nadu",
+      country: "",
+      state: "",
       sameAsBilling: true,
       creditLimit: 0,
       openingBalance: 0,
@@ -139,6 +148,21 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   });
 
   const watchSameAsBilling = watch("sameAsBilling");
+  const [locationDistrict, setLocationDistrict] = useState("");
+  const [locationIds, setLocationIds] = useState<{ countryId?: string; stateId?: string; districtId?: string; cityId?: string }>({});
+  const [districtError, setDistrictError] = useState<string | undefined>();
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({
+    stateRequired: true,
+    districtRequired: true,
+    cityRequired: true,
+  });
+  useEffect(() => {
+    register("country");
+    register("phone");
+    register("alternatePhone");
+    register("state");
+    register("city");
+  }, [register]);
 
   // Guards: never run two rep loads at once, and do not re-fetch on every open once loaded.
   const isFetchingRepsRef = useRef(false);
@@ -183,8 +207,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
       reset({
         customerType: "Business",
         status: "Active",
-        country: "India",
-        state: "Tamil Nadu",
+        country: "",
+        state: "",
         sameAsBilling: true,
         creditLimit: 0,
         openingBalance: 0,
@@ -195,7 +219,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     }
   }, [isOpen, reset, clearErrors]);
 
-  const handleNumberOnlyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleNumberOnlyKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
     if (
       e.key === "Backspace" ||
       e.key === "Delete" ||
@@ -230,174 +256,243 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
 
   const onSubmit = (data: CustomerFormData) =>
     runOnce(async () => {
-    // Re-check every rule here (not only through field rules) so nothing invalid reaches the API.
-    const submitErrors: Array<[keyof CustomerFormData, string | null]> = [
-      ["name", checkRequiredText(data.name, "customer name", 2)],
-      ["phone", checkPhone(data.phone, isValidIndianPhone, true)],
-      ["alternatePhone", checkPhone(data.alternatePhone, isValidIndianPhone)],
-      ["email", checkEmail(data.email)],
-      ["pincode", checkPincode(data.pincode)],
-      ["gstNumber", checkGstin(data.gstNumber)],
-      ["panNumber", checkPan(data.panNumber)],
-      ["creditLimit", checkMoney(data.creditLimit, "credit limit", { allowZero: true, optional: true })],
-      ["openingBalance", checkMoney(data.openingBalance, "existing outstanding amount", { allowZero: true, optional: true })],
-    ];
-    if (
-      data.salesRepresentativeId &&
-      availableSalesReps.length > 0 &&
-      !availableSalesReps.some((r) => r.id === data.salesRepresentativeId)
-    ) {
-      submitErrors.push([
-        "salesRepresentativeId",
-        "Please choose the sales representative from the list.",
-      ]);
-    }
-    const failed = submitErrors.filter(([, m]) => !!m);
-    if (failed.length > 0) {
-      failed.forEach(([f, m]) => setError(f, { type: "manual", message: m as string }));
-      return;
-    }
-    try {
-      const normalizedPhone = normalizeIndianPhoneTo10Digits(data.phone || "");
-      const normalizedAltPhone = data.alternatePhone
-        ? normalizeIndianPhoneTo10Digits(data.alternatePhone)
-        : undefined;
-
-      const cleanBilling = (
-        data.billingAddress ||
-        data.address ||
-        ""
-      ).trim();
-      const cleanShipping = (
-        data.sameAsBilling
-          ? cleanBilling
-          : data.shippingAddress || data.address || ""
-      ).trim();
-
-      const apiPayload: CreateCustomerPayload = {
-        name: data.name.trim(),
-        phone: normalizedPhone,
-        alternatePhone: normalizedAltPhone,
-        email: data.email?.trim() || undefined,
-        company: data.company?.trim() || undefined,
-        customerType: data.customerType || "Business",
-        gender: data.gender?.trim() || undefined,
-        status: data.status || "Active",
-        address: data.address?.trim() || undefined,
-        city: data.city?.trim() || undefined,
-        state: data.state?.trim() || undefined,
-        country: data.country?.trim() || "India",
-        pincode: data.pincode?.trim() || undefined,
-        billingAddress: cleanBilling || undefined,
-        shippingAddress: cleanShipping || undefined,
-        gstNumber: data.gstNumber?.trim().toUpperCase() || undefined,
-        panNumber: data.panNumber?.trim().toUpperCase() || undefined,
-        creditLimit:
-          data.creditLimit !== "" && data.creditLimit !== undefined
-            ? Number(data.creditLimit)
-            : undefined,
-        paymentTerms: data.paymentTerms?.trim() || undefined,
-        openingBalance:
-          data.openingBalance !== "" && data.openingBalance !== undefined
-            ? Number(data.openingBalance)
-            : undefined,
-        preferredPaymentMethod:
-          data.preferredPaymentMethod?.trim() || undefined,
-        notes: data.notes?.trim() || undefined,
-      };
-
-      const res = await customerApi.createCustomer(apiPayload);
-      const rawData = res?.data || (res as any)?.customer || res;
-
-      if (rawData && (rawData.id || res?.success)) {
-        const created = mapApiCustomerToSalesCustomer(
-          rawData.id ? rawData : res.data || rawData,
-        );
-
-        if (data.salesRepresentativeId) {
-          created.salesRepresentativeId = data.salesRepresentativeId;
-          const matchedRep = availableSalesReps.find(
-            (r) => r.id === data.salesRepresentativeId,
-          );
-          if (matchedRep) {
-            created.salesRepresentativeName = matchedRep.name;
-          }
-          try {
-            await collectionApi.assignCustomer({
-              customerId: created.id,
-              salesRepresentativeId: data.salesRepresentativeId,
-              assignmentType: "Primary",
-            });
-          } catch (assignErr) {
-            console.warn("Assign sales rep error:", assignErr);
-          }
-          assignCustomerSalesRep(
-            created.id,
-            data.salesRepresentativeId,
-            "Primary",
-            undefined,
-            undefined,
-            created.salesRepresentativeName,
-          );
-        }
-
-        saveCustomer(created);
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Customer", id: "LIST" },
-            { type: "Customer", id: created.id },
-            "SalesRepresentative",
-            "Dashboard",
-          ]),
-        );
-        toast.success(`Customer ${created.name} registered successfully.`);
-        try {
-          onCustomerCreated(created);
-        } catch (cbErr) {
-          console.error("onCustomerCreated callback error:", cbErr);
-        }
-        onClose();
-      } else {
-        throw new Error(res?.message || "Failed to create customer");
-      }
-    } catch (apiErr: any) {
-      const errorCode =
-        apiErr?.response?.data?.error?.code || apiErr?.response?.data?.code;
-      const errorMsg =
-        apiErr?.response?.data?.error?.message ||
-        apiErr?.response?.data?.message ||
-        apiErr?.message ||
-        "";
-
+      // Re-check every rule here (not only through field rules) so nothing invalid reaches the API.
+      const submitErrors: Array<[keyof CustomerFormData, string | null]> = [
+        ["name", checkRequiredText(data.name, "customer name", 2)],
+        ["phone", checkIntlPhone(data.phone, true, "phone number")],
+        [
+          "alternatePhone",
+          checkIntlPhone(data.alternatePhone, true, "WhatsApp number"),
+        ],
+        ["email", checkEmail(data.email, true)],
+        ["pincode", checkPincode(data.pincode, true)],
+        [
+          "gstNumber",
+          String(data.gstNumber ?? "").trim()
+            ? checkGstin(data.gstNumber)
+            : "Please enter the GST number.",
+        ],
+        [
+          "panNumber",
+          String(data.panNumber ?? "").trim()
+            ? checkPan(data.panNumber)
+            : "Please enter the PAN number.",
+        ],
+        [
+          "creditLimit",
+          checkMoney(data.creditLimit, "credit limit", {
+            allowZero: true,
+            optional: true,
+          }),
+        ],
+        [
+          "openingBalance",
+          checkMoney(data.openingBalance, "existing outstanding amount", {
+            allowZero: true,
+            optional: true,
+          }),
+        ],
+      ];
       if (
-        errorCode === "DUPLICATE_CUSTOMER_CODE" ||
-        errorMsg.toLowerCase().includes("customer code already exists")
+        data.salesRepresentativeId &&
+        availableSalesReps.length > 0 &&
+        !availableSalesReps.some((r) => r.id === data.salesRepresentativeId)
       ) {
-        setError("customerCode", {
-          type: "manual",
-          message:
-            "Could not generate a unique customer code. Please try again.",
-        });
-        toast.error("Could not generate a unique customer code. Please try again.");
+        submitErrors.push([
+          "salesRepresentativeId",
+          "Please choose the sales representative from the list.",
+        ]);
+      }
+      submitErrors.push(
+        ["country", data.country?.trim() ? null : "Please select a country"],
+        [
+          "state",
+          locationMeta.stateRequired && !data.state?.trim()
+            ? "Please select a state"
+            : null,
+        ],
+        [
+          "city",
+          locationMeta.cityRequired && !data.city?.trim()
+            ? "Please select a city"
+            : null,
+        ],
+      );
+      const districtMissing =
+        locationMeta.districtRequired && !locationDistrict.trim();
+      setDistrictError(
+        districtMissing ? "Please select a district" : undefined,
+      );
+      const failed = submitErrors.filter(([, m]) => !!m);
+      if (failed.length > 0 || districtMissing) {
+        failed.forEach(([f, m]) =>
+          setError(f, { type: "manual", message: m as string }),
+        );
         return;
       }
+      try {
+        const normalizedPhone = normalizePhoneForSave(
+          data.phone || "",
+        );
+        const normalizedAltPhone = data.alternatePhone
+          ? normalizePhoneForSave(data.alternatePhone)
+          : undefined;
 
-      const fieldErrors = extractApiFieldErrors(apiErr);
-      const knownFields = [
-        "name", "phone", "alternatePhone", "email", "pincode", "gstNumber",
-        "panNumber", "creditLimit", "openingBalance", "city",
-        "state", "country", "company",
-      ] as const;
-      let mapped = false;
-      for (const f of knownFields) {
-        if (fieldErrors[f]) {
-          setError(f as keyof CustomerFormData, { type: "server", message: fieldErrors[f] });
-          mapped = true;
+        const cleanBilling = (data.billingAddress || data.address || "").trim();
+        const cleanShipping = (
+          data.sameAsBilling
+            ? cleanBilling
+            : data.shippingAddress || data.address || ""
+        ).trim();
+
+        const apiPayload: CreateCustomerPayload = {
+          name: data.name.trim(),
+          phone: normalizedPhone,
+          whatsapp: normalizedAltPhone,
+          email: data.email?.trim() || undefined,
+          company: data.company?.trim() || undefined,
+          customerType: data.customerType || "Business",
+          gender: data.gender?.trim() || undefined,
+          status: data.status || "Active",
+          address: data.address?.trim() || undefined,
+          city: data.city?.trim() || undefined,
+          state: data.state?.trim() || undefined,
+          country: data.country?.trim() || "India",
+          countryId: locationIds.countryId || undefined,
+          stateId: locationIds.stateId || undefined,
+          districtId: locationIds.districtId || undefined,
+          cityId: locationIds.cityId || undefined,
+          pincode: data.pincode?.trim() || undefined,
+          billingAddress: cleanBilling || undefined,
+          shippingAddress: cleanShipping || undefined,
+          gstNumber: data.gstNumber?.trim().toUpperCase() || undefined,
+          panNumber: data.panNumber?.trim().toUpperCase() || undefined,
+          creditLimit:
+            data.creditLimit !== "" && data.creditLimit !== undefined
+              ? Number(data.creditLimit)
+              : undefined,
+          paymentTerms: data.paymentTerms?.trim() || undefined,
+          openingBalance:
+            data.openingBalance !== "" && data.openingBalance !== undefined
+              ? Number(data.openingBalance)
+              : undefined,
+          preferredPaymentMethod:
+            data.preferredPaymentMethod?.trim() || undefined,
+          notes: data.notes?.trim() || undefined,
+        };
+
+        const res = await customerApi.createCustomer(apiPayload);
+        const rawData = res?.data || (res as any)?.customer || res;
+
+        if (rawData && (rawData.id || res?.success)) {
+          const created = mapApiCustomerToSalesCustomer(
+            rawData.id ? rawData : res.data || rawData,
+          );
+
+          if (data.salesRepresentativeId) {
+            created.salesRepresentativeId = data.salesRepresentativeId;
+            const matchedRep = availableSalesReps.find(
+              (r) => r.id === data.salesRepresentativeId,
+            );
+            if (matchedRep) {
+              created.salesRepresentativeName = matchedRep.name;
+            }
+            try {
+              await collectionApi.assignCustomer({
+                customerId: created.id,
+                salesRepresentativeId: data.salesRepresentativeId,
+                assignmentType: "Primary",
+              });
+            } catch (assignErr) {
+              console.warn("Assign sales rep error:", assignErr);
+            }
+            assignCustomerSalesRep(
+              created.id,
+              data.salesRepresentativeId,
+              "Primary",
+              undefined,
+              undefined,
+              created.salesRepresentativeName,
+            );
+          }
+
+          saveCustomer(created);
+          store.dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Customer", id: "LIST" },
+              { type: "Customer", id: created.id },
+              "SalesRepresentative",
+              "Dashboard",
+            ]),
+          );
+          toast.success(`Customer ${created.name} registered successfully.`);
+          try {
+            onCustomerCreated(created);
+          } catch (cbErr) {
+            console.error("onCustomerCreated callback error:", cbErr);
+          }
+          onClose();
+        } else {
+          throw new Error(res?.message || "Failed to create customer");
         }
+      } catch (apiErr: any) {
+        const errorCode =
+          apiErr?.response?.data?.error?.code || apiErr?.response?.data?.code;
+        const errorMsg =
+          apiErr?.response?.data?.error?.message ||
+          apiErr?.response?.data?.message ||
+          apiErr?.message ||
+          "";
+
+        if (
+          errorCode === "DUPLICATE_CUSTOMER_CODE" ||
+          errorMsg.toLowerCase().includes("customer code already exists")
+        ) {
+          setError("customerCode", {
+            type: "manual",
+            message:
+              "Could not generate a unique customer code. Please try again.",
+          });
+          toast.error(
+            "Could not generate a unique customer code. Please try again.",
+          );
+          return;
+        }
+
+        const fieldErrors = extractApiFieldErrors(apiErr);
+        const knownFields = [
+          "name",
+          "phone",
+          "alternatePhone",
+          "email",
+          "pincode",
+          "gstNumber",
+          "panNumber",
+          "creditLimit",
+          "openingBalance",
+          "city",
+          "state",
+          "country",
+          "company",
+        ] as const;
+        let mapped = false;
+        for (const f of knownFields) {
+          if (fieldErrors[f]) {
+            setError(f as keyof CustomerFormData, {
+              type: "server",
+              message: fieldErrors[f],
+            });
+            mapped = true;
+          }
+        }
+        if (mapped) return;
+        toast.error(
+          getApiErrorMessage(
+            apiErr,
+            "We could not register the customer. Please try again.",
+          ),
+        );
       }
-      if (mapped) return;
-      toast.error(getApiErrorMessage(apiErr, "We could not register the customer. Please try again."));
-    }
     });
 
   return (
@@ -428,7 +523,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 <input
                   type="text"
                   {...register("name", {
-                    validate: (val) => checkRequiredText(val, "customer name", 2) || true,
+                    validate: (val) =>
+                      checkRequiredText(val, "customer name", 2) || true,
                   })}
                   placeholder="e.g. Marcus Vance or Acme Corp"
                   className={
@@ -465,6 +561,25 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
               </div>
 
               <div>
+                <FormLabel>Account Status</FormLabel>
+                <select {...register("status")} className={FORM_SELECT_CLS}>
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                  <option value="Blocked">Blocked</option>
+                </select>
+              </div>
+
+              <div>
+                <FormLabel>Gender</FormLabel>
+                <select {...register("gender")} className={FORM_SELECT_CLS}>
+                  <option value="">Select Gender</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <div>
                 <FormLabel>Sales Representative</FormLabel>
                 <SalesRepSearchableSelect
                   value={watch("salesRepresentativeId")}
@@ -487,66 +602,26 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 )}
               </div>
 
-              <div>
-                <FormLabel required>Primary Phone</FormLabel>
-                <input
-                  type="tel"
-                  maxLength={10}
-                  {...register("phone", {
-                    validate: (val) =>
-                      checkPhone(val, isValidIndianPhone, true) || true,
-                  })}
-                  onKeyDown={handleNumberOnlyKeyDown}
-                  onInput={(e) => {
-                    e.currentTarget.value = normalizeIndianPhoneTo10Digits(
-                      e.currentTarget.value,
-                    );
-                  }}
-                  placeholder="e.g. 9876543210"
-                  className={
-                    errors.phone ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                  }
-                />
-                {errors.phone && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errors.phone.message}</span>
-                  </p>
-                )}
-              </div>
+              <PhoneField
+                label="Primary Phone"
+                required
+                value={watch("phone") || ""}
+                error={errors.phone?.message as string | undefined}
+                placeholder="e.g. 9876543210"
+                onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+              />
+
+              <PhoneField
+                label="WhatsApp Number"
+                required
+                value={watch("alternatePhone") || ""}
+                error={errors.alternatePhone?.message as string | undefined}
+                placeholder="e.g. 9876543211"
+                onChange={(v) => setValue("alternatePhone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+              />
 
               <div>
-                <FormLabel>Alternate Phone</FormLabel>
-                <input
-                  type="tel"
-                  maxLength={10}
-                  {...register("alternatePhone", {
-                    validate: (val) =>
-                      checkPhone(val, isValidIndianPhone) || true,
-                  })}
-                  onKeyDown={handleNumberOnlyKeyDown}
-                  onInput={(e) => {
-                    e.currentTarget.value = normalizeIndianPhoneTo10Digits(
-                      e.currentTarget.value,
-                    );
-                  }}
-                  placeholder="e.g. 9876543211"
-                  className={
-                    errors.alternatePhone
-                      ? FORM_INPUT_ERROR_CLS
-                      : FORM_INPUT_CLS
-                  }
-                />
-                {errors.alternatePhone && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errors.alternatePhone.message}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <FormLabel>Email Address (Optional)</FormLabel>
+                <FormLabel required>Email Address</FormLabel>
                 <input
                   type="email"
                   {...register("email", {
@@ -564,25 +639,6 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   </p>
                 )}
               </div>
-
-              <div>
-                <FormLabel>Gender</FormLabel>
-                <select {...register("gender")} className={FORM_SELECT_CLS}>
-                  <option value="">Select Gender</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <FormLabel>Account Status</FormLabel>
-                <select {...register("status")} className={FORM_SELECT_CLS}>
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="Blocked">Blocked</option>
-                </select>
-              </div>
             </div>
           </div>
 
@@ -596,9 +652,9 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
               <div className="sm:col-span-4">
-                <FormLabel>Street Address</FormLabel>
-                <input
-                  type="text"
+                <FormLabel>Address</FormLabel>
+                <textarea
+                  rows={3}
                   {...register("address")}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -613,67 +669,54 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                 />
               </div>
 
-              <div>
-                <FormLabel>City</FormLabel>
-                <input
-                  type="text"
-                  {...register("city")}
-                  placeholder="e.g. Chennai"
-                  className={
-                    errors.city ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+              <LocationFields
+                country={watch("country") || ""}
+                state={watch("state") || ""}
+                district={locationDistrict}
+                city={watch("city") || ""}
+                onMeta={setLocationMeta}
+                errors={{
+                  country: errors.country?.message as string | undefined,
+                  state: errors.state?.message as string | undefined,
+                  district: districtError,
+                  city: errors.city?.message as string | undefined,
+                }}
+                onChange={(patch) => {
+                  setLocationIds((prev) => ({
+                    countryId: patch.countryId !== undefined ? patch.countryId : prev.countryId,
+                    stateId: patch.stateId !== undefined ? patch.stateId : prev.stateId,
+                    districtId: patch.districtId !== undefined ? patch.districtId : prev.districtId,
+                    cityId: patch.cityId !== undefined ? patch.cityId : prev.cityId,
+                  }));
+                  if (patch.country !== undefined)
+                    setValue("country", patch.country, {
+                      shouldDirty: true,
+                      shouldValidate: isSubmitted,
+                    });
+                  if (patch.state !== undefined)
+                    setValue("state", patch.state, {
+                      shouldDirty: true,
+                      shouldValidate: isSubmitted,
+                    });
+                  if (patch.district !== undefined) {
+                    setLocationDistrict(patch.district);
+                    setDistrictError(undefined);
                   }
-                />
-                {errors.city && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errors.city.message}</span>
-                  </p>
-                )}
-              </div>
+                  if (patch.city !== undefined)
+                    setValue("city", patch.city, {
+                      shouldDirty: true,
+                      shouldValidate: isSubmitted,
+                    });
+                }}
+              />
 
               <div>
-                <FormLabel>State</FormLabel>
-                <input
-                  type="text"
-                  {...register("state")}
-                  placeholder="e.g. Tamil Nadu"
-                  className={
-                    errors.state ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                  }
-                />
-                {errors.state && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errors.state.message}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <FormLabel>Country</FormLabel>
-                <input
-                  type="text"
-                  {...register("country")}
-                  placeholder="e.g. India"
-                  className={
-                    errors.country ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                  }
-                />
-                {errors.country && (
-                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errors.country.message}</span>
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <FormLabel>Pincode / ZIP</FormLabel>
+                <FormLabel required>Pincode / ZIP</FormLabel>
                 <input
                   type="text"
                   maxLength={6}
                   {...register("pincode", {
-                    validate: (val) => checkPincode(val) || true,
+                    validate: (val) => checkPincode(val, true) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -706,7 +749,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               <div>
-                <FormLabel>GSTIN (GST Number)</FormLabel>
+                <FormLabel required>GSTIN (GST Number)</FormLabel>
                 <input
                   type="text"
                   maxLength={15}
@@ -714,8 +757,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     validate: (val) => checkGstin(val) || true,
                   })}
                   onInput={(e) => {
-                    e.currentTarget.value =
-                      e.currentTarget.value.toUpperCase();
+                    e.currentTarget.value = e.currentTarget.value.toUpperCase();
                   }}
                   placeholder="e.g. 33AABCZ9876K1Z2"
                   className={`${errors.gstNumber ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS} font-mono uppercase`}
@@ -729,7 +771,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
               </div>
 
               <div>
-                <FormLabel>PAN Number</FormLabel>
+                <FormLabel required>PAN Number</FormLabel>
                 <input
                   type="text"
                   maxLength={10}
@@ -737,8 +779,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                     validate: (val) => checkPan(val) || true,
                   })}
                   onInput={(e) => {
-                    e.currentTarget.value =
-                      e.currentTarget.value.toUpperCase();
+                    e.currentTarget.value = e.currentTarget.value.toUpperCase();
                   }}
                   placeholder="e.g. ABCDE1234F"
                   className={`${errors.panNumber ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS} font-mono uppercase`}
@@ -822,7 +863,10 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   {...register("creditLimit", {
                     validate: (val) =>
-                      checkMoney(val, "credit limit", { allowZero: true, optional: true }) || true,
+                      checkMoney(val, "credit limit", {
+                        allowZero: true,
+                        optional: true,
+                      }) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {
@@ -868,7 +912,10 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   type="text"
                   {...register("openingBalance", {
                     validate: (val) =>
-                      checkMoney(val, "existing outstanding amount", { allowZero: true, optional: true }) || true,
+                      checkMoney(val, "existing outstanding amount", {
+                        allowZero: true,
+                        optional: true,
+                      }) || true,
                   })}
                   onKeyDown={handleNumberOnlyKeyDown}
                   onInput={(e) => {

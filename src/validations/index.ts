@@ -442,8 +442,13 @@ export const SupplierSchema = z.object({
     .trim()
     .min(1, "Pincode is required")
     .regex(/^\d{6}$/, "Pincode must be exactly 6 digits"),
-  gstNumber: z.string().trim().optional(),
-  panNumber: z.string().trim().optional(),
+  whatsappNumber: z
+    .string()
+    .trim()
+    .min(1, "WhatsApp number is required")
+    .refine((val) => isValidIndianPhone(val), INDIAN_PHONE_ERROR_MESSAGE),
+  gstNumber: z.string().trim().min(1, "GST number is required"),
+  panNumber: z.string().trim().min(1, "PAN number is required"),
   paymentTerms: z.string().trim().optional(),
   creditLimit: z
     .union([

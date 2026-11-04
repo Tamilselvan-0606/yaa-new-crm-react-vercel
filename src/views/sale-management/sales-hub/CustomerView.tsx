@@ -1,4 +1,9 @@
-import { CommonTableHead } from '../../../components/common/CommonTableHead';
+import { PhoneField } from "../../../components/common/PhoneField";
+import {
+  LocationFields,
+  LocationMeta,
+} from "../../../components/common/LocationFields";
+import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import React, {
   useState,
   useMemo,
@@ -88,6 +93,8 @@ import { collectionApi } from "../../../api/commerce/collectionApi";
 import {
   normalizeIndianPhoneTo10Digits,
   isValidIndianPhone,
+  normalizePhoneForSave,
+  isValidIntlPhone,
 } from "../../../utils/validation";
 import {
   checkRequiredText,
@@ -118,8 +125,9 @@ import {
   FORM_TEXTAREA_CLS,
 } from "../utils/formUtils";
 
-import { formatDate } from '../utils/dateUtils';
+import { formatDate } from "../utils/dateUtils";
 import { evictApiCache } from "../../../api/queryCache";
+
 export const CustomerView: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -146,7 +154,9 @@ export const CustomerView: React.FC = () => {
   const [isApiConnected, setIsApiConnected] = useState<boolean | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string | null>(null);
   const [totalApiRecords, setTotalApiRecords] = useState<number | null>(null);
-  const [apiSummary, setApiSummary] = useState<CustomerListSummary | null>(null);
+  const [apiSummary, setApiSummary] = useState<CustomerListSummary | null>(
+    null,
+  );
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -173,7 +183,8 @@ export const CustomerView: React.FC = () => {
     }>
   >([]);
   const [isProcessingBulkUpload, setIsProcessingBulkUpload] = useState(false);
-  const [bulkUploadResult, setBulkUploadResult] = useState<CustomerBulkUploadResult | null>(null);
+  const [bulkUploadResult, setBulkUploadResult] =
+    useState<CustomerBulkUploadResult | null>(null);
   const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Live Sales Representatives API State
@@ -354,97 +365,101 @@ export const CustomerView: React.FC = () => {
   };
 
   useRevalidateAfterSubmit(repAssignFE, validateRepAssignment, [
-    selectedRepIdForCustomer, repEffectiveFrom, repAssignmentType, availableSalesReps,
+    selectedRepIdForCustomer,
+    repEffectiveFrom,
+    repAssignmentType,
+    availableSalesReps,
   ]);
   useEffect(() => {
     repAssignFE.reset();
   }, [isChangeRepModalOpen, repAssignFE.reset]);
 
-  const handleSaveCustomerRepAssignment = () => repAssignGuard.runOnce(async () => {
-    if (!changeRepTargetCustomer) return;
-    if (!repAssignFE.validateAll(validateRepAssignment())) {
-      return;
-    }
-    const rep = availableSalesReps.find(
-      (r) => r.id === selectedRepIdForCustomer,
-    );
-    const repName = rep?.name || "Unassigned";
+  const handleSaveCustomerRepAssignment = () =>
+    repAssignGuard.runOnce(async () => {
+      if (!changeRepTargetCustomer) return;
+      if (!repAssignFE.validateAll(validateRepAssignment())) {
+        return;
+      }
+      const rep = availableSalesReps.find(
+        (r) => r.id === selectedRepIdForCustomer,
+      );
+      const repName = rep?.name || "Unassigned";
 
-    // 1. Send remote assignment to Commerce collections API
-    try {
-      await collectionApi.assignCustomer({
-        customerId: changeRepTargetCustomer.id,
-        salesRepresentativeId: selectedRepIdForCustomer,
-        assignmentType: repAssignmentType,
-        effectiveFrom: repEffectiveFrom,
-        notes: repAssignmentNotes,
-      });
-      customerAssignmentsCacheRef.current = null;
-    } catch (apiErr: any) {
-      toast.error(
-        getApiErrorMessage(
-          apiErr,
-          "We could not assign the sales representative. Please try again.",
+      // 1. Send remote assignment to Commerce collections API
+      try {
+        await collectionApi.assignCustomer({
+          customerId: changeRepTargetCustomer.id,
+          salesRepresentativeId: selectedRepIdForCustomer,
+          assignmentType: repAssignmentType,
+          effectiveFrom: repEffectiveFrom,
+          notes: repAssignmentNotes,
+        });
+        customerAssignmentsCacheRef.current = null;
+      } catch (apiErr: any) {
+        toast.error(
+          getApiErrorMessage(
+            apiErr,
+            "We could not assign the sales representative. Please try again.",
+          ),
+        );
+        return;
+      }
+
+      // 2. Update central store
+      assignCustomerSalesRep(
+        changeRepTargetCustomer.id,
+        selectedRepIdForCustomer,
+        repAssignmentType,
+        repEffectiveFrom,
+        repAssignmentNotes,
+        repName,
+      );
+
+      // 3. Update liveCustomers state in CustomerView
+      setLiveCustomers((prev) =>
+        prev.map((c) =>
+          c.id === changeRepTargetCustomer.id
+            ? {
+                ...c,
+                salesRepresentativeId: selectedRepIdForCustomer,
+                salesRepresentativeName: repName,
+                salesRepresentativeType: repAssignmentType,
+                assignedDate: repEffectiveFrom,
+                assignmentNotes: repAssignmentNotes,
+              }
+            : c,
         ),
       );
-      return;
-    }
 
-    // 2. Update central store
-    assignCustomerSalesRep(
-      changeRepTargetCustomer.id,
-      selectedRepIdForCustomer,
-      repAssignmentType,
-      repEffectiveFrom,
-      repAssignmentNotes,
-      repName,
-    );
+      // 4. Update selectedCustomer if open
+      if (
+        selectedCustomer &&
+        selectedCustomer.id === changeRepTargetCustomer.id
+      ) {
+        setSelectedCustomer({
+          ...selectedCustomer,
+          salesRepresentativeId: selectedRepIdForCustomer,
+          salesRepresentativeName: repName,
+          salesRepresentativeType: repAssignmentType,
+          assignedDate: repEffectiveFrom,
+          assignmentNotes: repAssignmentNotes,
+        });
+      }
 
-    // 3. Update liveCustomers state in CustomerView
-    setLiveCustomers((prev) =>
-      prev.map((c) =>
-        c.id === changeRepTargetCustomer.id
-          ? {
-              ...c,
-              salesRepresentativeId: selectedRepIdForCustomer,
-              salesRepresentativeName: repName,
-              salesRepresentativeType: repAssignmentType,
-              assignedDate: repEffectiveFrom,
-              assignmentNotes: repAssignmentNotes,
-            }
-          : c,
-      ),
-    );
-
-    // 4. Update selectedCustomer if open
-    if (
-      selectedCustomer &&
-      selectedCustomer.id === changeRepTargetCustomer.id
-    ) {
-      setSelectedCustomer({
-        ...selectedCustomer,
-        salesRepresentativeId: selectedRepIdForCustomer,
-        salesRepresentativeName: repName,
-        salesRepresentativeType: repAssignmentType,
-        assignedDate: repEffectiveFrom,
-        assignmentNotes: repAssignmentNotes,
+      toast.success(`Assigned ${repName} to ${changeRepTargetCustomer.name}!`, {
+        description: `${repAssignmentType} Rep assignment active from ${repEffectiveFrom}.`,
       });
-    }
-
-    toast.success(`Assigned ${repName} to ${changeRepTargetCustomer.name}!`, {
-      description: `${repAssignmentType} Rep assignment active from ${repEffectiveFrom}.`,
+      store.dispatch(
+        baseApi.util.invalidateTags([
+          { type: "Customer", id: "LIST" },
+          { type: "Customer", id: changeRepTargetCustomer.id },
+          "SalesRepresentative",
+          "Dashboard",
+        ]),
+      );
+      setIsChangeRepModalOpen(false);
+      setChangeRepTargetCustomer(null);
     });
-    store.dispatch(
-      baseApi.util.invalidateTags([
-        { type: "Customer", id: "LIST" },
-        { type: "Customer", id: changeRepTargetCustomer.id },
-        "SalesRepresentative",
-        "Dashboard",
-      ]),
-    );
-    setIsChangeRepModalOpen(false);
-    setChangeRepTargetCustomer(null);
-  });
 
   // React Hook Form Types & Defaults
   interface CustomerFormValues {
@@ -524,6 +539,21 @@ export const CustomerView: React.FC = () => {
   });
 
   const watchSameAsBilling = watch("sameAsBilling");
+  const [locationDistrict, setLocationDistrict] = useState("");
+  const [locationIds, setLocationIds] = useState<{ countryId?: string; stateId?: string; districtId?: string; cityId?: string }>({});
+  const [districtError, setDistrictError] = useState<string | undefined>();
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({
+    stateRequired: true,
+    districtRequired: true,
+    cityRequired: true,
+  });
+  useEffect(() => {
+    register("country");
+    register("phone");
+    register("alternatePhone");
+    register("state");
+    register("city");
+  }, [register]);
 
   // The customer form always opens and closes without leftover errors.
   useEffect(() => {
@@ -598,12 +628,15 @@ export const CustomerView: React.FC = () => {
         status?: string;
         type?: string;
         page?: number;
-      }
+      },
     ) => {
       const targetPage = overrides?.page ?? currentPage;
-      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
-      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
-      const targetType = overrides?.type !== undefined ? overrides.type : appliedType;
+      const targetSearch =
+        overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus =
+        overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetType =
+        overrides?.type !== undefined ? overrides.type : appliedType;
       const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}_${targetType}`;
 
       // Prevent concurrent calls or redundant re-fetching of identical parameters
@@ -628,7 +661,9 @@ export const CustomerView: React.FC = () => {
               targetType.toUpperCase() !== "ALL" ? targetType : undefined,
           }),
           forceRefresh || !customerAssignmentsCacheRef.current
-            ? collectionApi.getCustomerAssignments({ limit: 200 }).catch(() => null)
+            ? collectionApi
+                .getCustomerAssignments({ limit: 200 })
+                .catch(() => null)
             : Promise.resolve(null),
         ]);
 
@@ -749,8 +784,6 @@ export const CustomerView: React.FC = () => {
     return () =>
       window.removeEventListener("crm:sidebar-navigate", handleSidebarNav);
   }, [loadCustomers, loadSalesReps]);
-
-
 
   const handleManualRefresh = () => {
     evictApiCache(["Customer", "SalesRepresentative"]); // explicit refresh bypasses the cache
@@ -933,7 +966,9 @@ export const CustomerView: React.FC = () => {
     setBulkSubmitAttempted(false);
 
     if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
-      setBulkFileError("Invalid file type. Please select a valid CSV file (.csv).");
+      setBulkFileError(
+        "Invalid file type. Please select a valid CSV file (.csv).",
+      );
       return;
     }
 
@@ -994,9 +1029,7 @@ export const CustomerView: React.FC = () => {
             h.includes("alternate_phone") ||
             h.includes("alternatemobile"),
         ),
-        email: headers.findIndex(
-          (h) => h.includes("email") || h === "mail",
-        ),
+        email: headers.findIndex((h) => h.includes("email") || h === "mail"),
         dob: headers.findIndex(
           (h) =>
             h.includes("date_of_birth") ||
@@ -1014,7 +1047,9 @@ export const CustomerView: React.FC = () => {
       };
 
       if (colIdx.name === -1 && colIdx.mobile === -1) {
-        setBulkFileError("Expected CSV headers not found (full_name, mobile_number, etc.).");
+        setBulkFileError(
+          "Expected CSV headers not found (full_name, mobile_number, etc.).",
+        );
       }
 
       const seenMobiles = new Set<string>();
@@ -1054,8 +1089,13 @@ export const CustomerView: React.FC = () => {
 
         const errors: string[] = [];
         if (!fullName) errors.push("Full Name is required");
-        else if (fullName.length < 2) errors.push("Full Name must be at least 2 characters");
-        if (!cleanMobile || cleanMobile.length !== 10 || !isValidIndianPhone(cleanMobile)) {
+        else if (fullName.length < 2)
+          errors.push("Full Name must be at least 2 characters");
+        if (
+          !cleanMobile ||
+          cleanMobile.length !== 10 ||
+          !isValidIndianPhone(cleanMobile)
+        ) {
           errors.push("Valid 10-digit mobile number is required");
         } else if (seenMobiles.has(cleanMobile)) {
           errors.push(`Duplicate mobile "${cleanMobile}" in CSV`);
@@ -1071,7 +1111,8 @@ export const CustomerView: React.FC = () => {
         if (dateOfBirth) {
           const dobTime = new Date(dateOfBirth).getTime();
           if (isNaN(dobTime)) errors.push("Date of birth is not a valid date");
-          else if (dobTime > Date.now()) errors.push("Date of birth cannot be in the future");
+          else if (dobTime > Date.now())
+            errors.push("Date of birth cannot be in the future");
         }
 
         parsed.push({
@@ -1099,76 +1140,84 @@ export const CustomerView: React.FC = () => {
   };
 
   // Execute Bulk Upload via Commerce API (POST /commerce/customers/bulk-upload)
-  const handleExecuteBulkUpload = () => bulkUploadGuard.runOnce(async () => {
-    // Validate on confirm: every problem is shown together inside the dialog (no toasts).
-    setBulkSubmitAttempted(true);
-    if (!bulkFile) {
-      setBulkFileError("Please select a CSV file to upload.");
-      return;
-    }
-    if (bulkParsedCustomers.length === 0) {
-      setBulkFileError(
-        (prev) => prev || "The selected file has no customer rows to import. Please choose a valid CSV file.",
-      );
-      return;
-    }
-    if (bulkParsedCustomers.some((r) => !r.isValid)) return;
-    setBulkFileError(null);
-
-    setIsProcessingBulkUpload(true);
-    setBulkUploadResult(null);
-
-    try {
-      const res = await customerApi.bulkUploadCustomers(bulkFile);
-
-      if (res && res.success) {
-        const result = res.data;
-        setBulkUploadResult(result);
-
-        // Invalidate RTK cache tags
-        store.dispatch(
-          baseApi.util.invalidateTags([
-            { type: "Customer", id: "LIST" },
-            "Dashboard",
-          ]),
+  const handleExecuteBulkUpload = () =>
+    bulkUploadGuard.runOnce(async () => {
+      // Validate on confirm: every problem is shown together inside the dialog (no toasts).
+      setBulkSubmitAttempted(true);
+      if (!bulkFile) {
+        setBulkFileError("Please select a CSV file to upload.");
+        return;
+      }
+      if (bulkParsedCustomers.length === 0) {
+        setBulkFileError(
+          (prev) =>
+            prev ||
+            "The selected file has no customer rows to import. Please choose a valid CSV file.",
         );
+        return;
+      }
+      if (bulkParsedCustomers.some((r) => !r.isValid)) return;
+      setBulkFileError(null);
 
-        // Reload live customers list from backend
-        await loadCustomers(true);
+      setIsProcessingBulkUpload(true);
+      setBulkUploadResult(null);
 
-        if (result.failed === 0) {
-          toast.success(
-            `Customer bulk upload completed! All ${result.created} customer record${result.created > 1 ? "s" : ""} imported successfully.`,
+      try {
+        const res = await customerApi.bulkUploadCustomers(bulkFile);
+
+        if (res && res.success) {
+          const result = res.data;
+          setBulkUploadResult(result);
+
+          // Invalidate RTK cache tags
+          store.dispatch(
+            baseApi.util.invalidateTags([
+              { type: "Customer", id: "LIST" },
+              "Dashboard",
+            ]),
           );
-        } else if (result.created > 0) {
-          toast.warning(
-            `Bulk upload completed: ${result.created} created, ${result.failed} failed. See error details below.`,
-          );
+
+          // Reload live customers list from backend
+          await loadCustomers(true);
+
+          if (result.failed === 0) {
+            toast.success(
+              `Customer bulk upload completed! All ${result.created} customer record${result.created > 1 ? "s" : ""} imported successfully.`,
+            );
+          } else if (result.created > 0) {
+            toast.warning(
+              `Bulk upload completed: ${result.created} created, ${result.failed} failed. See error details below.`,
+            );
+          } else {
+            toast.error(
+              `All ${result.failed} customer records failed. Please review errors below.`,
+            );
+          }
         } else {
-          toast.error(
-            `All ${result.failed} customer records failed. Please review errors below.`,
-          );
+          toast.error(res?.message || "Customer bulk upload failed.");
         }
-      } else {
-        toast.error(res?.message || "Customer bulk upload failed.");
+      } catch (err: any) {
+        console.error("Bulk upload error:", err);
+        const apiErrors =
+          err?.data?.data?.errors || err?.response?.data?.data?.errors;
+        if (Array.isArray(apiErrors) && apiErrors.length > 0) {
+          setBulkUploadResult({
+            total: bulkParsedCustomers.length,
+            created: 0,
+            failed: apiErrors.length,
+            errors: apiErrors,
+          });
+        }
+        toast.error(
+          getApiErrorMessage(
+            err,
+            "We could not upload the customers CSV file. Please try again.",
+          ),
+        );
+      } finally {
+        setIsProcessingBulkUpload(false);
       }
-    } catch (err: any) {
-      console.error("Bulk upload error:", err);
-      const apiErrors =
-        err?.data?.data?.errors || err?.response?.data?.data?.errors;
-      if (Array.isArray(apiErrors) && apiErrors.length > 0) {
-        setBulkUploadResult({
-          total: bulkParsedCustomers.length,
-          created: 0,
-          failed: apiErrors.length,
-          errors: apiErrors,
-        });
-      }
-      toast.error(getApiErrorMessage(err, "We could not upload the customers CSV file. Please try again."));
-    } finally {
-      setIsProcessingBulkUpload(false);
-    }
-  });
+    });
 
   // Overall Summary Metrics (5 Cards)
   const summary = useMemo(() => {
@@ -1310,21 +1359,21 @@ export const CustomerView: React.FC = () => {
     customerCode: string,
     excludeId?: string,
   ): SalesCustomer[] => {
-    const cleanPhone = normalizeIndianPhoneTo10Digits(phone);
+    const cleanPhone = normalizePhoneForSave(phone);
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = customerCode.trim().toLowerCase();
 
     return customers.filter((c) => {
       if (excludeId && c.id === excludeId) return false;
-      const cPhone = normalizeIndianPhoneTo10Digits(c.phone || "");
+      const cPhone = normalizePhoneForSave(c.phone || "");
       const cEmail = (c.email || "").trim().toLowerCase();
       const cCode = (c.customerCode || "").trim().toLowerCase();
 
       const phoneMatch = Boolean(
         cleanPhone &&
         cPhone &&
-        cleanPhone.length === 10 &&
-        cPhone.length === 10 &&
+        cleanPhone.length >= 10 &&
+        cPhone.length >= 10 &&
         cleanPhone === cPhone,
       );
       const emailMatch = Boolean(cleanEmail && cEmail && cleanEmail === cEmail);
@@ -1365,25 +1414,73 @@ export const CustomerView: React.FC = () => {
     // Re-check every rule here (not only through field rules / disabled buttons).
     const submitChecks: Array<[keyof CustomerFormValues, string | null]> = [
       ["name", checkRequiredText(data.name, "customer name", 2)],
-      ["phone", checkPhone(data.phone, isValidIndianPhone, true)],
-      ["alternatePhone", checkPhone(data.alternatePhone, isValidIndianPhone)],
-      ["email", checkEmail(data.email)],
-      ["pincode", checkPincode(data.pincode)],
-      ["gstNumber", checkGstin(data.gstNumber)],
-      ["panNumber", checkPan(data.panNumber)],
-      ["creditLimit", checkMoney(data.creditLimit, "credit limit", { allowZero: true, optional: true })],
-      ["openingBalance", checkMoney(data.openingBalance, "existing outstanding amount", { allowZero: true, optional: true })],
+      ["phone", checkPhone(data.phone, isValidIntlPhone, true)],
+      [
+        "alternatePhone",
+        checkPhone(data.alternatePhone, isValidIntlPhone, true),
+      ],
+      ["email", checkEmail(data.email, true)],
+      ["pincode", checkPincode(data.pincode, true)],
+      [
+        "gstNumber",
+        String(data.gstNumber ?? "").trim()
+          ? checkGstin(data.gstNumber)
+          : "Please enter the GST number.",
+      ],
+      [
+        "panNumber",
+        String(data.panNumber ?? "").trim()
+          ? checkPan(data.panNumber)
+          : "Please enter the PAN number.",
+      ],
+      [
+        "creditLimit",
+        checkMoney(data.creditLimit, "credit limit", {
+          allowZero: true,
+          optional: true,
+        }),
+      ],
+      [
+        "openingBalance",
+        checkMoney(data.openingBalance, "existing outstanding amount", {
+          allowZero: true,
+          optional: true,
+        }),
+      ],
     ];
     if (
       data.salesRepresentativeId &&
       availableSalesReps.length > 0 &&
       !availableSalesReps.some((r) => r.id === data.salesRepresentativeId)
     ) {
-      submitChecks.push(["salesRepresentativeId", "Please choose the sales representative from the list."]);
+      submitChecks.push([
+        "salesRepresentativeId",
+        "Please choose the sales representative from the list.",
+      ]);
     }
+    submitChecks.push(
+      ["country", data.country?.trim() ? null : "Please select a country"],
+      [
+        "state",
+        locationMeta.stateRequired && !data.state?.trim()
+          ? "Please select a state"
+          : null,
+      ],
+      [
+        "city",
+        locationMeta.cityRequired && !data.city?.trim()
+          ? "Please select a city"
+          : null,
+      ],
+    );
+    const districtMissing =
+      locationMeta.districtRequired && !locationDistrict.trim();
+    setDistrictError(districtMissing ? "Please select a district" : undefined);
     const failedChecks = submitChecks.filter(([, m]) => !!m);
-    if (failedChecks.length > 0) {
-      failedChecks.forEach(([f, m]) => setError(f, { type: "manual", message: m as string }));
+    if (failedChecks.length > 0 || districtMissing) {
+      failedChecks.forEach(([f, m]) =>
+        setError(f, { type: "manual", message: m as string }),
+      );
       return;
     }
 
@@ -1404,9 +1501,9 @@ export const CustomerView: React.FC = () => {
       customerType: data.customerType,
       salesRepresentativeId: data.salesRepresentativeId || undefined,
       salesRepresentativeName: selectedRep ? selectedRep.name : undefined,
-      phone: normalizeIndianPhoneTo10Digits(data.phone),
+      phone: normalizePhoneForSave(data.phone),
       alternatePhone: cleanStr(data.alternatePhone)
-        ? normalizeIndianPhoneTo10Digits(data.alternatePhone)
+        ? normalizePhoneForSave(data.alternatePhone)
         : undefined,
       email: cleanStr(data.email) || "",
       gender: cleanStr(data.gender),
@@ -1415,6 +1512,10 @@ export const CustomerView: React.FC = () => {
       city: cleanStr(data.city) || "",
       state: cleanStr(data.state) || "",
       country: cleanStr(data.country) || "",
+      countryId: locationIds.countryId || undefined,
+      stateId: locationIds.stateId || undefined,
+      districtId: locationIds.districtId || undefined,
+      cityId: locationIds.cityId || undefined,
       pincode: cleanStr(data.pincode) || "",
       gstNumber: cleanStr(data.gstNumber)?.toUpperCase(),
       panNumber: cleanStr(data.panNumber)?.toUpperCase(),
@@ -1475,11 +1576,14 @@ export const CustomerView: React.FC = () => {
     setActiveDetailTab("overview");
     setIsDetailModalOpen(true);
 
-    // If ledger is not cached yet, fetch it once
-    if (!ledgerCacheRef.current[customer.id]) {
-      setIsLoadingLedger(true);
+    // Always fetch fresh details (GET /customers/:id); the ledger is fetched once and cached
+    const needsLedger = !ledgerCacheRef.current[customer.id];
+    setIsLoadingLedger(true);
+    {
       Promise.allSettled([
-        customerApi.getCustomerLedger(customer.id),
+        needsLedger
+          ? customerApi.getCustomerLedger(customer.id)
+          : Promise.reject(new Error("ledger cached")),
         customerApi.getCustomerById(customer.id),
       ])
         .then(([ledgerRes, detailRes]) => {
@@ -1516,8 +1620,18 @@ export const CustomerView: React.FC = () => {
   const mapCustomerApiFieldErrors = (apiErr: any): boolean => {
     const fe = extractApiFieldErrors(apiErr);
     const keys = [
-      "name", "phone", "alternatePhone", "email", "pincode", "gstNumber",
-      "panNumber", "creditLimit", "openingBalance", "city", "state", "country",
+      "name",
+      "phone",
+      "alternatePhone",
+      "email",
+      "pincode",
+      "gstNumber",
+      "panNumber",
+      "creditLimit",
+      "openingBalance",
+      "city",
+      "state",
+      "country",
     ] as const;
     let mapped = false;
     for (const k of keys) {
@@ -1529,220 +1643,250 @@ export const CustomerView: React.FC = () => {
     return mapped;
   };
 
-  const commitSaveCustomer = (payload: SalesCustomer) => customerSaveGuard.runOnce(async () => {
-    setIsSubmitting(true);
-    try {
-      const apiPayload = mapSalesCustomerToPayload(payload);
+  const commitSaveCustomer = (payload: SalesCustomer) =>
+    customerSaveGuard.runOnce(async () => {
+      setIsSubmitting(true);
+      try {
+        const apiPayload = mapSalesCustomerToPayload(payload);
 
-      if (editingCustomer) {
-        try {
-          const res = await customerApi.updateCustomer(
-            editingCustomer.id,
-            apiPayload,
-          );
-          const rawData = res?.data || (res as any)?.customer || res;
-          if (rawData && (rawData.id || res?.success)) {
-            const updated = mapApiCustomerToSalesCustomer(
-              rawData.id ? rawData : res.data || rawData,
+        if (editingCustomer) {
+          try {
+            const res = await customerApi.updateCustomer(
+              editingCustomer.id,
+              apiPayload,
             );
-            if (payload.salesRepresentativeId) {
-              updated.salesRepresentativeId = payload.salesRepresentativeId;
-              updated.salesRepresentativeName = payload.salesRepresentativeName;
-              updated.salesRepresentativeType = payload.salesRepresentativeType;
-              try {
-                await collectionApi.assignCustomer({
-                  customerId: updated.id,
-                  salesRepresentativeId: payload.salesRepresentativeId,
-                  assignmentType: payload.salesRepresentativeType || "Primary",
-                });
-              } catch (assignErr) {
-                console.warn("Assign sales rep on update failed:", assignErr);
-              }
-              assignCustomerSalesRep(
-                updated.id,
-                payload.salesRepresentativeId,
-                payload.salesRepresentativeType || "Primary",
-                undefined,
-                undefined,
-                payload.salesRepresentativeName,
+            const rawData = res?.data || (res as any)?.customer || res;
+            if (rawData && (rawData.id || res?.success)) {
+              const updated = mapApiCustomerToSalesCustomer(
+                rawData.id ? rawData : res.data || rawData,
               );
-            }
-            saveCustomer(updated);
-            setLiveCustomers((prev) =>
-              prev.map((c) => (c.id === updated.id ? updated : c)),
-            );
-            toast.success(`Customer ${updated.name} updated successfully.`);
-            store.dispatch(
-              baseApi.util.invalidateTags([
-                { type: "Customer", id: "LIST" },
-                { type: "Customer", id: updated.id },
-                "SalesRepresentative",
-                "Dashboard",
-              ]),
-            );
-            setIsFormModalOpen(false);
-            setIsDuplicateModalOpen(false);
-            setPendingSavePayload(null);
-            if (selectedCustomer && selectedCustomer.id === updated.id) {
-              setSelectedCustomer(updated);
-            }
-            if (reopenDetailAfterEdit) {
-              setIsDetailModalOpen(true);
-              setReopenDetailAfterEdit(false);
-            }
-            return;
-          }
-        } catch (apiErr: any) {
-          const errorCode =
-            apiErr?.response?.data?.error?.code || apiErr?.response?.data?.code;
-          const errorMsg =
-            apiErr?.response?.data?.error?.message ||
-            apiErr?.response?.data?.message ||
-            apiErr?.message ||
-            "";
-
-          const isDuplicateCode =
-            errorCode === "DUPLICATE_CUSTOMER_CODE" ||
-            errorMsg.toLowerCase().includes("customer code already exists");
-
-          if (isDuplicateCode) {
-            setError("customerCode", {
-              type: "manual",
-              message:
-                "Could not generate a unique customer code. Please try again.",
-            });
-            toast.error(
-              "Could not generate a unique customer code. Please try again.",
-            );
-            return;
-          }
-
-          if (mapCustomerApiFieldErrors(apiErr)) {
-            setIsDuplicateModalOpen(false);
-            return;
-          }
-          toast.error(getApiErrorMessage(apiErr, "We could not update the customer. Please try again."));
-          return;
-        }
-      } else {
-        try {
-          const res = await customerApi.createCustomer(apiPayload);
-          const rawData = res?.data || (res as any)?.customer || res;
-          if (rawData && (rawData.id || res?.success)) {
-            const created = mapApiCustomerToSalesCustomer(
-              rawData.id ? rawData : res.data || rawData,
-            );
-            if (payload.salesRepresentativeId) {
-              created.salesRepresentativeId = payload.salesRepresentativeId;
-              created.salesRepresentativeName = payload.salesRepresentativeName;
-              created.salesRepresentativeType = payload.salesRepresentativeType;
-              try {
-                await collectionApi.assignCustomer({
-                  customerId: created.id,
-                  salesRepresentativeId: payload.salesRepresentativeId,
-                  assignmentType: payload.salesRepresentativeType || "Primary",
-                });
-              } catch (assignErr) {
-                console.warn("Assign sales rep on create failed:", assignErr);
+              if (payload.salesRepresentativeId) {
+                updated.salesRepresentativeId = payload.salesRepresentativeId;
+                updated.salesRepresentativeName =
+                  payload.salesRepresentativeName;
+                updated.salesRepresentativeType =
+                  payload.salesRepresentativeType;
+                try {
+                  await collectionApi.assignCustomer({
+                    customerId: updated.id,
+                    salesRepresentativeId: payload.salesRepresentativeId,
+                    assignmentType:
+                      payload.salesRepresentativeType || "Primary",
+                  });
+                } catch (assignErr) {
+                  console.warn("Assign sales rep on update failed:", assignErr);
+                }
+                assignCustomerSalesRep(
+                  updated.id,
+                  payload.salesRepresentativeId,
+                  payload.salesRepresentativeType || "Primary",
+                  undefined,
+                  undefined,
+                  payload.salesRepresentativeName,
+                );
               }
-              assignCustomerSalesRep(
-                created.id,
-                payload.salesRepresentativeId,
-                payload.salesRepresentativeType || "Primary",
-                undefined,
-                undefined,
-                payload.salesRepresentativeName,
+              saveCustomer(updated);
+              setLiveCustomers((prev) =>
+                prev.map((c) => (c.id === updated.id ? updated : c)),
               );
+              toast.success(`Customer ${updated.name} updated successfully.`);
+              store.dispatch(
+                baseApi.util.invalidateTags([
+                  { type: "Customer", id: "LIST" },
+                  { type: "Customer", id: updated.id },
+                  "SalesRepresentative",
+                  "Dashboard",
+                ]),
+              );
+              setIsFormModalOpen(false);
+              setIsDuplicateModalOpen(false);
+              setPendingSavePayload(null);
+              if (selectedCustomer && selectedCustomer.id === updated.id) {
+                setSelectedCustomer(updated);
+              }
+              if (reopenDetailAfterEdit) {
+                setIsDetailModalOpen(true);
+                setReopenDetailAfterEdit(false);
+              }
+              return;
             }
-            saveCustomer(created);
-            setLiveCustomers((prev) => [created, ...prev]);
-            customerAssignmentsCacheRef.current = null;
-            toast.success(
-              `Customer ${created.name} registered successfully via Commerce API.`,
-            );
-            store.dispatch(
-              baseApi.util.invalidateTags([
-                { type: "Customer", id: "LIST" },
-                { type: "Customer", id: created.id },
-                "SalesRepresentative",
-                "Dashboard",
-              ]),
-            );
-            setIsFormModalOpen(false);
-            setIsDuplicateModalOpen(false);
-            setPendingSavePayload(null);
-            return;
-          }
-        } catch (apiErr: any) {
-          const errorCode =
-            apiErr?.response?.data?.error?.code || apiErr?.response?.data?.code;
-          const errorMsg =
-            apiErr?.response?.data?.error?.message ||
-            apiErr?.response?.data?.message ||
-            apiErr?.message ||
-            "";
+          } catch (apiErr: any) {
+            const errorCode =
+              apiErr?.response?.data?.error?.code ||
+              apiErr?.response?.data?.code;
+            const errorMsg =
+              apiErr?.response?.data?.error?.message ||
+              apiErr?.response?.data?.message ||
+              apiErr?.message ||
+              "";
 
-          const isDuplicateCode =
-            errorCode === "DUPLICATE_CUSTOMER_CODE" ||
-            errorMsg.toLowerCase().includes("customer code already exists");
+            const isDuplicateCode =
+              errorCode === "DUPLICATE_CUSTOMER_CODE" ||
+              errorMsg.toLowerCase().includes("customer code already exists");
 
-          if (isDuplicateCode) {
-            setError("customerCode", {
-              type: "manual",
-              message:
+            if (isDuplicateCode) {
+              setError("customerCode", {
+                type: "manual",
+                message:
+                  "Could not generate a unique customer code. Please try again.",
+              });
+              toast.error(
                 "Could not generate a unique customer code. Please try again.",
-            });
+              );
+              return;
+            }
+
+            if (mapCustomerApiFieldErrors(apiErr)) {
+              setIsDuplicateModalOpen(false);
+              return;
+            }
             toast.error(
-              "Could not generate a unique customer code. Please try again.",
+              getApiErrorMessage(
+                apiErr,
+                "We could not update the customer. Please try again.",
+              ),
             );
             return;
           }
+        } else {
+          try {
+            const res = await customerApi.createCustomer(apiPayload);
+            const rawData = res?.data || (res as any)?.customer || res;
+            if (rawData && (rawData.id || res?.success)) {
+              const created = mapApiCustomerToSalesCustomer(
+                rawData.id ? rawData : res.data || rawData,
+              );
+              if (payload.salesRepresentativeId) {
+                created.salesRepresentativeId = payload.salesRepresentativeId;
+                created.salesRepresentativeName =
+                  payload.salesRepresentativeName;
+                created.salesRepresentativeType =
+                  payload.salesRepresentativeType;
+                try {
+                  await collectionApi.assignCustomer({
+                    customerId: created.id,
+                    salesRepresentativeId: payload.salesRepresentativeId,
+                    assignmentType:
+                      payload.salesRepresentativeType || "Primary",
+                  });
+                } catch (assignErr) {
+                  console.warn("Assign sales rep on create failed:", assignErr);
+                }
+                assignCustomerSalesRep(
+                  created.id,
+                  payload.salesRepresentativeId,
+                  payload.salesRepresentativeType || "Primary",
+                  undefined,
+                  undefined,
+                  payload.salesRepresentativeName,
+                );
+              }
+              saveCustomer(created);
+              setLiveCustomers((prev) => [created, ...prev]);
+              customerAssignmentsCacheRef.current = null;
+              toast.success(
+                `Customer ${created.name} registered successfully via Commerce API.`,
+              );
+              store.dispatch(
+                baseApi.util.invalidateTags([
+                  { type: "Customer", id: "LIST" },
+                  { type: "Customer", id: created.id },
+                  "SalesRepresentative",
+                  "Dashboard",
+                ]),
+              );
+              setIsFormModalOpen(false);
+              setIsDuplicateModalOpen(false);
+              setPendingSavePayload(null);
+              return;
+            }
+          } catch (apiErr: any) {
+            const errorCode =
+              apiErr?.response?.data?.error?.code ||
+              apiErr?.response?.data?.code;
+            const errorMsg =
+              apiErr?.response?.data?.error?.message ||
+              apiErr?.response?.data?.message ||
+              apiErr?.message ||
+              "";
 
-          if (mapCustomerApiFieldErrors(apiErr)) {
-            setIsDuplicateModalOpen(false);
+            const isDuplicateCode =
+              errorCode === "DUPLICATE_CUSTOMER_CODE" ||
+              errorMsg.toLowerCase().includes("customer code already exists");
+
+            if (isDuplicateCode) {
+              setError("customerCode", {
+                type: "manual",
+                message:
+                  "Could not generate a unique customer code. Please try again.",
+              });
+              toast.error(
+                "Could not generate a unique customer code. Please try again.",
+              );
+              return;
+            }
+
+            if (mapCustomerApiFieldErrors(apiErr)) {
+              setIsDuplicateModalOpen(false);
+              return;
+            }
+            toast.error(
+              getApiErrorMessage(
+                apiErr,
+                "We could not register the customer. Please try again.",
+              ),
+            );
             return;
           }
-          toast.error(getApiErrorMessage(apiErr, "We could not register the customer. Please try again."));
-          return;
         }
+      } finally {
+        setIsSubmitting(false);
       }
-    } finally {
-      setIsSubmitting(false);
-    }
-  });
+    });
 
   const handleUpdateCustomerStatus = (
     target: SalesCustomer,
     newStatus: CustomerStatus,
-  ) => customerStatusGuard.runOnce(async () => {
-    if (!target?.id || !["Active", "Inactive", "Blocked"].includes(newStatus)) {
-      toast.error("Please choose a valid customer status.");
-      return;
-    }
-    try {
-      await customerApi.patchCustomer(target.id, { status: newStatus });
-      toast.success(`Customer ${target.name} set to ${newStatus}.`);
-      updateCustomerStatus(target.id, newStatus);
-      setLiveCustomers((prev) =>
-        prev.map((c) => (c.id === target.id ? { ...c, status: newStatus } : c)),
-      );
-      store.dispatch(
-        baseApi.util.invalidateTags([
-          { type: "Customer", id: "LIST" },
-          { type: "Customer", id: target.id },
-          "SalesRepresentative",
-          "Dashboard",
-        ]),
-      );
-      if (selectedCustomer && selectedCustomer.id === target.id) {
-        setSelectedCustomer((prev) =>
-          prev ? { ...prev, status: newStatus } : null,
+  ) =>
+    customerStatusGuard.runOnce(async () => {
+      if (
+        !target?.id ||
+        !["Active", "Inactive", "Blocked"].includes(newStatus)
+      ) {
+        toast.error("Please choose a valid customer status.");
+        return;
+      }
+      try {
+        await customerApi.patchCustomer(target.id, { status: newStatus });
+        toast.success(`Customer ${target.name} set to ${newStatus}.`);
+        updateCustomerStatus(target.id, newStatus);
+        setLiveCustomers((prev) =>
+          prev.map((c) =>
+            c.id === target.id ? { ...c, status: newStatus } : c,
+          ),
+        );
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Customer", id: "LIST" },
+            { type: "Customer", id: target.id },
+            "SalesRepresentative",
+            "Dashboard",
+          ]),
+        );
+        if (selectedCustomer && selectedCustomer.id === target.id) {
+          setSelectedCustomer((prev) =>
+            prev ? { ...prev, status: newStatus } : null,
+          );
+        }
+      } catch (apiErr: any) {
+        toast.error(
+          getApiErrorMessage(
+            apiErr,
+            "We could not update the customer status. Please try again.",
+          ),
         );
       }
-    } catch (apiErr: any) {
-      toast.error(getApiErrorMessage(apiErr, "We could not update the customer status. Please try again."));
-    }
-  });
+    });
 
   const handleOpenDeleteModal = (target: SalesCustomer) => {
     setDeleteTargetCustomer(target);
@@ -1750,42 +1894,49 @@ export const CustomerView: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDeleteCustomer = () => customerDeleteGuard.runOnce(async () => {
-    if (!deleteTargetCustomer?.id) return;
-    setIsDeletingCustomer(true);
-    setDeleteCustomerError(null);
-    try {
-      await customerApi.deleteCustomer(deleteTargetCustomer.id);
-      toast.success(
-        `Customer "${deleteTargetCustomer.name}" deleted successfully.`,
-      );
-      customerAssignmentsCacheRef.current = null;
-      deleteCustomer(deleteTargetCustomer.id);
-      setLiveCustomers((prev) =>
-        prev.filter((c) => c.id !== deleteTargetCustomer.id),
-      );
-      store.dispatch(
-        baseApi.util.invalidateTags([
-          { type: "Customer", id: "LIST" },
-          { type: "Customer", id: deleteTargetCustomer.id },
-          "SalesRepresentative",
-          "Dashboard",
-        ]),
-      );
-      if (selectedCustomer && selectedCustomer.id === deleteTargetCustomer.id) {
-        setIsDetailModalOpen(false);
-        setSelectedCustomer(null);
+  const handleConfirmDeleteCustomer = () =>
+    customerDeleteGuard.runOnce(async () => {
+      if (!deleteTargetCustomer?.id) return;
+      setIsDeletingCustomer(true);
+      setDeleteCustomerError(null);
+      try {
+        await customerApi.deleteCustomer(deleteTargetCustomer.id);
+        toast.success(
+          `Customer "${deleteTargetCustomer.name}" deleted successfully.`,
+        );
+        customerAssignmentsCacheRef.current = null;
+        deleteCustomer(deleteTargetCustomer.id);
+        setLiveCustomers((prev) =>
+          prev.filter((c) => c.id !== deleteTargetCustomer.id),
+        );
+        store.dispatch(
+          baseApi.util.invalidateTags([
+            { type: "Customer", id: "LIST" },
+            { type: "Customer", id: deleteTargetCustomer.id },
+            "SalesRepresentative",
+            "Dashboard",
+          ]),
+        );
+        if (
+          selectedCustomer &&
+          selectedCustomer.id === deleteTargetCustomer.id
+        ) {
+          setIsDetailModalOpen(false);
+          setSelectedCustomer(null);
+        }
+        setIsDeleteModalOpen(false);
+        setDeleteTargetCustomer(null);
+      } catch (apiErr: any) {
+        const errMsg = getApiErrorMessage(
+          apiErr,
+          "We could not delete the customer. Please try again.",
+        );
+        setDeleteCustomerError(errMsg);
+        toast.error(errMsg);
+      } finally {
+        setIsDeletingCustomer(false);
       }
-      setIsDeleteModalOpen(false);
-      setDeleteTargetCustomer(null);
-    } catch (apiErr: any) {
-      const errMsg = getApiErrorMessage(apiErr, "We could not delete the customer. Please try again.");
-      setDeleteCustomerError(errMsg);
-      toast.error(errMsg);
-    } finally {
-      setIsDeletingCustomer(false);
-    }
-  });
+    });
 
   // Filtered and Paginated Customers
   const filteredCustomers = useMemo(() => {
@@ -2514,7 +2665,11 @@ export const CustomerView: React.FC = () => {
                 { label: "CONTACT INFO", align: "left", minWidth: "160px" },
                 { label: "TOTAL SALES", align: "right", minWidth: "120px" },
                 { label: "AMOUNT PAID", align: "right", minWidth: "130px" },
-                { label: "AMOUNT PAID DATE", align: "center", minWidth: "120px" },
+                {
+                  label: "AMOUNT PAID DATE",
+                  align: "center",
+                  minWidth: "120px",
+                },
                 { label: "OUTSTANDING", align: "right", minWidth: "120px" },
                 { label: "CREDIT LIMIT", align: "left", minWidth: "120px" },
                 { label: "STATUS", align: "center", minWidth: "110px" },
@@ -2694,7 +2849,9 @@ export const CustomerView: React.FC = () => {
                             );
                           }
                           const d = new Date(pDate);
-                          const formatted = !isNaN(d.getTime()) ? formatDate(d) : pDate;
+                          const formatted = !isNaN(d.getTime())
+                            ? formatDate(d)
+                            : pDate;
                           return (
                             <span
                               className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700"
@@ -2763,8 +2920,6 @@ export const CustomerView: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="inline-flex items-center justify-center gap-1">
-                          
-
                           {/* 3. 3-Dots Floating Menu Button */}
                           <SaleActionDropdown
                             items={[
@@ -2784,10 +2939,15 @@ export const CustomerView: React.FC = () => {
                                 hidden: Boolean(
                                   (cust.salesRepresentativeId &&
                                     cust.salesRepresentativeId.trim() !== "" &&
-                                    cust.salesRepresentativeId.trim().toLowerCase() !== "unassigned") ||
-                                    (cust.salesRepresentativeName &&
-                                      cust.salesRepresentativeName.trim() !== "" &&
-                                      cust.salesRepresentativeName.trim().toLowerCase() !== "unassigned"),
+                                    cust.salesRepresentativeId
+                                      .trim()
+                                      .toLowerCase() !== "unassigned") ||
+                                  (cust.salesRepresentativeName &&
+                                    cust.salesRepresentativeName.trim() !==
+                                      "" &&
+                                    cust.salesRepresentativeName
+                                      .trim()
+                                      .toLowerCase() !== "unassigned"),
                                 ),
                                 onClick: () => handleOpenChangeRepModal(cust),
                               },
@@ -2915,7 +3075,8 @@ export const CustomerView: React.FC = () => {
                   <input
                     type="text"
                     {...register("name", {
-                      validate: (val) => checkRequiredText(val, "customer name", 2) || true,
+                      validate: (val) =>
+                        checkRequiredText(val, "customer name", 2) || true,
                     })}
                     placeholder="e.g. Marcus Vance or Acme Corp"
                     className={
@@ -2952,6 +3113,15 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
+                  <FormLabel>Account Status</FormLabel>
+                  <select {...register("status")} className={FORM_SELECT_CLS}>
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                    <option value="Blocked">Blocked</option>
+                  </select>
+                </div>
+
+                <div>
                   <FormLabel>Sales Representative</FormLabel>
                   <SalesRepSearchableSelect
                     value={watch("salesRepresentativeId")}
@@ -2969,66 +3139,26 @@ export const CustomerView: React.FC = () => {
                   <FormError message={errors.salesRepresentativeId?.message} />
                 </div>
 
-                <div>
-                  <FormLabel required>Primary Phone</FormLabel>
-                  <input
-                    type="tel"
-                    maxLength={10}
-                    {...register("phone", {
-                      validate: (val) =>
-                        checkPhone(val, isValidIndianPhone, true) || true,
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = normalizeIndianPhoneTo10Digits(
-                        e.currentTarget.value,
-                      );
-                    }}
-                    placeholder="e.g. 9876543210"
-                    className={
-                      errors.phone ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                    }
-                  />
-                  {errors.phone && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.phone.message}</span>
-                    </p>
-                  )}
-                </div>
+                <PhoneField
+                  label="Primary Phone"
+                  required
+                  value={watch("phone") || ""}
+                  error={errors.phone?.message as string | undefined}
+                  placeholder="e.g. 9876543210"
+                  onChange={(v) => setValue("phone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+                />
+
+                <PhoneField
+                  label="WhatsApp Number"
+                  required
+                  value={watch("alternatePhone") || ""}
+                  error={errors.alternatePhone?.message as string | undefined}
+                  placeholder="e.g. 9876543211"
+                  onChange={(v) => setValue("alternatePhone" as any, v as any, { shouldDirty: true, shouldValidate: true })}
+                />
 
                 <div>
-                  <FormLabel>Alternate Phone</FormLabel>
-                  <input
-                    type="tel"
-                    maxLength={10}
-                    {...register("alternatePhone", {
-                      validate: (val) =>
-                        checkPhone(val, isValidIndianPhone) || true,
-                    })}
-                    onKeyDown={handleNumberOnlyKeyDown}
-                    onInput={(e) => {
-                      e.currentTarget.value = normalizeIndianPhoneTo10Digits(
-                        e.currentTarget.value,
-                      );
-                    }}
-                    placeholder="e.g. 9876543211"
-                    className={
-                      errors.alternatePhone
-                        ? FORM_INPUT_ERROR_CLS
-                        : FORM_INPUT_CLS
-                    }
-                  />
-                  {errors.alternatePhone && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.alternatePhone.message}</span>
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <FormLabel>Email Address (Optional)</FormLabel>
+                  <FormLabel required>Email Address</FormLabel>
                   <input
                     type="email"
                     {...register("email", {
@@ -3056,15 +3186,6 @@ export const CustomerView: React.FC = () => {
                     <option value="Other">Other</option>
                   </select>
                 </div>
-
-                <div>
-                  <FormLabel>Account Status</FormLabel>
-                  <select {...register("status")} className={FORM_SELECT_CLS}>
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                    <option value="Blocked">Blocked</option>
-                  </select>
-                </div>
               </div>
             </div>
 
@@ -3078,9 +3199,9 @@ export const CustomerView: React.FC = () => {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 pt-1">
                 <div className="sm:col-span-4">
-                  <FormLabel>Street Address</FormLabel>
-                  <input
-                    type="text"
+                  <FormLabel>Address</FormLabel>
+                  <textarea
+                    rows={3}
                     {...register("address")}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -3095,67 +3216,54 @@ export const CustomerView: React.FC = () => {
                   />
                 </div>
 
-                <div>
-                  <FormLabel>City</FormLabel>
-                  <input
-                    type="text"
-                    {...register("city")}
-                    placeholder="e.g. Chennai"
-                    className={
-                      errors.city ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
+                <LocationFields
+                  country={watch("country") || ""}
+                  state={watch("state") || ""}
+                  district={locationDistrict}
+                  city={watch("city") || ""}
+                  onMeta={setLocationMeta}
+                  errors={{
+                    country: errors.country?.message as string | undefined,
+                    state: errors.state?.message as string | undefined,
+                    district: districtError,
+                    city: errors.city?.message as string | undefined,
+                  }}
+                  onChange={(patch) => {
+                    setLocationIds((prev) => ({
+                      countryId: patch.countryId !== undefined ? patch.countryId : prev.countryId,
+                      stateId: patch.stateId !== undefined ? patch.stateId : prev.stateId,
+                      districtId: patch.districtId !== undefined ? patch.districtId : prev.districtId,
+                      cityId: patch.cityId !== undefined ? patch.cityId : prev.cityId,
+                    }));
+                    if (patch.country !== undefined)
+                      setValue("country", patch.country, {
+                        shouldDirty: true,
+                        shouldValidate: isSubmitted,
+                      });
+                    if (patch.state !== undefined)
+                      setValue("state", patch.state, {
+                        shouldDirty: true,
+                        shouldValidate: isSubmitted,
+                      });
+                    if (patch.district !== undefined) {
+                      setLocationDistrict(patch.district);
+                      setDistrictError(undefined);
                     }
-                  />
-                  {errors.city && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.city.message}</span>
-                    </p>
-                  )}
-                </div>
+                    if (patch.city !== undefined)
+                      setValue("city", patch.city, {
+                        shouldDirty: true,
+                        shouldValidate: isSubmitted,
+                      });
+                  }}
+                />
 
                 <div>
-                  <FormLabel>State</FormLabel>
-                  <input
-                    type="text"
-                    {...register("state")}
-                    placeholder="e.g. Tamil Nadu"
-                    className={
-                      errors.state ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                    }
-                  />
-                  {errors.state && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.state.message}</span>
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <FormLabel>Country</FormLabel>
-                  <input
-                    type="text"
-                    {...register("country")}
-                    placeholder="e.g. India"
-                    className={
-                      errors.country ? FORM_INPUT_ERROR_CLS : FORM_INPUT_CLS
-                    }
-                  />
-                  {errors.country && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.country.message}</span>
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <FormLabel>Pincode / ZIP</FormLabel>
+                  <FormLabel required>Pincode / ZIP</FormLabel>
                   <input
                     type="text"
                     maxLength={6}
                     {...register("pincode", {
-                      validate: (val) => checkPincode(val) || true,
+                      validate: (val) => checkPincode(val, true) || true,
                     })}
                     onKeyDown={handleNumberOnlyKeyDown}
                     onInput={(e) => {
@@ -3188,7 +3296,7 @@ export const CustomerView: React.FC = () => {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                 <div>
-                  <FormLabel>GSTIN (GST Number)</FormLabel>
+                  <FormLabel required>GSTIN (GST Number)</FormLabel>
                   <input
                     type="text"
                     maxLength={15}
@@ -3211,7 +3319,7 @@ export const CustomerView: React.FC = () => {
                 </div>
 
                 <div>
-                  <FormLabel>PAN Number</FormLabel>
+                  <FormLabel required>PAN Number</FormLabel>
                   <input
                     type="text"
                     maxLength={10}
@@ -3304,7 +3412,10 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("creditLimit", {
                       validate: (val) =>
-                        checkMoney(val, "credit limit", { allowZero: true, optional: true }) || true,
+                        checkMoney(val, "credit limit", {
+                          allowZero: true,
+                          optional: true,
+                        }) || true,
                     })}
                     onKeyDown={handleNumberOnlyKeyDown}
                     onInput={(e) => {
@@ -3350,7 +3461,10 @@ export const CustomerView: React.FC = () => {
                     type="text"
                     {...register("openingBalance", {
                       validate: (val) =>
-                        checkMoney(val, "existing outstanding amount", { allowZero: true, optional: true }) || true,
+                        checkMoney(val, "existing outstanding amount", {
+                          allowZero: true,
+                          optional: true,
+                        }) || true,
                     })}
                     onKeyDown={handleNumberOnlyKeyDown}
                     onInput={(e) => {
@@ -3474,7 +3588,8 @@ export const CustomerView: React.FC = () => {
                     {dup.name}
                   </p>
                   <p className="text-[11px] text-slate-500 font-mono">
-                    {dup.customerCode} • {dup.phone}{dup.email ? ` • ${dup.email}` : ""}
+                    {dup.customerCode} • {dup.phone}
+                    {dup.email ? ` • ${dup.email}` : ""}
                   </p>
                   {dup.company && (
                     <p className="text-[11px] text-slate-400">{dup.company}</p>
@@ -3595,8 +3710,12 @@ export const CustomerView: React.FC = () => {
                         • {selectedCustomer.company}
                       </span>
                     )}
-                    {selectedCustomer.phone && <span>• {selectedCustomer.phone}</span>}
-                    {selectedCustomer.email && <span>• {selectedCustomer.email}</span>}
+                    {selectedCustomer.phone && (
+                      <span>• {selectedCustomer.phone}</span>
+                    )}
+                    {selectedCustomer.email && (
+                      <span>• {selectedCustomer.email}</span>
+                    )}
                     {selectedCustomerCollectionData?.rep && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-900/40 text-[#4309A2] dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
                         <UserCheck className="w-3 h-3 text-[#4309A2]" />
@@ -4035,7 +4154,7 @@ export const CustomerView: React.FC = () => {
                       {selectedCustomer.alternatePhone && (
                         <div className="flex justify-between py-1.5">
                           <span className="text-slate-500">
-                            Alternate Phone:
+                            WhatsApp Number:
                           </span>
                           <span className="font-semibold text-slate-800 dark:text-slate-200">
                             {selectedCustomer.alternatePhone}
@@ -4225,110 +4344,110 @@ export const CustomerView: React.FC = () => {
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
-                    <table className="w-full min-w-[620px] text-left text-xs">
-                      <thead className="bg-[#33077C] text-white font-bold uppercase text-[10px] tracking-wider">
-                        <tr>
-                          <th className="py-2.5 px-3">Invoice No</th>
-                          <th className="py-2.5 px-3">Date</th>
-                          <th className="py-2.5 px-3">Due Date</th>
-                          <th className="py-2.5 px-3 text-right">
-                            Invoice Total
-                          </th>
-                          <th className="py-2.5 px-3 text-right">
-                            Paid Amount
-                          </th>
-                          <th className="py-2.5 px-3 text-right">
-                            Outstanding
-                          </th>
-                          <th className="py-2.5 px-3 text-center">Status</th>
-                          <th className="py-2.5 px-3 text-center">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                        {selectedCustomerSales.map((s) => {
-                          const todayStr = "2026-10-08";
-                          const paidAmt = s.paidAmount || 0;
-                          const outstanding =
-                            s.balance ??
-                            Math.max(0, (s.grandTotal || 0) - paidAmt);
-                          let statusLabel = "Paid";
-                          let statusClass =
-                            "bg-emerald-100 text-emerald-700 border-emerald-200";
+                      <table className="w-full min-w-[620px] text-left text-xs">
+                        <thead className="bg-[#33077C] text-white font-bold uppercase text-[10px] tracking-wider">
+                          <tr>
+                            <th className="py-2.5 px-3">Invoice No</th>
+                            <th className="py-2.5 px-3">Date</th>
+                            <th className="py-2.5 px-3">Due Date</th>
+                            <th className="py-2.5 px-3 text-right">
+                              Invoice Total
+                            </th>
+                            <th className="py-2.5 px-3 text-right">
+                              Paid Amount
+                            </th>
+                            <th className="py-2.5 px-3 text-right">
+                              Outstanding
+                            </th>
+                            <th className="py-2.5 px-3 text-center">Status</th>
+                            <th className="py-2.5 px-3 text-center">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                          {selectedCustomerSales.map((s) => {
+                            const todayStr = "2026-10-08";
+                            const paidAmt = s.paidAmount || 0;
+                            const outstanding =
+                              s.balance ??
+                              Math.max(0, (s.grandTotal || 0) - paidAmt);
+                            let statusLabel = "Paid";
+                            let statusClass =
+                              "bg-emerald-100 text-emerald-700 border-emerald-200";
 
-                          if (outstanding > 0) {
-                            if (s.dueDate && s.dueDate < todayStr) {
-                              statusLabel = "Overdue";
-                              statusClass =
-                                "bg-rose-100 text-rose-700 border-rose-200";
-                            } else if (s.dueDate && s.dueDate === todayStr) {
-                              statusLabel = "Due Today";
-                              statusClass =
-                                "bg-amber-100 text-amber-700 border-amber-200";
-                            } else {
-                              statusLabel = "Upcoming";
-                              statusClass =
-                                "bg-blue-100 text-blue-700 border-blue-200";
+                            if (outstanding > 0) {
+                              if (s.dueDate && s.dueDate < todayStr) {
+                                statusLabel = "Overdue";
+                                statusClass =
+                                  "bg-rose-100 text-rose-700 border-rose-200";
+                              } else if (s.dueDate && s.dueDate === todayStr) {
+                                statusLabel = "Due Today";
+                                statusClass =
+                                  "bg-amber-100 text-amber-700 border-amber-200";
+                              } else {
+                                statusLabel = "Upcoming";
+                                statusClass =
+                                  "bg-blue-100 text-blue-700 border-blue-200";
+                              }
                             }
-                          }
 
-                          return (
-                            <tr
-                              key={s.id}
-                              className="hover:bg-slate-50 dark:hover:bg-slate-800/60"
-                            >
-                              <td className="py-2.5 px-3 font-mono font-bold text-[#33077C] dark:text-purple-300">
-                                {s.invoiceNo}
-                              </td>
-                              <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                                {formatDate(s.saleDate)}
-                              </td>
-                              <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                                {s.dueDate || "N/A"}
-                              </td>
-                              <td className="py-2.5 px-3 text-right font-medium text-slate-800 dark:text-slate-200">
-                                ₹
-                                {(s.grandTotal || 0).toLocaleString("en-IN", {
-                                  minimumFractionDigits: 2,
-                                })}
-                              </td>
-                              <td className="py-2.5 px-3 text-right text-emerald-600 font-medium">
-                                ₹
-                                {paidAmt.toLocaleString("en-IN", {
-                                  minimumFractionDigits: 2,
-                                })}
-                              </td>
-                              <td className="py-2.5 px-3 text-right font-bold text-rose-600">
-                                ₹
-                                {outstanding.toLocaleString("en-IN", {
-                                  minimumFractionDigits: 2,
-                                })}
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                <span
-                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusClass}`}
-                                >
-                                  {statusLabel}
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsDetailModalOpen(false);
-                                    navigate(
-                                      `/sale-management/sales/collections?search=${encodeURIComponent(s.invoiceNo)}`,
-                                    );
-                                  }}
-                                  className="px-2 py-1 rounded bg-purple-50 hover:bg-purple-100 text-[#33077C] font-semibold text-[11px] border border-purple-200 transition-colors cursor-pointer"
-                                >
-                                  {outstanding > 0 ? "Collect" : "View"}
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                            return (
+                              <tr
+                                key={s.id}
+                                className="hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                              >
+                                <td className="py-2.5 px-3 font-mono font-bold text-[#33077C] dark:text-purple-300">
+                                  {s.invoiceNo}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                                  {formatDate(s.saleDate)}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                                  {s.dueDate || "N/A"}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-medium text-slate-800 dark:text-slate-200">
+                                  ₹
+                                  {(s.grandTotal || 0).toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                  })}
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-emerald-600 font-medium">
+                                  ₹
+                                  {paidAmt.toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                  })}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold text-rose-600">
+                                  ₹
+                                  {outstanding.toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                  })}
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusClass}`}
+                                  >
+                                    {statusLabel}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsDetailModalOpen(false);
+                                      navigate(
+                                        `/sale-management/sales/collections?search=${encodeURIComponent(s.invoiceNo)}`,
+                                      );
+                                    }}
+                                    className="px-2 py-1 rounded bg-purple-50 hover:bg-purple-100 text-[#33077C] font-semibold text-[11px] border border-purple-200 transition-colors cursor-pointer"
+                                  >
+                                    {outstanding > 0 ? "Collect" : "View"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
@@ -5415,11 +5534,20 @@ export const CustomerView: React.FC = () => {
               <p className="text-slate-600 dark:text-slate-300 text-xs mt-1">
                 Expected CSV headers:{" "}
                 <code className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/50 text-[#33077C] dark:text-purple-300 font-mono text-[11px] break-all sm:break-normal">
-                  customer_code, full_name*, mobile_number*, alternate_mobile, email, date_of_birth, gender, occupation, status
+                  customer_code, full_name*, mobile_number*, alternate_mobile,
+                  email, date_of_birth, gender, occupation, status
                 </code>
               </p>
               <p className="text-slate-500 dark:text-slate-400 text-[11px] mt-1">
-                Required fields: <strong className="text-slate-700 dark:text-slate-200">full_name</strong> and <strong className="text-slate-700 dark:text-slate-200">mobile_number</strong>. Max file size: 5 MB.
+                Required fields:{" "}
+                <strong className="text-slate-700 dark:text-slate-200">
+                  full_name
+                </strong>{" "}
+                and{" "}
+                <strong className="text-slate-700 dark:text-slate-200">
+                  mobile_number
+                </strong>
+                . Max file size: 5 MB.
               </p>
             </div>
             <button
@@ -5440,8 +5568,8 @@ export const CustomerView: React.FC = () => {
                   bulkUploadResult.failed === 0
                     ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-100"
                     : bulkUploadResult.created > 0
-                    ? "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-100"
-                    : "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-100"
+                      ? "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-100"
+                      : "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-100"
                 }`}
               >
                 {bulkUploadResult.failed === 0 ? (
@@ -5454,8 +5582,8 @@ export const CustomerView: React.FC = () => {
                     {bulkUploadResult.failed === 0
                       ? "Bulk Upload Completed Successfully!"
                       : bulkUploadResult.created > 0
-                      ? "Bulk Upload Completed with Warnings"
-                      : "Bulk Upload Failed"}
+                        ? "Bulk Upload Completed with Warnings"
+                        : "Bulk Upload Failed"}
                   </h4>
                   <p className="text-xs mt-0.5 opacity-90">
                     {bulkUploadResult.failed === 0
@@ -5494,41 +5622,49 @@ export const CustomerView: React.FC = () => {
               </div>
 
               {/* Errors Breakdown Table if any */}
-              {bulkUploadResult.errors && bulkUploadResult.errors.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                      <span>Row-Level Errors ({bulkUploadResult.errors.length})</span>
-                    </span>
-                    <span className="text-[11px] text-slate-400">
-                      Fix these rows in your CSV and re-upload
-                    </span>
-                  </div>
-                  <div className="max-h-56 overflow-auto rounded-xl border border-rose-200 dark:border-rose-900/60">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead className="bg-rose-100/60 dark:bg-rose-950/60 text-rose-800 dark:text-rose-200 sticky top-0 z-10 font-bold uppercase text-[10px]">
-                        <tr>
-                          <th className="py-2 px-3 text-center w-16">CSV Row</th>
-                          <th className="py-2 px-3">Validation Message</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40 bg-white dark:bg-slate-900">
-                        {bulkUploadResult.errors.map((err, i) => (
-                          <tr key={i} className="hover:bg-rose-50/50 dark:hover:bg-rose-950/20">
-                            <td className="py-2 px-3 text-center font-mono font-bold text-rose-600 text-xs">
-                              #{err.row}
-                            </td>
-                            <td className="py-2 px-3 text-rose-700 dark:text-rose-300 font-medium">
-                              {err.message}
-                            </td>
+              {bulkUploadResult.errors &&
+                bulkUploadResult.errors.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>
+                          Row-Level Errors ({bulkUploadResult.errors.length})
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Fix these rows in your CSV and re-upload
+                      </span>
+                    </div>
+                    <div className="max-h-56 overflow-auto rounded-xl border border-rose-200 dark:border-rose-900/60">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="bg-rose-100/60 dark:bg-rose-950/60 text-rose-800 dark:text-rose-200 sticky top-0 z-10 font-bold uppercase text-[10px]">
+                          <tr>
+                            <th className="py-2 px-3 text-center w-16">
+                              CSV Row
+                            </th>
+                            <th className="py-2 px-3">Validation Message</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40 bg-white dark:bg-slate-900">
+                          {bulkUploadResult.errors.map((err, i) => (
+                            <tr
+                              key={i}
+                              className="hover:bg-rose-50/50 dark:hover:bg-rose-950/20"
+                            >
+                              <td className="py-2 px-3 text-center font-mono font-bold text-rose-600 text-xs">
+                                #{err.row}
+                              </td>
+                              <td className="py-2 px-3 text-rose-700 dark:text-rose-300 font-medium">
+                                {err.message}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Action Buttons for Results */}
               <div className="pt-3 flex flex-wrap justify-end items-center gap-2.5 border-t border-slate-100 dark:border-slate-800">
@@ -5623,27 +5759,35 @@ export const CustomerView: React.FC = () => {
               {bulkFileError && <FormError message={bulkFileError} />}
 
               {/* All row errors together, shown only after the user attempts the upload */}
-              {bulkSubmitAttempted && bulkParsedCustomers.some((r) => !r.isValid) && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50 dark:bg-rose-950/30 p-3 space-y-1.5" role="alert">
-                  <p className="flex items-center gap-1.5 text-[11px] font-bold text-rose-600">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>
-                      {bulkParsedCustomers.filter((r) => !r.isValid).length} row
-                      {bulkParsedCustomers.filter((r) => !r.isValid).length > 1 ? "s have" : " has"} errors. Please
-                      correct the CSV and select it again.
-                    </span>
-                  </p>
-                  <ul className="max-h-32 overflow-auto space-y-0.5 text-[11px] text-rose-600 font-medium">
-                    {bulkParsedCustomers
-                      .filter((r) => !r.isValid)
-                      .map((r) => (
-                        <li key={r.rowNumber}>
-                          Row {r.rowNumber}: {r.errors.join(", ")}
-                        </li>
-                      ))}
-                  </ul>
-                </div>
-              )}
+              {bulkSubmitAttempted &&
+                bulkParsedCustomers.some((r) => !r.isValid) && (
+                  <div
+                    className="rounded-xl border border-rose-200 bg-rose-50 dark:bg-rose-950/30 p-3 space-y-1.5"
+                    role="alert"
+                  >
+                    <p className="flex items-center gap-1.5 text-[11px] font-bold text-rose-600">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {bulkParsedCustomers.filter((r) => !r.isValid).length}{" "}
+                        row
+                        {bulkParsedCustomers.filter((r) => !r.isValid).length >
+                        1
+                          ? "s have"
+                          : " has"}{" "}
+                        errors. Please correct the CSV and select it again.
+                      </span>
+                    </p>
+                    <ul className="max-h-32 overflow-auto space-y-0.5 text-[11px] text-rose-600 font-medium">
+                      {bulkParsedCustomers
+                        .filter((r) => !r.isValid)
+                        .map((r) => (
+                          <li key={r.rowNumber}>
+                            Row {r.rowNumber}: {r.errors.join(", ")}
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
 
               {/* Parsed Summary Counters */}
               {bulkParsedCustomers.length > 0 && (
@@ -5661,7 +5805,9 @@ export const CustomerView: React.FC = () => {
                       Ready to Upload
                     </div>
                     <div className="text-xl font-black text-emerald-600 mt-0.5">
-                      {bulkSubmitAttempted ? bulkParsedCustomers.filter((c) => c.isValid).length : "-"}
+                      {bulkSubmitAttempted
+                        ? bulkParsedCustomers.filter((c) => c.isValid).length
+                        : "-"}
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-center">
@@ -5669,7 +5815,9 @@ export const CustomerView: React.FC = () => {
                       Needs Attention
                     </div>
                     <div className="text-xl font-black text-rose-600 mt-0.5">
-                      {bulkSubmitAttempted ? bulkParsedCustomers.filter((c) => !c.isValid).length : "-"}
+                      {bulkSubmitAttempted
+                        ? bulkParsedCustomers.filter((c) => !c.isValid).length
+                        : "-"}
                     </div>
                   </div>
                 </div>
@@ -5691,7 +5839,9 @@ export const CustomerView: React.FC = () => {
                       <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 sticky top-0 z-10 font-bold uppercase text-[10px]">
                         <tr>
                           <th className="py-2 px-2.5 text-center w-10">#</th>
-                          <th className="py-2 px-2.5 text-center w-16">Status</th>
+                          <th className="py-2 px-2.5 text-center w-16">
+                            Status
+                          </th>
                           <th className="py-2 px-3">Customer Code</th>
                           <th className="py-2 px-3">Full Name</th>
                           <th className="py-2 px-3">Mobile</th>
@@ -5719,7 +5869,9 @@ export const CustomerView: React.FC = () => {
                             </td>
                             <td className="py-2 px-2.5 text-center">
                               {!bulkSubmitAttempted ? (
-                                <span className="text-[10px] font-bold text-slate-400">-</span>
+                                <span className="text-[10px] font-bold text-slate-400">
+                                  -
+                                </span>
                               ) : row.isValid ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-200">
                                   <CheckCircle2 className="w-3 h-3 text-emerald-600" />
@@ -5733,16 +5885,24 @@ export const CustomerView: React.FC = () => {
                               )}
                             </td>
                             <td className="py-2 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                              {row.customerCode || <span className="text-slate-400 italic">Auto</span>}
+                              {row.customerCode || (
+                                <span className="text-slate-400 italic">
+                                  Auto
+                                </span>
+                              )}
                             </td>
                             <td className="py-2 px-3 font-medium text-slate-900 dark:text-white">
                               {row.fullName || (
-                                <span className="italic text-rose-400">Missing</span>
+                                <span className="italic text-rose-400">
+                                  Missing
+                                </span>
                               )}
                             </td>
                             <td className="py-2 px-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
                               {row.mobileNumber || (
-                                <span className="italic text-rose-400">Missing</span>
+                                <span className="italic text-rose-400">
+                                  Missing
+                                </span>
                               )}
                             </td>
                             <td className="py-2 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
@@ -5788,14 +5948,17 @@ export const CustomerView: React.FC = () => {
                   <div className="flex items-center justify-between text-xs font-bold text-[#33077C] dark:text-purple-300">
                     <div className="flex items-center gap-2">
                       <Loader2 className="w-4 h-4 animate-spin text-[#33077C] dark:text-purple-300" />
-                      <span>Uploading & Processing CSV via Commerce API...</span>
+                      <span>
+                        Uploading & Processing CSV via Commerce API...
+                      </span>
                     </div>
                   </div>
                   <div className="w-full bg-purple-200 dark:bg-purple-900/60 h-2 rounded-full overflow-hidden">
                     <div className="bg-[#33077C] dark:bg-purple-400 h-full w-2/3 animate-pulse" />
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Validating headers, organization isolation, and phone uniqueness...
+                    Validating headers, organization isolation, and phone
+                    uniqueness...
                   </div>
                 </div>
               )}
@@ -5829,9 +5992,7 @@ export const CustomerView: React.FC = () => {
                   ) : (
                     <>
                       <Upload className="w-4 h-4 stroke-[2.5]" />
-                      <span>
-                        Upload Customers to Commerce API
-                      </span>
+                      <span>Upload Customers to Commerce API</span>
                     </>
                   )}
                 </button>

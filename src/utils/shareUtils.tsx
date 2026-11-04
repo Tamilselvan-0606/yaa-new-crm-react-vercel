@@ -166,7 +166,7 @@ export const formatInvoiceShare = (sale: any): SharePayload => {
     `Best regards,\nYAA Sales Team`;
 
   const whatsAppText =
-    `*YAA SALES & MART - INVOICE*\n` +
+    `*INVOICE*\n` +
     `--------------------------------\n` +
     `*Invoice #:* ${invoiceNo}\n` +
     `*Customer:* ${customerName}\n` +

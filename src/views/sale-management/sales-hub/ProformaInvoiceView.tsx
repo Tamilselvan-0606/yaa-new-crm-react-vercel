@@ -1579,7 +1579,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   };
 
   // Switch to Form Mode for Editing Proforma
-  const handleOpenEditForm = (proforma: SaleProformaInvoice) => {
+  const handleOpenEditForm = async (listProforma: SaleProformaInvoice) => {
+    let proforma = listProforma;
+    try {
+      const res = await commerceProformaApi.getProformaById(listProforma.id);
+      if (res?.success && res.data) proforma = mapApiProformaToSaleProforma(res.data);
+    } catch (err) {
+      console.warn("Could not fetch proforma details:", err);
+    }
     const mappedItems: ExtendedProformaItem[] = proforma.items.map((it) => {
       const stockItem = availableProducts.find(
         (s) => s.productId === it.productId || s.productName === it.productName,
@@ -2949,8 +2956,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         : proforma.status === "Cancelled"
           ? "rose"
           : "purple",
-    companyName: companyProfile.companyName || "YAA CREATIONS CRM",
-    companySubtitle: companyProfile.companySubtitle || "Enterprise Sales Hub",
+    companyName: companyProfile.companyName,
+    companySubtitle: companyProfile.companySubtitle,
     companyAddress: companyProfile.companyAddress || undefined,
     companyGstin: companyProfile.companyGstin || undefined,
     companyPhone: companyProfile.companyPhone || undefined,
@@ -5584,13 +5591,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             <div className="flex justify-between items-start border-b border-slate-200 pb-6">
               <div>
                 <h2 className="text-2xl font-black text-[#33077C]">
-                  YAA CREATIONS CRM
+                  {companyProfile.companyName}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  128 Commercial Boulevard, Tech Park, Chennai - 600001
+                  {companyProfile.companyAddress}
                 </p>
                 <p className="text-xs text-slate-500">
-                  GSTIN: 33AAAAA0000A1Z5 | Phone: +91 98765 43210
+                  GSTIN: {companyProfile.companyGstin} | Phone: {companyProfile.companyPhone}
                 </p>
               </div>
               <div className="text-right">
@@ -5744,18 +5751,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             )}
 
             {/* Modal Actions */}
-            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setPreviewProforma(null)}
-                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 whitespace-nowrap justify-center"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => handlePrintProforma(previewProforma)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer whitespace-nowrap justify-center"
               >
                 <Printer className="w-4 h-4 text-slate-600" />
                 <span>Print Proforma</span>
@@ -5764,7 +5771,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 type="button"
                 disabled={isDownloadingPdf}
                 onClick={() => handleDownloadProforma(previewProforma)}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer whitespace-nowrap justify-center"
               >
                 <Download className="w-4 h-4" />
                 <span>Download Proforma</span>

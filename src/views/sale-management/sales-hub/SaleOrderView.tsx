@@ -1,3 +1,4 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
@@ -1371,7 +1372,30 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   };
 
   // Open Edit Form
-  const handleOpenEditForm = (order: SaleOrderRecord) => {
+  // Open the history dialog, then load the latest record (GET /orders/:id)
+  const handleOpenHistory = async (order: SaleOrderRecord) => {
+    setHistoryOrder(order);
+    try {
+      if (order.id) {
+        const res = await commerceSaleOrderApi.getOrderById(order.id);
+        if (res?.success && res.data) {
+          const fresh = mapApiSaleOrderToSaleOrderRecord(res.data);
+          setHistoryOrder((prev) => (prev && prev.id === order.id ? { ...prev, ...fresh } : prev));
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch sale order history:", err);
+    }
+  };
+
+  const handleOpenEditForm = async (listOrder: SaleOrderRecord) => {
+    let order = listOrder;
+    try {
+      const res = await commerceSaleOrderApi.getOrderById(listOrder.id);
+      if (res?.success && res.data) order = mapApiSaleOrderToSaleOrderRecord(res.data);
+    } catch (err) {
+      console.warn("Could not fetch sale order details:", err);
+    }
     loadMasterData();
     const editTabId = `tab-edit-${order.id}`;
     const newTab: SaleOrderTabItem = {
@@ -2308,15 +2332,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             ? "rose"
             : "purple",
     referenceNo: order.referenceNo,
-    companyName: companyProfile.companyName || "YAA CREATIONS CRM",
+    companyName: companyProfile.companyName,
     companySubtitle:
-      companyProfile.companySubtitle || "Commerce & Enterprise Sales Hub",
+      companyProfile.companySubtitle,
     companyAddress:
-      companyProfile.companyAddress ||
-      "128 Commercial Boulevard, Tech Park, Chennai - 600001, Tamil Nadu",
-    companyGstin: companyProfile.companyGstin || "33AAAAA0000A1Z5",
-    companyPhone: companyProfile.companyPhone || "+91 98400 12345",
-    companyEmail: companyProfile.companyEmail || "orders@yaacreations.com",
+      companyProfile.companyAddress,
+    companyGstin: companyProfile.companyGstin,
+    companyPhone: companyProfile.companyPhone,
+    companyEmail: companyProfile.companyEmail,
     partyTitle: "Bill To (Customer Details)",
     partyName: order.partyName,
     partyCompany: order.customerCompany,
@@ -2420,9 +2443,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         <body>
           <div class="header">
             <div>
-              <div class="brand-name">${companyProfile.companyName || "YAA CREATIONS CRM"}</div>
-              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle || "Commerce & Enterprise Sales Hub"}</div>
-              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin || "33AAAAA0000A1Z5"} • Phone: ${companyProfile.companyPhone || "+91 98400 12345"}</div>
+              <div class="brand-name">${companyProfile.companyName}</div>
+              <div style="color: #64748b; font-size: 12px; margin-top: 2px;">${companyProfile.companySubtitle}</div>
+              <div style="color: #475569; font-size: 11px;">GSTIN: ${companyProfile.companyGstin} • Phone: ${companyProfile.companyPhone}</div>
             </div>
             <div>
               <div class="doc-title">SALE ORDER</div>
@@ -4862,7 +4885,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                 {
                                   label: "View History",
                                   variant: "view",
-                                  onClick: () => setHistoryOrder(item),
+                                  onClick: () => handleOpenHistory(item),
                                 },
                                 {
                                   label: "Mark as Cancelled",
@@ -4920,13 +4943,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             <div className="flex justify-between items-start border-b border-slate-200 pb-6">
               <div>
                 <h2 className="text-2xl font-black text-[#33077C]">
-                  YAA CREATIONS CRM
+                  {companyProfile.companyName}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  128 Commercial Boulevard, Tech Park, Chennai - 600001
+                  {companyProfile.companyAddress}
                 </p>
                 <p className="text-xs text-slate-500">
-                  GSTIN: 33AAAAA0000A1Z5 | Phone: +91 98765 43210
+                  GSTIN: {companyProfile.companyGstin} | Phone: {companyProfile.companyPhone}
                 </p>
               </div>
               <div className="text-right">
@@ -5083,18 +5106,18 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
               </div>
             )}
 
-            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setPreviewOrder(null)}
-                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 whitespace-nowrap justify-center"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => handlePrintOrder(previewOrder)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer whitespace-nowrap justify-center"
               >
                 <Printer className="w-4 h-4 text-slate-600" />
                 <span>Print Order</span>
@@ -5103,7 +5126,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 type="button"
                 disabled={isDownloadingPdf}
                 onClick={() => handleDownloadSaleOrder(previewOrder)}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer whitespace-nowrap justify-center"
               >
                 <Download className="w-4 h-4" />
                 <span>Download Order</span>
@@ -5120,123 +5143,48 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           onClose={() => setHistoryOrder(null)}
           title={`Order History - ${historyOrder.orderNo}`}
           maxWidth="md"
+          subtitle="Complete lifecycle progression and timeline audit log"
+          headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryOrder(null)}
         >
-          <div className="p-1 sm:p-2 space-y-4 text-xs font-sans">
-            <div className="p-4 bg-purple-50/60 rounded-2xl border border-purple-100 flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-[#33077C] uppercase tracking-wider">
-                  Order No
-                </div>
-                <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                  {historyOrder.orderNo}
-                </div>
-                <div className="text-xs text-slate-500 font-medium">
-                  {historyOrder.partyName}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Total Amount
-                </div>
-                <div className="text-base font-extrabold text-[#33077C] mt-0.5">
-                  ₹{" "}
-                  {historyOrder.amount.toLocaleString("en-IN", {
-                    minimumFractionDigits: 2,
-                  })}
-                </div>
-                <span
-                  className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    historyOrder.status === "Converted"
-                      ? "bg-emerald-100 text-emerald-700"
-                      : "bg-amber-100 text-amber-700"
-                  }`}
-                >
-                  {historyOrder.status}
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Audit Timeline
-              </div>
-
-              <div className="relative pl-6 space-y-4 border-l-2 border-purple-200 ml-2">
-                {/* Event 1 */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-[#33077C] ring-4 ring-purple-100" />
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      Sale Order Booked
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      Date: {isoToDdmmyyyy(historyOrder.orderDate)} • Due:{" "}
-                      {isoToDdmmyyyy(historyOrder.dueDate)}
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Created by Sales Representative
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 2 */}
-                <div className="relative">
-                  <div
-                    className={`absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full ${
-                      historyOrder.status === "Converted"
-                        ? "bg-emerald-500 ring-4 ring-emerald-100"
-                        : "bg-amber-500 ring-4 ring-amber-100"
-                    }`}
-                  />
-                  <div>
-                    <div className="font-bold text-slate-800">
-                      {historyOrder.status === "Converted"
-                        ? "Converted to Sale Invoice"
-                        : "Order Status: Active / Open"}
-                    </div>
-                    <div className="text-slate-500 text-[11px] mt-0.5">
-                      {historyOrder.convertedToInvoiceNo
-                        ? `Linked Invoice: ${historyOrder.convertedToInvoiceNo}`
-                        : "Awaiting fulfillment / shipment"}
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Timestamp:{" "}
-                      {new Date(
-                        historyOrder.createdAt || Date.now(),
-                      ).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Event 3 */}
-                <div className="relative">
-                  <div className="absolute -left-[31px] top-0.5 w-3.5 h-3.5 rounded-full bg-slate-300 ring-4 ring-slate-100" />
-                  <div>
-                    <div className="font-bold text-slate-700">
-                      Last Verified
-                    </div>
-                    <div className="text-slate-400 text-[10px] mt-0.5">
-                      Updated:{" "}
-                      {new Date(
-                        historyOrder.updatedAt || Date.now(),
-                      ).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-4 border-t border-slate-100">
-              <Button
-                variant="secondary"
-                size="md"
-                type="button"
-                onClick={() => setHistoryOrder(null)}
-              >
-                Close
-              </Button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            eyebrow="Order No"
+            title={historyOrder.orderNo}
+            subtitle={historyOrder.partyName}
+            amount={{ label: "Total Amount", value: `₹${Number(historyOrder.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[{ label: historyOrder.status, tone: historyOrder.status === "Converted" ? "success" : historyOrder.status === "Cancelled" ? "danger" : "warning" }]}
+            facts={[
+              { label: "Order Date", value: isoToDdmmyyyy(historyOrder.orderDate) },
+              { label: "Due Date", value: isoToDdmmyyyy(historyOrder.dueDate) },
+              { label: "Items", value: String(historyOrder.items?.length || 0) },
+              { label: "Payment Type", value: historyOrder.paymentType },
+              { label: "Advance", value: `₹${Number((historyOrder as any).advanceAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: "Linked Invoice", value: historyOrder.convertedToInvoiceNo },
+            ]}
+            events={[
+              {
+                title: "Sale Order Booked",
+                at: historyOrder.createdAt || historyOrder.orderDate,
+                tone: "primary",
+                description: `Order booked for ${historyOrder.partyName}.`,
+                details: [
+                  { label: "Order Date", value: isoToDdmmyyyy(historyOrder.orderDate) },
+                  { label: "Due Date", value: isoToDdmmyyyy(historyOrder.dueDate) },
+                ],
+              },
+              {
+                title: historyOrder.status === "Converted" ? "Converted to Sale Invoice" : `Order Status: ${historyOrder.status}`,
+                at: historyOrder.status === "Open" ? undefined : historyOrder.updatedAt,
+                tone: historyOrder.status === "Converted" ? "success" : historyOrder.status === "Cancelled" ? "danger" : "warning",
+                description: historyOrder.convertedToInvoiceNo ? `Linked Invoice: ${historyOrder.convertedToInvoiceNo}` : "Awaiting fulfillment / shipment.",
+              },
+            ]}
+            recordId={historyOrder.id}
+            updatedAt={historyOrder.updatedAt}
+            onClose={() => setHistoryOrder(null)}
+          />
         </Modal>
       )}
 

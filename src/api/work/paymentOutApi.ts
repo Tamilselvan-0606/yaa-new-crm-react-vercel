@@ -364,7 +364,9 @@ export const workPaymentOutApi = {
     id: string
   ): Promise<PaymentOutSingleResponse> => {
     const response = await baseClient.get<PaymentOutSingleResponse>(
-      `/work/payments-out/${id}`
+      `/work/payments-out/${id}`,
+      // `timeout: 0` (axios default = none) makes the request non-cacheable, so every View calls GET /work/payments-out/:id.
+      { timeout: 0 }
     );
     return response.data;
   },

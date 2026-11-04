@@ -254,6 +254,10 @@ export interface SalesCustomer {
   city: string;
   state: string;
   country: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
+  cityId?: string;
   pincode: string;
   gstNumber?: string;
   panNumber?: string;
@@ -362,11 +366,16 @@ export interface Supplier {
   name: string;
   contactPerson: string;
   phone: string;
+  whatsappNumber?: string;
   email: string;
   address: string;
   city: string;
   state: string;
   country: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
+  cityId?: string;
   pincode: string;
   gstNumber?: string;
   panNumber?: string;
@@ -620,6 +629,11 @@ export interface InventoryStockItem {
   lastUpdated: string;
   createdAt?: string;
   batches?: StockBatch[];
+  isBatchTracking?: boolean;
+  batchNo?: string;
+  initialBatchNo?: string;
+  mfgDate?: string;
+  expDate?: string;
   itemImage?: string;
 }
 
@@ -710,16 +724,27 @@ function getStorage<T>(key: string, initial: T): T {
 
     const parsed = JSON.parse(raw);
 
-    // Auto-purge mock stocks (Aashirvaad Atta, etc.)
+    // Auto-purge mock/legacy stocks & stale test batches
     if (key === KEYS.STOCKS && Array.isArray(parsed)) {
+      let modified = false;
       const cleaned = parsed.filter(
         (s) =>
           !String(s.productId || s.id).startsWith('PROD_10') &&
           !String(s.id).startsWith('stk_') &&
-          !String(s.productName || '').includes('Aashirvaad') &&
           !String(s.productName || '').includes('India Gate')
       );
-      if (cleaned.length !== parsed.length) {
+      if (cleaned.length !== parsed.length) modified = true;
+
+      // Purge any stale QA-EXP batches from stored stock records
+      cleaned.forEach((s: any) => {
+        if (Array.isArray(s.batches)) {
+          const beforeLen = s.batches.length;
+          s.batches = s.batches.filter((b: any) => !String(b.batchNo || '').startsWith('QA-EXP'));
+          if (s.batches.length !== beforeLen) modified = true;
+        }
+      });
+
+      if (modified) {
         localStorage.setItem(KEYS.STOCKS, JSON.stringify(cleaned));
         return cleaned as unknown as T;
       }

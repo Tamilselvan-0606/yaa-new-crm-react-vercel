@@ -1822,8 +1822,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Pagination Card */}
-              {apiOrgSubsTotal > 0 && (
-                <Pagination
+              <Pagination
                   currentPage={safeOrgSubsPage}
                   total={apiOrgSubsTotal}
                   pageSize={orgSubsPageSize}
@@ -1833,7 +1832,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     setOrgSubsPage(1);
                   }}
                 />
-              )}
             </>
           ) : (
             // =========================================================
@@ -2118,8 +2116,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Pagination Card */}
-              {apiClientSubsTotal > 0 && (
-                <Pagination
+              <Pagination
                   currentPage={safeSubsPage}
                   total={apiClientSubsTotal}
                   pageSize={subsPageSize}
@@ -2129,7 +2126,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     setSubsPage(1);
                   }}
                 />
-              )}
             </>
           )}
         </div>
@@ -2400,8 +2396,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Standalone Pagination Card */}
-              {(isSuperAdmin ? apiPlansTotal : filteredPlansList.length) > 0 && (
-                <Pagination
+              <Pagination
                   currentPage={safePlansPage}
                   total={isSuperAdmin ? apiPlansTotal : filteredPlansList.length}
                   pageSize={plansPageSize}
@@ -2411,7 +2406,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     setPlansPage(1);
                   }}
                 />
-              )}
             </div>
           ) : (
             // =====================================================
@@ -2690,8 +2684,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
 
               {/* Standalone Pagination Card */}
-              {filteredPlansList.length > 0 && (
-                <Pagination
+              <Pagination
                   currentPage={safePlansPage}
                   total={filteredPlansList.length}
                   pageSize={plansPageSize}
@@ -2701,7 +2694,6 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     setPlansPage(1);
                   }}
                 />
-              )}
             </div>
           )}
         </div>
@@ -3211,8 +3203,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   }}
                   options={customers.map((c) => ({
                     value: c.id,
-                    label: c.company ? `${c.company} (${c.name})` : c.name,
+                    label: `${c.company || c.name}${c.clientId && c.clientId !== c.id ? ` (${c.clientId})` : ''}`,
                   }))}
+                  optionVariant="strong"
                   placeholder="Select Customer"
                   activeColor="brand"
                 />
@@ -3234,8 +3227,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   }}
                   options={products.map((p) => ({
                     value: p.id,
-                    label: p.name,
+                    label: p.code ? `${p.name} (${p.code})` : p.name,
                   }))}
+                  optionVariant="strong"
                   placeholder="Select Product"
                   activeColor="brand"
                 />
@@ -3447,8 +3441,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   }}
                   options={availableOrgs.map((org: any) => ({
                     value: org.id,
-                    label: org.name,
+                    label: org.code ? `${org.name} (${org.code})` : org.name,
                   }))}
+                  optionVariant="strong"
                   placeholder="Select Organization"
                   activeColor="brand"
                   error={!!orgSubErrors.organization}

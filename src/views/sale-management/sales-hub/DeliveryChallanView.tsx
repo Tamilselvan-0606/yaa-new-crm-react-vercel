@@ -1326,7 +1326,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   };
 
   // Open Edit Form
-  const handleOpenEditForm = (challan: DeliveryChallanRecord) => {
+  const handleOpenEditForm = async (listChallan: DeliveryChallanRecord) => {
+    let challan = listChallan;
+    try {
+      const res = await commerceDeliveryChallanApi.getChallanById(listChallan.id);
+      if (res?.success && res.data) challan = mapApiDeliveryChallanToRecord(res.data);
+    } catch (err) {
+      console.warn("Could not fetch delivery challan details:", err);
+    }
     loadMasterData();
     const editTabId = `tab-edit-${challan.id}`;
     const newTab: ChallanTabItem = {
@@ -2051,8 +2058,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     status: item.status,
     statusColor: item.status === 'Delivered' ? 'emerald' : item.status === 'Cancelled' ? 'rose' : 'purple',
     referenceNo: item.referenceNo,
-    companyName: companyProfile.companyName || 'YAA CREATIONS CRM',
-    companySubtitle: companyProfile.companySubtitle || 'Wholesale & Enterprise Distribution Hub',
+    companyName: companyProfile.companyName,
+    companySubtitle: companyProfile.companySubtitle,
     companyAddress: companyProfile.companyAddress || undefined,
     companyGstin: companyProfile.companyGstin || undefined,
     companyPhone: companyProfile.companyPhone || undefined,
@@ -4083,7 +4090,16 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               {
                                 label: 'Preview',
                                 variant: 'preview',
-                                onClick: () => setPreviewChallan(item),
+                                onClick: async () => {
+                                  let fresh = item;
+                                  try {
+                                    const res = await commerceDeliveryChallanApi.getChallanById(item.id);
+                                    if (res?.success && res.data) fresh = mapApiDeliveryChallanToRecord(res.data);
+                                  } catch (err) {
+                                    console.warn('Could not fetch delivery challan details:', err);
+                                  }
+                                  setPreviewChallan(fresh);
+                                },
                               },
                               {
                                 label: 'Print Challan',
@@ -4253,11 +4269,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           <div className="p-6 sm:p-8 space-y-6 bg-white text-slate-800 font-sans">
             <div className="flex justify-between items-start border-b border-slate-200 pb-6">
               <div>
-                <h2 className="text-2xl font-black text-[#33077C]">YAA CREATIONS CRM</h2>
+                <h2 className="text-2xl font-black text-[#33077C]">{companyProfile.companyName}</h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  128 Commercial Boulevard, Tech Park, Chennai - 600001
+                  {companyProfile.companyAddress}
                 </p>
-                <p className="text-xs text-slate-500">GSTIN: 33AAAAA0000A1Z5 | Phone: +91 98765 43210</p>
+                <p className="text-xs text-slate-500">GSTIN: {companyProfile.companyGstin} | Phone: {companyProfile.companyPhone}</p>
               </div>
               <div className="text-right">
                 <span className="inline-block px-3 py-1 rounded-lg bg-purple-100 text-[#33077C] font-black text-xs uppercase tracking-wider mb-2">
@@ -4350,18 +4366,18 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setPreviewChallan(null)}
-                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer whitespace-nowrap justify-center"
               >
                 Close
               </button>
               <button
                 type="button"
                 onClick={() => handlePrintChallan(previewChallan)}
-                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer"
+                className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-2 shadow-2xs cursor-pointer whitespace-nowrap justify-center"
               >
                 <Printer className="w-4 h-4 text-slate-600" />
                 <span>Print Challan</span>
@@ -4370,7 +4386,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 type="button"
                 disabled={isDownloadingPdf}
                 onClick={() => handleDownloadChallan(previewChallan)}
-                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer"
+                className="h-10 px-5 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold flex items-center gap-2 shadow-md cursor-pointer whitespace-nowrap justify-center"
               >
                 <Download className="w-4 h-4" />
                 <span>Download Challan</span>

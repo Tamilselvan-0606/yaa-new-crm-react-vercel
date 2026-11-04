@@ -1,3 +1,5 @@
+import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
+import { useCompanyDocumentProfile } from "../../../hooks/useCompanyDocumentProfile";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -158,6 +160,7 @@ export interface UnifiedTransactionRecord {
 }
 
 export const SalesReturnView: React.FC = () => {
+  const companyProfile = useCompanyDocumentProfile();
   const location = useLocation();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -1055,6 +1058,23 @@ export const SalesReturnView: React.FC = () => {
     toast.success(`e-Invoice generated for Credit Note #${tx.refNo}! IRN: ${irn}`);
   };
 
+  // Open the history dialog, then load the latest return (GET /returns/:id)
+  const handleOpenHistory = async (row: UnifiedTransactionRecord) => {
+    setActiveMenuId(null);
+    setHistoryTx(row);
+    const original = row.originalReturn;
+    if (!original || !UUID_REGEX.test(original.id)) return;
+    try {
+      const res = await commerceSalesReturnApi.getSalesReturnById(original.id);
+      if (res?.success && res.data) {
+        const fresh = mapApiSalesReturnToSalesReturn(res.data);
+        setHistoryTx((prev) => (prev && prev.id === row.id ? { ...prev, originalReturn: { ...original, ...fresh } } : prev));
+      }
+    } catch (err) {
+      console.warn("Could not fetch sales return history:", err);
+    }
+  };
+
   // Open PDF / Preview
   const handleOpenPdf = async (tx: UnifiedTransactionRecord) => {
     setActiveMenuId(null);
@@ -1586,7 +1606,7 @@ export const SalesReturnView: React.FC = () => {
                               {
                                 label: 'View History',
                                 variant: 'view',
-                                onClick: () => setHistoryTx(row),
+                                onClick: () => handleOpenHistory(row),
                               },
                               {
                                 label: 'Void / Delete',
@@ -1917,11 +1937,11 @@ export const SalesReturnView: React.FC = () => {
           <div className="p-6 sm:p-8 space-y-6 bg-white text-slate-800 font-sans">
             <div className="flex justify-between items-start border-b border-slate-200 pb-6">
               <div>
-                <h2 className="text-2xl font-black text-[#33077C]">YAA CREATIONS CRM</h2>
+                <h2 className="text-2xl font-black text-[#33077C]">{companyProfile.companyName}</h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  128 Commercial Boulevard, Tech Park, Chennai - 600001
+                  {companyProfile.companyAddress}
                 </p>
-                <p className="text-xs text-slate-500">GSTIN: 33AAAAA0000A1Z5 | Phone: +91 98765 43210</p>
+                <p className="text-xs text-slate-500">GSTIN: {companyProfile.companyGstin} | Phone: {companyProfile.companyPhone}</p>
               </div>
               <div className="text-right">
                 <span className="inline-block px-3 py-1 rounded-lg bg-rose-100 text-rose-700 font-black text-xs uppercase tracking-wider mb-2">
@@ -1986,11 +2006,11 @@ export const SalesReturnView: React.FC = () => {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-200 flex flex-wrap justify-end gap-2">
+            <div className="pt-4 flex flex-col-reverse sm:flex-row sm:flex-wrap justify-end items-stretch sm:items-center gap-2.5 sm:gap-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setIsViewModalOpen(false)}
-                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                className="h-10 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 whitespace-nowrap justify-center"
               >
                 Close
               </button>
@@ -2002,7 +2022,7 @@ export const SalesReturnView: React.FC = () => {
                     handleDownloadReturn(selectedReturn);
                   }
                 }}
-                className="h-10 px-5 rounded-xl bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold flex items-center gap-2 shadow-md transition disabled:opacity-50"
+                className="h-10 px-5 rounded-xl bg-[#EA580C] hover:bg-[#C2410C] text-white text-xs font-bold flex items-center gap-2 shadow-md transition disabled:opacity-50 whitespace-nowrap justify-center"
               >
                 {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 <span>{isDownloading ? 'Generating...' : 'Download Return'}</span>
@@ -2091,54 +2111,52 @@ export const SalesReturnView: React.FC = () => {
           subtitle={`Timeline and lifecycle events for ${historyTx.partyName}`}
           maxWidth="2xl"
           headerGradient={true}
+          showBackIcon={true}
+          hideCloseButton={true}
+          onBack={() => setHistoryTx(null)}
         >
-          <div className="p-6 space-y-4">
-            <div className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-purple-100">
-              <div className="relative flex items-start gap-3">
-                <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center -ml-6.5 ring-4 ring-white shrink-0">
-                  <Check className="w-3 h-3 stroke-[3]" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800">
-                    Transaction Recorded ({historyTx.type})
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    Date: {isoToDdmmyyyy(historyTx.date)} • Amount: ₹{historyTx.total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </div>
-                  <div className="text-[10.5px] text-slate-400 font-mono mt-0.5">
-                    Status: {historyTx.status || 'Active'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="relative flex items-start gap-3">
-                <div className="w-5 h-5 rounded-full bg-[#33077C] text-white flex items-center justify-center -ml-6.5 ring-4 ring-white shrink-0">
-                  <Clock className="w-3 h-3" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-800">
-                    Stock &amp; Ledger Reversal
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    Returned items restocked into inventory ledger on approval.
-                  </div>
-                  <div className="text-[10.5px] text-slate-400 font-mono mt-0.5">
-                    Commerce Backend API Synchronized
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-4 border-t border-slate-200 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setHistoryTx(null)}
-                className="px-5 py-2 rounded-xl bg-[#33077C] hover:bg-[#4309A2] text-white text-xs font-bold transition-all"
-              >
-                Done
-              </button>
-            </div>
-          </div>
+          <HistoryTimelineView
+            eyebrow={historyTx.type}
+            title={`Ref #${historyTx.refNo}`}
+            subtitle={historyTx.partyName}
+            amount={{ label: "Total", value: `₹${Number(historyTx.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` }}
+            badges={[{ label: historyTx.status || "Active", tone: historyTx.status === "Rejected" || historyTx.status === "Cancelled" ? "danger" : historyTx.status === "Pending" || historyTx.status === "Requested" ? "warning" : "success" }]}
+            facts={[
+              { label: "Date", value: isoToDdmmyyyy(historyTx.date) },
+              { label: "Received / Paid", value: `₹${Number(historyTx.receivedPaid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+              { label: "Balance", value: `₹${Number(historyTx.balance || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            ]}
+            events={[
+              {
+                title: `Transaction Recorded (${historyTx.type})`,
+                at: historyTx.originalReturn?.createdAt || historyTx.date,
+                tone: "primary",
+                description: `Recorded for ${historyTx.partyName}.`,
+                details: [
+                  { label: "Date", value: isoToDdmmyyyy(historyTx.date) },
+                  { label: "Amount", value: `₹${Number(historyTx.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                  ...(historyTx.originalReturn?.invoiceNo ? [{ label: "Invoice", value: historyTx.originalReturn.invoiceNo }] : []),
+                ],
+              },
+              ...(historyTx.originalReturn
+                ? [
+                    {
+                      title: `Return Status: ${historyTx.originalReturn.returnStatus}`,
+                      at: historyTx.originalReturn.updatedAt,
+                      tone: String(historyTx.originalReturn.returnStatus) === "Rejected" ? ("danger" as const) : String(historyTx.originalReturn.returnStatus) === "Pending" ? ("warning" as const) : ("success" as const),
+                      description: historyTx.originalReturn.rejectionReason ? `Rejected: ${historyTx.originalReturn.rejectionReason}` : "Returned items are restocked into the inventory ledger on approval.",
+                      details: [
+                        { label: "Refund", value: `${historyTx.originalReturn.refundStatus} via ${historyTx.originalReturn.refundMethod}` },
+                        { label: "Refund Amount", value: `₹${Number(historyTx.originalReturn.refundAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+                      ],
+                    },
+                  ]
+                : [{ title: `Status: ${historyTx.status || "Active"}`, tone: "success" as const, description: "Commerce backend API synchronized." }]),
+            ]}
+            recordId={historyTx.originalReturn?.id || historyTx.id}
+            updatedAt={historyTx.originalReturn?.updatedAt}
+            onClose={() => setHistoryTx(null)}
+          />
         </Modal>
       )}
 

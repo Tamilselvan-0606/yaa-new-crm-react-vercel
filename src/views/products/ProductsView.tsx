@@ -979,8 +979,7 @@ export const ProductsView: React.FC = () => {
       </div>
 
       {/* 4. Pagination */}
-      {totalProducts > 0 && (
-        <Pagination
+      <Pagination
           currentPage={page}
           total={totalProducts}
           pageSize={pageSize}
@@ -990,7 +989,6 @@ export const ProductsView: React.FC = () => {
             setPage(1);
           }}
         />
-      )}
 
       {/* Add / Edit Product Modal */}
       <Modal
@@ -1032,7 +1030,6 @@ export const ProductsView: React.FC = () => {
                   className="w-full h-11 px-4 bg-slate-100/80 border border-slate-200 rounded-xl text-xs sm:text-[13px] font-semibold text-slate-600 cursor-not-allowed select-none outline-none"
                 />
               </div>
-              <span className="text-[11px] text-slate-400 mt-1 block">Default organization (non-editable)</span>
             </div>
 
             <div>
@@ -1066,6 +1063,7 @@ export const ProductsView: React.FC = () => {
                       }))
                     : [{ value: '', label: loadingSubOrgs ? 'Loading Sub-Organizations...' : 'No Sub-Organizations found' }]
                 }
+                optionVariant="strong"
                 placeholder="Select Sub-Organization"
                 error={!!formErrors.subOrganizationId}
               />
@@ -1117,6 +1115,7 @@ export const ProductsView: React.FC = () => {
                       : [{ value: '', label: loadingBranches ? 'Loading Branches...' : 'No Branches found' }];
                   })()
                 }
+                optionVariant="strong"
                 placeholder="Select Branch"
                 error={!!formErrors.branchId}
               />

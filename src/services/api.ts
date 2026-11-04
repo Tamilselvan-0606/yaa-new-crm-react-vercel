@@ -104,9 +104,22 @@ class ApiService {
     setStoredToken(token);
   }
 
+  /**
+   * Forgets the header selection (organization, sub-organization, branch, product) and the lists cached for them,
+   * so a different login never starts with the previous organization's scope.
+   */
+  clearOrganizationScope() {
+    const prefixes = ['active_sub_organization', 'active_branch', 'active_product', 'active_organization', 'active_sub_orgs_list_cache', 'active_sub_org_seller_cache', 'active_org_seller_cache'];
+    const exact = ['yaa_crm_organization_id', 'branches_catalog_orgsuperadmin', 'organizations_catalog_orgsuperadmin', 'organizationId', 'subOrganizationId', 'branchId'];
+    Object.keys(localStorage).forEach((key) => {
+      if (exact.includes(key) || prefixes.some((p) => key.startsWith(p))) localStorage.removeItem(key);
+    });
+  }
+
   removeToken() {
     removeStoredToken();
     clearApiCache();
+    this.clearOrganizationScope();
   }
 
   setUserId(id: string) {
@@ -324,6 +337,9 @@ class ApiService {
         try { await authApi.logout(); } catch { /* the session may not exist */ }
         throw new Error(blocked);
       }
+      // The previous login's organization scope must not leak into this one (set before the user is mapped,
+      // because mapping stores this login's own organization).
+      this.clearOrganizationScope();
       const appUser = this.mapApiUserToAppUser(userObj);
       // A new session must never see another user's or organisation's cached responses.
       clearApiCache();
