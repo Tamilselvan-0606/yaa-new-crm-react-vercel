@@ -1,4 +1,3 @@
-import { useDebounce } from "use-debounce";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
@@ -266,16 +265,6 @@ export const PaymentInView: React.FC = () => {
   const [selectedPaymentType, setSelectedPaymentType] = useState<string>("All");
   const [pendingSearch, setPendingSearch] = useState<string>("");
   const [appliedSearch, setAppliedSearch] = useState<string>("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -368,28 +357,44 @@ export const PaymentInView: React.FC = () => {
   // -------------------------------------------------------------
   // API: Fetch Payment-In list with current filters and pagination
   // -------------------------------------------------------------
-  const fetchPaymentIns = useCallback(async () => {
+  const fetchPaymentIns = useCallback(async (overrides?: {
+    page?: number;
+    search?: string;
+    period?: string;
+    paymentType?: string;
+    firm?: string;
+    from?: string;
+    to?: string;
+  }) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     setIsFetching(true);
     try {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetPeriod = overrides?.period !== undefined ? overrides.period : selectedPeriod;
+      const targetPaymentType = overrides?.paymentType !== undefined ? overrides.paymentType : selectedPaymentType;
+      const targetFirm = overrides?.firm !== undefined ? overrides.firm : selectedFirm;
+      const targetFrom = overrides?.from !== undefined ? overrides.from : startDate;
+      const targetTo = overrides?.to !== undefined ? overrides.to : endDate;
+
       const params: PaymentInFilterParams = {
-        page_no: currentPage,
+        page_no: targetPage,
         page_size: pageSize,
         pagination_required: true,
         sortOrder: "desc",
       };
 
-      if (appliedSearch) {
-        params.search = appliedSearch;
+      if (targetSearch) {
+        params.search = targetSearch;
       }
-      if (startDate) params.from = startDate;
-      if (endDate) params.to = endDate;
+      if (targetFrom) params.from = targetFrom;
+      if (targetTo) params.to = targetTo;
 
       if (
-        selectedPeriod &&
-        selectedPeriod !== "All Time" &&
-        selectedPeriod !== "Custom"
+        targetPeriod &&
+        targetPeriod !== "All Time" &&
+        targetPeriod !== "Custom"
       ) {
         const pMap: Record<string, string> = {
           Today: "today",
@@ -399,19 +404,19 @@ export const PaymentInView: React.FC = () => {
           "This Quarter": "this_quarter",
           "This Year": "this_year",
         };
-        if (pMap[selectedPeriod]) params.period = pMap[selectedPeriod];
+        if (pMap[targetPeriod]) params.period = pMap[targetPeriod];
       }
 
-      if (selectedPaymentType && selectedPaymentType !== "All") {
-        params.paymentType = selectedPaymentType;
+      if (targetPaymentType && targetPaymentType !== "All") {
+        params.paymentType = targetPaymentType;
       }
 
       if (
-        selectedFirm &&
-        selectedFirm !== "All" &&
-        UUID_REGEX.test(selectedFirm)
+        targetFirm &&
+        targetFirm !== "All" &&
+        UUID_REGEX.test(targetFirm)
       ) {
-        params.customerId = selectedFirm;
+        params.customerId = targetFirm;
       }
 
       const res = await commercePaymentInApi.getPaymentIns(params);
@@ -1216,18 +1221,8 @@ export const PaymentInView: React.FC = () => {
       errs.customer = "Please choose the customer from the list.";
     }
 
-    const receiptErr = checkRequiredText(formReceiptNo, "receipt number");
-    if (receiptErr) {
-      errs.receiptNo = receiptErr;
-    } else if (
-      paymentIns.some(
-        (p) =>
-          p.id !== editingPaymentIn?.id &&
-          (p.receiptNo || "").trim().toLowerCase() === formReceiptNo.trim().toLowerCase(),
-      )
-    ) {
-      errs.receiptNo = "This receipt number is already used. Please enter a different receipt number.";
-    }
+    // The receipt number is read-only and assigned by the server ("Auto-generated on save"), so it is
+    // never required or duplicate-checked in the form. A server-side problem still shows via apiFields.receiptNo.
 
     const dateErr = checkRequiredDate(formDate, "payment date");
     if (dateErr) errs.date = dateErr;
@@ -1596,17 +1591,6 @@ export const PaymentInView: React.FC = () => {
   };
 
   const handleResetFilters = () => {
-    const isSame =
-      appliedSearch === "" &&
-      pendingSearch === "" &&
-      selectedPeriod === "This Month" &&
-      pendingPeriod === "This Month" &&
-      selectedFirm === "All" &&
-      pendingFirm === "All" &&
-      selectedPaymentType === "All" &&
-      pendingPaymentType === "All" &&
-      currentPage === 1;
-
     setPendingSearch("");
     setAppliedSearch("");
     setPendingPeriod("This Month");
@@ -1617,10 +1601,16 @@ export const PaymentInView: React.FC = () => {
     setSelectedPaymentType("All");
     setCurrentPage(1);
 
-    if (isSame) {
-      isFetchingRef.current = false;
-      fetchPaymentIns();
-    }
+    isFetchingRef.current = false;
+    fetchPaymentIns({
+      page: 1,
+      search: "",
+      period: "This Month",
+      paymentType: "All",
+      firm: "All",
+      from: undefined,
+      to: undefined,
+    });
   };
 
   return (

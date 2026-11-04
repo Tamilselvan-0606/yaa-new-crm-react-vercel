@@ -100,11 +100,43 @@ export const indianPhoneAnyFormat =
   (message: string): Validator =>
   (v) => (isEmpty(v) || isValidIndianPhone(v) ? null : message);
 
+const GST_FORMAT_MESSAGE = 'Enter a valid GST number (e.g. 33AAAAA0000A1Z5)';
+const PAN_FORMAT_MESSAGE = 'Enter a valid PAN number (e.g. AAAAA0000A)';
+
 export const validGst: Validator = (v) =>
-  isEmpty(v) || isValidGstin(v.replace(/[^a-zA-Z0-9]/g, '')) ? null : 'Enter a valid GST number (e.g. 33AAAAA0000A1Z5)';
+  isEmpty(v) || isValidGstin(v.replace(/[^a-zA-Z0-9]/g, '')) ? null : GST_FORMAT_MESSAGE;
 
 export const validPan: Validator = (v) =>
-  isEmpty(v) || isValidPan(v.replace(/[^a-zA-Z0-9]/g, '')) ? null : 'Enter a valid PAN number (e.g. AAAAA0000A)';
+  isEmpty(v) || isValidPan(v.replace(/[^a-zA-Z0-9]/g, '')) ? null : PAN_FORMAT_MESSAGE;
+
+/**
+ * Pincode / postal code. Uses the country's own rule from the master data when there is one
+ * (e.g. "^(\d{6})$" for India), otherwise the Indian 6-digit rule.
+ */
+export const pincodeMatching =
+  (regex?: string | null, format?: string | null): Validator =>
+  (v) => {
+    if (isEmpty(v)) return null;
+    if (!regex) return validPincode(v);
+    try {
+      return new RegExp(regex).test(v.trim()) ? null : `Enter a valid pincode${format ? ` (format: ${format})` : ''}`;
+    } catch {
+      return validPincode(v);
+    }
+  };
+
+/** Typing filter for a pincode: digits only (max 6) unless the country's rule allows letters. */
+export const cleanPincode = (raw: string, regex?: string | null): string =>
+  regex && /[A-Za-z]/.test(regex) ? raw.replace(/[^A-Za-z0-9 -]/g, '').toUpperCase().slice(0, 10) : raw.replace(/\D/g, '').slice(0, regex ? 10 : 6);
+
+/** Optional non-negative number (amounts such as a discount). */
+export const nonNegativeAmount =
+  (label: string): Validator =>
+  (v) => (isEmpty(v) || (Number.isFinite(Number(v)) && Number(v) >= 0) ? null : `${label} must be a valid amount`);
+
+/** Indian PIN code: 6 digits, not starting with 0. */
+export const validPincode: Validator = (v) =>
+  isEmpty(v) || /^[1-9]\d{5}$/.test(v.trim()) ? null : 'Enter a valid 6-digit pincode';
 
 // No leading dot, no consecutive dots, no dot/hyphen at the domain start, TLD of 2+ letters.
 const EMAIL_PATTERN = /^(?!\.)(?!.*\.\.)[A-Za-z0-9_'+\-.]*?[A-Za-z0-9_+-]@(?![.-])([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/;
@@ -112,6 +144,14 @@ export const isValidEmailAddress = (v?: string | null): boolean => !!v && EMAIL_
 
 export const emailAddress: Validator = (v) =>
   isEmpty(v) || isValidEmailAddress(v) ? null : 'Please enter a valid email address';
+
+/** Letters (any language) separated by single spaces: no digits, symbols or punctuation. */
+const LETTERS_AND_SPACES = /^\p{L}+(?: \p{L}+)*$/u;
+
+/** A person's name: alphabets only. Use for Contact Person / Full Name fields. */
+export const alphabetsOnly =
+  (label: string): Validator =>
+  (v) => (isEmpty(v) || LETTERS_AND_SPACES.test(v.trim()) ? null : `${label} should contain alphabets only`);
 
 // -----------------------------------------------------------------------------
 // Typing helpers
@@ -124,6 +164,30 @@ export const digitsOnly = (raw: string, max = 10): string => raw.replace(/\D/g, 
 export const alphanumericUpper = (raw: string, max: number): string =>
   raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, max);
 
+
+/** Name-style input: keeps only letters and spaces (digits and symbols are dropped as you type). */
+export const lettersOnly = (raw: string, max = 100): string =>
+  raw.replace(/[^\p{L}\s]/gu, '').replace(/\s{2,}/g, ' ').replace(/^\s+/, '').slice(0, max);
 /** While typing a mobile number, only the first digit can already be wrong. */
 export const liveMobileStartError = (label: string, digits: string): string =>
   digits && !/^[6-9]/.test(digits) ? `${label} must start with 6, 7, 8 or 9` : '';
+
+// Character rules by position, used while typing. A character that breaks its slot is an error right away,
+// the same way a mobile number starting with 0-5 is.
+const GST_SLOTS = [/\d/, /\d/, /[A-Z]/, /[A-Z]/, /[A-Z]/, /[A-Z]/, /[A-Z]/, /\d/, /\d/, /\d/, /\d/, /[A-Z]/, /[1-9A-Z]/, /Z/, /[0-9A-Z]/];
+const PAN_SLOTS = [/[A-Z]/, /[A-Z]/, /[A-Z]/, /[A-Z]/, /[A-Z]/, /\d/, /\d/, /\d/, /\d/, /[A-Z]/];
+
+
+const slotError = (value: string, slots: RegExp[], message: string): string => {
+  const chars = value.toUpperCase();
+  for (let i = 0; i < chars.length; i++) {
+    if (i >= slots.length || !slots[i].test(chars[i])) return message;
+  }
+  return '';
+};
+
+/** While typing a GST number: 2 digits, 5 letters, 4 digits, 1 letter, then a letter/digit, "Z", a letter/digit. */
+export const liveGstError = (value: string): string => slotError(value, GST_SLOTS, GST_FORMAT_MESSAGE);
+
+/** While typing a PAN: 5 letters, 4 digits, 1 letter. */
+export const livePanError = (value: string): string => slotError(value, PAN_SLOTS, PAN_FORMAT_MESSAGE);

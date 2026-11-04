@@ -127,6 +127,8 @@ export const collectionEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'Collection', id: 'ASSIGNMENTS_LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
       ],
     }),
@@ -213,6 +215,8 @@ export const collectionEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'Dashboard',
       ],
     }),

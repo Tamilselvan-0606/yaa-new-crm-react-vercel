@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   BranchListResponse,
@@ -19,11 +19,7 @@ export const branchEndpoints = baseApi.injectEndpoints({
       query: (arg) => {
         const payload = arg && typeof arg === 'object' ? arg : undefined;
         const p = payload?.params || {};
-        const queryParams: Record<string, any> = {
-          page_no: p.page_no ?? 1,
-          page_size: p.page_size ?? 10,
-          pagination_required: p.pagination_required ?? 'true',
-        };
+        const queryParams: Record<string, any> = buildListParams(p, { sortBy: 'name' });
         if (p.search) queryParams.search = p.search;
         if (p.status && p.status !== 'ALL') queryParams.status = p.status;
         if (p.organization_id) queryParams.organization_id = p.organization_id;
@@ -106,11 +102,7 @@ export const branchApi = {
     orgId?: string
   ): Promise<BranchListResponse> => {
     const activeOrgId = orgId || getStoredOrganizationId();
-    const queryParams: Record<string, any> = {
-      page_no: params?.page_no ?? 1,
-      page_size: params?.page_size ?? 10,
-      pagination_required: params?.pagination_required ?? 'true',
-    };
+    const queryParams: Record<string, any> = buildListParams(params, { sortBy: 'name' });
     if (params?.search) queryParams.search = params.search;
     if (params?.status && params.status !== 'ALL') queryParams.status = params.status;
     if (params?.organization_id || activeOrgId) {
@@ -154,6 +146,29 @@ export const branchApi = {
 
     inFlightBranchRequests.set(cacheKey, requestPromise);
     return requestPromise;
+  },
+
+  /**
+   * Get one branch (with its login user)
+   * GET /branches/{id}, falling back to /platform/branches/{id}
+   */
+  getBranchById: async (id: string, orgId?: string): Promise<BranchSingleResponse> => {
+    const activeOrgId = orgId || getStoredOrganizationId();
+    const headers: Record<string, string> = {};
+    if (activeOrgId) headers['x-organization-id'] = activeOrgId;
+
+    let lastError: any = null;
+    for (const url of [`/branches/${encodeURIComponent(id)}`, `/platform/branches/${encodeURIComponent(id)}`]) {
+      try {
+        const res = await baseClient.get<BranchSingleResponse>(url, { headers });
+        return res.data;
+      } catch (err: any) {
+        lastError = err;
+        if (err?.response?.status === 404 || err?.status === 404) continue;
+        throw err;
+      }
+    }
+    throw lastError;
   },
 
   /**

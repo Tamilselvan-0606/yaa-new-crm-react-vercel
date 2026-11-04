@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -745,16 +744,6 @@ export const SalesView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingSaleStatus, setPendingSaleStatus] = useState("All");
   const [appliedSaleStatus, setAppliedSaleStatus] = useState("All");
   const [pendingPaymentStatus, setPendingPaymentStatus] = useState("All");
@@ -1238,35 +1227,47 @@ export const SalesView: React.FC = () => {
 
   // Live Invoices Fetching
   const isFetchingInvoicesRef = useRef(false);
-  const fetchSalesInvoices = useCallback(async (): Promise<boolean> => {
+  const fetchSalesInvoices = useCallback(async (overrides?: {
+    page?: number;
+    search?: string;
+    saleStatus?: string;
+    paymentStatus?: string;
+    customer?: string;
+  }): Promise<boolean> => {
     if (isFetchingInvoicesRef.current) return false;
     isFetchingInvoicesRef.current = true;
     setIsApiLoading(true);
     try {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetSaleStatus = overrides?.saleStatus !== undefined ? overrides.saleStatus : appliedSaleStatus;
+      const targetPaymentStatus = overrides?.paymentStatus !== undefined ? overrides.paymentStatus : appliedPaymentStatus;
+      const targetCustomer = overrides?.customer !== undefined ? overrides.customer : appliedCustomer;
+
       const params: InvoiceFilterParams = {
-        page_no: currentPage,
+        page_no: targetPage,
         page_size: pageSize,
         pagination_required: "true",
         sortOrder: "desc",
       };
-      if (appliedSearch && appliedSearch.trim()) {
-        params.search = appliedSearch.trim();
+      if (targetSearch && targetSearch.trim()) {
+        params.search = targetSearch.trim();
       }
-      if (appliedSaleStatus && appliedSaleStatus.toUpperCase() !== "ALL") {
-        params.status = appliedSaleStatus;
-      }
-      if (
-        appliedPaymentStatus &&
-        appliedPaymentStatus.toUpperCase() !== "ALL"
-      ) {
-        params.paymentStatus = appliedPaymentStatus;
+      if (targetSaleStatus && targetSaleStatus.toUpperCase() !== "ALL") {
+        params.status = targetSaleStatus;
       }
       if (
-        appliedCustomer &&
-        appliedCustomer.toUpperCase() !== "ALL" &&
-        UUID_REGEX.test(appliedCustomer)
+        targetPaymentStatus &&
+        targetPaymentStatus.toUpperCase() !== "ALL"
       ) {
-        params.customerId = appliedCustomer;
+        params.paymentStatus = targetPaymentStatus;
+      }
+      if (
+        targetCustomer &&
+        targetCustomer.toUpperCase() !== "ALL" &&
+        UUID_REGEX.test(targetCustomer)
+      ) {
+        params.customerId = targetCustomer;
       }
 
       const res = await commerceInvoiceApi.getInvoices(params);
@@ -2927,7 +2928,7 @@ export const SalesView: React.FC = () => {
       // form (and the Stock screens) read fresh figures.
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "Stock", id: "BATCHES" },
+          { type: "Batch", id: "LIST" },
           { type: "Stock", id: "LIST" },
         ]),
       );
@@ -2982,6 +2983,7 @@ export const SalesView: React.FC = () => {
           };
 
           let paymentFailed = false;
+          let paymentFailureReason = "";
           try {
             const payInPayload: any = {
               date:
@@ -2991,7 +2993,8 @@ export const SalesView: React.FC = () => {
               receivedAmount: currentPaid,
               invoiceNo: savedApiSale.invoiceNo,
               referenceNo: savedApiSale.referenceNo || savedApiSale.invoiceNo,
-              receiptNo: newPaymentInRecord.receiptNo,
+              // receiptNo is left out on purpose: the server assigns it. Sending an empty string is
+              // rejected by the API ("expected string to have >=1 characters").
               notes: `Payment received on creation of Invoice ${savedApiSale.invoiceNo}`,
             };
             if (UUID_REGEX.test(savedApiSale.customerId)) {
@@ -3004,9 +3007,15 @@ export const SalesView: React.FC = () => {
           } catch (payInErr) {
             console.warn("commercePaymentInApi.createPaymentIn notice:", payInErr);
             paymentFailed = true;
+            paymentFailureReason = getApiErrorMessage(payInErr, "");
           }
 
-          savePaymentIn(newPaymentInRecord);
+          // The backend owns the receipt and the customer's paid total. A local copy with an empty receipt
+          // number would show up as a phantom receipt (and add the amount again to the local customer
+          // balance), so it is only kept for local-only invoices that never reached the server.
+          if (!UUID_REGEX.test(savedApiSale.id)) {
+            savePaymentIn(newPaymentInRecord);
+          }
           dispatch(
             baseApi.util.invalidateTags([
               { type: "PaymentIn", id: "LIST" },
@@ -3017,7 +3026,7 @@ export const SalesView: React.FC = () => {
 
           if (paymentFailed) {
             toast.warning(
-              `Invoice ${savedApiSale.invoiceNo} was generated, but recording the initial payment failed. You can retry payment without re-creating the invoice.`,
+              `Invoice ${savedApiSale.invoiceNo} was generated, but the initial payment could not be recorded${paymentFailureReason ? `: ${paymentFailureReason}` : "."} You can add the payment from the invoice without re-creating it.`,
               { duration: 8000 }
             );
           }
@@ -3078,9 +3087,9 @@ export const SalesView: React.FC = () => {
           // 5. Invalidate RTK cache
           dispatch(
             baseApi.util.invalidateTags([
-              { type: "Quotation", id: "LIST" },
+              { type: "Estimation", id: "LIST" },
               ...(quotId && UUID_REGEX.test(quotId)
-                ? [{ type: "Quotation" as const, id: quotId }]
+                ? [{ type: "Estimation" as const, id: quotId }]
                 : []),
               { type: "SalesInvoice", id: "LIST" },
             ]),
@@ -3129,9 +3138,9 @@ export const SalesView: React.FC = () => {
           });
           dispatch(
             baseApi.util.invalidateTags([
-              { type: "SalesOrder", id: "LIST" },
+              { type: "SaleOrder", id: "LIST" },
               ...(orderId && UUID_REGEX.test(orderId)
-                ? [{ type: "SalesOrder" as const, id: orderId }]
+                ? [{ type: "SaleOrder" as const, id: orderId }]
                 : []),
             ]),
           );
@@ -3170,7 +3179,7 @@ export const SalesView: React.FC = () => {
             customerId: savedApiSale.customerId,
             grandTotal: savedApiSale.grandTotal,
           });
-          dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
+          dispatch(baseApi.util.invalidateTags([{ type: "ProformaInvoice", id: "LIST" }]));
         }
 
         // D. Originating from Delivery Challan
@@ -3389,7 +3398,7 @@ export const SalesView: React.FC = () => {
         // The backend posts the stock movement for the cancelled invoice: refresh stock figures.
         dispatch(
           baseApi.util.invalidateTags([
-            { type: "Stock", id: "BATCHES" },
+            { type: "Batch", id: "LIST" },
             { type: "Stock", id: "LIST" },
           ]),
         );
@@ -3464,7 +3473,7 @@ export const SalesView: React.FC = () => {
           { type: "SalesInvoice", id: deleteTargetSale.id },
           { type: "SalesInvoice", id: "LIST" },
           { type: "Customer", id: "LIST" },
-          { type: "Stock", id: "BATCHES" },
+          { type: "Batch", id: "LIST" },
           { type: "Stock", id: "LIST" },
           "Dashboard",
           "Collection",
@@ -6239,19 +6248,6 @@ export const SalesView: React.FC = () => {
               }
             }}
             onReset={() => {
-              const isSame =
-                appliedSearch === "" &&
-                pendingSearch === "" &&
-                appliedSaleStatus === "All" &&
-                pendingSaleStatus === "All" &&
-                appliedPaymentStatus === "All" &&
-                pendingPaymentStatus === "All" &&
-                appliedCustomer === "All" &&
-                pendingCustomer === "All" &&
-                appliedSalesRep === "All" &&
-                pendingSalesRep === "All" &&
-                currentPage === 1;
-
               setPendingSearch("");
               setAppliedSearch("");
               setPendingSaleStatus("All");
@@ -6264,10 +6260,14 @@ export const SalesView: React.FC = () => {
               setAppliedSalesRep("All");
               setCurrentPage(1);
 
-              if (isSame) {
-                isFetchingInvoicesRef.current = false;
-                fetchSalesInvoices();
-              }
+              isFetchingInvoicesRef.current = false;
+              fetchSalesInvoices({
+                page: 1,
+                search: "",
+                saleStatus: "All",
+                paymentStatus: "All",
+                customer: "All",
+              });
             }}
             filterSlot={
               <div className="flex items-center gap-2.5 flex-wrap">
@@ -8196,7 +8196,7 @@ export const SalesView: React.FC = () => {
         isOpen={isAddCustomerModalOpen}
         onClose={() => setIsAddCustomerModalOpen(false)}
         onCustomerCreated={(newCust) => {
-          dispatch(baseApi.util.invalidateTags(['CommerceCustomer', 'Customer'] as any));
+          dispatch(baseApi.util.invalidateTags(['Customer']));
           hasLoadedCustomersRef.current = false;
           loadCustomersData();
           handleCustomerChange(newCust.id);
@@ -8210,7 +8210,7 @@ export const SalesView: React.FC = () => {
           setActiveItemRowIndex(null);
         }}
         onProductCreated={(newProd) => {
-          dispatch(baseApi.util.invalidateTags(['Product', 'InventoryStock'] as any));
+          dispatch(baseApi.util.invalidateTags(['Product', 'Stock', 'Batch']));
           const pId = newProd.id || (newProd as any).productId;
           const mapped = {
             id: pId,

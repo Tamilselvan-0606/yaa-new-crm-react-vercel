@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -116,16 +115,6 @@ export const SalesRepresentativeView: React.FC = () => {
   // ── filters / pagination ─────────────────────────────────────────────────
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState<
     "ALL" | "Active" | "Inactive"
   >("ALL");
@@ -230,20 +219,8 @@ export const SalesRepresentativeView: React.FC = () => {
   // ── cache of all known representatives for duplicate validation without hitting API ──
   const allRepsCacheRef = useRef<ApiSalesRepresentative[]>([]);
 
-  const refreshAllRepsCache = useCallback(async () => {
-    try {
-      const res = await salesRepresentativeApi.getList({ limit: 200 });
-      if (res.success && res.data) {
-        allRepsCacheRef.current = res.data;
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshAllRepsCache();
-  }, [refreshAllRepsCache]);
+  // The cache is populated by loadReps (status=ALL, no search), which runs on mount
+  // with exactly this data - no separate preload request is needed.
 
   const findDuplicateRepByMobile = useCallback(
     (mobileInput: string, excludeRepId?: string) => {
@@ -341,23 +318,25 @@ export const SalesRepresentativeView: React.FC = () => {
   }, []);
 
   // ── load list (fetches Active + Inactive when ALL so inactive reps always appear) ──
-  const loadReps = useCallback(async () => {
+  const loadReps = useCallback(async (overrides?: { search?: string; status?: string }) => {
     const currentReqId = ++requestIdRef.current;
     setIsListLoading(true);
     setListError(null);
     try {
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
       let repList: ApiSalesRepresentative[] = [];
       let fetchedSummary: SalesRepListSummary | undefined;
 
-      if (appliedStatus === "ALL") {
+      if (targetStatus === "ALL") {
         const [defaultRes, inactiveRes] = await Promise.allSettled([
           salesRepresentativeApi.getList({
             limit: 200,
-            search: appliedSearch || undefined,
+            search: targetSearch || undefined,
           }),
           salesRepresentativeApi.getList({
             limit: 200,
-            search: appliedSearch || undefined,
+            search: targetSearch || undefined,
             status: "Inactive",
           }),
         ]);
@@ -448,8 +427,8 @@ export const SalesRepresentativeView: React.FC = () => {
       } else {
         const res = await salesRepresentativeApi.getList({
           limit: 200,
-          search: appliedSearch || undefined,
-          status: appliedStatus,
+          search: targetSearch || undefined,
+          status: targetStatus,
         });
 
         if (currentReqId !== requestIdRef.current) return;
@@ -1362,22 +1341,12 @@ export const SalesRepresentativeView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedStatus === "ALL" &&
-            pendingStatus === "ALL" &&
-            currentPage === 1;
-
           setPendingSearch("");
           setAppliedSearch("");
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setCurrentPage(1);
-
-          if (isSame) {
-            loadReps();
-          }
+          loadReps({ search: "", status: "ALL" });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

@@ -116,6 +116,7 @@ export interface Branch {
   id: string;
   organizationId?: string;
   subOrganizationId?: string;
+  subOrganizationName?: string;
   productId?: string;
   productName?: string;
   organizationType?: 'Client Management' | 'Sales Management' | string;
@@ -127,7 +128,10 @@ export interface Branch {
   email?: string;
   location?: string;
   city?: string;
+  country?: string;
   state?: string;
+  district?: string;
+  pincode?: string;
   address?: string;
   gstNumber?: string;
   status: BranchStatus;

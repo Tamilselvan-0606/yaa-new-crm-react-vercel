@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useForm, Controller } from 'react-hook-form';
@@ -188,16 +187,6 @@ export const ExpenseView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('All Expenses');
   const [appliedPeriod, setAppliedPeriod] = useState('All Expenses');
   const [customStartDate, setCustomStartDate] = useState('');
@@ -276,9 +265,24 @@ export const ExpenseView: React.FC = () => {
 
   // Fetch Expenses from Work API with deduplication
   const fetchExpenses = useCallback(
-    async (forceRefresh = false) => {
-      const dateRange = getDateRangeForPeriod(appliedPeriod, customStartDate, customEndDate);
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedPaymentMode}_${dateRange.from || ''}_${dateRange.to || ''}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        period?: string;
+        category?: string;
+        paymentMode?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetPeriod = overrides?.period !== undefined ? overrides.period : appliedPeriod;
+      const targetCategory = overrides?.category !== undefined ? overrides.category : appliedCategory;
+      const targetPaymentMode = overrides?.paymentMode !== undefined ? overrides.paymentMode : appliedPaymentMode;
+
+      const dateRange = getDateRangeForPeriod(targetPeriod, customStartDate, customEndDate);
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetCategory}_${targetPaymentMode}_${dateRange.from || ''}_${dateRange.to || ''}`;
 
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
@@ -289,11 +293,11 @@ export const ExpenseView: React.FC = () => {
 
       try {
         const response = await workExpenseApi.getExpenses({
-          page: currentPage,
+          page: targetPage,
           limit: pageSize,
-          search: appliedSearch.trim() || undefined,
-          categoryId: appliedCategory !== 'All' ? appliedCategory : undefined,
-          paymentMethod: appliedPaymentMode !== 'All' ? appliedPaymentMode : undefined,
+          search: targetSearch.trim() || undefined,
+          categoryId: targetCategory !== 'All' ? targetCategory : undefined,
+          paymentMethod: targetPaymentMode !== 'All' ? targetPaymentMode : undefined,
           from: dateRange.from,
           to: dateRange.to,
           sortBy: 'expenseDate',
@@ -1404,17 +1408,8 @@ export const ExpenseView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedPeriod === 'All Expenses' &&
-            pendingPeriod === 'All Expenses' &&
-            appliedCategory === 'All' &&
-            pendingCategory === 'All' &&
-            appliedPaymentMode === 'All' &&
-            pendingPaymentMode === 'All' &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('All Expenses');
@@ -1424,10 +1419,13 @@ export const ExpenseView: React.FC = () => {
           setPendingPaymentMode('All');
           setAppliedPaymentMode('All');
           setCurrentPage(1);
-
-          if (isSame) {
-            fetchExpenses(true);
-          }
+          fetchExpenses(true, {
+            search: '',
+            period: 'All Expenses',
+            category: 'All',
+            paymentMode: 'All',
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2 flex-nowrap">

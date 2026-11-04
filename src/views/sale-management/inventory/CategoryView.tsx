@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
@@ -63,16 +62,6 @@ export const CategoryView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);

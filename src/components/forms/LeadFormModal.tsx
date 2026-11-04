@@ -8,6 +8,7 @@ import { Button } from '../common/Button';
 import { useAuth } from '../../context/AuthContext';
 import { useScopeLock } from '../../hooks/useScopeLock';
 import { RegisteredField } from '../common/FormField';
+import { lettersOnly } from '../../utils/fieldValidators';
 import {
   useCreatePlatformLeadMutation,
   useUpdatePlatformLeadMutation,
@@ -662,8 +663,9 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             label="Lead Name"
             required
             registration={register("company")}
+            transform={lettersOnly}
             error={errors.company?.message}
-            placeholder="Lead / Company Name"
+            placeholder="Enter lead name"
           />
 
           <RegisteredField
@@ -681,6 +683,7 @@ export const LeadFormModal: React.FC<LeadFormModalProps> = ({
             label="Contact Person Name"
             required
             registration={register("name")}
+            transform={lettersOnly}
             error={errors.name?.message}
             placeholder="Full Name"
           />

@@ -19,6 +19,13 @@ export interface SubOrganizationApiItem {
   code: string;
   name: string;
   legalName?: string;
+  country?: string;
+  state?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   organizationType?: string;
   /** 1 = client management, 2 = sales management, 3 = both. */
   subOrganizationType?: number | string | null;
@@ -38,6 +45,8 @@ export interface SubOrganizationApiItem {
   createdAt: string;
   updatedAt?: string;
   user?: SubOrganizationUser;
+  /** Only returned by GET /sub-organizations/{id}. */
+  branches?: Array<{ id: string; name?: string }>;
   // UI helper mappings
   subscriptionPlan?: string;
   branchesCount?: number;
@@ -98,6 +107,13 @@ export interface CreateSubOrganizationRequest {
   password?: string;
   roleId?: string;
   legalName?: string;
+  country?: string;
+  state?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   organizationType?: string;
   industry?: string;
   location?: string;
@@ -127,6 +143,13 @@ export interface UpdateSubOrganizationRequest {
   password?: string;
   roleId?: string;
   legalName?: string;
+  country?: string;
+  state?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   organizationType?: string;
   industry?: string;
   location?: string;

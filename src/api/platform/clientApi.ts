@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   PlatformClientListParams,
@@ -15,7 +15,7 @@ export const clientEndpoints = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getPlatformClients: builder.query<PlatformClientListResponse, PlatformClientListParams | void>({
       query: (params) => {
-        const queryParams: Record<string, any> = {};
+        const queryParams: Record<string, any> = params ? buildListParams(params as any, { sortBy: 'name' }) : {};
         const targetOrgId =
           (params && typeof params === 'object' && 'organization_id' in params && params.organization_id)
             ? params.organization_id
@@ -90,7 +90,7 @@ export const clientEndpoints = baseApi.injectEndpoints({
           params: targetOrgId ? { organization_id: targetOrgId } : undefined,
         };
       },
-      invalidatesTags: [{ type: 'PlatformClient', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'PlatformClient', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     updatePlatformClient: builder.mutation<

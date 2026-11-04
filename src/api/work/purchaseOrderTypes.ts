@@ -36,6 +36,24 @@ export interface ApiPurchaseOrder {
   balance?: number;
   paymentStatus?: 'Paid' | 'Partial' | 'Unpaid' | string;
   status: 'Pending' | 'Approved' | 'Ordered' | 'Received' | 'Cancelled' | string;
+  originalBillAmount?: number;
+  totalPurchaseReturnAmount?: number;
+  totalReturned?: number;
+  netPayableAmount?: number;
+  netPayable?: number;
+  totalPaidAmount?: number;
+  totalPaid?: number;
+  creditAdjustedAmount?: number;
+  outstandingBalance?: number;
+  outstandingAmount?: number;
+  supplierCreditAmount?: number;
+  supplierCredit?: number;
+  supplierCreditGeneratedAmount?: number;
+  creditRefundedAmount?: number;
+  refundedAmount?: number;
+  creditSettledAmount?: number;
+  remainingSupplierCredit?: number;
+  refundStatus?: string;
   notes?: string | null;
   createdBy?: string;
   createdAt: string;
@@ -110,7 +128,7 @@ export interface PurchaseOrderListResponse {
   message: string;
   data: ApiPurchaseOrder[];
   pagination?: PurchaseOrderPagination;
-  summary?: { totalCount: number; totalAmount: number; todayCount: number; todayAmount: number; pendingPayments: number; paidCount: number; completedCount: number };
+  summary?: { totalCount: number; totalAmount: number; todayCount: number; todayAmount: number; pendingPayments: number; paidCount: number; completedCount: number; totalPurchaseReturnAmount?: number; supplierCreditAmount?: number };
   meta?: {
     timestamp: string;
     requestId: string;

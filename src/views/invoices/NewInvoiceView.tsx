@@ -388,37 +388,32 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
 
   const availableCustomers = mappedPlatformClients.length > 0 ? mappedPlatformClients : commerceCustomers;
 
-  // Live Subscription Plans from Platform API
-  const [platformPlans, setPlatformPlans] = useState<
-    Array<{ id: string; name: string; price: number; hsn: string; taxPercent: number; description?: string }>
-  >([]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchPlans = async () => {
-      try {
-        const res = await subscriptionPlanApi.getSubscriptionPlans({ limit: 100 });
-        if (isMounted && res.data) {
-          setPlatformPlans(
-            res.data.map((plan) => ({
-              id: plan.id,
-              name: plan.name,
-              hsn: '998314',
-              price: Number(plan.monthlyPrice || plan.annualPrice || 0),
-              taxPercent: Number(plan.gstRate) || 18,
-              description: plan.description || '',
-            }))
-          );
-        }
-      } catch (err) {
-        console.error('Failed to load subscription plans in NewInvoiceView:', err);
-      }
-    };
-    fetchPlans();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  // Subscription plans only supply default HSN / price / GST for line items, so they are fetched the first
+  // time those defaults are needed (not when the page opens) and reused afterwards.
+  type PlatformPlan = { id: string; name: string; price: number; hsn: string; taxPercent: number; description?: string };
+  const platformPlansRequest = useRef<Promise<PlatformPlan[]> | null>(null);
+  const loadPlatformPlans = (): Promise<PlatformPlan[]> => {
+    if (!platformPlansRequest.current) {
+      platformPlansRequest.current = subscriptionPlanApi
+        .getSubscriptionPlans({ limit: 100 })
+        .then((res) =>
+          (res.data || []).map((plan) => ({
+            id: plan.id,
+            name: plan.name,
+            hsn: '998314',
+            price: Number(plan.monthlyPrice || plan.annualPrice || 0),
+            taxPercent: Number(plan.gstRate) || 18,
+            description: plan.description || '',
+          }))
+        )
+        .catch((err) => {
+          console.error('Failed to load subscription plans in NewInvoiceView:', err);
+          platformPlansRequest.current = null; // retry next time
+          return [] as PlatformPlan[];
+        });
+    }
+    return platformPlansRequest.current;
+  };
 
   // Column 2: Client Selection & Dropdown
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -459,14 +454,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
   });
 
   // Get projects associated with the selected client (or live platform plans)
-  const getActiveClientProjects = () => {
+  const getActiveClientProjects = async () => {
     if (selectedCustomer && clientProjectsMap[selectedCustomer.id]?.length) {
       return clientProjectsMap[selectedCustomer.id];
     }
-    return platformPlans;
+    return loadPlatformPlans();
   };
 
-  const handleSaveClientProject = (e: React.FormEvent) => {
+  const handleSaveClientProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClientProject.name?.trim()) {
       showToast('error', 'Project Name Required', 'Please enter a name for the project.');
@@ -486,7 +481,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       description: newClientProject.description?.trim() || '',
     };
 
-    const currentList = clientProjectsMap[selectedCustomer.id] || getActiveClientProjects();
+    const currentList = clientProjectsMap[selectedCustomer.id] || (await getActiveClientProjects());
     setClientProjectsMap({
       ...clientProjectsMap,
       [selectedCustomer.id]: [...currentList, createdProj],
@@ -669,8 +664,8 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     }
   }, [invoiceToEdit, invoiceToDuplicate]);
 
-  const handleProductChange = (itemId: string, productName: string) => {
-    const activeProjects = getActiveClientProjects();
+  const handleProductChange = async (itemId: string, productName: string) => {
+    const activeProjects = await getActiveClientProjects();
     const foundClientProj = activeProjects.find((p) => p.name === productName);
 
     const defaultHsn = foundClientProj?.hsn || '998313';

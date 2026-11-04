@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import { SalesRepSearchableSelect } from './SalesRepSearchableSelect';
@@ -156,16 +155,6 @@ export const CollectionsView: React.FC = () => {
   const initialSearch = searchParams.get('search') || '';
   const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [appliedSearch, setAppliedSearch] = useState(initialSearch);
-  const [debouncedSearch] = useDebounce(searchTerm, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
 
   // Main Sub-views: Dashboard | Customer Assignments | Follow-ups | Collection History
   const rawInitial = (searchParams.get('subView') || searchParams.get('tab') || searchParams.get('view') || 'dashboard') as string;
@@ -348,14 +337,28 @@ export const CollectionsView: React.FC = () => {
   const invoicesRequestSeqRef = useRef(0);
   const invoicesInFlightRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
 
-  const loadInvoices = React.useCallback((): Promise<void> => {
+  const loadInvoices = React.useCallback((overrides?: {
+    search?: string;
+    repFilter?: string;
+    customerFilter?: string;
+    dueDate?: string;
+    status?: string;
+    paymentStatus?: string;
+  }): Promise<void> => {
+    const effSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+    const effRep = overrides?.repFilter !== undefined ? overrides.repFilter : selectedRepFilter;
+    const effCustomer = overrides?.customerFilter !== undefined ? overrides.customerFilter : selectedCustomerFilter;
+    const effDueDate = overrides?.dueDate !== undefined ? overrides.dueDate : dueDateFilter;
+    const effStatus = overrides?.status !== undefined ? overrides.status : statusFilter;
+    const effPaymentStatus = overrides?.paymentStatus !== undefined ? overrides.paymentStatus : paymentStatusFilter;
+
     const key = JSON.stringify([
-      appliedSearch,
-      selectedRepFilter,
-      selectedCustomerFilter,
-      dueDateFilter,
-      statusFilter,
-      paymentStatusFilter,
+      effSearch,
+      effRep,
+      effCustomer,
+      effDueDate,
+      effStatus,
+      effPaymentStatus,
     ]);
     if (invoicesInFlightRef.current?.key === key) return invoicesInFlightRef.current.promise;
 
@@ -368,20 +371,20 @@ export const CollectionsView: React.FC = () => {
 
       const [colRes, invRes, assignRes] = await Promise.allSettled([
         collectionApi.getCollectionInvoices({
-          search: appliedSearch || undefined,
-          salesRepresentativeId: selectedRepFilter !== 'ALL' ? selectedRepFilter : undefined,
-          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
-          dueDateFilter: dueDateFilter !== 'ALL' ? dueDateFilter : undefined,
-          status: statusFilter !== 'ALL' ? statusFilter : undefined,
-          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+          search: effSearch || undefined,
+          salesRepresentativeId: effRep !== 'ALL' ? effRep : undefined,
+          customerId: effCustomer !== 'ALL' ? effCustomer : undefined,
+          dueDateFilter: effDueDate !== 'ALL' ? effDueDate : undefined,
+          status: effStatus !== 'ALL' ? effStatus : undefined,
+          paymentStatus: effPaymentStatus !== 'ALL' ? effPaymentStatus : undefined,
           limit: 200,
         }),
         commerceInvoiceApi.getInvoices({
           pagination_required: false,
-          search: appliedSearch || undefined,
-          customerId: selectedCustomerFilter !== 'ALL' ? selectedCustomerFilter : undefined,
-          status: statusFilter !== 'ALL' ? statusFilter : undefined,
-          paymentStatus: paymentStatusFilter !== 'ALL' ? paymentStatusFilter : undefined,
+          search: effSearch || undefined,
+          customerId: effCustomer !== 'ALL' ? effCustomer : undefined,
+          status: effStatus !== 'ALL' ? effStatus : undefined,
+          paymentStatus: effPaymentStatus !== 'ALL' ? effPaymentStatus : undefined,
           page_size: 200,
         }),
         collectionApi.getCustomerAssignments({ limit: 200 }),
@@ -512,17 +515,24 @@ export const CollectionsView: React.FC = () => {
     loadMetrics();
   }, [loadMetrics]);
 
+  // One effect per sub-view, so a change that only affects another sub-view's loader (e.g. the page
+  // number of the dashboard table re-creating loadAssignments/loadFollowUps/loadHistory) can no longer
+  // re-fire the active sub-view's request.
   useEffect(() => {
-    if (subView === 'dashboard') {
-      loadInvoices();
-    } else if (subView === 'customer-assignments') {
-      loadAssignments();
-    } else if (subView === 'follow-ups') {
-      loadFollowUps();
-    } else if (subView === 'collection-history') {
-      loadHistory();
-    }
-  }, [subView, loadInvoices, loadAssignments, loadFollowUps, loadHistory]);
+    if (subView === 'dashboard') loadInvoices();
+  }, [subView, loadInvoices]);
+
+  useEffect(() => {
+    if (subView === 'customer-assignments') loadAssignments();
+  }, [subView, loadAssignments]);
+
+  useEffect(() => {
+    if (subView === 'follow-ups') loadFollowUps();
+  }, [subView, loadFollowUps]);
+
+  useEffect(() => {
+    if (subView === 'collection-history') loadHistory();
+  }, [subView, loadHistory]);
 
   // Listen for sidebar click navigation events to immediately re-fetch collection data
   useEffect(() => {
@@ -533,10 +543,10 @@ export const CollectionsView: React.FC = () => {
         customEvent.detail?.id === 'collections'
       ) {
         loadMetrics();
-        loadInvoices();
-        if (subView === 'customer-assignments') loadAssignments();
-        if (subView === 'follow-ups') loadFollowUps();
-        if (subView === 'collection-history') loadHistory();
+        if (subView === 'dashboard') loadInvoices();
+        else if (subView === 'customer-assignments') loadAssignments();
+        else if (subView === 'follow-ups') loadFollowUps();
+        else if (subView === 'collection-history') loadHistory();
       }
     };
     window.addEventListener('crm:sidebar-navigate', handleSidebarNavigate);
@@ -1040,13 +1050,12 @@ export const CollectionsView: React.FC = () => {
     setPaymentStatusFilter(pendingPaymentStatusFilter);
     setCurrentPage(1);
 
-    if (isSame) {
-      loadMetrics();
-      if (subView === 'dashboard') loadInvoices();
-      else if (subView === 'customer-assignments') loadAssignments();
-      else if (subView === 'follow-ups') loadFollowUps();
-      else if (subView === 'collection-history') loadHistory();
-    }
+    invoicesInFlightRef.current = null;
+    loadMetrics();
+    if (subView === 'dashboard') loadInvoices({ search: '', repFilter: 'ALL', customerFilter: 'ALL', dueDate: 'ALL', status: 'ALL', paymentStatus: 'ALL' });
+    else if (subView === 'customer-assignments') loadAssignments();
+    else if (subView === 'follow-ups') loadFollowUps();
+    else if (subView === 'collection-history') loadHistory();
   };
 
   // Reset all filters
@@ -1502,8 +1511,9 @@ export const CollectionsView: React.FC = () => {
           'Dashboard',
         ])
       );
-      loadAssignments();
-      loadInvoices();
+      // loadInvoices() already re-reads the customer assignments for the dashboard, so only one of the two runs.
+      if (subView === 'dashboard') loadInvoices();
+      else loadAssignments();
     } catch (err: any) {
       console.error('Failed to assign customer:', err);
       const fe = extractApiFieldErrors(err);

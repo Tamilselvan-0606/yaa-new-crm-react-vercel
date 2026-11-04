@@ -13,6 +13,7 @@ import {
   getStoredOrganizationId,
 } from './config';
 import { canRefreshAfter, refreshAccessToken, retryWithRefreshedToken } from './tokenRefresh';
+import { ALL_TAG_TYPES } from '../store/api/tagTypes';
 
 /**
  * Base Axios Client for CRM API integration
@@ -148,49 +149,59 @@ const dynamicBaseQuery: BaseQueryFn<
 export const baseApi = createApi({
   reducerPath: 'api',
   baseQuery: dynamicBaseQuery,
-  tagTypes: [
-    'User',
-    'Organization',
-    'Customer',
-    'Supplier',
-    'Product',
-    'Stock',
-    'Quotation',
-    'Proforma',
-    'SalesOrder',
-    'DeliveryChallan',
-    'SalesInvoice',
-    'Payment',
-    'PaymentIn',
-    'PaymentOut',
-    'SalesReturn',
-    'PurchaseRequest',
-    'Purchase',
-    'PurchaseReturn',
-    'Expense',
-    'ExpenseCategory',
-    'Lead',
-    'Task',
-    'Content',
-    'Dashboard',
-    'Employee',
-    'Reminder',
-    'Activity',
-    'Report',
-    'Setting',
-    'Branch',
-    'Category',
-    'Subcategory',
-    'Unit',
-    'Subscription',
-    'ClientSubscription',
-    'SubscriptionPlan',
-    'OrgSubscription',
-    'ProductPlan',
-    'ClientProduct',
-    'PlatformClient',
-    'SalesRepresentative',
-    'Collection',
-  ],
+  // Cache policy for every RTK Query endpoint: keep responses 5 minutes after the last component using them
+  // unmounts, so leaving a page and coming back reuses the response. Nothing refetches just because a component
+  // mounted (refetchOnMountOrArgChange stays false) or the tab got focus; mutations invalidate by tag instead.
+  keepUnusedDataFor: 300,
+  refetchOnMountOrArgChange: false,
+  refetchOnFocus: false,
+  refetchOnReconnect: true,
+  // Every tag lives in api/tags.ts (one definition for all modules).
+  tagTypes: [...ALL_TAG_TYPES],
   endpoints: () => ({}),
 });
+
+// ---------------------------------------------------------------------------------------------------
+// List request shape shared by every list endpoint:
+//   ?page_no=1&page_size=10&pagination_required=true&search=abc&status=Active&page=1&limit=10&sortBy=name
+// (`page` / `limit` are sent next to `page_no` / `page_size` because the backend accepts either form.)
+// Empty values are left out, "All" status means no status filter.
+// ---------------------------------------------------------------------------------------------------
+export interface ListParamsInput {
+  page?: number;
+  limit?: number;
+  page_no?: number;
+  page_size?: number;
+  pagination_required?: boolean | string;
+  search?: string;
+  status?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}
+
+export interface ListParamsDefaults {
+  /** Used when the screen does not choose a sort: 'name' for master data, 'createdAt' for documents. */
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export const buildListParams = (p: ListParamsInput = {}, defaults: ListParamsDefaults = {}) => {
+  const page = Number(p.page_no ?? p.page ?? 1) || 1;
+  const limit = Number(p.page_size ?? p.limit ?? 10) || 10;
+  const search = typeof p.search === 'string' ? p.search.trim() : '';
+  const status = p.status && p.status !== 'All' && p.status !== 'ALL' ? p.status : undefined;
+  const sortBy = p.sortBy ?? defaults.sortBy;
+  const sortOrder = p.sortOrder ?? (p.sortBy ? undefined : defaults.sortOrder);
+
+  return {
+    page_no: page,
+    page_size: limit,
+    pagination_required: String(p.pagination_required ?? 'true'),
+    search: search || undefined,
+    status,
+    page,
+    limit,
+    sortBy,
+    sortOrder,
+  };
+};

@@ -89,15 +89,15 @@ export const dashboardOverviewEndpoints = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getPlatformOverview: builder.query<Envelope<PlatformOverview>, void>({
       query: () => ({ url: '/platform/dashboard/overview/platform' }),
-      providesTags: ['Dashboard'],
+      providesTags: ['PlatformDashboard'],
     }),
     getOrganizationOverview: builder.query<Envelope<OrganizationOverview>, OverviewScope>({
       query: (scope) => ({ url: '/platform/dashboard/overview/organization', ...scopeArgs(scope) }),
-      providesTags: ['Dashboard'],
+      providesTags: ['PlatformDashboard'],
     }),
     getSubOrganizationOverview: builder.query<Envelope<SubOrganizationOverview>, OverviewScope>({
       query: (scope) => ({ url: '/platform/dashboard/overview/sub-organization', ...scopeArgs(scope) }),
-      providesTags: ['Dashboard'],
+      providesTags: ['PlatformDashboard'],
     }),
   }),
   overrideExisting: false,

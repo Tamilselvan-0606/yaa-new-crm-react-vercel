@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   QuoteListParams,
   QuoteListResponse,
@@ -17,20 +17,20 @@ export const quoteEndpoints = baseApi.injectEndpoints({
     getPlatformQuotes: builder.query<QuoteListResponse, QuoteListParams | void>({
       query: (params) => ({
         url: '/platform/quotes',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
       }),
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Quotation' as const, id })),
-              { type: 'Quotation', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'PlatformQuote' as const, id })),
+              { type: 'PlatformQuote', id: 'LIST' },
             ]
-          : [{ type: 'Quotation', id: 'LIST' }],
+          : [{ type: 'PlatformQuote', id: 'LIST' }],
     }),
 
     getPlatformQuoteById: builder.query<QuoteSingleResponse, string>({
       query: (id) => `/platform/quotes/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Quotation', id }],
+      providesTags: (_result, _error, id) => [{ type: 'PlatformQuote', id }],
     }),
 
     createPlatformQuote: builder.mutation<QuoteSingleResponse, CreateQuoteRequest>({
@@ -39,7 +39,7 @@ export const quoteEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformQuote', id: 'LIST' }],
     }),
 
     updatePlatformQuote: builder.mutation<QuoteSingleResponse, { id: string; payload: UpdateQuoteRequest }>({
@@ -49,8 +49,8 @@ export const quoteEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Quotation', id },
-        { type: 'Quotation', id: 'LIST' },
+        { type: 'PlatformQuote', id },
+        { type: 'PlatformQuote', id: 'LIST' },
       ],
     }),
 
@@ -59,7 +59,7 @@ export const quoteEndpoints = baseApi.injectEndpoints({
         url: `/platform/quotes/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformQuote', id: 'LIST' }],
     }),
 
     convertPlatformQuote: builder.mutation<QuoteConvertResponse, { id: string; payload: ConvertQuoteRequest }>({
@@ -68,7 +68,7 @@ export const quoteEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, { type: 'SalesInvoice', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformQuote', id: 'LIST' }, { type: 'PlatformInvoice', id: 'LIST' }],
     }),
 
     convertToProformaInvoice: builder.mutation<QuoteConvertResponse, { id: string; payload: { dueDate?: string } }>({
@@ -77,7 +77,7 @@ export const quoteEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, { type: 'SalesInvoice', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformQuote', id: 'LIST' }, { type: 'PlatformInvoice', id: 'LIST' }],
     }),
   }),
   overrideExisting: false,
@@ -96,7 +96,7 @@ export const {
 export const quoteApi = {
   getQuotes: async (params?: QuoteListParams): Promise<QuoteListResponse> => {
     const res = await baseClient.get<QuoteListResponse>('/platform/quotes', {
-      params,
+      params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
     });
     return res.data;
   },

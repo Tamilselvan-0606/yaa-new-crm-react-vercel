@@ -25,6 +25,14 @@ import {
 import { useAppDispatch } from '../../hooks/redux';
 import { baseApi } from '../../api/baseApi';
 import { RegisteredField } from '../common/FormField';
+import {
+  alphanumericUpper,
+  digitsOnly,
+  lettersOnly,
+  liveGstError,
+  liveMobileStartError,
+  livePanError,
+} from '../../utils/fieldValidators';
 import { toast } from "../../utils/toast";
 import {
   Upload,
@@ -222,6 +230,8 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
     reset,
     control,
     setValue,
+    setError,
+    clearErrors,
     formState: { errors, isSubmitting },
   } = useForm<CustomerFormData>({
     resolver: zodResolver(CustomerSchema),
@@ -238,6 +248,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
       address: '',
     },
   });
+
+  /** Shows (or clears) an error while the user is still typing, before the form is submitted. */
+  const showLiveError = (field: 'gstNumber' | 'panNumber' | 'phone' | 'whatsapp', message: string) =>
+    message ? setError(field, { type: 'manual', message }) : clearErrors(field);
 
   // Load real products, requested with the selected branch once the branches for the current org/sub-org are
   // loaded (so a stale branch id is never sent). If the server rejects the branch, the org/sub-org products
@@ -501,10 +515,10 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
 
       dispatch(
         baseApi.util.invalidateTags([
-          { type: 'Customer', id: 'LIST' },
+          { type: 'CrmCustomer', id: 'LIST' },
           { type: 'PlatformClient', id: 'LIST' },
           { type: 'Lead', id: 'LIST' },
-          'Dashboard',
+          'PlatformDashboard',
         ])
       );
       onClose();
@@ -721,6 +735,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             label="Client Name"
             required
             registration={register("clientName")}
+            transform={lettersOnly}
             error={errors.clientName?.message}
             placeholder="e.g. John Doe"
           />
@@ -740,6 +755,7 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
             label="Contact Person"
             required
             registration={register("contactPerson")}
+            transform={lettersOnly}
             error={errors.contactPerson?.message}
             placeholder="Contact Person Full Name"
           />
@@ -759,8 +775,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   placeholder="e.g. 9876543210"
                   value={field.value || ''}
                   onChange={(e) => {
-                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    const clean = digitsOnly(e.target.value);
                     field.onChange(clean);
+                    showLiveError('phone', liveMobileStartError('Phone Number', clean));
                   }}
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                     errors.phone
@@ -788,8 +805,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   placeholder="e.g. 9876543210"
                   value={field.value || ''}
                   onChange={(e) => {
-                    const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    const clean = digitsOnly(e.target.value);
                     field.onChange(clean);
+                    showLiveError('whatsapp', liveMobileStartError('WhatsApp Number', clean));
                   }}
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
                     errors.whatsapp
@@ -830,8 +848,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   placeholder="e.g. 33AAAAA0000A1Z5"
                   value={field.value || ''}
                   onChange={(e) => {
-                    const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 15);
+                    const clean = alphanumericUpper(e.target.value, 15);
                     field.onChange(clean);
+                    showLiveError('gstNumber', liveGstError(clean));
                   }}
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
                     errors.gstNumber
@@ -860,8 +879,9 @@ export const CustomerFormModal: React.FC<CustomerFormModalProps> = ({
                   placeholder="e.g. AAAAA0000A"
                   value={field.value || ''}
                   onChange={(e) => {
-                    const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
+                    const clean = alphanumericUpper(e.target.value, 10);
                     field.onChange(clean);
+                    showLiveError('panNumber', livePanError(clean));
                   }}
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all uppercase ${
                     errors.panNumber

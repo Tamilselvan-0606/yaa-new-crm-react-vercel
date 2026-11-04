@@ -309,15 +309,15 @@ export const quotationEndpoints = baseApi.injectEndpoints({
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Quotation' as const, id })),
-              { type: 'Quotation', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'Estimation' as const, id })),
+              { type: 'Estimation', id: 'LIST' },
             ]
-          : [{ type: 'Quotation', id: 'LIST' }],
+          : [{ type: 'Estimation', id: 'LIST' }],
     }),
 
     getCommerceQuotationById: builder.query<QuotationSingleResponse, string>({
       query: (id) => `/commerce/quotations/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Quotation', id }],
+      providesTags: (_result, _error, id) => [{ type: 'Estimation', id }],
     }),
 
     createCommerceQuotation: builder.mutation<QuotationSingleResponse, CreateQuotationPayload>({
@@ -326,7 +326,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: sanitizeCommerceQuotationPayload(payload),
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Estimation', id: 'LIST' }, 'Dashboard'],
     }),
 
     updateCommerceQuotation: builder.mutation<QuotationSingleResponse, { id: string; payload: UpdateQuotationPayload }>({
@@ -336,8 +336,8 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Quotation', id },
-        { type: 'Quotation', id: 'LIST' },
+        { type: 'Estimation', id },
+        { type: 'Estimation', id: 'LIST' },
       ],
     }),
 
@@ -348,8 +348,8 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         body: sanitizeCommerceQuotationPayload(payload),
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Quotation', id },
-        { type: 'Quotation', id: 'LIST' },
+        { type: 'Estimation', id },
+        { type: 'Estimation', id: 'LIST' },
       ],
     }),
 
@@ -358,7 +358,7 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         url: `/commerce/quotations/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Quotation', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Estimation', id: 'LIST' }, 'Dashboard'],
     }),
 
     updateCommerceQuotationStatus: builder.mutation<QuotationSingleResponse, { id: string; status: string }>({
@@ -368,8 +368,8 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         body: { status },
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Quotation', id },
-        { type: 'Quotation', id: 'LIST' },
+        { type: 'Estimation', id },
+        { type: 'Estimation', id: 'LIST' },
       ],
     }),
 
@@ -380,10 +380,10 @@ export const quotationEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Quotation', id },
-        { type: 'Quotation', id: 'LIST' },
-        { type: 'Proforma', id: 'LIST' },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'Estimation', id },
+        { type: 'Estimation', id: 'LIST' },
+        { type: 'ProformaInvoice', id: 'LIST' },
+        { type: 'SaleOrder', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         'Dashboard',
       ],

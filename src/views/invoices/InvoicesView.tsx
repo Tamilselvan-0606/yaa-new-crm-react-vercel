@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   PlusCircle,
   Pencil,
@@ -145,7 +145,31 @@ const getFallbackSellerDetails = (apiItem?: any) => {
   };
 };
 
-const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice => {
+// Maps API line items to the screen's item shape. Applied AFTER the raw record is spread into the result,
+// otherwise the raw `items` (title/quantity) replace these (name/qty) and the rows render blank.
+const mapLineItems = (items: any[] | undefined, idPrefix: string, defaultHsn: string) =>
+  (items || []).map((it: any, idx: number) => {
+    const qty = Number(it.quantity) || 1;
+    const price = Number(it.unitPrice) || 0;
+    const taxRate = Number(it.gstPercent) || 0;
+    const sub = qty * price;
+    const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
+    const total = Number(it.lineTotal) || sub + taxAmount;
+    return {
+      id: it.id || it.itemId || `${idPrefix}_${idx + 1}`,
+      name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
+      description: it.itemDescription || '',
+      hsnCode: it.hsnCode || defaultHsn,
+      qty,
+      unitPrice: price,
+      taxPercent: taxRate,
+      discount: 0,
+      subtotal: sub,
+      total,
+    };
+  });
+
+const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice => {
   const rawInvoiceDate = api.invoiceDate || (api as any).date || '';
   const rawDueDate = api.dueDate || '';
   const seller = (api as any).organization || (api as any).company || (api as any).seller || {};
@@ -188,26 +212,6 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
       branchName: bankData.branchName || bankData.branch || '',
       upiId: bankData.upiId || bankData.vpa || '',
     } : undefined,
-    items: (api.items || []).map((it, idx) => {
-      const qty = Number(it.quantity) || 1;
-      const price = Number(it.unitPrice) || 0;
-      const taxRate = Number(it.gstPercent) || 0;
-      const sub = qty * price;
-      const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
-      const total = Number(it.lineTotal) || sub + taxAmount;
-      return {
-        id: it.id || `pitem_${idx + 1}`,
-        name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
-        description: it.itemDescription || '',
-        hsnCode: it.hsnCode || '',
-        qty,
-        unitPrice: price,
-        taxPercent: taxRate,
-        discount: 0,
-        subtotal: sub,
-        total,
-      };
-    }),
     subtotal: Number(api.subTotal) || 0,
     totalDiscount: Number(api.discountTotal) || 0,
     taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
@@ -217,6 +221,7 @@ const mapApiProformaToSavedInvoice = (api: ProformaInvoiceApiItem): SavedInvoice
     grandTotal: Number(api.grandTotal) || 0,
     createdAt: api.createdAt,
     ...(api as any),
+    items: mapLineItems(api.items as any[], 'pitem', ''),
   };
 };
 
@@ -281,26 +286,6 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
       branchName: bankData.branchName || bankData.branch || '',
       upiId: bankData.upiId || bankData.vpa || '',
     } : undefined,
-    items: (api.items || []).map((it, idx) => {
-      const qty = Number(it.quantity) || 1;
-      const price = Number(it.unitPrice) || 0;
-      const taxRate = Number(it.gstPercent) || 0;
-      const sub = qty * price;
-      const taxAmount = Number(it.taxAmount) || (sub * taxRate) / 100;
-      const total = Number(it.lineTotal) || sub + taxAmount;
-      return {
-        id: it.id || it.itemId || `item_${idx + 1}`,
-        name: it.title || it.itemDescription || it.itemId || `Line Item ${idx + 1}`,
-        description: it.itemDescription || '',
-        hsnCode: it.hsnCode || '998314',
-        qty,
-        unitPrice: price,
-        taxPercent: taxRate,
-        discount: 0,
-        subtotal: sub,
-        total,
-      };
-    }),
     subtotal: Number(api.subTotal) || 0,
     totalDiscount: Number(api.discountTotal) || 0,
     taxableAmount: Math.max(0, (Number(api.subTotal) || 0) - (Number(api.discountTotal) || 0)),
@@ -311,6 +296,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
     paymentDetails,
     createdAt: api.createdAt,
     ...(api as any),
+    items: mapLineItems(api.items as any[], 'item', '998314'),
   };
 };
 
@@ -343,22 +329,26 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [appliedBilledOrgId, setAppliedBilledOrgId] = useState<string>('');
   const [availableOrganizations, setAvailableOrganizations] = useState<OrganizationApiItem[]>([]);
 
-  // Load registered organizations for Super Admin filter
+  // Platform Administrator only: the organization list feeds the "Organization" filter, so it is fetched the
+  // first time that filter opens (not when the page loads) and kept afterwards.
+  const orgFilterRequested = useRef(false);
+  const loadOrganizationFilterOptions = () => {
+    if (!isSuperAdmin || orgFilterRequested.current) return;
+    orgFilterRequested.current = true;
+    organizationApi
+      .getOrganizations(1, 100)
+      .then((res) => {
+        if (res && Array.isArray(res.data)) setAvailableOrganizations(res.data);
+        else orgFilterRequested.current = false;
+      })
+      .catch((err) => {
+        orgFilterRequested.current = false;
+        console.warn('Could not load organizations for Super Admin filter:', err);
+      });
+  };
+
   useEffect(() => {
     let isMounted = true;
-    if (isSuperAdmin) {
-      organizationApi
-        .getOrganizations(1, 100)
-        .then((res) => {
-          if (isMounted && res && Array.isArray(res.data)) {
-            setAvailableOrganizations(res.data);
-          }
-        })
-        .catch((err) => {
-          console.warn('Could not load organizations for Super Admin filter:', err);
-        });
-    }
-
     // Load active organization details to populate Billing From seller info
     const orgId = currentUser?.organizationId || getStoredOrganizationId();
     if (orgId) {
@@ -416,6 +406,39 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [viewingInvoice, setViewingInvoice] = useState<SavedInvoice | null>(null);
+  const viewingDocId = viewingInvoice?.id;
+
+  // Opening a proforma / invoice shows the list row at once, then loads the full record (GET by id) so the
+  // line items, totals, status and payments are exactly what is saved. A failed call keeps the row.
+  // The response is cached (PlatformProformaInvoice / PlatformInvoice tags) and refreshed after any change.
+  useEffect(() => {
+    if (!viewingDocId) return;
+    let cancelled = false;
+    const request: Promise<SavedInvoice | null> = isProforma
+      ? proformaInvoiceApi
+          .getProformaInvoiceById(viewingDocId)
+          .then((res) => (res?.success && res.data ? mapApiProformaToSavedInvoice(res.data) : null))
+      : invoiceApi
+          .getInvoiceById(viewingDocId)
+          .then((res) => (res?.success && res.data ? mapApiInvoiceToSavedInvoice(res.data) : null));
+    request
+      .then((detail) => {
+        if (cancelled || !detail) return;
+        setViewingInvoice((cur: SavedInvoice | null) => {
+          if (!cur || cur.id !== detail.id) return cur;
+          // seller (company/bank) comes from the logged-in organization, not from this record: keep the row's
+          const { company: _company, bank: _bank, ...rest } = detail as any;
+          const kept = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== '' && v != null));
+          return { ...cur, ...kept, items: detail.items.length ? detail.items : cur.items } as SavedInvoice;
+        });
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingDocId, isProforma]);
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionDropdownPos, setActionDropdownPos] = useState<{
     top?: number;
@@ -1667,6 +1690,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                 ]}
                 value={pendingBilledOrgId}
                 onChange={(val) => setPendingBilledOrgId(val)}
+                onOpen={loadOrganizationFilterOptions}
               />
             )}
             <FilterDropdown
@@ -2405,31 +2429,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
           const isFullyPaid = balanceDueVal <= 0.001 || paymentHistoryInvoice.status === 'Paid';
           const paidPercent = grandTotalVal > 0 ? Math.min(100, Math.round((settledVal / grandTotalVal) * 100)) : 100;
 
-          const paymentsList = (paymentHistoryInvoice.payments && paymentHistoryInvoice.payments.length > 0)
-            ? paymentHistoryInvoice.payments
-            : paymentHistoryInvoice.paymentDetails && (paymentHistoryInvoice.paymentDetails.amountPaid || settledVal > 0)
-              ? [{
-                  id: 'pd-1',
-                  invoiceId: paymentHistoryInvoice.id,
-                  amount: Number(paymentHistoryInvoice.paymentDetails.amountPaid || settledVal),
-                  paymentDate: paymentHistoryInvoice.paymentDetails.paymentDate || rawInvDate || new Date().toISOString().split('T')[0],
-                  paymentMode: paymentHistoryInvoice.paymentDetails.paymentMode || 'Cash',
-                  referenceNumber: paymentHistoryInvoice.paymentDetails.referenceId || null,
-                  notes: paymentHistoryInvoice.paymentDetails.notes || null,
-                  createdAt: paymentHistoryInvoice.paymentDetails.recordedAt || new Date().toISOString(),
-                }]
-              : isFullyPaid
-                ? [{
-                    id: 'pd-default',
-                    invoiceId: paymentHistoryInvoice.id,
-                    amount: grandTotalVal,
-                    paymentDate: rawInvDate || new Date().toISOString().split('T')[0],
-                    paymentMode: 'Cash',
-                    referenceNumber: null,
-                    notes: 'Direct settlement',
-                    createdAt: new Date().toISOString(),
-                  }]
-                : [];
+          // Payment history is exactly what the API returned for this invoice.
+          const paymentsList = paymentHistoryInvoice.payments ?? [];
 
           return (
             <div className="space-y-5 text-slate-800 -mt-1">
@@ -2555,11 +2556,14 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                                 {/* Payment Mode */}
                                 <td className="px-3.5 py-3 whitespace-nowrap font-semibold text-slate-800">
                                   {mode}
+                                  {payment.receiptNumber && (
+                                    <span className="block text-[10px] font-medium text-slate-400">{payment.receiptNumber}</span>
+                                  )}
                                 </td>
 
                                 {/* Status */}
-                                <td className="px-3.5 py-3 whitespace-nowrap font-medium text-emerald-600">
-                                  Successful
+                                <td className={`px-3.5 py-3 whitespace-nowrap font-medium ${String(payment.status || 'Paid').toLowerCase() === 'paid' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {String(payment.status || 'Paid').toLowerCase() === 'paid' ? 'Successful' : payment.status}
                                 </td>
 
                                 {/* Reference / Note */}
@@ -2576,6 +2580,11 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
                                 {/* Amount Credited */}
                                 <td className="px-3.5 py-3 whitespace-nowrap text-right font-bold text-emerald-600 text-sm">
                                   ₹{Number(payment.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  {(Number(payment.totalTdsDeduction) > 0 || Number(payment.bankDeductions) > 0) && (
+                                    <span className="block text-[10px] font-medium text-slate-500">
+                                      Net ₹{Number(payment.netReceived || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                  )}
                                 </td>
                               </tr>
                             );

@@ -50,12 +50,14 @@ import {
   useDeletePlatformLeadMutation,
   useConvertPlatformLeadMutation,
   PlatformLeadItem,
+  platformLeadApi,
 } from "../../api/platform/leadApi";
 import {
   useGetPlatformClientsQuery,
   useUpdatePlatformClientStatusMutation,
   useDeletePlatformClientMutation,
   PlatformClientItem,
+  platformClientApi,
 } from "../../api/platform/clientApi";
 import { Customer, Lead } from "../../types";
 import { getStoredOrganizationId } from "../../api/config";
@@ -108,6 +110,54 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   const [selectedLeadDetail, setSelectedLeadDetail] = useState<Lead | null>(
     null,
   );
+  const selectedClientId = selectedClientDetail?.id;
+
+  // Opening a client shows the list row at once, then loads the full record (GET client by id: contact,
+  // address, GST/PAN, subscription and billing) so the details are exactly what is saved. The detail never
+  // blanks a field the row already has. The response is cached (PlatformClient tag) and refreshed after
+  // any client / lead / subscription / invoice change.
+  useEffect(() => {
+    if (!selectedClientId) return;
+    let cancelled = false;
+    platformClientApi
+      .getClientById(selectedClientId, (selectedClientDetail as any)?.organizationId || undefined)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return;
+        const detail = mapPlatformClientToRow(res.data);
+        const kept = Object.fromEntries(Object.entries(detail).filter(([, v]) => v !== "" && v != null));
+        setSelectedClientDetail((cur) => (cur && cur.id === detail.id ? ({ ...cur, ...kept } as Customer) : cur));
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClientId]);
+
+  const selectedLeadId = selectedLeadDetail?.id;
+
+  // Opening a lead shows the list row at once, then loads the full record (GET lead by id) so the details,
+  // organization / sub-organization / branch names and notes are exactly what is saved. The detail never
+  // blanks a field the row already has. The response is cached (Lead tag) and refreshed after any lead change.
+  useEffect(() => {
+    if (!selectedLeadId) return;
+    let cancelled = false;
+    platformLeadApi
+      .getLeadById(selectedLeadId)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return;
+        const detail = mapPlatformLeadToRow(res.data);
+        const kept = Object.fromEntries(Object.entries(detail).filter(([, v]) => v !== "" && v != null));
+        setSelectedLeadDetail((cur) => (cur && cur.id === detail.id ? ({ ...cur, ...kept } as Lead) : cur));
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLeadId]);
 
   // 3-dots row menu + click-to-copy contact buttons (shared hooks)
   const rowMenu = useRowActionMenu(200);
@@ -209,6 +259,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
   // Active Organization ID
   const activeOrgId = getStoredOrganizationId();
 
+  // Only the visible tab loads: clients are fetched when the Client Accounts tab opens, leads when Leads & Prospects does.
   // Platform Clients API Query & Mutations
   const {
     data: platformClientsResponse,
@@ -223,7 +274,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     organization_id: activeOrgId || undefined,
     sub_organization_id: effectiveSubOrgId,
     branch_id: effectiveBranchId,
-  });
+  }, { skip: viewMode !== "clients" });
 
   const [updatePlatformClientStatus] = useUpdatePlatformClientStatusMutation();
   const [deletePlatformClient] = useDeletePlatformClientMutation();
@@ -245,7 +296,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
     organization_id: activeOrgId || undefined,
     sub_organization_id: effectiveSubOrgId,
     branch_id: effectiveBranchId,
-  });
+  }, { skip: viewMode !== "leads" });
 
   const [updatePlatformLeadStatus] = useUpdatePlatformLeadStatusMutation();
   const [deletePlatformLead] = useDeletePlatformLeadMutation();
@@ -358,7 +409,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   // Map Platform Client items into unified table format
   const rawPlatformClients: PlatformClientItem[] = platformClientsResponse?.data || [];
-  const clientsFromApi: any[] = rawPlatformClients.map((pc, idx) => {
+  const mapPlatformClientToRow = (pc: PlatformClientItem): any => {
     const rawProds: any[] = [];
     if (pc.subscription?.planName || pc.subscriptionPlan) {
       rawProds.push({
@@ -435,7 +486,8 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       createdAt: pc.createdAt,
       updatedAt: pc.updatedAt,
     };
-  });
+  };
+  const clientsFromApi: any[] = rawPlatformClients.map(mapPlatformClientToRow);
 
   // Filtered Clients (incorporating live API clients + fallback + client safeguard for subOrg and branch)
   const allCustomerSource = clientsFromApi.length > 0 ? clientsFromApi : customers;
@@ -480,7 +532,7 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
 
   // Map Platform Lead items into table format
   const rawPlatformLeads: PlatformLeadItem[] = platformLeadsResponse?.data || [];
-  const leads: any[] = rawPlatformLeads.map((pl) => {
+  const mapPlatformLeadToRow = (pl: PlatformLeadItem): any => {
     return {
       id: pl.id,
       leadId: pl.leadCode || pl.id,
@@ -523,12 +575,14 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
       organizationId: (pl as any).organizationId || (pl as any).organization_id || "",
       subOrganizationId: (pl as any).subOrganizationId || (pl as any).sub_organization_id || "",
       branchId: (pl as any).branchId || (pl as any).branch_id || "",
+      organizationName: (pl as any).organizationName || (pl as any).organization?.name || "",
       subOrganizationName: (pl as any).subOrganizationName || (pl as any).subOrganization?.name || "",
       branchName: (pl as any).branchName || (pl as any).branch?.name || "",
       createdAt: pl.createdAt,
       updatedAt: pl.updatedAt,
     };
-  });
+  };
+  const leads: any[] = rawPlatformLeads.map(mapPlatformLeadToRow);
 
   // Filtered Leads (server-side params already applied, with client safeguard for subOrg and branch)
   const filteredLeads = leads.filter((l) => {

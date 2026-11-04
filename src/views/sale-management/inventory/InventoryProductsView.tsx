@@ -1,4 +1,3 @@
-import { useDebounce } from "use-debounce";
 import {
   CommonTableHead,
   CommonTableTh,
@@ -66,6 +65,7 @@ import {
   subcategoryApi,
   ApiSubcategory,
   unitApi,
+  resolveBaseUnitId,
   ApiUnit,
   mapApiUnitToUnitItem,
   BulkProductCommonRow,
@@ -496,6 +496,8 @@ export interface CategorySelectProps {
   onChange: (val: string) => void;
   categories: string[];
   onOpenAddCategoryModal: () => void;
+  required?: boolean;
+  error?: string;
 }
 
 export const CategorySelectField: React.FC<CategorySelectProps> = ({
@@ -503,6 +505,8 @@ export const CategorySelectField: React.FC<CategorySelectProps> = ({
   onChange,
   categories,
   onOpenAddCategoryModal,
+  required = false,
+  error,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -534,15 +538,17 @@ export const CategorySelectField: React.FC<CategorySelectProps> = ({
 
   return (
     <div ref={dropdownRef} className="relative w-full">
-      <FormLabel>Category</FormLabel>
+      <FormLabel required={required}>Category</FormLabel>
       <div
         onClick={() => setIsOpen(!isOpen)}
         className={`relative w-full h-11 px-4 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
           isOpen
             ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
-            : value
-              ? "border-slate-300 hover:border-slate-400"
-              : "border-slate-200 hover:border-slate-300"
+            : error
+              ? "border-rose-400 ring-2 ring-rose-100"
+              : value
+                ? "border-slate-300 hover:border-slate-400"
+                : "border-slate-200 hover:border-slate-300"
         }`}
       >
         {/* Selected value or placeholder */}
@@ -652,6 +658,8 @@ export interface SubcategorySelectProps {
   category: string;
   subcategories: string[];
   onOpenAddSubcategoryModal: () => void;
+  required?: boolean;
+  error?: string;
 }
 
 export const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
@@ -660,6 +668,8 @@ export const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
   category,
   subcategories,
   onOpenAddSubcategoryModal,
+  required = false,
+  error,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -697,15 +707,17 @@ export const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
 
   return (
     <div ref={dropdownRef} className="relative w-full">
-      <FormLabel>Subcategory</FormLabel>
+      <FormLabel required={required}>Subcategory</FormLabel>
       <div
         onClick={() => setIsOpen(!isOpen)}
         className={`relative w-full h-11 px-4 bg-white rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
           isOpen
             ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
-            : value
-              ? "border-slate-300 hover:border-slate-400"
-              : "border-slate-200 hover:border-slate-300"
+            : error
+              ? "border-rose-400 ring-2 ring-rose-100"
+              : value
+                ? "border-slate-300 hover:border-slate-400"
+                : "border-slate-200 hover:border-slate-300"
         }`}
       >
         {/* Selected value or placeholder */}
@@ -902,16 +914,6 @@ export const InventoryProductsView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingCategory, setPendingCategory] = useState("ALL");
   const [appliedCategory, setAppliedCategory] = useState("ALL");
   const [pendingType, setPendingType] = useState("ALL");
@@ -938,8 +940,22 @@ export const InventoryProductsView: React.FC = () => {
    * Query parameters are only requested when applied
    */
   const loadProducts = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedType}_${appliedStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        category?: string;
+        itemType?: string;
+        status?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? page;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetCategory = overrides?.category !== undefined ? overrides.category : appliedCategory;
+      const targetType = overrides?.itemType !== undefined ? overrides.itemType : appliedType;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetCategory}_${targetType}_${targetStatus}`;
 
       // Skip redundant re-fetching of identical parameters
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
@@ -950,16 +966,16 @@ export const InventoryProductsView: React.FC = () => {
 
       try {
         const prodResult = await productApi.getProducts({
-          page_no: page,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           sortOrder: "desc",
-          status: appliedStatus !== "ALL" ? appliedStatus : undefined,
-          category: appliedCategory !== "ALL" ? appliedCategory : undefined,
+          status: targetStatus !== "ALL" ? targetStatus : undefined,
+          category: targetCategory !== "ALL" ? targetCategory : undefined,
           itemType:
-            appliedType !== "ALL"
-              ? (appliedType as "Product" | "Service")
+            targetType !== "ALL"
+              ? (targetType as "Product" | "Service")
               : undefined,
         });
         if (seq !== requestSeqRef.current) return;
@@ -968,7 +984,7 @@ export const InventoryProductsView: React.FC = () => {
           const mapped = prodResult.data.map((item, idx) => {
             return mapApiProductToProductItem(
               item,
-              (page - 1) * pageSize + idx,
+              (targetPage - 1) * pageSize + idx,
             );
           });
           // Cache product images for cross-module consistency (e.g. StocksView)
@@ -1140,73 +1156,89 @@ export const InventoryProductsView: React.FC = () => {
   };
 
   // Toggle Product Status (PATCH /commerce/products/:id)
-  const handleToggleStatus = (item: ProductItem) => toggleGuard.runOnce(async () => {
-    const nextStatus = item.status === "Active" ? "Inactive" : "Active";
-    setActiveDropdownId(null);
-    setDropdownPos(null);
+  const handleToggleStatus = (item: ProductItem) =>
+    toggleGuard.runOnce(async () => {
+      const nextStatus = item.status === "Active" ? "Inactive" : "Active";
+      setActiveDropdownId(null);
+      setDropdownPos(null);
 
-    if (checkRequiredSelection(item?.id, "product")) {
-      toast.error("This product could not be identified. Please refresh and try again.");
-      return;
-    }
+      if (checkRequiredSelection(item?.id, "product")) {
+        toast.error(
+          "This product could not be identified. Please refresh and try again.",
+        );
+        return;
+      }
 
-    try {
-      const res = await productApi.patchProduct(item.id, {
-        status: nextStatus,
-      });
-      if (res?.success) {
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === item.id ? { ...p, status: nextStatus } : p,
+      try {
+        const res = await productApi.patchProduct(item.id, {
+          status: nextStatus,
+        });
+        if (res?.success) {
+          setProducts((prev) =>
+            prev.map((p) =>
+              p.id === item.id ? { ...p, status: nextStatus } : p,
+            ),
+          );
+          toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
+          return;
+        }
+        toast.error(
+          "The product status could not be updated. Please try again.",
+        );
+      } catch (apiErr: any) {
+        // Do not pretend the change succeeded when the server rejected it.
+        console.warn("Remote product status patch failed:", apiErr);
+        toast.error(
+          getApiErrorMessage(
+            apiErr,
+            "The product status could not be updated. Please try again.",
           ),
         );
-        toast.success(`Product "${item.productName}" set to ${nextStatus}.`);
-        return;
       }
-      toast.error("The product status could not be updated. Please try again.");
-    } catch (apiErr: any) {
-      // Do not pretend the change succeeded when the server rejected it.
-      console.warn("Remote product status patch failed:", apiErr);
-      toast.error(getApiErrorMessage(apiErr, "The product status could not be updated. Please try again."));
-    }
-  });
+    });
 
   // Confirm and Execute Delete (DELETE /commerce/products/:id)
-  const handleConfirmDelete = () => deleteGuard.runOnce(async () => {
-    if (!deleteConfirmItem) return;
-    const { id, productName } = deleteConfirmItem;
-    if (checkRequiredSelection(id, "product")) {
-      setDeleteProductError("This product could not be identified. Please refresh and try again.");
-      return;
-    }
-    setIsDeleting(true);
-    setDeleteProductError(null);
-
-    try {
-      const res = await productApi.deleteProduct(id);
-      if (res?.success) {
-        setProducts((prev) => prev.filter((p) => p.id !== id));
-        setTotalApiRecords((prev) =>
-          prev !== null && prev > 0 ? prev - 1 : prev,
+  const handleConfirmDelete = () =>
+    deleteGuard.runOnce(async () => {
+      if (!deleteConfirmItem) return;
+      const { id, productName } = deleteConfirmItem;
+      if (checkRequiredSelection(id, "product")) {
+        setDeleteProductError(
+          "This product could not be identified. Please refresh and try again.",
         );
-        toast.success(`Product "${productName}" deleted successfully.`);
-        setDeleteConfirmItem(null);
-        setDeleteProductError(null);
         return;
-      } else {
-        const errorMsg = (res as any)?.message || "Failed to delete product.";
+      }
+      setIsDeleting(true);
+      setDeleteProductError(null);
+
+      try {
+        const res = await productApi.deleteProduct(id);
+        if (res?.success) {
+          setProducts((prev) => prev.filter((p) => p.id !== id));
+          setTotalApiRecords((prev) =>
+            prev !== null && prev > 0 ? prev - 1 : prev,
+          );
+          toast.success(`Product "${productName}" deleted successfully.`);
+          setDeleteConfirmItem(null);
+          setDeleteProductError(null);
+          return;
+        } else {
+          const errorMsg = (res as any)?.message || "Failed to delete product.";
+          setDeleteProductError(errorMsg);
+          toast.error(errorMsg);
+        }
+      } catch (apiErr: any) {
+        console.warn("Remote product delete failed:", apiErr);
+        const errorMsg = getApiErrorMessage(
+          apiErr,
+          "Failed to delete product. Please try again.",
+        );
         setDeleteProductError(errorMsg);
         toast.error(errorMsg);
+      } finally {
+        setIsDeleting(false);
       }
-    } catch (apiErr: any) {
-      console.warn("Remote product delete failed:", apiErr);
-      const errorMsg = getApiErrorMessage(apiErr, "Failed to delete product. Please try again.");
-      setDeleteProductError(errorMsg);
-      toast.error(errorMsg);
-    } finally {
-      setIsDeleting(false);
-    }
-  });
+    });
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -1221,7 +1253,6 @@ export const InventoryProductsView: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(
     null,
   );
-  const [activeTab, setActiveTab] = useState<"Pricing" | "Stock">("Pricing");
   const isAtPriceManuallyEdited = useRef(false);
 
   // Secondary sub-modals for Unit & HSN search
@@ -1283,6 +1314,23 @@ export const InventoryProductsView: React.FC = () => {
             : [];
       if (list.length > 0) {
         setApiUnits(list);
+        const currentVals = getValues();
+        if (!currentVals.baseUnitId) {
+          const matched =
+            list.find(
+              (u) =>
+                u.shortCode?.toUpperCase() === "PCS" ||
+                u.name?.toUpperCase().includes("PIECE") ||
+                (currentVals.unit &&
+                  (u.shortCode?.toUpperCase() === currentVals.unit.toUpperCase() ||
+                    u.name?.toUpperCase() === currentVals.unit.toUpperCase())),
+            ) || list[0];
+          if (matched) {
+            setValue("baseUnitId", matched.id);
+            if (!currentVals.unit) setValue("unit", matched.shortCode || matched.name);
+            setSelectedBaseUnit(formatUnitOption(matched));
+          }
+        }
       }
     } catch (err: any) {
       console.warn("Failed to load units from Commerce API:", err);
@@ -1431,7 +1479,8 @@ export const InventoryProductsView: React.FC = () => {
 
   // Handler to delete unit via Commerce unitApi
   const handleDeleteCustomUnit = async (unitToRemove: ApiUnit) => {
-    if (deletingUnitId || checkRequiredSelection(unitToRemove?.id, "unit")) return;
+    if (deletingUnitId || checkRequiredSelection(unitToRemove?.id, "unit"))
+      return;
     const formatted = formatUnitOption(unitToRemove);
     setDeletingUnitId(unitToRemove.id);
     try {
@@ -1573,9 +1622,9 @@ export const InventoryProductsView: React.FC = () => {
     };
   }, [activeDropdownId, isBulkMenuOpen]);
 
-  // Auto-fetch salePrice (or purchasePrice) into atPrice when Stock tab is activated
+  // Stock valuation price follows the sale (or purchase) price until the user types their own value
   useEffect(() => {
-    if (activeTab === "Stock" && isModalOpen) {
+    if (isModalOpen && formData.itemType === "Product") {
       const currentAtPrice = getValues("atPrice");
       const currentSalePrice = getValues("salePrice");
       const currentPurchasePrice = getValues("purchasePrice");
@@ -1586,11 +1635,20 @@ export const InventoryProductsView: React.FC = () => {
       ) {
         const fallbackPrice = currentSalePrice || currentPurchasePrice || "";
         if (fallbackPrice) {
-          setValue("atPrice", fallbackPrice as any, { shouldValidate: isSubmitted });
+          setValue("atPrice", fallbackPrice as any, {
+            shouldValidate: isSubmitted,
+          });
         }
       }
     }
-  }, [activeTab, isModalOpen, getValues, setValue]);
+  }, [
+    isModalOpen,
+    formData.itemType,
+    formData.salePrice,
+    formData.purchasePrice,
+    getValues,
+    setValue,
+  ]);
 
   const handleOpenAddModal = (
     defaultType?: "Product" | "Service" | React.MouseEvent,
@@ -1600,17 +1658,28 @@ export const InventoryProductsView: React.FC = () => {
     if (masterSubcategories.length === 0) fetchLiveSubcategories();
     const type = typeof defaultType === "string" ? defaultType : "Product";
     setEditingProduct(null);
-    setActiveTab("Pricing");
     isAtPriceManuallyEdited.current = false;
-    setSelectedBaseUnit("");
+
+    const defaultUnit =
+      allAvailableUnits.find(
+        (u) =>
+          u.shortCode?.toUpperCase() === "PCS" ||
+          u.name?.toUpperCase().includes("PIECE"),
+      ) || allAvailableUnits[0];
+
+    const defaultUnitCode = defaultUnit?.shortCode || defaultUnit?.name || "PCS";
+    const defaultUnitId = defaultUnit?.id;
+    const defaultFormatted = defaultUnit ? formatUnitOption(defaultUnit) : "PCS";
+
+    setSelectedBaseUnit(defaultFormatted);
     setSelectedSecondaryUnit("None");
     setItemImageState("");
     reset({
       ...defaultProductFormValues,
       itemType: type as "Product" | "Service",
       productCode: "", // generated by the server on save
-      unit: "",
-      baseUnitId: undefined,
+      unit: defaultUnitCode,
+      baseUnitId: defaultUnitId,
       secondaryUnitId: undefined,
       secondaryUnit: undefined,
       category: "",
@@ -1625,7 +1694,6 @@ export const InventoryProductsView: React.FC = () => {
     if (categories.length === 0) fetchLiveCategories();
     if (masterSubcategories.length === 0) fetchLiveSubcategories();
     setEditingProduct(prod);
-    setActiveTab("Pricing");
     const initialAtPrice =
       prod.atPrice || prod.salePrice || prod.purchasePrice || "";
     isAtPriceManuallyEdited.current = Boolean(
@@ -1834,19 +1902,26 @@ export const InventoryProductsView: React.FC = () => {
   }, [masterSubcategories, formData.category]);
 
   // Field-level validation for the product form. Returns { field: message } (empty when valid).
-  const validateProductForm = (data: ProductFormValues): Record<string, string> => {
+  const validateProductForm = (
+    data: ProductFormValues,
+  ): Record<string, string> => {
     const salePriceNum = Number(data.salePrice) || 0;
     const blank = (v: unknown) => v === "" || v === undefined || v === null;
     const discountErr = (() => {
       if (blank(data.discountValue)) return null;
-      if (data.discountType === "Percentage") return checkPercent(data.discountValue, "discount percentage");
-      const base = checkMoney(data.discountValue, "discount amount", { allowZero: true });
+      if (data.discountType === "Percentage")
+        return checkPercent(data.discountValue, "discount percentage");
+      const base = checkMoney(data.discountValue, "discount amount", {
+        allowZero: true,
+      });
       if (base) return base;
       return Number(data.discountValue) > salePriceNum
         ? `The discount (₹${Number(data.discountValue)}) cannot be more than the sale price (₹${salePriceNum}).`
         : null;
     })();
     const checks: Array<[string, string | null]> = [
+      ["category", checkRequiredSelection(data.category, "category")],
+      ["subcategory", checkRequiredSelection(data.subcategory, "subcategory")],
       [
         "productName",
         !(data.productName || "").trim()
@@ -1855,35 +1930,95 @@ export const InventoryProductsView: React.FC = () => {
             ? "The item name must be at least 2 characters."
             : null,
       ],
-      ["salePrice", checkMoney(data.salePrice, "sale price", { allowZero: true, optional: true })],
+      [
+        "salePrice",
+        checkMoney(data.salePrice, "sale price", {
+          allowZero: true,
+          optional: true,
+        }),
+      ],
       ["discountValue", discountErr],
       [
         "purchasePrice",
-        checkMoney(data.purchasePrice, "purchase price", { allowZero: true, optional: true }) ||
-          checkNotGreaterThan(data.purchasePrice, data.salePrice, "purchase price", "sale price"),
+        checkMoney(data.purchasePrice, "purchase price", {
+          allowZero: true,
+          optional: true,
+        }) ||
+          checkNotGreaterThan(
+            data.purchasePrice,
+            data.salePrice,
+            "purchase price",
+            "sale price",
+          ),
       ],
-      ["openingStock", checkNumber(data.openingStock, "opening stock", { allowZero: true, optional: true })],
-      ["atPrice", checkMoney(data.atPrice, "stock valuation price", { allowZero: true, optional: true })],
-      ["minStockAlert", checkNumber(data.minStockAlert, "minimum stock level", { allowZero: true, optional: true, maxDecimals: 0 })],
-      ["expDate", checkDateNotBefore(data.expDate, data.mfgDate, "expiry date", "manufacturing date")],
+      [
+        "atPrice",
+        checkMoney(data.atPrice, "stock valuation price", {
+          allowZero: true,
+          optional: true,
+        }),
+      ],
+      [
+        "minStockAlert",
+        checkNumber(data.minStockAlert, "minimum stock level", {
+          allowZero: true,
+          optional: true,
+          maxDecimals: 0,
+        }),
+      ],
+      [
+        "expDate",
+        checkDateNotBefore(
+          data.expDate,
+          data.mfgDate,
+          "expiry date",
+          "manufacturing date",
+        ),
+      ],
       ["itemImage", imageFileError],
     ];
     if (data.hasWholesale) {
       checks.push(
         [
           "wholesalePrice",
-          checkMoney(data.wholesalePrice, "wholesale price", { allowZero: true, optional: true }) ||
-            checkNotGreaterThan(data.wholesalePrice, data.salePrice, "wholesale price", "sale price"),
+          checkMoney(data.wholesalePrice, "wholesale price", {
+            allowZero: true,
+            optional: true,
+          }) ||
+            checkNotGreaterThan(
+              data.wholesalePrice,
+              data.salePrice,
+              "wholesale price",
+              "sale price",
+            ),
         ],
-        ["minWholesaleQty", checkNumber(data.minWholesaleQty, "minimum wholesale quantity", { allowZero: true, optional: true, maxDecimals: 0 })],
+        [
+          "minWholesaleQty",
+          checkNumber(data.minWholesaleQty, "minimum wholesale quantity", {
+            allowZero: true,
+            optional: true,
+            maxDecimals: 0,
+          }),
+        ],
       );
     }
     return collectErrors(checks);
   };
 
   const MANAGED_KEYS = [
-    "productName", "salePrice", "discountValue", "purchasePrice", "openingStock", "atPrice",
-    "minStockAlert", "expDate", "wholesalePrice", "minWholesaleQty", "itemImage",
+    "category",
+    "subcategory",
+    "productName",
+    "salePrice",
+    "discountValue",
+    "purchasePrice",
+    "openingStock",
+    "atPrice",
+    "minStockAlert",
+    "expDate",
+    "wholesalePrice",
+    "minWholesaleQty",
+    "itemImage",
   ] as const;
 
   // After the first Save attempt, keep the business-rule errors in sync with the values:
@@ -1898,20 +2033,44 @@ export const InventoryProductsView: React.FC = () => {
       if (msg) {
         // Do not overwrite messages produced by the field's own registered rule
         if (!current || current.message !== msg) {
-          if (!current || current.type === "manual" || current.type === "server") {
-            setError(key as keyof ProductFormValues, { type: "manual", message: msg });
+          if (
+            !current ||
+            current.type === "manual" ||
+            current.type === "server"
+          ) {
+            setError(key as keyof ProductFormValues, {
+              type: "manual",
+              message: msg,
+            });
           }
         }
-      } else if (current && (current.type === "manual" || current.type === "server")) {
+      } else if (
+        current &&
+        (current.type === "manual" || current.type === "server")
+      ) {
         clearErrors(key as keyof ProductFormValues);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    isModalOpen, isSubmitted, formData.productName, formData.salePrice, formData.discountValue,
-    formData.discountType, formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
-    formData.purchasePrice, formData.openingStock, formData.atPrice, formData.minStockAlert,
-    formData.mfgDate, formData.expDate, imageFileError,
+    isModalOpen,
+    isSubmitted,
+    formData.category,
+    formData.subcategory,
+    formData.batchNo,
+    formData.productName,
+    formData.salePrice,
+    formData.discountValue,
+    formData.discountType,
+    formData.wholesalePrice,
+    formData.minWholesaleQty,
+    formData.hasWholesale,
+    formData.purchasePrice,
+    formData.atPrice,
+    formData.minStockAlert,
+    formData.mfgDate,
+    formData.expDate,
+    imageFileError,
   ]);
 
   // Start clean whenever the item modal closes (opening already resets the form)
@@ -1928,368 +2087,400 @@ export const InventoryProductsView: React.FC = () => {
     setUnitDoneAttempted(false);
   }, [isUnitModalOpen]);
 
-  // Switch to the tab holding the first error so it is visible
-  const revealProductErrors = (errs: Record<string, string>) => {
-    const keys = Object.keys(errs);
-    if (keys.length === 0) return;
-    const stockKeys = ["minStockAlert", "batchNo", "mfgDate", "expDate", "location", "openingStock", "atPrice"];
-    const firstVisible = keys.find((k) => k !== "openingStock" && k !== "atPrice") ?? keys[0];
-    if (stockKeys.includes(firstVisible)) setActiveTab("Stock");
-    else if (firstVisible !== "productName" && firstVisible !== "itemImage") setActiveTab("Pricing");
-  };
-
   // Registered-rule errors present: still show every business-rule error in the same submit
   const handleInvalidItem = (rhfErrors: Record<string, any>) => {
     const extra = validateProductForm(getValues());
     Object.keys(extra).forEach((k) => {
-      if (!rhfErrors[k]) setError(k as keyof ProductFormValues, { type: "manual", message: extra[k] });
+      if (!rhfErrors[k])
+        setError(k as keyof ProductFormValues, {
+          type: "manual",
+          message: extra[k],
+        });
     });
-    revealProductErrors({ ...extra, ...Object.fromEntries(Object.keys(rhfErrors).map((k) => [k, ""])) });
   };
 
   const handleSaveItem = (
     keepOpenAfterSave = false,
     formValuesParam?: ProductFormValues,
-  ) => saveGuard.runOnce(async () => {
-    const data = formValuesParam || getValues();
-    const validationErrors = validateProductForm(data);
-    if (Object.keys(validationErrors).length > 0) {
-      Object.keys(validationErrors).forEach((k) =>
-        setError(k as keyof ProductFormValues, { type: "manual", message: validationErrors[k] }),
-      );
-      revealProductErrors(validationErrors);
-      return;
-    }
-    if (editingProduct && checkRequiredSelection(editingProduct.id, "product")) {
-      setError("root", { type: "manual", message: "This product could not be identified. Please close and reopen it." });
-      return;
-    }
-    let saveSucceeded = false;
-    // Map backend field errors onto the form; fall back to a toast for anything else.
-    const reportSaveError = (apiErr: any, fallback: string) => {
-      const apiFields = extractApiFieldErrors(apiErr);
-      let mappedAny = false;
-      for (const [k, v] of Object.entries(apiFields)) {
-        const field = k === "name" ? "productName" : k;
-        if (field in defaultProductFormValues) {
-          setError(field as keyof ProductFormValues, { type: "server", message: v });
-          mappedAny = true;
-        }
+  ) =>
+    saveGuard.runOnce(async () => {
+      const data = formValuesParam || getValues();
+      const validationErrors = validateProductForm(data);
+      if (Object.keys(validationErrors).length > 0) {
+        Object.keys(validationErrors).forEach((k) =>
+          setError(k as keyof ProductFormValues, {
+            type: "manual",
+            message: validationErrors[k],
+          }),
+        );
+        return;
       }
-      // Backend field errors are shown inline; anything else is an API error toast.
-      if (!mappedAny) toast.error(getApiErrorMessage(apiErr, fallback));
-    };
+      if (
+        editingProduct &&
+        checkRequiredSelection(editingProduct.id, "product")
+      ) {
+        setError("root", {
+          type: "manual",
+          message:
+            "This product could not be identified. Please close and reopen it.",
+        });
+        return;
+      }
+      let saveSucceeded = false;
+      // Map backend field errors onto the form; fall back to a toast for anything else.
+      const reportSaveError = (apiErr: any, fallback: string) => {
+        const apiFields = extractApiFieldErrors(apiErr);
+        let mappedAny = false;
+        for (const [k, v] of Object.entries(apiFields)) {
+          const field = k === "name" ? "productName" : k;
+          if (field in defaultProductFormValues) {
+            setError(field as keyof ProductFormValues, {
+              type: "server",
+              message: v,
+            });
+            mappedAny = true;
+          }
+        }
+        // Backend field errors are shown inline; anything else is an API error toast.
+        if (!mappedAny) toast.error(getApiErrorMessage(apiErr, fallback));
+      };
 
-    // Existing products keep their code; a new product gets one from the server.
-    const finalCode = (data.productCode || "").trim();
-    const finalStatus = (editingProduct ? editingProduct.status : "Active") as
-      | "Active"
-      | "Inactive";
+      // Existing products keep their code; a new product gets one from the server.
+      const finalCode = (data.productCode || "").trim();
+      const finalStatus = (
+        editingProduct ? editingProduct.status : "Active"
+      ) as "Active" | "Inactive";
 
-    const imageBase64Data = (
-      itemImageState ||
-      data.itemImage ||
-      formData.itemImage ||
-      ""
-    ).trim();
-    let finalImageUrl: string | null = null;
-    if (imageBase64Data) {
-      if (imageBase64Data.startsWith("data:")) {
-        try {
-          const uploadRes = await baseClient.post("/uploads/base64", {
-            image: imageBase64Data,
-            folder: "items",
-            fileName: `item_${Date.now()}.png`,
-          });
-          const returnedUrl =
-            (typeof uploadRes.data?.data === "string"
-              ? uploadRes.data.data
-              : null) ||
-            uploadRes.data?.data?.url ||
-            uploadRes.data?.data?.fileUrl ||
-            uploadRes.data?.data?.imageUrl ||
-            uploadRes.data?.data?.location ||
-            uploadRes.data?.data?.path ||
-            (typeof uploadRes.data === "string" ? uploadRes.data : null) ||
-            uploadRes.data?.url ||
-            uploadRes.data?.fileUrl ||
-            uploadRes.data?.imageUrl ||
-            uploadRes.data?.location;
+      const imageBase64Data = (
+        itemImageState ||
+        data.itemImage ||
+        formData.itemImage ||
+        ""
+      ).trim();
+      let finalImageUrl: string | null = null;
+      if (imageBase64Data) {
+        if (imageBase64Data.startsWith("data:")) {
+          try {
+            const uploadRes = await baseClient.post("/uploads/base64", {
+              image: imageBase64Data,
+              folder: "items",
+              fileName: `item_${Date.now()}.png`,
+            });
+            const returnedUrl =
+              (typeof uploadRes.data?.data === "string"
+                ? uploadRes.data.data
+                : null) ||
+              uploadRes.data?.data?.url ||
+              uploadRes.data?.data?.fileUrl ||
+              uploadRes.data?.data?.imageUrl ||
+              uploadRes.data?.data?.location ||
+              uploadRes.data?.data?.path ||
+              (typeof uploadRes.data === "string" ? uploadRes.data : null) ||
+              uploadRes.data?.url ||
+              uploadRes.data?.fileUrl ||
+              uploadRes.data?.imageUrl ||
+              uploadRes.data?.location;
 
-          if (returnedUrl && typeof returnedUrl === "string") {
-            finalImageUrl = returnedUrl;
-          } else {
+            if (returnedUrl && typeof returnedUrl === "string") {
+              finalImageUrl = returnedUrl;
+            } else {
+              finalImageUrl = imageBase64Data;
+            }
+          } catch (upErr) {
+            console.warn(
+              "Failed to upload base64 to S3, using data directly:",
+              upErr,
+            );
             finalImageUrl = imageBase64Data;
           }
-        } catch (upErr) {
-          console.warn(
-            "Failed to upload base64 to S3, using data directly:",
-            upErr,
-          );
+        } else {
           finalImageUrl = imageBase64Data;
         }
       } else {
-        finalImageUrl = imageBase64Data;
+        finalImageUrl = null;
       }
-    } else {
-      finalImageUrl = null;
-    }
 
-    const payload: Record<string, any> = {
-      itemType: data.itemType,
-      productCode: finalCode || undefined,
-      productName: data.productName.trim(),
-    };
+      const payload: Record<string, any> = {
+        itemType: data.itemType,
+        productCode: finalCode || undefined,
+        productName: data.productName.trim(),
+      };
 
-    if (data.itemType) payload.itemType = data.itemType;
-    if (editingProduct && finalCode) {
-      payload.productCode = finalCode;
-    } else if (data.productCode && data.productCode.trim()) {
-      payload.productCode = data.productCode.trim();
-    }
-    if (data.description && data.description.trim())
-      payload.description = data.description.trim();
-    if (data.hsnCode && data.hsnCode.trim())
-      payload.hsnCode = data.hsnCode.trim();
-    if (data.unit && data.unit.trim()) payload.unit = data.unit.trim();
-    if (data.baseUnitId) payload.baseUnitId = data.baseUnitId;
-    if (data.secondaryUnitId) payload.secondaryUnitId = data.secondaryUnitId;
-    if (data.category && data.category.trim())
-      payload.category = data.category.trim();
-    if (data.subcategory && data.subcategory.trim())
-      payload.subcategory = data.subcategory.trim();
-
-    const effImg = finalImageUrl || imageBase64Data;
-    if (effImg && effImg.trim()) {
-      payload.itemImage = effImg;
-      payload.image = effImg;
-      payload.imageBase64 = effImg;
-    }
-
-    if (data.salePrice !== "" && data.salePrice !== undefined) {
-      payload.salePrice = Number(data.salePrice) || 0;
-      if (data.salePriceTaxType)
-        payload.salePriceTaxType = data.salePriceTaxType;
-    }
-
-    if (
-      data.discountValue !== "" &&
-      data.discountValue !== undefined &&
-      Number(data.discountValue) > 0
-    ) {
-      payload.discountValue = Number(data.discountValue);
-      if (data.discountType) payload.discountType = data.discountType;
-    }
-
-    if (data.hasWholesale) {
-      payload.hasWholesale = true;
-      if (data.wholesalePrice !== "" && data.wholesalePrice !== undefined) {
-        payload.wholesalePrice = Number(data.wholesalePrice) || 0;
+      if (data.itemType) payload.itemType = data.itemType;
+      if (editingProduct && finalCode) {
+        payload.productCode = finalCode;
+      } else if (data.productCode && data.productCode.trim()) {
+        payload.productCode = data.productCode.trim();
       }
-      if (data.wholesaleTaxType)
-        payload.wholesaleTaxType = data.wholesaleTaxType;
-      if (data.minWholesaleQty !== "" && data.minWholesaleQty !== undefined) {
-        payload.minWholesaleQty = Number(data.minWholesaleQty) || 0;
-      }
-    }
+      if (data.description && data.description.trim())
+        payload.description = data.description.trim();
+      if (data.hsnCode && data.hsnCode.trim())
+        payload.hsnCode = data.hsnCode.trim();
+      let effUnit = (data.unit && data.unit.trim()) || "PCS";
+      let effBaseUnitId = data.baseUnitId;
 
-    if (data.purchasePrice !== "" && data.purchasePrice !== undefined) {
-      payload.purchasePrice = Number(data.purchasePrice) || 0;
-      if (data.purchasePriceTaxType)
-        payload.purchasePriceTaxType = data.purchasePriceTaxType;
-    }
-
-    if (data.taxRate && data.taxRate !== "None" && data.taxRate.trim()) {
-      payload.taxRate = data.taxRate;
-    }
-
-    if (data.openingStock !== "" && data.openingStock !== undefined) {
-      payload.openingStock = Number(data.openingStock) || 0;
-      if (data.atPrice !== "" && data.atPrice !== undefined) {
-        payload.atPrice = Number(data.atPrice) || 0;
-      }
-      if (data.asOfDate) payload.asOfDate = data.asOfDate;
-    }
-
-    if (
-      data.minStockAlert !== "" &&
-      data.minStockAlert !== undefined &&
-      Number(data.minStockAlert) > 0
-    ) {
-      payload.minStockAlert = Number(data.minStockAlert);
-    }
-
-    if (data.location && data.location.trim()) {
-      payload.location = data.location.trim();
-    }
-
-    const hasBatch = Boolean(data.isBatchTracking || data.batchNo?.trim());
-    if (hasBatch) {
-      payload.isBatchTracking = true;
-      if (data.batchNo && data.batchNo.trim())
-        payload.batchNo = data.batchNo.trim();
-      if (data.mfgDate && data.mfgDate.trim())
-        payload.mfgDate = data.mfgDate.trim();
-      if (data.expDate && data.expDate.trim())
-        payload.expDate = data.expDate.trim();
-    }
-
-    if (finalStatus) payload.status = finalStatus;
-
-    setIsSubmitting(true);
-
-    try {
-      if (editingProduct) {
-        // PUT /commerce/products/:id
-        try {
-          const res = await productApi.updateProduct(
-            editingProduct.id,
-            payload,
-          );
-          if (res?.success && res.data) {
-            const updated = mapApiProductToProductItem(res.data);
-            const effImage =
-              cleanProductImage(res.data.itemImage) ||
-              cleanProductImage(res.data.image) ||
-              cleanProductImage(res.data.imageBase64) ||
-              cleanProductImage(updated.itemImage) ||
-              finalImageUrl ||
-              undefined;
-
-            const effBase64 =
-              (imageBase64Data && imageBase64Data.startsWith("data:")
-                ? imageBase64Data
-                : "") ||
-              cleanProductImage(res.data.imageBase64) ||
-              cleanProductImage(updated.imageBase64) ||
-              effImage;
-
-            if (effBase64 && effBase64.startsWith("data:")) {
-              saveProductImageToCache(editingProduct.id, effBase64);
-              if (finalCode) saveProductImageToCache(finalCode, effBase64);
-              if (res.data.id) saveProductImageToCache(res.data.id, effBase64);
-              if (res.data.productCode)
-                saveProductImageToCache(res.data.productCode, effBase64);
-              if (res.data.sku)
-                saveProductImageToCache(res.data.sku, effBase64);
-              if (res.data.itemImage)
-                saveProductImageToCache(res.data.itemImage, effBase64);
-            }
-
-            setProducts((prev) =>
-              prev.map((p) =>
-                p.id === editingProduct.id ||
-                p.id === res.data.id ||
-                (p.productCode &&
-                  (p.productCode === finalCode ||
-                    p.productCode === res.data.productCode ||
-                    p.productCode === res.data.sku))
-                  ? {
-                      ...p,
-                      ...updated,
-                      itemImage: effImage,
-                      image: effImage,
-                      imageBase64: effBase64,
-                    }
-                  : p,
-              ),
-            );
-            toast.success(
-              `Item "${updated.productName}" updated successfully!`,
-            );
-            saveSucceeded = true;
-            if (!keepOpenAfterSave) setIsModalOpen(false);
-            return;
+      if (!effBaseUnitId) {
+        const matched = allAvailableUnits.find(
+          (u) =>
+            u.id === effUnit ||
+            u.shortCode?.toUpperCase() === effUnit.toUpperCase() ||
+            u.name?.toUpperCase() === effUnit.toUpperCase() ||
+            formatUnitOption(u).toUpperCase().includes(`(${effUnit.toUpperCase()})`),
+        );
+        if (matched) {
+          effBaseUnitId = matched.id;
+          effUnit = matched.shortCode || matched.name;
+        } else {
+          const resolved = await resolveBaseUnitId(effUnit);
+          if (resolved) {
+            effBaseUnitId = resolved.baseUnitId;
+            effUnit = resolved.unitCode;
           }
-          toast.error("The item could not be updated. Please try again.");
-          return;
-        } catch (apiErr: any) {
-          console.error("Remote product update failed:", apiErr);
-          reportSaveError(apiErr, "Failed to update product");
-          return;
-        }
-      } else {
-        // POST /commerce/products
-        try {
-          const res = await productApi.createProduct(payload as any);
-          if (res?.success && res.data) {
-            const created = mapApiProductToProductItem(res.data);
-            const effImage =
-              cleanProductImage(res.data.itemImage) ||
-              cleanProductImage(res.data.image) ||
-              cleanProductImage(res.data.imageBase64) ||
-              cleanProductImage(created.itemImage) ||
-              finalImageUrl ||
-              undefined;
-
-            const effBase64 =
-              (imageBase64Data && imageBase64Data.startsWith("data:")
-                ? imageBase64Data
-                : "") ||
-              cleanProductImage(res.data.imageBase64) ||
-              cleanProductImage(created.imageBase64) ||
-              effImage;
-
-            if (effBase64 && effBase64.startsWith("data:")) {
-              if (res.data.id) saveProductImageToCache(res.data.id, effBase64);
-              if (res.data.productCode)
-                saveProductImageToCache(res.data.productCode, effBase64);
-              if (res.data.sku)
-                saveProductImageToCache(res.data.sku, effBase64);
-              if (finalCode) saveProductImageToCache(finalCode, effBase64);
-              if (res.data.itemImage)
-                saveProductImageToCache(res.data.itemImage, effBase64);
-            }
-
-            setProducts((prev) => [
-              {
-                ...created,
-                itemImage: effImage,
-                image: effImage,
-                imageBase64: effBase64,
-              },
-              ...prev,
-            ]);
-            setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
-            toast.success(`Item "${created.productName}" added successfully!`);
-            saveSucceeded = true;
-            if (!keepOpenAfterSave) setIsModalOpen(false);
-            return;
-          }
-          toast.error("The item could not be added. Please try again.");
-          return;
-        } catch (apiErr: any) {
-          console.error("Remote product create failed:", apiErr);
-          reportSaveError(apiErr, "Failed to create product");
-          return;
         }
       }
-    } finally {
-      setIsSubmitting(false);
-      if (!saveSucceeded) {
-        // Keep the modal open and every entered value so the user can correct and retry.
-      } else if (keepOpenAfterSave) {
-        setItemImageState("");
-        setEditingProduct(null);
-        reset({
-          ...defaultProductFormValues,
-          itemType: data.itemType,
-          productCode: "",
-          category: data.category || "",
-          subcategory: "",
-          unit: data.unit || "PCS",
-          baseUnitId: data.baseUnitId,
-          secondaryUnitId: undefined,
-          secondaryUnit: undefined,
-          itemImage: "",
-        });
-        setActiveTab("Pricing");
-      } else {
-        setItemImageState("");
-        setIsModalOpen(false);
+
+      payload.unit = effUnit;
+      if (effBaseUnitId) payload.baseUnitId = effBaseUnitId;
+      if (data.secondaryUnitId) payload.secondaryUnitId = data.secondaryUnitId;
+      if (data.category && data.category.trim())
+        payload.category = data.category.trim();
+      if (data.subcategory && data.subcategory.trim())
+        payload.subcategory = data.subcategory.trim();
+
+      const effImg = finalImageUrl || imageBase64Data;
+      if (effImg && effImg.trim()) {
+        payload.itemImage = effImg;
+        payload.image = effImg;
+        payload.imageBase64 = effImg;
       }
-    }
-  });
+
+      if (data.salePrice !== "" && data.salePrice !== undefined) {
+        payload.salePrice = Number(data.salePrice) || 0;
+        if (data.salePriceTaxType)
+          payload.salePriceTaxType = data.salePriceTaxType;
+      }
+
+      if (
+        data.discountValue !== "" &&
+        data.discountValue !== undefined &&
+        Number(data.discountValue) > 0
+      ) {
+        payload.discountValue = Number(data.discountValue);
+        if (data.discountType) payload.discountType = data.discountType;
+      }
+
+      if (data.hasWholesale) {
+        payload.hasWholesale = true;
+        if (data.wholesalePrice !== "" && data.wholesalePrice !== undefined) {
+          payload.wholesalePrice = Number(data.wholesalePrice) || 0;
+        }
+        if (data.wholesaleTaxType)
+          payload.wholesaleTaxType = data.wholesaleTaxType;
+        if (data.minWholesaleQty !== "" && data.minWholesaleQty !== undefined) {
+          payload.minWholesaleQty = Number(data.minWholesaleQty) || 0;
+        }
+      }
+
+      if (data.purchasePrice !== "" && data.purchasePrice !== undefined) {
+        payload.purchasePrice = Number(data.purchasePrice) || 0;
+        if (data.purchasePriceTaxType)
+          payload.purchasePriceTaxType = data.purchasePriceTaxType;
+      }
+
+      if (data.taxRate && data.taxRate !== "None" && data.taxRate.trim()) {
+        payload.taxRate = data.taxRate;
+      }
+
+      if (data.openingStock !== "" && data.openingStock !== undefined) {
+        payload.openingStock = Number(data.openingStock) || 0;
+        if (data.atPrice !== "" && data.atPrice !== undefined) {
+          payload.atPrice = Number(data.atPrice) || 0;
+        }
+        if (data.asOfDate) payload.asOfDate = data.asOfDate;
+      }
+
+      if (
+        data.minStockAlert !== "" &&
+        data.minStockAlert !== undefined &&
+        Number(data.minStockAlert) > 0
+      ) {
+        payload.minStockAlert = Number(data.minStockAlert);
+      }
+
+      if (data.location && data.location.trim()) {
+        payload.location = data.location.trim();
+      }
+
+      const hasBatch = Boolean(data.isBatchTracking || data.batchNo?.trim());
+      if (hasBatch) {
+        payload.isBatchTracking = true;
+        if (data.batchNo && data.batchNo.trim())
+          payload.batchNo = data.batchNo.trim();
+        if (data.mfgDate && data.mfgDate.trim())
+          payload.mfgDate = data.mfgDate.trim();
+        if (data.expDate && data.expDate.trim())
+          payload.expDate = data.expDate.trim();
+      }
+
+      if (finalStatus) payload.status = finalStatus;
+
+      setIsSubmitting(true);
+
+      try {
+        if (editingProduct) {
+          // PUT /commerce/products/:id
+          try {
+            const res = await productApi.updateProduct(
+              editingProduct.id,
+              payload,
+            );
+            if (res?.success && res.data) {
+              const updated = mapApiProductToProductItem(res.data);
+              const effImage =
+                cleanProductImage(res.data.itemImage) ||
+                cleanProductImage(res.data.image) ||
+                cleanProductImage(res.data.imageBase64) ||
+                cleanProductImage(updated.itemImage) ||
+                finalImageUrl ||
+                undefined;
+
+              const effBase64 =
+                (imageBase64Data && imageBase64Data.startsWith("data:")
+                  ? imageBase64Data
+                  : "") ||
+                cleanProductImage(res.data.imageBase64) ||
+                cleanProductImage(updated.imageBase64) ||
+                effImage;
+
+              if (effBase64 && effBase64.startsWith("data:")) {
+                saveProductImageToCache(editingProduct.id, effBase64);
+                if (finalCode) saveProductImageToCache(finalCode, effBase64);
+                if (res.data.id)
+                  saveProductImageToCache(res.data.id, effBase64);
+                if (res.data.productCode)
+                  saveProductImageToCache(res.data.productCode, effBase64);
+                if (res.data.sku)
+                  saveProductImageToCache(res.data.sku, effBase64);
+                if (res.data.itemImage)
+                  saveProductImageToCache(res.data.itemImage, effBase64);
+              }
+
+              setProducts((prev) =>
+                prev.map((p) =>
+                  p.id === editingProduct.id ||
+                  p.id === res.data.id ||
+                  (p.productCode &&
+                    (p.productCode === finalCode ||
+                      p.productCode === res.data.productCode ||
+                      p.productCode === res.data.sku))
+                    ? {
+                        ...p,
+                        ...updated,
+                        itemImage: effImage,
+                        image: effImage,
+                        imageBase64: effBase64,
+                      }
+                    : p,
+                ),
+              );
+              toast.success(
+                `Item "${updated.productName}" updated successfully!`,
+              );
+              saveSucceeded = true;
+              if (!keepOpenAfterSave) setIsModalOpen(false);
+              return;
+            }
+            toast.error("The item could not be updated. Please try again.");
+            return;
+          } catch (apiErr: any) {
+            console.error("Remote product update failed:", apiErr);
+            reportSaveError(apiErr, "Failed to update product");
+            return;
+          }
+        } else {
+          // POST /commerce/products
+          try {
+            const res = await productApi.createProduct(payload as any);
+            if (res?.success && res.data) {
+              const created = mapApiProductToProductItem(res.data);
+              const effImage =
+                cleanProductImage(res.data.itemImage) ||
+                cleanProductImage(res.data.image) ||
+                cleanProductImage(res.data.imageBase64) ||
+                cleanProductImage(created.itemImage) ||
+                finalImageUrl ||
+                undefined;
+
+              const effBase64 =
+                (imageBase64Data && imageBase64Data.startsWith("data:")
+                  ? imageBase64Data
+                  : "") ||
+                cleanProductImage(res.data.imageBase64) ||
+                cleanProductImage(created.imageBase64) ||
+                effImage;
+
+              if (effBase64 && effBase64.startsWith("data:")) {
+                if (res.data.id)
+                  saveProductImageToCache(res.data.id, effBase64);
+                if (res.data.productCode)
+                  saveProductImageToCache(res.data.productCode, effBase64);
+                if (res.data.sku)
+                  saveProductImageToCache(res.data.sku, effBase64);
+                if (finalCode) saveProductImageToCache(finalCode, effBase64);
+                if (res.data.itemImage)
+                  saveProductImageToCache(res.data.itemImage, effBase64);
+              }
+
+              setProducts((prev) => [
+                {
+                  ...created,
+                  itemImage: effImage,
+                  image: effImage,
+                  imageBase64: effBase64,
+                },
+                ...prev,
+              ]);
+              setTotalApiRecords((prev) => (prev !== null ? prev + 1 : prev));
+              toast.success(
+                `Item "${created.productName}" added successfully!`,
+              );
+              saveSucceeded = true;
+              if (!keepOpenAfterSave) setIsModalOpen(false);
+              return;
+            }
+            toast.error("The item could not be added. Please try again.");
+            return;
+          } catch (apiErr: any) {
+            console.error("Remote product create failed:", apiErr);
+            reportSaveError(apiErr, "Failed to create product");
+            return;
+          }
+        }
+      } finally {
+        setIsSubmitting(false);
+        if (!saveSucceeded) {
+          // Keep the modal open and every entered value so the user can correct and retry.
+        } else if (keepOpenAfterSave) {
+          setItemImageState("");
+          setEditingProduct(null);
+          reset({
+            ...defaultProductFormValues,
+            itemType: data.itemType,
+            productCode: "",
+            category: data.category || "",
+            subcategory: "",
+            unit: data.unit || "PCS",
+            baseUnitId: data.baseUnitId,
+            secondaryUnitId: undefined,
+            secondaryUnit: undefined,
+            itemImage: "",
+          });
+        } else {
+          setItemImageState("");
+          setIsModalOpen(false);
+        }
+      }
+    });
 
   const handleDeleteProduct = (id: string) => {
     setActiveDropdownId(null);
@@ -2300,7 +2491,9 @@ export const InventoryProductsView: React.FC = () => {
       setDeleteConfirmItem(prod);
     } else {
       // Never claim a delete happened when nothing was sent to the server.
-      toast.error("This item could not be found. Please refresh the list and try again.");
+      toast.error(
+        "This item could not be found. Please refresh the list and try again.",
+      );
     }
   };
 
@@ -2333,11 +2526,15 @@ export const InventoryProductsView: React.FC = () => {
           await loadProducts(true);
           return;
         }
-        toast.error(`The items could not be marked as ${status}. Please try again.`);
+        toast.error(
+          `The items could not be marked as ${status}. Please try again.`,
+        );
       } catch (err: any) {
         // No local fallback: do not show a status the server did not accept.
         console.warn(`Bulk status ${status} API failed:`, err);
-        toast.error(getApiErrorMessage(err, `Failed to mark items as ${status}.`));
+        toast.error(
+          getApiErrorMessage(err, `Failed to mark items as ${status}.`),
+        );
       } finally {
         setIsBulkStatusLoading(false);
       }
@@ -2618,7 +2815,11 @@ export const InventoryProductsView: React.FC = () => {
       const it = bulkItems.find((b) => b.id === id);
       if (!it) return;
       if (checkRequiredSelection(id, "product")) {
-        addRowError(id, "productName", "This item could not be identified. Please reopen the bulk update screen.");
+        addRowError(
+          id,
+          "productName",
+          "This item could not be identified. Please reopen the bulk update screen.",
+        );
         return;
       }
       if (!(it.productName || "").trim()) {
@@ -2628,13 +2829,37 @@ export const InventoryProductsView: React.FC = () => {
     pricingRows.forEach((row) => {
       const it = bulkItems.find((b) => b.id === row.id);
       if (!it) return;
-      addRowError(row.id, "purchasePrice", checkMoney(it.purchasePrice, "purchase price", { allowZero: true, optional: true }));
-      addRowError(row.id, "salePrice", checkMoney(it.salePrice, "sale price", { allowZero: true, optional: true }));
+      addRowError(
+        row.id,
+        "purchasePrice",
+        checkMoney(it.purchasePrice, "purchase price", {
+          allowZero: true,
+          optional: true,
+        }),
+      );
+      addRowError(
+        row.id,
+        "salePrice",
+        checkMoney(it.salePrice, "sale price", {
+          allowZero: true,
+          optional: true,
+        }),
+      );
       if (!rawBlank(it.discountValue)) {
         if ((it.discountType || "Percentage") === "Percentage") {
-          addRowError(row.id, "discountValue", checkPercent(it.discountValue, "discount percentage"));
+          addRowError(
+            row.id,
+            "discountValue",
+            checkPercent(it.discountValue, "discount percentage"),
+          );
         } else {
-          addRowError(row.id, "discountValue", checkMoney(it.discountValue, "discount amount", { allowZero: true }));
+          addRowError(
+            row.id,
+            "discountValue",
+            checkMoney(it.discountValue, "discount amount", {
+              allowZero: true,
+            }),
+          );
           if (Number(it.discountValue) > (Number(it.salePrice) || 0)) {
             addRowError(
               row.id,
@@ -2648,9 +2873,31 @@ export const InventoryProductsView: React.FC = () => {
     stockRows.forEach((row) => {
       const it = bulkItems.find((b) => b.id === row.id);
       if (!it) return;
-      addRowError(row.id, "openingStock", checkNumber(it.openingStock, "stock quantity", { allowZero: true, optional: true }));
-      addRowError(row.id, "openingStock", checkMoney(it.atPrice, "stock valuation price", { allowZero: true, optional: true }));
-      addRowError(row.id, "openingStock", checkNumber(it.minStockAlert, "minimum stock level", { allowZero: true, optional: true, maxDecimals: 0 }));
+      addRowError(
+        row.id,
+        "openingStock",
+        checkNumber(it.openingStock, "stock quantity", {
+          allowZero: true,
+          optional: true,
+        }),
+      );
+      addRowError(
+        row.id,
+        "openingStock",
+        checkMoney(it.atPrice, "stock valuation price", {
+          allowZero: true,
+          optional: true,
+        }),
+      );
+      addRowError(
+        row.id,
+        "openingStock",
+        checkNumber(it.minStockAlert, "minimum stock level", {
+          allowZero: true,
+          optional: true,
+          maxDecimals: 0,
+        }),
+      );
     });
 
     return validationErrors;
@@ -2665,88 +2912,92 @@ export const InventoryProductsView: React.FC = () => {
       return;
     }
     if (!bulkSubmitAttempted) return;
-    setBulkRowErrors(computeBulkErrors(bulkItems, computeBulkChanges(bulkItems)));
+    setBulkRowErrors(
+      computeBulkErrors(bulkItems, computeBulkChanges(bulkItems)),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bulkItems, bulkSubmitAttempted, isBulkUpdateModalOpen]);
 
-  const handleSaveBulkUpdate = () => bulkUpdateGuard.runOnce(async () => {
-    const changes = computeBulkChanges(bulkItems);
-    const { commonRows, pricingRows, stockRows, itemInformationRows } = changes;
+  const handleSaveBulkUpdate = () =>
+    bulkUpdateGuard.runOnce(async () => {
+      const changes = computeBulkChanges(bulkItems);
+      const { commonRows, pricingRows, stockRows, itemInformationRows } =
+        changes;
 
-    if (
-      commonRows.length === 0 &&
-      pricingRows.length === 0 &&
-      stockRows.length === 0 &&
-      itemInformationRows.length === 0
-    ) {
-      toast.info("No changes detected to update.");
-      setIsBulkUpdateModalOpen(false);
-      return;
-    }
-
-    // Validate every changed row at once; show inline per-row errors, no API call, no toast.
-    setBulkSubmitAttempted(true);
-    const validationErrors = computeBulkErrors(bulkItems, changes);
-    if (Object.keys(validationErrors).length > 0) {
-      setBulkRowErrors(validationErrors);
-      const firstField = Object.values(validationErrors)[0].field;
-      setBulkTab(firstField === "openingStock" ? "Stock" : "Pricing");
-      return;
-    }
-    setBulkRowErrors({});
-    const payload: BulkUpdateProductsPayload = {
-      common: commonRows,
-      pricing: pricingRows,
-      stock: stockRows,
-      itemInformation: itemInformationRows,
-      products: [],
-    };
-
-    setIsSavingBulkUpdate(true);
-    try {
-      const res = await productApi.bulkUpdateProducts(payload);
-      if (res?.success) {
-        toast.success(res.message || "All item updates saved successfully!");
+      if (
+        commonRows.length === 0 &&
+        pricingRows.length === 0 &&
+        stockRows.length === 0 &&
+        itemInformationRows.length === 0
+      ) {
+        toast.info("No changes detected to update.");
         setIsBulkUpdateModalOpen(false);
-        await loadProducts(true);
         return;
       }
-      toast.error("The item updates could not be saved. Please try again.");
-      return;
-    } catch (err: any) {
-      console.error("Bulk update products API failed:", err);
-      const errData = err?.response?.data;
-      const failedList = errData?.data?.failed;
-      if (Array.isArray(failedList) && failedList.length > 0) {
-        const errorsMap: Record<
-          string,
-          { productCode: string; field: string; message: string }
-        > = {};
-        failedList.forEach((f: any) => {
-          const firstErr = f.errors?.[0];
-          errorsMap[f.id] = {
-            productCode: f.productCode || f.id,
-            field: firstErr?.field || "discountValue",
-            message: firstErr?.message || "Validation error",
-          };
-        });
-        setBulkRowErrors(errorsMap);
-        setBulkTab("Pricing");
-        const errorDetails = failedList
-          .map((f: any) => {
-            const itemMsg = f.errors?.map((e: any) => e.message).join(", ");
-            return `${f.productCode || f.id}: ${itemMsg || "Validation error"}`;
-          })
-          .join("; ");
-        toast.error(`Some items could not be updated. ${errorDetails}`);
-      } else {
-        toast.error(getApiErrorMessage(err, "Failed to save bulk updates."));
+
+      // Validate every changed row at once; show inline per-row errors, no API call, no toast.
+      setBulkSubmitAttempted(true);
+      const validationErrors = computeBulkErrors(bulkItems, changes);
+      if (Object.keys(validationErrors).length > 0) {
+        setBulkRowErrors(validationErrors);
+        const firstField = Object.values(validationErrors)[0].field;
+        setBulkTab(firstField === "openingStock" ? "Stock" : "Pricing");
+        return;
       }
-      return;
-    } finally {
-      setIsSavingBulkUpdate(false);
-    }
-  });
+      setBulkRowErrors({});
+      const payload: BulkUpdateProductsPayload = {
+        common: commonRows,
+        pricing: pricingRows,
+        stock: stockRows,
+        itemInformation: itemInformationRows,
+        products: [],
+      };
+
+      setIsSavingBulkUpdate(true);
+      try {
+        const res = await productApi.bulkUpdateProducts(payload);
+        if (res?.success) {
+          toast.success(res.message || "All item updates saved successfully!");
+          setIsBulkUpdateModalOpen(false);
+          await loadProducts(true);
+          return;
+        }
+        toast.error("The item updates could not be saved. Please try again.");
+        return;
+      } catch (err: any) {
+        console.error("Bulk update products API failed:", err);
+        const errData = err?.response?.data;
+        const failedList = errData?.data?.failed;
+        if (Array.isArray(failedList) && failedList.length > 0) {
+          const errorsMap: Record<
+            string,
+            { productCode: string; field: string; message: string }
+          > = {};
+          failedList.forEach((f: any) => {
+            const firstErr = f.errors?.[0];
+            errorsMap[f.id] = {
+              productCode: f.productCode || f.id,
+              field: firstErr?.field || "discountValue",
+              message: firstErr?.message || "Validation error",
+            };
+          });
+          setBulkRowErrors(errorsMap);
+          setBulkTab("Pricing");
+          const errorDetails = failedList
+            .map((f: any) => {
+              const itemMsg = f.errors?.map((e: any) => e.message).join(", ");
+              return `${f.productCode || f.id}: ${itemMsg || "Validation error"}`;
+            })
+            .join("; ");
+          toast.error(`Some items could not be updated. ${errorDetails}`);
+        } else {
+          toast.error(getApiErrorMessage(err, "Failed to save bulk updates."));
+        }
+        return;
+      } finally {
+        setIsSavingBulkUpdate(false);
+      }
+    });
 
   // Filtered bulk items based on bulkSearch
   const filteredBulkItems = useMemo(() => {
@@ -3170,17 +3421,7 @@ export const InventoryProductsView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedCategory === "ALL" &&
-            pendingCategory === "ALL" &&
-            appliedType === "ALL" &&
-            pendingType === "ALL" &&
-            appliedStatus === "ALL" &&
-            pendingStatus === "ALL" &&
-            page === 1;
-
+          lastFetchKeyRef.current = null;
           setPendingSearch("");
           setAppliedSearch("");
           setPendingCategory("ALL");
@@ -3190,10 +3431,13 @@ export const InventoryProductsView: React.FC = () => {
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setPage(1);
-
-          if (isSame) {
-            loadProducts(true);
-          }
+          loadProducts(true, {
+            search: "",
+            category: "ALL",
+            itemType: "ALL",
+            status: "ALL",
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex flex-wrap items-center gap-2.5">
@@ -3548,7 +3792,8 @@ export const InventoryProductsView: React.FC = () => {
             noValidate
             onSubmit={handleSubmit(
               (data) => handleSaveItem(false, data),
-              (rhfErrors) => handleInvalidItem(rhfErrors as Record<string, any>),
+              (rhfErrors) =>
+                handleInvalidItem(rhfErrors as Record<string, any>),
             )}
             className="relative w-full max-w-5xl bg-white rounded-xl sm:rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh] my-auto"
           >
@@ -3609,7 +3854,10 @@ export const InventoryProductsView: React.FC = () => {
                     onOpenAddCategoryModal={() =>
                       setIsAddCategoryModalOpen(true)
                     }
+                    required
+                    error={errors.category?.message}
                   />
+                  <FormError message={errors.category?.message} showIcon />
                 </div>
 
                 {/* 1.2 Subcategory Select Component (Second Field) */}
@@ -3624,7 +3872,10 @@ export const InventoryProductsView: React.FC = () => {
                     onOpenAddSubcategoryModal={() =>
                       setIsAddSubcategoryModalOpen(true)
                     }
+                    required
+                    error={errors.subcategory?.message}
                   />
+                  <FormError message={errors.subcategory?.message} showIcon />
                 </div>
 
                 {/* 1.3 Item Name */}
@@ -3838,59 +4089,8 @@ export const InventoryProductsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Tabs: Pricing | Stock - Segmented Button Switching */}
-              <div className="flex items-center pt-1 pb-1">
-                <div className="inline-flex items-center p-1 bg-slate-100/90 rounded-xl border border-slate-200/80 shadow-2xs">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("Pricing")}
-                    className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                      activeTab === "Pricing"
-                        ? "bg-[#33077C] text-white shadow-xs"
-                        : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
-                    }`}
-                  >
-                    <IndianRupee className="w-3.5 h-3.5" />
-                    <span>Pricing</span>
-                  </button>
-
-                  {formData.itemType === "Product" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab("Stock");
-                        const currentAtPrice = getValues("atPrice");
-                        const currentSalePrice = getValues("salePrice");
-                        const currentPurchasePrice = getValues("purchasePrice");
-                        if (
-                          !currentAtPrice ||
-                          Number(currentAtPrice) === 0 ||
-                          !isAtPriceManuallyEdited.current
-                        ) {
-                          const fallbackPrice =
-                            currentSalePrice || currentPurchasePrice || "";
-                          if (fallbackPrice) {
-                            setValue("atPrice", fallbackPrice as any, {
-                              shouldValidate: isSubmitted,
-                            });
-                          }
-                        }
-                      }}
-                      className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                        activeTab === "Stock"
-                          ? "bg-[#33077C] text-white shadow-xs"
-                          : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
-                      }`}
-                    >
-                      <Boxes className="w-3.5 h-3.5" />
-                      <span>Stock</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* TAB 1: PRICING TAB CONTENT */}
-              {activeTab === "Pricing" && (
+              {/* PRICING */}
+              {
                 <div className="space-y-4 animate-in fade-in duration-100">
                   {/* Card 1: Sale Price & Wholesale Price */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
@@ -4254,10 +4454,10 @@ export const InventoryProductsView: React.FC = () => {
                     </div>
                   </div>
                 </div>
-              )}
+              }
 
-              {/* TAB 2: STOCK TAB CONTENT */}
-              {activeTab === "Stock" && (
+              {/* STOCK (always shown below pricing; products only) */}
+              {formData.itemType === "Product" && (
                 <div className="space-y-4 pt-1 animate-in fade-in duration-100">
                   {/* Min Stock To Maintain | Location */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -4391,7 +4591,10 @@ export const InventoryProductsView: React.FC = () => {
                             }}
                             className={`${FORM_INPUT_CLS} cursor-pointer`}
                           />
-                          <FormError message={errors.expDate?.message} showIcon />
+                          <FormError
+                            message={errors.expDate?.message}
+                            showIcon
+                          />
                           <span className="text-[10px] text-slate-400 mt-1 block">
                             Expiry / Best before date
                           </span>
@@ -4403,11 +4606,10 @@ export const InventoryProductsView: React.FC = () => {
               )}
             </div>
 
-            {/* Form-level messages (openingStock / atPrice have no inline input in this form) */}
-            {(errors.root || errors.openingStock || errors.atPrice) && (
+            {/* Form-level messages (the stock valuation price has no inline input) */}
+            {(errors.root || errors.atPrice) && (
               <div className="px-4 sm:px-6 py-2 bg-white border-t border-slate-100 shrink-0 space-y-0.5">
                 <FormError message={errors.root?.message} showIcon />
-                <FormError message={errors.openingStock?.message} showIcon />
                 <FormError message={errors.atPrice?.message} showIcon />
               </div>
             )}
@@ -4721,7 +4923,11 @@ export const InventoryProductsView: React.FC = () => {
                   setUnitDoneAttempted(true);
                   let effectiveBase = selectedBaseUnit;
                   let baseUnitObj = allAvailableUnits.find(
-                    (u) => formatUnitOption(u) === selectedBaseUnit,
+                    (u) =>
+                      formatUnitOption(u) === selectedBaseUnit ||
+                      u.id === selectedBaseUnit ||
+                      u.shortCode?.toUpperCase() === selectedBaseUnit?.toUpperCase() ||
+                      u.name?.toUpperCase() === selectedBaseUnit?.toUpperCase(),
                   );
 
                   // If user entered text in custom unit name without clicking Add, create and apply it
@@ -4751,14 +4957,22 @@ export const InventoryProductsView: React.FC = () => {
 
                   if (!baseUnitObj && chosen) {
                     baseUnitObj = allAvailableUnits.find(
-                      (u) => formatUnitOption(u) === chosen,
+                      (u) =>
+                        formatUnitOption(u) === chosen ||
+                        u.id === chosen ||
+                        u.shortCode?.toUpperCase() === chosen?.toUpperCase() ||
+                        u.name?.toUpperCase() === chosen?.toUpperCase(),
                     );
                   }
 
                   const secUnitObj =
                     selectedSecondaryUnit && selectedSecondaryUnit !== "None"
                       ? allAvailableUnits.find(
-                          (u) => formatUnitOption(u) === selectedSecondaryUnit,
+                          (u) =>
+                            formatUnitOption(u) === selectedSecondaryUnit ||
+                            u.id === selectedSecondaryUnit ||
+                            u.shortCode?.toUpperCase() === selectedSecondaryUnit?.toUpperCase() ||
+                            u.name?.toUpperCase() === selectedSecondaryUnit?.toUpperCase(),
                         )
                       : null;
 
@@ -4770,10 +4984,7 @@ export const InventoryProductsView: React.FC = () => {
                   setFormData({
                     ...formData,
                     unit: finalUnit,
-                    baseUnitId:
-                      baseUnitObj && !baseUnitObj.id.startsWith("unit-")
-                        ? baseUnitObj.id
-                        : undefined,
+                    baseUnitId: baseUnitObj?.id,
                     secondaryUnitId:
                       secUnitObj && !secUnitObj.id.startsWith("unit-")
                         ? secUnitObj.id

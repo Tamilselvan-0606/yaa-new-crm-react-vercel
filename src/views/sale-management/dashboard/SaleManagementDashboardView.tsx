@@ -47,6 +47,7 @@ import {
 } from '../../../api';
 
 import { formatDate as sharedFormatDate } from '../utils/dateUtils';
+import { evictApiCache } from "../../../api/queryCache";
 type TimeRange = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'all';
 type ModuleTab = 'all' | 'inventory' | 'sales_hub' | 'purchase' | 'reports';
 
@@ -137,7 +138,10 @@ export const SaleManagementDashboardView: React.FC = () => {
   // Main Dashboard APIs fetcher
   const fetchAllDashboardApis = useCallback(
     async (isManualRefresh = false) => {
-      if (isManualRefresh) setIsRefreshing(true);
+      if (isManualRefresh) {
+        evictApiCache(["Dashboard", "SalesReport"]); // the Refresh button must read from the server
+        setIsRefreshing(true);
+      }
       setLoadingModules(true);
       setLoadingLowStock(true);
       setLoadingTopProducts(true);

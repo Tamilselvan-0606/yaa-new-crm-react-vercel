@@ -4,8 +4,6 @@ import {
   ArrowLeft,
   X,
   Search,
-  IndianRupee,
-  Boxes,
   Loader2,
   Check,
   AlertCircle,
@@ -29,7 +27,7 @@ import {
 } from "../../../api/commerce/productApi";
 import { categoryApi, ApiCategory } from "../../../api/commerce/categoryApi";
 import { subcategoryApi } from "../../../api/commerce/subcategoryApi";
-import { unitApi, ApiUnit } from "../../../api/commerce/unitApi";
+import { unitApi, ApiUnit, resolveBaseUnitId } from "../../../api/commerce/unitApi";
 import { toast } from "../../../utils/toast";
 import { FormError } from "../../../components/common/FormError";
 import {
@@ -148,6 +146,8 @@ interface SearchableDropdownProps {
   clearLabel?: string;
   emptyMessage?: string;
   disabled?: boolean;
+  /** Inline error shown under the field (red border). */
+  error?: string;
   footerAction?: {
     label: string;
     onClick: () => void;
@@ -168,6 +168,7 @@ export const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
   clearLabel,
   emptyMessage,
   disabled = false,
+  error,
   footerAction,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -223,6 +224,8 @@ export const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
         } ${
           isOpen
             ? "border-[#4309A2] ring-4 ring-[#4309A2]/10"
+            : error
+            ? "border-rose-400 ring-2 ring-rose-100"
             : value
             ? "border-slate-300 hover:border-slate-400"
             : "border-slate-200 hover:border-slate-300"
@@ -396,7 +399,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   onClose,
   onProductCreated,
 }) => {
-  const [activeTab, setActiveTab] = useState<"Pricing" | "Stock">("Pricing");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { runOnce } = useSubmitGuard();
   const unitGuard = useSubmitGuard();
@@ -465,7 +467,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       purchasePriceTaxType: "Excluded",
       taxRate: "None",
       minStockAlert: "10",
-      openingStock: "0",
+      openingStock: "",
       location: "",
       batchNo: "",
       mfgDate: "",
@@ -512,8 +514,32 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       const res = await unitApi.getUnits({
         sortOrder: "asc",
       });
-      if (res && res.data && Array.isArray(res.data)) {
-        setAllAvailableUnits(res.data);
+      const list = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res)
+          ? res
+          : Array.isArray((res as any)?.data?.data)
+            ? (res as any).data.data
+            : [];
+      if (list && list.length > 0) {
+        setAllAvailableUnits(list);
+        const currentVals = getValues();
+        if (!currentVals.baseUnitId) {
+          const matched =
+            list.find(
+              (u) =>
+                u.shortCode?.toUpperCase() === "PCS" ||
+                u.name?.toUpperCase().includes("PIECE") ||
+                (currentVals.unit &&
+                  (u.shortCode?.toUpperCase() === currentVals.unit.toUpperCase() ||
+                    u.name?.toUpperCase() === currentVals.unit.toUpperCase())),
+            ) || list[0];
+          if (matched) {
+            setValue("baseUnitId", matched.id);
+            if (!currentVals.unit) setValue("unit", matched.shortCode || matched.name);
+            setSelectedBaseUnit(formatUnitOption(matched));
+          }
+        }
       }
     } catch (err) {
       console.warn("Failed to load units in AddItemModal:", err);
@@ -601,13 +627,13 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       (u) =>
         u.shortCode?.toUpperCase() === val.toUpperCase() ||
         u.name?.toUpperCase() === val.toUpperCase() ||
-        formatUnitOption(u) === val
+        u.id === val ||
+        formatUnitOption(u) === val,
     );
     if (matched) {
       setValue("baseUnitId", matched.id);
       setSelectedBaseUnit(formatUnitOption(matched));
     } else {
-      setValue("baseUnitId", undefined);
       setSelectedBaseUnit(val);
     }
   };
@@ -648,7 +674,6 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     setImageFileError(null);
     if (!isOpen) reset();
     if (isOpen) {
-      setActiveTab("Pricing");
       setItemImageState("");
       setSelectedBaseUnit("PCS");
       setSelectedSecondaryUnit("None");
@@ -671,7 +696,7 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
         purchasePriceTaxType: "Excluded",
         taxRate: "None",
         minStockAlert: "10",
-        openingStock: "0",
+        openingStock: "",
         location: "",
         batchNo: "",
         mfgDate: "",
@@ -803,6 +828,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
       return null;
     })();
     const checks: Array<[string, string | null]> = [
+      ["category", checkRequiredSelection(d.category, "category")],
+      ["subcategory", checkRequiredSelection(d.subcategory, "subcategory")],
       ["unit", checkRequiredSelection(d.unit, "unit")],
       ["salePrice", checkMoney(d.salePrice, "sale price", { allowZero: true, optional: true })],
       ["discountValue", discountErr],
@@ -832,50 +859,63 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
     return collectErrors(checks);
   };
 
-  const pricingKeys = ["salePrice", "discountValue", "wholesalePrice", "minWholesaleQty", "purchasePrice"];
 
   // Errors appear only after the first Save attempt, then stay in sync as values change.
   useRevalidateAfterSubmit(fe, () => computeExtraErrors(getValues()), [
-    formData.unit, formData.salePrice, formData.discountValue, formData.discountType,
+    formData.category, formData.subcategory, formData.unit, formData.salePrice, formData.discountValue, formData.discountType,
     formData.wholesalePrice, formData.minWholesaleQty, formData.hasWholesale,
     formData.purchasePrice, formData.minStockAlert, formData.batchNo, formData.mfgDate,
     formData.expDate, imageFileError,
   ]);
-
-  // Switch to the tab that holds the first non-RHF error so it is visible
-  const revealTab = (extra: Record<string, string>) => {
-    const keys = Object.keys(extra);
-    if (keys.length === 0 || keys[0] === "unit" || keys[0] === "itemImage") return;
-    setActiveTab(pricingKeys.includes(keys[0]) ? "Pricing" : "Stock");
-  };
 
   // RHF fields invalid: also reveal the controlled-field errors in the same submit
   const onInvalid = () => {
     const extra = computeExtraErrors(getValues());
     fe.validateAll(extra);
     // Name/category fields are on top; only switch tabs when there are no top-level RHF errors
-    revealTab(extra);
   };
 
   // Form submission to API
   const onSubmit = (data: ItemModalFormData) => runOnce(async () => {
     const extraErrors = computeExtraErrors(data);
     if (!fe.validateAll(extraErrors)) {
-      revealTab(extraErrors);
       return;
     }
     setIsSubmitting(true);
     try {
+      let effUnit = (data.unit && data.unit.trim()) || "PCS";
+      let effBaseUnitId = data.baseUnitId;
+
+      if (!effBaseUnitId) {
+        const matched = allAvailableUnits.find(
+          (u) =>
+            u.id === effUnit ||
+            u.shortCode?.toUpperCase() === effUnit.toUpperCase() ||
+            u.name?.toUpperCase() === effUnit.toUpperCase() ||
+            formatUnitOption(u).toUpperCase().includes(`(${effUnit.toUpperCase()})`),
+        );
+        if (matched) {
+          effBaseUnitId = matched.id;
+          effUnit = matched.shortCode || matched.name;
+        } else {
+          const resolved = await resolveBaseUnitId(effUnit);
+          if (resolved) {
+            effBaseUnitId = resolved.baseUnitId;
+            effUnit = resolved.unitCode;
+          }
+        }
+      }
+
       const payload: Record<string, any> = {
         productName: data.productName.trim(),
-        unit: data.unit || "PCS",
+        unit: effUnit,
       };
 
       if (data.itemType) payload.itemType = data.itemType;
       if (data.category && data.category.trim()) payload.category = data.category.trim();
       if (data.subcategory && data.subcategory.trim()) payload.subcategory = data.subcategory.trim();
       if (data.hsnCode && data.hsnCode.trim()) payload.hsnCode = data.hsnCode.trim();
-      if (data.baseUnitId) payload.baseUnitId = data.baseUnitId;
+      if (effBaseUnitId) payload.baseUnitId = effBaseUnitId;
       if (data.secondaryUnitId) payload.secondaryUnitId = data.secondaryUnitId;
 
       const effImg = itemImageState || data.itemImage;
@@ -1028,9 +1068,11 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
             {/* Row 1: Category, Subcategory, Item Name */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-start">
               {/* Category */}
-              <div className="md:col-span-3">
+              <div className="md:col-span-3" {...fieldAttr("category")}>
                 <SearchableDropdown
                   label="Category"
+                  required
+                  error={fe.errors.category}
                   value={formData.category}
                   onChange={(val) => {
                     setValue("category", val, { shouldValidate: isSubmitted });
@@ -1041,15 +1083,16 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   searchPlaceholder="Search Category by name..."
                   addNewButtonLabel="+ Add New Category"
                   onAddNew={() => setIsAddCategoryModalOpen(true)}
-                  allowClear
-                  clearLabel="None / General Category"
                 />
+                <FormError message={fe.errors.category} showIcon />
               </div>
 
               {/* Subcategory */}
-              <div className="md:col-span-3">
+              <div className="md:col-span-3" {...fieldAttr("subcategory")}>
                 <SearchableDropdown
                   label="Subcategory"
+                  required
+                  error={fe.errors.subcategory}
                   value={formData.subcategory || ""}
                   onChange={(val) => setValue("subcategory", val)}
                   options={subcategoryOptions}
@@ -1057,10 +1100,9 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
                   searchPlaceholder="Search Subcategory..."
                   addNewButtonLabel="+ Add New Subcategory"
                   onAddNew={() => setIsAddSubcategoryModalOpen(true)}
-                  allowClear
-                  clearLabel="None / Unassigned"
                   disabled={!formData.category}
                 />
+                <FormError message={fe.errors.subcategory} showIcon />
               </div>
 
               {/* Item Name */}
@@ -1245,39 +1287,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               </div>
             </div>
 
-            {/* Tabs: Pricing | Stock - Segmented Switcher */}
-            <div className="flex items-center pt-1 pb-1">
-              <div className="inline-flex items-center p-1 bg-slate-100/90 rounded-xl border border-slate-200/80 shadow-2xs">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("Pricing")}
-                  className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                    activeTab === "Pricing"
-                      ? "bg-[#33077C] text-white shadow-xs"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
-                  }`}
-                >
-                  <IndianRupee className="w-3.5 h-3.5" />
-                  <span>Pricing</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("Stock")}
-                  className={`px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-2 ${
-                    activeTab === "Stock"
-                      ? "bg-[#33077C] text-white shadow-xs"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
-                  }`}
-                >
-                  <Boxes className="w-3.5 h-3.5" />
-                  <span>Stock</span>
-                </button>
-              </div>
-            </div>
-
-            {/* TAB 1: PRICING TAB CONTENT */}
-            {activeTab === "Pricing" && (
+            {/* PRICING */}
+            {(
               <div className="space-y-4 animate-in fade-in duration-100">
                 {/* Card 1: Sale Price & Wholesale Price */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
@@ -1517,8 +1528,8 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
               </div>
             )}
 
-            {/* TAB 2: STOCK TAB CONTENT */}
-            {activeTab === "Stock" && (
+            {/* STOCK (always shown below pricing) */}
+            {(
               <div className="space-y-4 pt-1 animate-in fade-in duration-100">
                 {/* Min Stock To Maintain | Location */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

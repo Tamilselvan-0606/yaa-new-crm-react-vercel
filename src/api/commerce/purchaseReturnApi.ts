@@ -254,7 +254,15 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
         { type: 'PurchaseReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
+
+        { type: 'Batch', id: 'LIST' },
+
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -272,7 +280,15 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
         { type: 'PurchaseReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
+
+        { type: 'Batch', id: 'LIST' },
+
+        { type: 'Product', id: 'LIST' },
       ],
     }),
 
@@ -286,7 +302,15 @@ export const commercePurchaseReturnEndpoints = baseApi.injectEndpoints({
         { type: 'PurchaseReturn', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
+
+        { type: 'Batch', id: 'LIST' },
+
+        { type: 'Product', id: 'LIST' },
       ],
     }),
   }),

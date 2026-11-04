@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, {
@@ -578,16 +577,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   const [searchParams] = useSearchParams();
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState("all");
   const [appliedPeriod, setAppliedPeriod] = useState("all");
   const [pendingStatus, setPendingStatus] = useState("ALL");
@@ -2251,7 +2240,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         );
       }
 
-      dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
+      dispatch(baseApi.util.invalidateTags([{ type: "ProformaInvoice", id: "LIST" }]));
       // Fresh batch stock for the next form (no stock is changed by the frontend).
       void batchStock.refresh(docProductIds);
 
@@ -2604,9 +2593,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "Proforma", id: proforma.id },
-          { type: "Proforma", id: "LIST" },
-          { type: "SalesOrder", id: "LIST" },
+          { type: "ProformaInvoice", id: proforma.id },
+          { type: "ProformaInvoice", id: "LIST" },
+          { type: "SaleOrder", id: "LIST" },
         ]),
       );
 
@@ -2821,7 +2810,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       if (backendDocNo) {
         duplicated.proformaNo = backendDocNo;
       }
-      dispatch(baseApi.util.invalidateTags([{ type: "Proforma", id: "LIST" }]));
+      dispatch(baseApi.util.invalidateTags([{ type: "ProformaInvoice", id: "LIST" }]));
       toast.success(
         `Duplicated ${proforma.proformaNo} as new Proforma ${duplicated.proformaNo || ""}!`,
       );
@@ -2864,8 +2853,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       await commerceProformaApi.deleteProforma(deleteTargetProforma.id);
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "Proforma", id: deleteTargetProforma.id },
-          { type: "Proforma", id: "LIST" },
+          { type: "ProformaInvoice", id: deleteTargetProforma.id },
+          { type: "ProformaInvoice", id: "LIST" },
         ]),
       );
       const updated = proformaList.filter(
@@ -2919,8 +2908,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       await commerceProformaApi.updateStatus(id, { status: newStatus });
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "Proforma", id },
-          { type: "Proforma", id: "LIST" },
+          { type: "ProformaInvoice", id },
+          { type: "ProformaInvoice", id: "LIST" },
         ]),
       );
       toast.success(`Proforma invoice marked as ${newStatus}!`);
@@ -4758,10 +4747,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                 ...prev.filter((p) => p.id !== created.id),
               ]);
               dispatch(
-                baseApi.util.invalidateTags([
-                  "Product",
-                  "InventoryStock",
-                ] as any),
+                baseApi.util.invalidateTags(["Product", "Stock", "Batch"]),
               );
               fetchLiveProducts();
               if (activeItemRowIndex !== null) {
@@ -5118,15 +5104,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedPeriod === "all" &&
-            pendingPeriod === "all" &&
-            appliedStatus === "ALL" &&
-            pendingStatus === "ALL" &&
-            page === 1;
-
           setPendingSearch("");
           setAppliedSearch("");
           setPendingPeriod("all");
@@ -5134,10 +5111,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setPage(1);
-
-          if (isSame) {
-            fetchProformas(1, pageSize, "", "ALL", "all");
-          }
+          fetchProformas(1, pageSize, "", "ALL", "all");
         }}
         placeholder="Search by customer name, proforma #..."
         filterSlot={

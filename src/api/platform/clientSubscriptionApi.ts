@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   ClientSubscriptionListParams,
@@ -20,7 +20,7 @@ export const clientSubscriptionEndpoints = baseApi.injectEndpoints({
     >({
       query: (params) => ({
         url: '/subscriptions',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
       }),
       providesTags: (result) =>
         result?.data
@@ -144,10 +144,7 @@ export const clientSubscriptionApi = {
       headers['x-organization-id'] = activeOrgId;
     }
 
-    const queryParams: Record<string, any> = {
-      page: params?.page ?? params?.page_no ?? 1,
-      limit: params?.limit ?? params?.page_size ?? 10,
-    };
+    const queryParams: Record<string, any> = buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' });
     if (params?.search) queryParams.search = params.search;
     if (params?.status && params.status !== 'ALL' && params.status !== 'All') {
       queryParams.status = params.status;

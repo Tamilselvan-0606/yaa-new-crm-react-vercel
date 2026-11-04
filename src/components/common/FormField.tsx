@@ -65,16 +65,27 @@ interface RegisteredFieldProps extends Omit<React.InputHTMLAttributes<HTMLInputE
   /** The object returned by `register('field')`. */
   registration: UseFormRegisterReturn;
   inputClassName?: string;
+  /** Cleans the typed text before react-hook-form sees it, e.g. `lettersOnly` for names or `digitsOnly` for numbers. */
+  transform?: (value: string) => string;
 }
 
 /** TextField for react-hook-form forms: `<RegisteredField label="Email" registration={register('email')} error={errors.email?.message} />`. */
 export const RegisteredField = React.forwardRef<HTMLInputElement, RegisteredFieldProps>(
-  ({ label, required, error, registration, inputClassName = '', type = 'text', ...inputProps }, _ref) => (
+  ({ label, required, error, registration, inputClassName = '', type = 'text', transform, ...inputProps }, _ref) => (
     <div>
       <label className={FIELD_LABEL_CLASS}>
         {label} {required && <span className="text-rose-500 font-bold">*</span>}
       </label>
-      <input {...registration} {...inputProps} type={type} className={fieldClass(!!error, inputClassName)} />
+      <input
+        {...registration}
+        {...inputProps}
+        type={type}
+        onChange={(e) => {
+          if (transform) e.target.value = transform(e.target.value);
+          registration.onChange(e);
+        }}
+        className={fieldClass(!!error, inputClassName)}
+      />
       {error && <p className="text-[11px] font-medium text-red-500 mt-1">{error}</p>}
     </div>
   )

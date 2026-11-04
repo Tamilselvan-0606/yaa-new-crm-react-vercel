@@ -68,7 +68,9 @@ export const useBatchStock = (opts: { branchId?: string } = {}) => {
   const loadProduct = useCallback(
     (productId?: string | null): Promise<void> => {
       if (!productId || cacheRef.current.has(productId)) return Promise.resolve();
-      return fetchProduct(productId, false);
+      // Stock availability is live data: always read it from the server (once per product while the form is open),
+      // never from an RTK cache entry left by an earlier visit.
+      return fetchProduct(productId, true);
     },
     [fetchProduct],
   );

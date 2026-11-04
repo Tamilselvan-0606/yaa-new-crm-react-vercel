@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -74,6 +73,7 @@ import {
 } from '../../../api/commerce/salesReturnApi';
 import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
 import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
+import { commercePaymentInApi, mapApiPaymentInToSalePaymentIn } from '../../../api/commerce/paymentInApi';
 import { productApi } from '../../../api/commerce/productApi';
 import {
   FormLabel,
@@ -212,16 +212,6 @@ export const SalesReturnView: React.FC = () => {
   // Search & Pagination
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
@@ -271,25 +261,41 @@ export const SalesReturnView: React.FC = () => {
   // -------------------------------------------------------------
   // API: Fetch Sales Returns list with current filters and pagination
   // -------------------------------------------------------------
-  const fetchSalesReturns = useCallback(async () => {
+  const fetchSalesReturns = useCallback(async (overrides?: {
+    page?: number;
+    search?: string;
+    period?: string;
+    status?: string;
+    firm?: string;
+    from?: string;
+    to?: string;
+  }) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     setIsFetching(true);
     try {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetPeriod = overrides?.period !== undefined ? overrides.period : selectedPeriod;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : selectedStatusFilter;
+      const targetFirm = overrides?.firm !== undefined ? overrides.firm : selectedFirm;
+      const targetFrom = overrides?.from !== undefined ? overrides.from : startDate;
+      const targetTo = overrides?.to !== undefined ? overrides.to : endDate;
+
       const params: SalesReturnFilterParams = {
-        page_no: currentPage,
+        page_no: targetPage,
         page_size: pageSize,
         pagination_required: true,
         sortOrder: 'desc',
       };
 
-      if (appliedSearch) {
-        params.search = appliedSearch;
+      if (targetSearch) {
+        params.search = targetSearch;
       }
-      if (startDate) params.from = startDate;
-      if (endDate) params.to = endDate;
+      if (targetFrom) params.from = targetFrom;
+      if (targetTo) params.to = targetTo;
 
-      if (selectedPeriod && selectedPeriod !== 'All Time') {
+      if (targetPeriod && targetPeriod !== 'All Time') {
         const pMap: Record<string, string> = {
           'Today': 'today',
           'This Week': 'this_week',
@@ -298,15 +304,15 @@ export const SalesReturnView: React.FC = () => {
           'This Quarter': 'this_quarter',
           'This Financial Year': 'this_year',
         };
-        if (pMap[selectedPeriod]) params.period = pMap[selectedPeriod];
+        if (pMap[targetPeriod]) params.period = pMap[targetPeriod];
       }
 
-      if (selectedStatusFilter && selectedStatusFilter !== 'All') {
-        params.status = selectedStatusFilter;
+      if (targetStatus && targetStatus !== 'All') {
+        params.status = targetStatus;
       }
 
-      if (selectedFirm !== 'ALL FIRMS' && UUID_REGEX.test(selectedFirm)) {
-        params.customerId = selectedFirm;
+      if (targetFirm !== 'ALL FIRMS' && UUID_REGEX.test(targetFirm)) {
+        params.customerId = targetFirm;
       }
 
       const res = await commerceSalesReturnApi.getSalesReturns(params);
@@ -352,6 +358,24 @@ export const SalesReturnView: React.FC = () => {
       })
       .catch((e) => console.warn('Customers load notice in SalesReturn:', e));
   }, [setCustomersList]);
+
+  // Payment-In rows of the ledger come from the API (the same source as the Payment-In page), not from
+  // the local store: the store can hold stale or local-only copies that the server never had.
+  const [livePaymentIns, setLivePaymentIns] = useState<ReturnType<typeof mapApiPaymentInToSalePaymentIn>[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    commercePaymentInApi
+      .getPaymentIns({ pagination_required: false })
+      .then((res) => {
+        if (!cancelled && res?.success && Array.isArray(res.data)) {
+          setLivePaymentIns(res.data.map(mapApiPaymentInToSalePaymentIn));
+        }
+      })
+      .catch((e) => console.warn('Payment-In ledger load notice in SalesReturn:', e));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load Sales Invoices for linking ONLY when Create Return Modal is opened
   const hasLoadedInvoicesRef = useRef(false);
@@ -592,7 +616,7 @@ export const SalesReturnView: React.FC = () => {
 
     // 3. Payments In (if selected)
     if (selectedTxType === 'All Transaction' || selectedTxType === 'Payment-In') {
-      (paymentIns || []).forEach((p, index) => {
+      (livePaymentIns ?? paymentIns ?? []).forEach((p, index) => {
         const amt = Number(p?.receivedAmount ?? 0) || 0;
         records.push({
           id: p?.id || `pay_${index}`,
@@ -611,7 +635,7 @@ export const SalesReturnView: React.FC = () => {
 
     // Sort by date desc
     return records.sort((a, b) => (b.date > a.date ? 1 : -1));
-  }, [salesReturns, sales, paymentIns, selectedTxType]);
+  }, [salesReturns, sales, paymentIns, livePaymentIns, selectedTxType]);
 
   // Filter Transactions by search and type
   const filteredTransactions = useMemo(() => {
@@ -1309,19 +1333,6 @@ export const SalesReturnView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            selectedPeriod === 'This Month' &&
-            pendingPeriod === 'This Month' &&
-            selectedStatusFilter === 'All' &&
-            pendingStatusFilter === 'All' &&
-            selectedTxType === 'All Transaction' &&
-            pendingTxType === 'All Transaction' &&
-            selectedFirm === 'ALL FIRMS' &&
-            pendingFirm === 'ALL FIRMS' &&
-            currentPage === 1;
-
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('This Month');
@@ -1334,10 +1345,16 @@ export const SalesReturnView: React.FC = () => {
           setSelectedFirm('ALL FIRMS');
           setCurrentPage(1);
 
-          if (isSame) {
-            isFetchingRef.current = false;
-            fetchSalesReturns();
-          }
+          isFetchingRef.current = false;
+          fetchSalesReturns({
+            page: 1,
+            search: '',
+            period: 'This Month',
+            status: 'All',
+            firm: 'ALL FIRMS',
+            from: undefined,
+            to: undefined,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1370,7 +1387,7 @@ export const SalesReturnView: React.FC = () => {
         rightSlot={
           <div className="flex items-center gap-3 pr-1 flex-wrap sm:flex-nowrap">
             <span className="text-xs font-semibold text-slate-500 shrink-0">
-              Total Returns :{' '}
+              {selectedTxType === 'Credit Note' ? 'Total Returns' : 'Total Transactions'} :{' '}
               <span className="text-[#33077C] font-bold">
                 {serverTotal || filteredTransactions.length}
               </span>

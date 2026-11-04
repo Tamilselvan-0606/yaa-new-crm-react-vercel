@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   ProformaListParams,
   ProformaListResponse,
@@ -17,20 +17,20 @@ export const proformaInvoiceEndpoints = baseApi.injectEndpoints({
     getPlatformProformaInvoices: builder.query<ProformaListResponse, ProformaListParams | void>({
       query: (params) => ({
         url: '/platform/proforma-invoices',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
       }),
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Proforma' as const, id })),
-              { type: 'Proforma', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'PlatformProformaInvoice' as const, id })),
+              { type: 'PlatformProformaInvoice', id: 'LIST' },
             ]
-          : [{ type: 'Proforma', id: 'LIST' }],
+          : [{ type: 'PlatformProformaInvoice', id: 'LIST' }],
     }),
 
     getPlatformProformaInvoiceById: builder.query<ProformaSingleResponse, string>({
       query: (id) => `/platform/proforma-invoices/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Proforma', id }],
+      providesTags: (_result, _error, id) => [{ type: 'PlatformProformaInvoice', id }],
     }),
 
     createPlatformProformaInvoice: builder.mutation<ProformaSingleResponse, CreateProformaRequest>({
@@ -39,7 +39,7 @@ export const proformaInvoiceEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Proforma', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformProformaInvoice', id: 'LIST' }],
     }),
 
     updatePlatformProformaInvoice: builder.mutation<
@@ -52,8 +52,8 @@ export const proformaInvoiceEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
+        { type: 'PlatformProformaInvoice', id },
+        { type: 'PlatformProformaInvoice', id: 'LIST' },
       ],
     }),
 
@@ -62,7 +62,7 @@ export const proformaInvoiceEndpoints = baseApi.injectEndpoints({
         url: `/platform/proforma-invoices/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Proforma', id: 'LIST' }],
+      invalidatesTags: [{ type: 'PlatformProformaInvoice', id: 'LIST' }],
     }),
 
     convertPlatformProformaToInvoice: builder.mutation<
@@ -75,8 +75,8 @@ export const proformaInvoiceEndpoints = baseApi.injectEndpoints({
         body: payload || {},
       }),
       invalidatesTags: [
-        { type: 'Proforma', id: 'LIST' },
-        { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'PlatformProformaInvoice', id: 'LIST' },
+        { type: 'PlatformInvoice', id: 'LIST' },
       ],
     }),
   }),
@@ -95,7 +95,7 @@ export const {
 export const proformaInvoiceApi = {
   getProformaInvoices: async (params?: ProformaListParams): Promise<ProformaListResponse> => {
     const res = await baseClient.get<ProformaListResponse>('/platform/proforma-invoices', {
-      params,
+      params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
     });
     return res.data;
   },

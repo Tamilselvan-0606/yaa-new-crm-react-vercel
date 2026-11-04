@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   OrganizationSubscriptionListParams,
   OrganizationSubscriptionListResponse,
@@ -18,7 +18,7 @@ export const organizationSubscriptionEndpoints = baseApi.injectEndpoints({
     >({
       query: (params) => ({
         url: '/platform/organization-subscriptions',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
         headers: {
           'x-organization-id': (params && typeof params === 'object' && 'organizationId' in params) ? params.organizationId || '' : '',
         },
@@ -106,7 +106,7 @@ export const organizationSubscriptionApi = {
     const res = await baseClient.get<OrganizationSubscriptionListResponse>(
       '/platform/organization-subscriptions',
       {
-        params,
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
         headers: {
           'x-organization-id': params?.organizationId || '',
         },

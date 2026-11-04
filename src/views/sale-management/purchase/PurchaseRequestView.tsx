@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -83,6 +82,7 @@ import { FormLabel, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils
 import { SaleActionDropdown } from '../utils';
 
 import { formatDate } from '../utils/dateUtils';
+import { evictApiCache } from "../../../api/queryCache";
 const getLoggedInUserName = (): string => {
   try {
     const raw = localStorage.getItem('nexus_crm_fallback_user');
@@ -140,16 +140,6 @@ export const PurchaseRequestView: React.FC = () => {
   // Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPriority, setPendingPriority] = useState('All');
   const [appliedPriority, setAppliedPriority] = useState('All');
   const [pendingStatus, setPendingStatus] = useState('All');
@@ -216,8 +206,20 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Master API Loader with deduplication
   const loadPurchaseRequests = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedPriority}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        priority?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetPriority = overrides?.priority !== undefined ? overrides.priority : appliedPriority;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}_${targetPriority}`;
 
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
@@ -228,13 +230,13 @@ export const PurchaseRequestView: React.FC = () => {
 
       try {
         const res = await commercePurchaseRequestApi.getPurchaseRequests({
-          page_no: currentPage,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           sortOrder: 'desc',
-          status: appliedStatus !== 'All' ? appliedStatus : undefined,
-          priority: appliedPriority !== 'All' ? appliedPriority : undefined,
+          status: targetStatus !== 'All' ? targetStatus : undefined,
+          priority: targetPriority !== 'All' ? targetPriority : undefined,
         });
 
         if (res && res.success && Array.isArray(res.data)) {
@@ -284,6 +286,7 @@ export const PurchaseRequestView: React.FC = () => {
 
 
   const handleManualRefresh = () => {
+    evictApiCache(["PurchaseRequest"]); // explicit refresh bypasses the cache
     lastFetchKeyRef.current = null;
     loadPurchaseRequests(true);
     toast.info('Refreshing purchase requests from Commerce API...');
@@ -322,14 +325,11 @@ export const PurchaseRequestView: React.FC = () => {
     }
   }, []);
 
-  // Prefetch suppliers on initial component mount
+  // Load initial products list and suppliers when the requisition form modal first opens (once per screen session)
+  const hasLoadedFormDataRef = useRef(false);
   useEffect(() => {
-    loadSuppliers();
-  }, [loadSuppliers]);
-
-  // Automatically load initial products list and suppliers when requisition form modal opens
-  useEffect(() => {
-    if (isCreateModalOpen) {
+    if (isCreateModalOpen && !hasLoadedFormDataRef.current) {
+      hasLoadedFormDataRef.current = true;
       handleProductSearch('');
       loadSuppliers();
     }
@@ -1417,15 +1417,8 @@ export const PurchaseRequestView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedPriority === 'All' &&
-            pendingPriority === 'All' &&
-            appliedStatus === 'All' &&
-            pendingStatus === 'All' &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPriority('All');
@@ -1433,10 +1426,12 @@ export const PurchaseRequestView: React.FC = () => {
           setPendingStatus('All');
           setAppliedStatus('All');
           setCurrentPage(1);
-
-          if (isSame) {
-            loadPurchaseRequests(true);
-          }
+          loadPurchaseRequests(true, {
+            search: '',
+            status: 'All',
+            priority: 'All',
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

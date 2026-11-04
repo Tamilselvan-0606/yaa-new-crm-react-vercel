@@ -20,6 +20,8 @@ interface CustomSelectProps {
   allowClear?: boolean;
   disabled?: boolean;
   error?: boolean;
+  /** Shows a search box at the top of the menu (long lists such as countries). */
+  searchable?: boolean;
 }
 
 export const CustomSelect: React.FC<CustomSelectProps> = ({
@@ -35,8 +37,10 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   allowClear = false,
   disabled = false,
   error = false,
+  searchable = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const [dropdownPos, setDropdownPos] = useState<{
     top: number;
     left: number;
@@ -50,6 +54,10 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   const normalizedOptions: SelectOption[] = (Array.isArray(options) ? options : []).map((opt) =>
     typeof opt === 'string' ? { value: opt, label: opt } : opt
   );
+
+  const visibleOptions = searchable && query.trim()
+    ? normalizedOptions.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase()))
+    : normalizedOptions;
 
   const selectedOption = normalizedOptions.find((opt) => String(opt.value) === String(value));
 
@@ -93,6 +101,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsOpen(false);
+        setQuery('');
       }
     };
 
@@ -120,6 +129,7 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
   const handleSelect = (val: string) => {
     onChange(val);
     setIsOpen(false);
+    setQuery('');
   };
 
   return (
@@ -189,6 +199,19 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
             }}
             className={`bg-white rounded-xl border border-slate-200/90 shadow-2xl shadow-slate-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs p-1 space-y-0.5 max-h-56 overflow-y-auto ${menuClassName}`}
           >
+            {searchable && (
+              <div className="p-1 pb-1.5 sticky top-0 bg-white z-10">
+                <input
+                  autoFocus
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search..."
+                  className="w-full h-8 px-2.5 text-[11.5px] border border-slate-200 rounded-md outline-none focus:border-[#4309A2]"
+                />
+              </div>
+            )}
+
             {allowClear && (
               <div
                 onClick={() => handleSelect('')}
@@ -206,13 +229,13 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
               </div>
             )}
 
-            {normalizedOptions.length === 0 && (
+            {visibleOptions.length === 0 && (
               <div className="px-3 py-2.5 text-xs text-slate-400 text-center italic select-none">
                 No options available
               </div>
             )}
 
-            {normalizedOptions.map((opt) => {
+            {visibleOptions.map((opt) => {
               const isSelected = String(opt.value) === String(value);
 
               return (

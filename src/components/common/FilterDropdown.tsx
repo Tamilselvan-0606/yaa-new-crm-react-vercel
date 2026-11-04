@@ -17,6 +17,8 @@ interface FilterDropdownProps<T extends string = string> {
   className?: string;
   /** Tailwind max-height class of the open list (default shows about six options before scrolling). */
   maxHeightClass?: string;
+  /** Called each time the list opens, so a screen can load the options lazily. */
+  onOpen?: () => void;
 }
 
 export function FilterDropdown<T extends string = string>({
@@ -26,6 +28,7 @@ export function FilterDropdown<T extends string = string>({
   placeholder = 'Filter',
   className = '',
   maxHeightClass = 'max-h-60',
+  onOpen,
 }: FilterDropdownProps<T>) {
   const [open, setOpen] = useState(false);
   const [alignRight, setAlignRight] = useState(false);
@@ -46,6 +49,7 @@ export function FilterDropdown<T extends string = string>({
       const rect = ref.current.getBoundingClientRect();
       setAlignRight(rect.left + 190 > window.innerWidth - 12 && rect.right > 190);
     }
+    if (!open) onOpen?.();
     setOpen((o) => !o);
   };
 

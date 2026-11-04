@@ -1,4 +1,3 @@
-import { useDebounce } from "use-debounce";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
@@ -577,16 +576,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   // Search & Filters
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState("This Month");
   const [appliedPeriod, setAppliedPeriod] = useState("This Month");
   const [pendingStatus, setPendingStatus] = useState("ALL");
@@ -925,18 +914,28 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Fetch Sales Orders from Live API merged with local converted orders
   const isFetchingOrdersRef = useRef(false);
-  const fetchSaleOrders = useCallback(async () => {
+  const fetchSaleOrders = useCallback(async (overrides?: {
+    page?: number;
+    search?: string;
+    status?: string;
+    period?: string;
+  }) => {
     if (isFetchingOrdersRef.current) return;
     isFetchingOrdersRef.current = true;
     setIsApiLoading(true);
     try {
-      const apiPeriod = mapPeriodToApiPeriod(appliedPeriod);
-      const apiStatus = appliedStatus === "ALL" ? undefined : appliedStatus;
+      const targetPage = overrides?.page ?? page;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetPeriod = overrides?.period !== undefined ? overrides.period : appliedPeriod;
+
+      const apiPeriod = mapPeriodToApiPeriod(targetPeriod);
+      const apiStatus = targetStatus === "ALL" ? undefined : targetStatus;
       const res = await commerceSaleOrderApi.getOrders({
-        page_no: page,
+        page_no: targetPage,
         page_size: pageSize,
         pagination_required: true,
-        search: appliedSearch.trim() || undefined,
+        search: targetSearch.trim() || undefined,
         status: apiStatus,
         period: apiPeriod,
         sortOrder: "desc",
@@ -2081,8 +2080,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "SalesOrder", id: order.id },
-          { type: "SalesOrder", id: "LIST" },
+          { type: "SaleOrder", id: order.id },
+          { type: "SaleOrder", id: "LIST" },
           { type: "DeliveryChallan", id: "LIST" },
         ]),
       );
@@ -2271,7 +2270,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
       dispatch(
         baseApi.util.invalidateTags([
-          { type: "SalesOrder", id: "LIST" },
+          { type: "SaleOrder", id: "LIST" },
           { type: "SalesInvoice", id: "LIST" },
         ]),
       );
@@ -4043,10 +4042,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           onClose={() => setIsAddCustomerModalOpen(false)}
           onCustomerCreated={(newCust) => {
             dispatch(
-              baseApi.util.invalidateTags([
-                "CommerceCustomer",
-                "Customer",
-              ] as any),
+              baseApi.util.invalidateTags(["Customer"]),
             );
             setLiveCustomers((prev) => [newCust as any, ...prev]);
             updateActiveTabFormData((prev) => ({
@@ -4076,7 +4072,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           }}
           onProductCreated={(newProduct) => {
             dispatch(
-              baseApi.util.invalidateTags(["Product", "InventoryStock"] as any),
+              baseApi.util.invalidateTags(["Product", "Stock", "Batch"]),
             );
             setLiveProducts((prev) => [newProduct, ...prev]);
             fetchLiveProducts();
@@ -4419,15 +4415,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedPeriod === "This Month" &&
-            pendingPeriod === "This Month" &&
-            appliedStatus === "ALL" &&
-            pendingStatus === "ALL" &&
-            page === 1;
-
           setPendingSearch("");
           setAppliedSearch("");
           setPendingPeriod("This Month");
@@ -4435,11 +4422,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setPage(1);
-
-          if (isSame) {
-            isFetchingOrdersRef.current = false;
-            fetchSaleOrders();
-          }
+          isFetchingOrdersRef.current = false;
+          fetchSaleOrders({ page: 1, search: "", status: "ALL", period: "This Month" });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

@@ -196,6 +196,8 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -218,6 +220,8 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -240,6 +244,8 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -255,6 +261,8 @@ export const commercePaymentInEndpoints = baseApi.injectEndpoints({
         { type: 'PaymentIn', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],

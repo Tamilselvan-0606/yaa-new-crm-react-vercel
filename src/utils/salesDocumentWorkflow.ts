@@ -92,18 +92,64 @@ export const inferDocType = (docRef?: string | null): SalesDocType | undefined =
   return undefined;
 };
 
+const LINEAGE_KEYS: Record<SalesDocType, readonly [keyof SalesDocumentLineage, keyof SalesDocumentLineage]> = {
+  Estimate: ['estimateId', 'estimateNo'],
+  Proforma: ['proformaId', 'proformaNo'],
+  Order: ['orderId', 'orderNo'],
+  Challan: ['challanId', 'challanNo'],
+  Invoice: ['invoiceId', 'invoiceNo'],
+};
+
+const isRealDocId = (v?: string | null): boolean => !!v && v.trim() !== '' && !/^[0-9]+$/.test(v.trim());
+
 /**
- * Finds the lineage record containing any matching document number or ID
+ * Does this stored lineage record really describe THIS document?
+ * Document numbers repeat (after deletions, resets or a re-seeded database), so a number alone must
+ * not link a new document to an old conversion:
+ *  - when both sides carry a real id, the ids decide (a different id is a different document);
+ *  - otherwise a number match is accepted only if the conversion is not older than the document.
+ */
+export const lineageBelongsToDocument = (
+  lineage: SalesDocumentLineage,
+  doc: { id?: string | null; no?: string | null; createdAt?: string | null },
+  type: SalesDocType,
+): boolean => {
+  const [idKey, noKey] = LINEAGE_KEYS[type];
+  const lineageId = lineage[idKey] as string | undefined;
+  const lineageNo = lineage[noKey] as string | undefined;
+  if (isRealDocId(lineageId) && isRealDocId(doc.id)) {
+    return lineageId!.trim().toLowerCase() === doc.id!.trim().toLowerCase();
+  }
+  const docNo = (doc.no || '').trim().toLowerCase();
+  if (lineageNo && docNo && lineageNo.trim().toLowerCase() === docNo) {
+    const converted = Date.parse(lineage.createdAt);
+    const created = Date.parse(doc.createdAt || '');
+    // A conversion cannot predate the document it converted (one minute of clock slack).
+    if (!isNaN(converted) && !isNaN(created) && converted < created - 60000) return false;
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Finds the lineage record containing any matching document number or ID.
+ * Pass `doc` (the document being looked up) to ignore stale records of an older document that merely
+ * had the same number.
  */
 export const findDocumentLineage = (
   docRef?: string | null,
-  docType?: SalesDocType
+  docType?: SalesDocType,
+  doc?: { id?: string | null; no?: string | null; createdAt?: string | null },
 ): SalesDocumentLineage | undefined => {
   if (!docRef || !docRef.trim()) return undefined;
   const clean = docRef.trim().toLowerCase();
-  const all = getStoredLineages();
+  const allStored = getStoredLineages();
 
   const effectiveType = docType || inferDocType(docRef);
+  const all =
+    doc && effectiveType
+      ? allStored.filter((l) => lineageBelongsToDocument(l, { ...doc, no: doc.no ?? docRef }, effectiveType))
+      : allStored;
 
   if (effectiveType === 'Estimate') {
     return all.find(
@@ -191,6 +237,13 @@ export const recordDocumentConversion = (params: {
     no?: string,
     id?: string
   ) => {
+    // If both the stored record and this conversion carry a real id for this document type, the ids
+    // decide: the same number on a different id is a different (older) document.
+    const [idKey] = LINEAGE_KEYS[type];
+    const storedId = item[idKey] as string | undefined;
+    if (isRealDocId(storedId) && isRealDocId(id)) {
+      return storedId!.trim().toLowerCase() === id!.trim().toLowerCase();
+    }
     if (type === 'Estimate') {
       return Boolean((no && item.estimateNo?.toLowerCase() === no) || (id && item.estimateId?.toLowerCase() === id));
     }
@@ -333,7 +386,11 @@ export const resolveDocumentConvertedAt = (
     item.referenceNo ||
     item.id;
 
-  const lineage = findDocumentLineage(docRef, docType);
+  const lineage = findDocumentLineage(docRef, docType, {
+    id: item.id,
+    no: docRef,
+    createdAt: item.createdAt,
+  });
 
   // 3. Inspect lineage conversion status per document type
   if (lineage) {

@@ -1,5 +1,5 @@
 import { CommonTableHead } from '../../components/common/CommonTableHead';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   branchApi,
@@ -39,6 +39,7 @@ import { Modal } from '../../components/common/Modal';
 import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
+  alphabetsOnly,  lettersOnly,
   digitsOnly,
   emailAddress,
   indianMobile,
@@ -46,6 +47,8 @@ import {
   minLength,
   required,
   requiredWhen,
+  pincodeMatching,
+  cleanPincode,
   validateFields,
   when,
 } from '../../utils/fieldValidators';
@@ -53,6 +56,7 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { LocationFields, LocationMeta } from '../../components/common/LocationFields';
 import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
@@ -76,7 +80,10 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
     email: item.email || item.user?.email || '',
     location: item.location || item.city || item.address || '',
     city: item.city || item.location || '',
+    country: item.country || '',
     state: item.state || '',
+    district: item.district || '',
+    pincode: item.pincode || '',
     address: item.address || item.location || '',
     gstNumber: item.gstNumber || '',
     status: normalizedStatus,
@@ -87,6 +94,8 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
       (item as any).sub_organization_id ||
       (item as any).subOrganization?.id ||
       '',
+    subOrganizationName:
+      (item as any).subOrganizationName || (item as any).sub_organization_name || (item as any).subOrganization?.name || '',
     organizationType: (item as any).organizationType || (item as any).organization_type,
     productId: item.productId,
     productName: item.productName,
@@ -126,6 +135,29 @@ export const BranchesView: React.FC = () => {
   // View Modal State
   const [viewBranch, setViewBranch] = useState<Branch | null>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const viewBranchId = isViewModalOpen ? viewBranch?.id : undefined;
+
+  // Opening "View" shows the list row at once, then loads the full record (GET branch by id) so the
+  // details are accurate. The detail never blanks a field the row already has (e.g. GST, sub-org name).
+  // The response is cached (Branch tag) and refreshed after any branch change.
+  useEffect(() => {
+    if (!viewBranchId) return;
+    let cancelled = false;
+    branchApi
+      .getBranchById(viewBranchId, viewBranch?.organizationId)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return;
+        const detail = mapApiBranchToBranch(res.data);
+        const kept = Object.fromEntries(Object.entries(detail).filter(([, v]) => v !== '' && v != null));
+        setViewBranch((cur) => (cur && cur.id === detail.id ? ({ ...cur, ...kept } as Branch) : cur));
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewBranchId]);
 
   // Confirmation Modal State (Inactive / Suspend / Delete)
   const [confirmAction, setConfirmAction] = useState<{
@@ -148,10 +180,18 @@ export const BranchesView: React.FC = () => {
     password: '',
     roleId: '',
     location: '',
+    country: '',
+    state: '',
+    district: '',
+    countryId: '',
+    stateId: '',
+    districtId: '',
+    pincode: '',
     status: 'Active' as BranchStatus,
   });
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({ stateRequired: true, districtRequired: true });
 
   /** Updates one form field and sets (or clears) its inline error in a single call. */
   const updateField = (key: keyof typeof formData, value: string, error = '') => {
@@ -172,13 +212,13 @@ export const BranchesView: React.FC = () => {
   });
 
   // Fetch active Organization name & Sub-Organizations list strictly segregated by Suite
-  const loadOrganizationAndSubOrgs = async () => {
+  const loadOrganizationAndSubOrgs = async (includeOrgName = true) => {
     try {
       setLoadingSubOrgs(true);
       const activeOrgId = currentUser?.organizationId || getStoredOrganizationId();
 
       // 1. Try to get parent organization details if available
-      if (activeOrgId) {
+      if (includeOrgName && activeOrgId) {
         try {
           const orgRes = await organizationApi.getOrganizationById(activeOrgId);
           if (orgRes && orgRes.data && orgRes.data.name) {
@@ -227,14 +267,6 @@ export const BranchesView: React.FC = () => {
       const loadedSubs = Array.from(subMap.values());
       setSubOrganizations(loadedSubs);
 
-      // Immediately trigger loadData with loaded sub-orgs so refresh never encounters an empty sub-org list
-      const activeSubOrgName = localStorage.getItem('active_sub_organization');
-      const matched =
-        activeSubOrgName && activeSubOrgName !== 'All'
-          ? loadedSubs.find((s) => s.name.toLowerCase() === activeSubOrgName.toLowerCase())
-          : undefined;
-      const effectiveSubId = matched?.id || localStorage.getItem('active_sub_organization_id') || undefined;
-      loadData(page, pageSize, appliedSearch, appliedStatus, effectiveSubId, loadedSubs);
     } catch (err) {
       console.error('Failed to load sub-organizations:', err);
       setSubOrganizations([]);
@@ -243,9 +275,35 @@ export const BranchesView: React.FC = () => {
     }
   };
 
+  // The organization name and sub-organization list only feed the Add / Edit / View forms (and the sub-organization
+  // column, when the branch API sends just an id). So they load the first time one of those needs them, not when
+  // the page opens: the page load calls the branch API only.
+  const formDataRequested = useRef(false);
+  const subOrgsRequested = useRef(false);
+  /** includeOrgName: also fetch the organization's name (only the forms need it). Without it, only the sub-organizations load. */
+  const ensureOrgAndSubOrgs = (includeOrgName = true) => {
+    if (includeOrgName) {
+      if (formDataRequested.current) return;
+      formDataRequested.current = true;
+      subOrgsRequested.current = true;
+      loadOrganizationAndSubOrgs(true);
+    } else {
+      if (formDataRequested.current || subOrgsRequested.current) return;
+      subOrgsRequested.current = true;
+      loadOrganizationAndSubOrgs(false);
+    }
+  };
+
   useEffect(() => {
-    loadOrganizationAndSubOrgs();
-  }, [currentUser?.organizationId, isSaleManagement]);
+    if (isModalOpen || isViewModalOpen) ensureOrgAndSubOrgs(true);
+  }, [isModalOpen, isViewModalOpen]);
+
+  // New branch: pre-select the first sub-organization once the list arrives (it may load after the form opens).
+  useEffect(() => {
+    if (isModalOpen && !editingBranch && !formData.subOrganizationId && subOrganizations.length > 0) {
+      setFormData((prev) => (prev.subOrganizationId ? prev : { ...prev, subOrganizationId: subOrganizations[0].id }));
+    }
+  }, [subOrganizations, isModalOpen]);
 
   // Listen to subOrgChanged and branchChanged events to reload branches based on header selections
   useEffect(() => {
@@ -288,19 +346,7 @@ export const BranchesView: React.FC = () => {
       const activeSubOrgName = localStorage.getItem('active_sub_organization');
       const storedSubOrgId = localStorage.getItem('active_sub_organization_id');
 
-      let currentSubs = providedSubs && providedSubs.length > 0 ? providedSubs : subOrganizations;
-      if (currentSubs.length === 0 && activeOrgId) {
-        try {
-          const subRes = await subOrganizationApi.getSubOrganizations(
-            { page_no: 1, page_size: 100, pagination_required: 'false' },
-            activeOrgId || undefined
-          );
-          if (subRes && Array.isArray(subRes.data)) {
-            currentSubs = subRes.data;
-            setSubOrganizations(currentSubs);
-          }
-        } catch {}
-      }
+      const currentSubs = providedSubs && providedSubs.length > 0 ? providedSubs : subOrganizations;
 
       const matchedSub =
         activeSubOrgName && activeSubOrgName !== 'All'
@@ -393,7 +439,10 @@ export const BranchesView: React.FC = () => {
 
       setTotalRecords(allItems.length);
       const startIdx = (targetPage - 1) * targetPageSize;
-      setBranches(allItems.slice(startIdx, startIdx + targetPageSize));
+      const pageItems = allItems.slice(startIdx, startIdx + targetPageSize);
+      setBranches(pageItems);
+      // The branch API only sometimes includes the sub-organization name; fetch the list only when a name is missing.
+      if (pageItems.some((b) => b.subOrganizationId && !b.subOrganizationName)) ensureOrgAndSubOrgs(false);
     } catch (err: any) {
       console.error('Failed to load branches data:', err);
       setBranches([]);
@@ -437,6 +486,13 @@ export const BranchesView: React.FC = () => {
       password: '',
       roleId: '',
       location: '',
+      country: '',
+      state: '',
+      district: '',
+      countryId: '',
+      stateId: '',
+      districtId: '',
+      pincode: '',
       status: 'Active',
     });
     setIsModalOpen(true);
@@ -460,6 +516,13 @@ export const BranchesView: React.FC = () => {
       password: '',
       roleId: '',
       location: branch.location || branch.city || branch.address || '',
+      country: branch.country || '',
+      state: branch.state || '',
+      district: branch.district || '',
+      countryId: '',
+      stateId: '',
+      districtId: '',
+      pincode: branch.pincode || '',
       status: branch.status || 'Active',
     });
     setIsModalOpen(true);
@@ -478,10 +541,14 @@ export const BranchesView: React.FC = () => {
       ['name', formData.name, [required('Branch Name is required')]],
       ['organizationId', formData.organizationId || defaultOrgName, [required('Select Organization is required')]],
       ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
-      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required')]],
+      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required'), alphabetsOnly('Contact Person Name')]],
       ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
       ['whatsapp', formData.whatsapp, [indianMobile('WhatsApp Number')]],
-      ['location', formData.location, [required('Location is required')]],
+      ['location', formData.location, [required('Location is required'), alphabetsOnly('Location')]],
+      ['country', formData.country, [required('Country is required')]],
+      ['state', formData.state, requiredWhen(locationMeta.stateRequired, 'State is required')],
+      ['district', formData.district, requiredWhen(locationMeta.districtRequired, 'District is required')],
+      ['pincode', formData.pincode, [required('Pincode is required'), pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)]],
       ['email', formData.email, [required('Email is required'), emailAddress]],
       ['password', formData.password, when(isCreate, [required('Password is required'), minLength(12, 'Password must be at least 12 characters')])],
       ['status', formData.status, [required('Status is required')]],
@@ -506,6 +573,10 @@ export const BranchesView: React.FC = () => {
           email: formData.email.trim(),
           location: formData.location.trim(),
           city: formData.location.trim(),
+          countryId: formData.countryId || undefined,
+          stateId: formData.stateId || undefined,
+          districtId: formData.districtId || undefined,
+          pincode: formData.pincode.trim(),
           status: formData.status,
         });
 
@@ -531,6 +602,10 @@ export const BranchesView: React.FC = () => {
           email: formData.email.trim(),
           location: formData.location.trim(),
           city: formData.location.trim(),
+          country: formData.country.trim(),
+          state: formData.state.trim(),
+          district: formData.district.trim(),
+          pincode: formData.pincode.trim(),
           status: formData.status,
         };
         const idx = catalogList.findIndex((b) => b.id === editingBranch.id || b.name.toLowerCase() === editingBranch.name.toLowerCase());
@@ -562,6 +637,10 @@ export const BranchesView: React.FC = () => {
           whatsapp: formData.whatsapp.trim() || undefined,
           location: formData.location.trim() || undefined,
           city: formData.location.trim() || undefined,
+          countryId: formData.countryId || undefined,
+          stateId: formData.stateId || undefined,
+          districtId: formData.districtId || undefined,
+          pincode: formData.pincode.trim(),
           status: formData.status,
           user: {
             email: trimmedEmail,
@@ -585,6 +664,10 @@ export const BranchesView: React.FC = () => {
           whatsapp: formData.whatsapp.trim(),
           location: formData.location.trim(),
           city: formData.location.trim(),
+          country: formData.country.trim(),
+          state: formData.state.trim(),
+          district: formData.district.trim(),
+          pincode: formData.pincode.trim(),
           status: formData.status,
           createdAt: new Date().toISOString(),
         };
@@ -848,7 +931,7 @@ export const BranchesView: React.FC = () => {
                       <td className="py-4 px-5 border border-slate-200 whitespace-nowrap">
                         <div className="flex flex-col">
                           <span className="font-bold text-slate-900 text-xs sm:text-[13px]">
-                            {subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name || 'Direct Organization'}
+                            {branch.subOrganizationName || subOrganizations.find((s) => s.id === branch.subOrganizationId)?.name || 'Direct Organization'}
                           </span>
                           <span className="text-[11px] text-slate-500 font-medium mt-0.5">
                             {branch.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management')}
@@ -1157,7 +1240,7 @@ export const BranchesView: React.FC = () => {
               value={formData.contactPerson}
               error={formErrors.contactPerson}
               placeholder="Enter contact person name"
-              onValueChange={(v) => updateField('contactPerson', v)}
+              onValueChange={(v) => updateField('contactPerson', lettersOnly(v))}
             />
             <TextField
               label="Mobile Number"
@@ -1202,8 +1285,33 @@ export const BranchesView: React.FC = () => {
               required
               value={formData.location}
               error={formErrors.location}
-              placeholder="e.g. Chennai, Tamil Nadu"
-              onValueChange={(v) => updateField('location', v)}
+              placeholder="e.g. Chennai"
+              onValueChange={(v) => updateField('location', lettersOnly(v))}
+            />
+          </div>
+
+          {/* Row 3b: Country | State | District | Pincode */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <LocationFields
+              country={formData.country}
+              state={formData.state}
+              district={formData.district}
+              errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district }}
+              onMeta={setLocationMeta}
+              onChange={(patch) => {
+                setFormData((prev) => ({ ...prev, ...patch }));
+                setFormErrors((prev) => ({ ...prev, ...Object.fromEntries(Object.keys(patch).map((k) => [k, ''])) }));
+              }}
+            />
+            <TextField
+              label="Pincode"
+              required
+              inputMode="numeric"
+              maxLength={10}
+              value={formData.pincode}
+              error={formErrors.pincode}
+              placeholder="e.g. 600001"
+              onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
             />
           </div>
 
@@ -1439,6 +1547,22 @@ export const BranchesView: React.FC = () => {
                   <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Location</span>
                     <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.location || viewBranch.city || viewBranch.address || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Country</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.country || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">State</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.state || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">District</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.district || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Pincode</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.pincode || '-'}</span>
                   </div>
                 </div>
               </div>

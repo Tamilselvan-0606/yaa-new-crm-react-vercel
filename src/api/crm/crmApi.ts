@@ -100,7 +100,7 @@ export const crmApi = baseApi.injectEndpoints({
           notes: data.notes || data.feedback,
         },
       }),
-      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard', 'Reminder'],
+      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'PlatformDashboard', 'Reminder'],
     }),
 
     updateLead: builder.mutation<Lead, { id: string; data: Partial<Lead> }>({
@@ -124,7 +124,7 @@ export const crmApi = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Lead', id },
         { type: 'Lead', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -136,8 +136,8 @@ export const crmApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: [
         { type: 'Lead', id: 'LIST' },
-        { type: 'Customer', id: 'LIST' },
-        'Dashboard',
+        { type: 'CrmCustomer', id: 'LIST' },
+        'PlatformDashboard',
       ],
     }),
 
@@ -146,7 +146,7 @@ export const crmApi = baseApi.injectEndpoints({
         url: `/platform/leads/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     getTasks: builder.query<TaskItem[], void>({
@@ -211,7 +211,7 @@ export const crmApi = baseApi.injectEndpoints({
           return { error: { status: 'CUSTOM_ERROR', error: e.message } };
         }
       },
-      invalidatesTags: [{ type: 'Task', id: 'LIST' }, 'Task', 'Dashboard'],
+      invalidatesTags: [{ type: 'Task', id: 'LIST' }, 'Task', 'PlatformDashboard'],
     }),
 
     updateTask: builder.mutation<TaskItem, { id: string; data: Partial<TaskItem> }>({
@@ -234,7 +234,7 @@ export const crmApi = baseApi.injectEndpoints({
         { type: 'Task', id },
         { type: 'Task', id: 'LIST' },
         'Task',
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -281,7 +281,7 @@ export const crmApi = baseApi.injectEndpoints({
           return { error: { status: 'CUSTOM_ERROR', error: e.message } };
         }
       },
-      invalidatesTags: [{ type: 'Content', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Content', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     getPayments: builder.query<PaymentItem[], void>({
@@ -301,7 +301,7 @@ export const crmApi = baseApi.injectEndpoints({
         method: 'POST',
         body: data,
       }),
-      invalidatesTags: [{ type: 'Payment', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Payment', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     getSubscriptions: builder.query<SubscriptionItem[], void>({
@@ -321,7 +321,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     getReports: builder.query<any, void>({
       query: () => '/commerce/sales/dashboard/modules',
-      providesTags: ['Report'],
+      providesTags: ['CrmReport'],
     }),
 
     getSettings: builder.query<CompanySettings, void>({
@@ -331,7 +331,7 @@ export const crmApi = baseApi.injectEndpoints({
 
     getMarketingOverview: builder.query<any, void>({
       query: () => '/marketing/overview',
-      providesTags: ['Content', 'Dashboard'],
+      providesTags: ['Content', 'PlatformDashboard'],
     }),
 
     getCrmProducts: builder.query<Product[], void>({
@@ -339,15 +339,15 @@ export const crmApi = baseApi.injectEndpoints({
       providesTags: (result) =>
         result
           ? [
-              ...result.map(({ id }) => ({ type: 'Product' as const, id })),
-              { type: 'Product', id: 'LIST' },
+              ...result.map(({ id }) => ({ type: 'CrmProduct' as const, id })),
+              { type: 'CrmProduct', id: 'LIST' },
             ]
-          : [{ type: 'Product', id: 'LIST' }],
+          : [{ type: 'CrmProduct', id: 'LIST' }],
     }),
 
     getCrmProductById: builder.query<any, string>({
       query: (id) => `/products/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Product', id }],
+      providesTags: (_result, _error, id) => [{ type: 'CrmProduct', id }],
     }),
 
     getCrmCustomers: builder.query<Customer[], void>({
@@ -355,15 +355,15 @@ export const crmApi = baseApi.injectEndpoints({
       providesTags: (result) =>
         result
           ? [
-              ...result.map(({ id }) => ({ type: 'Customer' as const, id })),
-              { type: 'Customer', id: 'LIST' },
+              ...result.map(({ id }) => ({ type: 'CrmCustomer' as const, id })),
+              { type: 'CrmCustomer', id: 'LIST' },
             ]
-          : [{ type: 'Customer', id: 'LIST' }],
+          : [{ type: 'CrmCustomer', id: 'LIST' }],
     }),
 
     getCrmCustomerById: builder.query<Customer, string>({
       query: (id) => `/platform/clients/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Customer', id }],
+      providesTags: (_result, _error, id) => [{ type: 'CrmCustomer', id }],
     }),
 
     updateCrmCustomer: builder.mutation<Customer, { id: string; data: Partial<Customer> }>({
@@ -373,9 +373,9 @@ export const crmApi = baseApi.injectEndpoints({
         body: data,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Customer', id },
-        { type: 'Customer', id: 'LIST' },
-        'Dashboard',
+        { type: 'CrmCustomer', id },
+        { type: 'CrmCustomer', id: 'LIST' },
+        'PlatformDashboard',
       ],
     }),
 
@@ -384,7 +384,7 @@ export const crmApi = baseApi.injectEndpoints({
         url: `/platform/clients/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Customer', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'CrmCustomer', id: 'LIST' }, 'PlatformDashboard'],
     }),
   }),
   overrideExisting: false,

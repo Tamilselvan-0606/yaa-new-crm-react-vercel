@@ -64,7 +64,7 @@ export const reportsAnalyticsEndpoints = baseApi.injectEndpoints({
           headers,
         };
       },
-      providesTags: ['Dashboard'],
+      providesTags: ['PlatformDashboard'],
     }),
   }),
   overrideExisting: false,

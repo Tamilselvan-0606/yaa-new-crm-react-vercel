@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   OrganizationListResponse,
   OrganizationSingleResponse,
@@ -96,9 +96,18 @@ export const {
 } = organizationEndpoints;
 
 export const organizationApi = {
-  getOrganizations: async (page = 1, limit = 10): Promise<OrganizationListResponse> => {
+  /**
+   * GET /platform/organizations?page_no&page_size&pagination_required&search&status&page&limit&sortBy
+   * (page/limit are sent alongside page_no/page_size because the backend accepts either form).
+   */
+  getOrganizations: async (
+    page = 1,
+    limit = 10,
+    options: { search?: string; status?: string; sortBy?: string } = {}
+  ): Promise<OrganizationListResponse> => {
+    const search = options.search?.trim();
     const res = await baseClient.get<OrganizationListResponse>('/platform/organizations', {
-      params: { page, limit },
+      params: buildListParams({ page, limit, search, status: options.status, sortBy: options.sortBy }, { sortBy: 'name' }),
     });
     return res.data;
   },

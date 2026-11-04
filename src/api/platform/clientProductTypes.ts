@@ -5,6 +5,8 @@ export interface ClientProductApiItem {
   organizationId: string;
   subOrganizationId?: string;
   branchId?: string;
+  /** Only returned by GET /products/{id}. */
+  branch?: { id: string; name?: string; code?: string; subOrganizationId?: string } | null;
   name: string;
   code: string;
   contactPerson?: string;

@@ -25,6 +25,8 @@ import {
   checkHasLineItems,
   extractApiFieldErrors,
   getApiErrorMessage,
+  friendlyFieldMessage,
+  humanizeFieldPath,
 } from '../src/utils/formValidation';
 
 const UUID = '3f2b8c1e-4a5d-4e6f-8a9b-0c1d2e3f4a5b';
@@ -257,5 +259,36 @@ describe('validateBatchStock (combined across rows)', () => {
       { getAvailable: () => 20, credit: () => 40 },
     );
     assert.equal(over['items.0.quantity'], 'Only 60 units are available in this batch. Please reduce the quantity.');
+  });
+});
+
+describe('friendly backend field messages', () => {
+  it('humanizes field paths', () => {
+    assert.equal(humanizeFieldPath(['receiptNo']), 'receipt number');
+    assert.equal(humanizeFieldPath(['items', 1, 'quantity']), 'item 2 quantity');
+    assert.equal(humanizeFieldPath('customerId'), 'customer');
+  });
+  it('turns zod messages into plain sentences', () => {
+    assert.equal(friendlyFieldMessage(['receiptNo'], 'Too small: expected string to have >=1 characters'), 'Please enter the receipt number.');
+    assert.equal(friendlyFieldMessage(['name'], 'Too small: expected string to have >=2 characters'), 'Name must be at least 2 characters.');
+    assert.equal(friendlyFieldMessage(['amount'], 'Too small: expected number to be >0'), 'Amount must be greater than zero.');
+    assert.equal(friendlyFieldMessage(['email'], 'Invalid email address'), 'Please enter a valid email address.');
+  });
+  it('uses the field details when the backend only says "Invalid request"', () => {
+    const err = {
+      status: 400,
+      message: 'Invalid request (receiptNo: Too small: expected string to have >=1 characters)',
+      response: {
+        status: 400,
+        data: {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid request',
+            fields: [{ path: ['receiptNo'], message: 'Too small: expected string to have >=1 characters' }],
+          },
+        },
+      },
+    };
+    assert.equal(getApiErrorMessage(err, 'fallback'), 'Please enter the receipt number.');
   });
 });

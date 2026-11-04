@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -76,7 +75,7 @@ import {
   getApiErrorMessage,
   useSubmitGuard,
 } from "../../../utils/formValidation";
-import { isValidIndianPhone } from "../../../utils/validation";
+import { isValidIndianPhone, normalizeIndianPhoneTo10Digits } from "../../../utils/validation";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -125,16 +124,6 @@ export const SupplierView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState("All");
   const [appliedStatus, setAppliedStatus] = useState("All");
   const [currentPage, setCurrentPage] = useState(1);
@@ -233,6 +222,7 @@ export const SupplierView: React.FC = () => {
     formState: { errors },
     setError,
     clearErrors,
+    setValue,
   } = useForm<SupplierFormData>({
     // Shared zod schema + friendly local rules layered on top.
     resolver: (async (values: any, ctx: any, opts: any) => {
@@ -290,8 +280,18 @@ export const SupplierView: React.FC = () => {
 
   // Load Suppliers from Live API with strict deduplication
   const loadSuppliers = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
 
       // Prevent concurrent calls or redundant re-fetching of identical parameters
       if (isFetchingRef.current) return;
@@ -308,10 +308,10 @@ export const SupplierView: React.FC = () => {
 
       try {
         const res = await supplierApi.getSuppliers({
-          page: currentPage,
+          page: targetPage,
           limit: pageSize,
-          search: appliedSearch.trim() || undefined,
-          status: appliedStatus !== "All" ? appliedStatus : undefined,
+          search: targetSearch.trim() || undefined,
+          status: targetStatus !== "All" ? targetStatus : undefined,
           pagination_required: true,
         });
 
@@ -532,6 +532,27 @@ export const SupplierView: React.FC = () => {
     toast.info(`Cloned details from "${sup.name}" into form.`);
   };
 
+  // Keystroke sanitizer: disallow typing non-numeric characters in number-only fields
+  const handleNumberOnlyKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (
+      e.key === "Backspace" ||
+      e.key === "Delete" ||
+      e.key === "ArrowLeft" ||
+      e.key === "ArrowRight" ||
+      e.key === "Tab" ||
+      e.key === "Enter" ||
+      e.ctrlKey ||
+      e.metaKey
+    ) {
+      return;
+    }
+    if (!/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+    }
+  };
+
   // Save / Update Supplier
   const { runOnce: runSupplierSaveOnce } = useSubmitGuard();
   const onSaveSupplier = (data: SupplierFormData) =>
@@ -543,7 +564,7 @@ export const SupplierView: React.FC = () => {
       if (editingSupplier) {
         const payload: UpdateSupplierPayload = {
           name: data.name.trim(),
-          phone: data.phone.trim(),
+          phone: normalizeIndianPhoneTo10Digits(data.phone) || data.phone.trim(),
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
@@ -553,8 +574,8 @@ export const SupplierView: React.FC = () => {
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
-        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
-        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
+        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim().toUpperCase();
+        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
 
@@ -573,7 +594,7 @@ export const SupplierView: React.FC = () => {
       } else {
         const payload: CreateSupplierPayload = {
           name: data.name.trim(),
-          phone: data.phone.trim(),
+          phone: normalizeIndianPhoneTo10Digits(data.phone) || data.phone.trim(),
           address: data.address.trim(),
           city: data.city.trim(),
           state: data.state.trim(),
@@ -583,8 +604,8 @@ export const SupplierView: React.FC = () => {
         };
         if (data.name?.trim()) payload.company = data.name.trim();
         if (data.email?.trim()) payload.email = data.email.trim();
-        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim();
-        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim();
+        if (data.gstNumber?.trim()) payload.gstNumber = data.gstNumber.trim().toUpperCase();
+        if (data.panNumber?.trim()) payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
 
@@ -1039,22 +1060,18 @@ export const SupplierView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedStatus === "All" &&
-            pendingStatus === "All" &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch("");
           setAppliedSearch("");
           setPendingStatus("All");
           setAppliedStatus("All");
           setCurrentPage(1);
-
-          if (isSame) {
-            loadSuppliers(true);
-          }
+          loadSuppliers(true, {
+            search: "",
+            status: "All",
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">
@@ -1420,8 +1437,20 @@ export const SupplierView: React.FC = () => {
             <div>
               <FormLabel required>Phone Number</FormLabel>
               <input
-                type="text"
-                {...register("phone")}
+                type="tel"
+                maxLength={10}
+                {...register("phone", {
+                  onChange: (e) => {
+                    const clean = normalizeIndianPhoneTo10Digits(e.target.value);
+                    setValue("phone", clean, { shouldValidate: true });
+                  },
+                })}
+                onKeyDown={handleNumberOnlyKeyDown}
+                onInput={(e) => {
+                  e.currentTarget.value = normalizeIndianPhoneTo10Digits(
+                    e.currentTarget.value,
+                  );
+                }}
                 placeholder="e.g. 9988776655"
                 className={getFormInputCls(!!errors.phone)}
               />
@@ -1477,6 +1506,12 @@ export const SupplierView: React.FC = () => {
                 type="text"
                 maxLength={6}
                 {...register("pincode")}
+                onKeyDown={handleNumberOnlyKeyDown}
+                onInput={(e) => {
+                  e.currentTarget.value = e.currentTarget.value
+                    .replace(/\D/g, "")
+                    .slice(0, 6);
+                }}
                 placeholder="e.g. 110041"
                 className={getFormInputCls(!!errors.pincode)}
               />
@@ -1499,9 +1534,19 @@ export const SupplierView: React.FC = () => {
               <FormLabel>GST Number</FormLabel>
               <input
                 type="text"
-                {...register("gstNumber")}
+                maxLength={15}
+                {...register("gstNumber", {
+                  onChange: (e) => {
+                    setValue("gstNumber", e.target.value.toUpperCase(), {
+                      shouldValidate: true,
+                    });
+                  },
+                })}
+                onInput={(e) => {
+                  e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                }}
                 placeholder="e.g. 07AAACA1234A1ZV"
-                className={getFormInputCls(!!errors.gstNumber)}
+                className={`${getFormInputCls(!!errors.gstNumber)} font-mono uppercase`}
               />
               <FormError message={errors.gstNumber?.message} />
             </div>
@@ -1509,9 +1554,19 @@ export const SupplierView: React.FC = () => {
               <FormLabel>PAN Number</FormLabel>
               <input
                 type="text"
-                {...register("panNumber")}
+                maxLength={10}
+                {...register("panNumber", {
+                  onChange: (e) => {
+                    setValue("panNumber", e.target.value.toUpperCase(), {
+                      shouldValidate: true,
+                    });
+                  },
+                })}
+                onInput={(e) => {
+                  e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                }}
                 placeholder="e.g. AAACA1234A"
-                className={getFormInputCls(!!errors.panNumber)}
+                className={`${getFormInputCls(!!errors.panNumber)} font-mono uppercase`}
               />
               <FormError message={errors.panNumber?.message} />
             </div>
@@ -1531,6 +1586,7 @@ export const SupplierView: React.FC = () => {
                 <option value="45 Days">45 Days</option>
                 <option value="60 Days">60 Days</option>
                 <option value="90 Days">90 Days</option>
+                <option value="120 Days">120 Days</option>
               </select>
               <FormError message={errors.paymentTerms?.message} />
             </div>
@@ -1582,9 +1638,19 @@ export const SupplierView: React.FC = () => {
               <FormLabel>IFSC Code</FormLabel>
               <input
                 type="text"
-                {...register("ifscCode")}
+                maxLength={11}
+                {...register("ifscCode", {
+                  onChange: (e) => {
+                    setValue("ifscCode", e.target.value.toUpperCase(), {
+                      shouldValidate: true,
+                    });
+                  },
+                })}
+                onInput={(e) => {
+                  e.currentTarget.value = e.currentTarget.value.toUpperCase();
+                }}
                 placeholder="e.g. HDFC0000123"
-                className={getFormInputCls(!!errors.ifscCode)}
+                className={`${getFormInputCls(!!errors.ifscCode)} font-mono uppercase`}
               />
               <FormError message={errors.ifscCode?.message} />
             </div>

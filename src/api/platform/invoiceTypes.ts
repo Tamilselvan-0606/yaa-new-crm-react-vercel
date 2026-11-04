@@ -23,6 +23,13 @@ export interface InvoicePaymentApiItem {
   referenceNumber?: string | null;
   notes?: string | null;
   createdAt: string;
+  /** Present on ledger-backed history: */
+  receiptNumber?: string | null;
+  status?: string;
+  netReceived?: number;
+  totalTdsDeduction?: number;
+  bankDeductions?: number;
+  recordedBy?: string | null;
 }
 
 export interface InvoiceApiItem {

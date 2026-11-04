@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
@@ -88,16 +87,6 @@ export const SubcategoryView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('ALL');
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [pendingCategory, setPendingCategory] = useState('ALL');
@@ -225,8 +214,15 @@ export const SubcategoryView: React.FC = () => {
    * Query parameters are only requested when applied
    */
   const loadSubcategories = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${page}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedCategory}`;
+    async (
+      forceRefresh = false,
+      overrides?: { search?: string; status?: string; category?: string; page?: number }
+    ) => {
+      const targetPage = overrides?.page ?? page;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetCategory = overrides?.category !== undefined ? overrides.category : appliedCategory;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}_${targetCategory}`;
 
       // Skip redundant re-fetching of identical parameters
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
@@ -237,19 +233,19 @@ export const SubcategoryView: React.FC = () => {
 
       try {
         const res = await subcategoryApi.getSubcategories({
-          page_no: page,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           sortOrder: 'desc',
-          status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
-          category: appliedCategory !== 'ALL' ? appliedCategory : undefined,
+          status: targetStatus !== 'ALL' ? targetStatus : undefined,
+          category: targetCategory !== 'ALL' ? targetCategory : undefined,
         });
         if (seq !== requestSeqRef.current) return;
 
         if (res && res.success && Array.isArray(res.data)) {
           const mapped = res.data.map((item, idx) =>
-            mapApiSubcategoryToSubcategoryItem(item, (page - 1) * pageSize + idx)
+            mapApiSubcategoryToSubcategoryItem(item, (targetPage - 1) * pageSize + idx)
           );
           setSubcategories(mapped);
           setIsApiConnected(true);
@@ -451,9 +447,10 @@ export const SubcategoryView: React.FC = () => {
           if (res?.success && res.data) {
             toast.success(`Subcategory "${res.data.subcategory || res.data.name || data.subcategory}" created successfully.`);
             setIsModalOpen(false);
-            setPage(1);
             lastFetchKeyRef.current = '';
-            await loadSubcategories(true);
+            // Changing the page re-runs the list effect; only force a refetch when already on page 1
+            if (page === 1) await loadSubcategories(true);
+            else setPage(1);
             return;
           }
         } catch (apiErr: any) {
@@ -641,15 +638,7 @@ export const SubcategoryView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedStatus === 'ALL' &&
-            pendingStatus === 'ALL' &&
-            appliedCategory === 'ALL' &&
-            pendingCategory === 'ALL' &&
-            page === 1;
-
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingStatus('ALL');
@@ -657,10 +646,7 @@ export const SubcategoryView: React.FC = () => {
           setPendingCategory('ALL');
           setAppliedCategory('ALL');
           setPage(1);
-
-          if (isSame) {
-            loadSubcategories(true);
-          }
+          loadSubcategories(true, { search: '', status: 'ALL', category: 'ALL', page: 1 });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

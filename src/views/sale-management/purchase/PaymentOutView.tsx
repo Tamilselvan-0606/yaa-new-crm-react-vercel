@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -116,16 +115,6 @@ export const PaymentOutView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('All Payment-Out Invoices');
   const [appliedPeriod, setAppliedPeriod] = useState('All Payment-Out Invoices');
   const [pendingStatus, setPendingStatus] = useState('All');
@@ -216,8 +205,18 @@ export const PaymentOutView: React.FC = () => {
 
   // Fetch Payments Out from Work API with deduplication
   const fetchPaymentsOut = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
@@ -226,11 +225,11 @@ export const PaymentOutView: React.FC = () => {
       setIsApiLoading(true);
 
       try {
-        const statusParam = appliedStatus !== 'All' ? appliedStatus : undefined;
+        const statusParam = targetStatus !== 'All' ? targetStatus : undefined;
         const response = await workPaymentOutApi.getPaymentsOut({
-          page: currentPage,
+          page: targetPage,
           limit: pageSize,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           status: statusParam,
           pagination_required: true,
         });
@@ -1296,17 +1295,8 @@ export const PaymentOutView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedPeriod === 'All Payment-Out Invoices' &&
-            pendingPeriod === 'All Payment-Out Invoices' &&
-            appliedPaymentMode === 'All' &&
-            pendingPaymentMode === 'All' &&
-            appliedStatus === 'All' &&
-            pendingStatus === 'All' &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('All Payment-Out Invoices');
@@ -1316,10 +1306,11 @@ export const PaymentOutView: React.FC = () => {
           setPendingStatus('All');
           setAppliedStatus('All');
           setCurrentPage(1);
-
-          if (isSame) {
-            fetchPaymentsOut(true);
-          }
+          fetchPaymentsOut(true, {
+            search: '',
+            status: 'All',
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2 flex-nowrap">

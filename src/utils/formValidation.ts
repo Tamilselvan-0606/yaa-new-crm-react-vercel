@@ -634,6 +634,60 @@ export const extractApiFieldErrors = (err: any): FieldErrors => {
   return out;
 };
 
+/** "receiptNo" -> "receipt number", "invoiceDate" -> "invoice date", ["items", 1, "quantity"] -> "item 2 quantity". */
+export const humanizeFieldPath = (path: Array<string | number> | string | undefined): string => {
+  const parts = Array.isArray(path) ? path : String(path ?? "").split(".");
+  const words: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (typeof part === "number" || /^\d+$/.test(String(part))) continue;
+    let text = String(part)
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[_-]+/g, " ")
+      .toLowerCase()
+      .trim();
+    text = text.replace(/\bno$/, "number").replace(/\bid$/, "").trim();
+    // "items" followed by a row index reads better as "item 2"
+    const next = parts[i + 1];
+    if ((text === "items" || text === "item") && next !== undefined && /^\d+$/.test(String(next))) {
+      text = `item ${Number(next) + 1}`;
+    }
+    if (text) words.push(text);
+  }
+  return words.join(" ") || "value";
+};
+
+/** Turns one backend (zod-style) field message into a plain sentence about that field. */
+export const friendlyFieldMessage = (path: Array<string | number> | string | undefined, message: string): string => {
+  const label = humanizeFieldPath(path);
+  const cap = label.charAt(0).toUpperCase() + label.slice(1);
+  const m = String(message || "").trim();
+
+  let hit = m.match(/Too small: expected string to have >=\s*(\d+) characters?/i);
+  if (hit) return Number(hit[1]) <= 1 ? `Please enter the ${label}.` : `${cap} must be at least ${hit[1]} characters.`;
+  hit = m.match(/Too big: expected string to have <=\s*(\d+) characters?/i);
+  if (hit) return `${cap} must be at most ${hit[1]} characters.`;
+  hit = m.match(/Too small: expected number to be >=\s*(-?[\d.]+)/i);
+  if (hit) return Number(hit[1]) === 0 ? `${cap} cannot be negative.` : `${cap} must be at least ${hit[1]}.`;
+  hit = m.match(/Too small: expected number to be >\s*(-?[\d.]+)/i);
+  if (hit) return Number(hit[1]) === 0 ? `${cap} must be greater than zero.` : `${cap} must be greater than ${hit[1]}.`;
+  hit = m.match(/Too big: expected number to be <=\s*(-?[\d.]+)/i);
+  if (hit) return `${cap} cannot be more than ${hit[1]}.`;
+  if (/expected (string|number|boolean|object|array), received undefined|Required|expected .* received null/i.test(m)) {
+    return `Please enter the ${label}.`;
+  }
+  if (/Invalid (email|url|uuid)/i.test(m)) {
+    const kind = m.match(/Invalid (email|url|uuid)/i)![1].toLowerCase();
+    return kind === "email" ? "Please enter a valid email address." : `${cap} is not valid.`;
+  }
+  if (/Invalid input|Invalid option|Invalid enum/i.test(m)) return `${cap} is not valid.`;
+  // Already a readable sentence from the backend: keep it.
+  if (/^[A-Z].*[.!]$/.test(m) && !/expected|>=|<=/.test(m)) return m;
+  return `${cap} is not valid.`;
+};
+
+const GENERIC_BACKEND_MESSAGES = /^(invalid request|invalid input|validation (failed|error)|bad request|request failed)\.?$/i;
+
 const TECHNICAL_PATTERNS = [
   /status code \d{3}/i,
   /^axioserror/i,
@@ -664,7 +718,17 @@ export const getApiErrorMessage = (err: any, fallback = 'Something went wrong. P
   }
   if (status && status >= 500) return fallback;
 
-  if (raw && !TECHNICAL_PATTERNS.some((p) => p.test(raw))) {
+  // A generic "Invalid request" with field details: say which field is wrong, in plain words.
+  const issues: ApiFieldIssue[] = Array.isArray(data?.error?.fields) ? data.error.fields : [];
+  if (issues.length > 0 && (!raw || GENERIC_BACKEND_MESSAGES.test(raw.trim()) || /^invalid request/i.test(raw))) {
+    const sentences = issues
+      .filter((i) => i && i.message)
+      .slice(0, 3)
+      .map((i) => friendlyFieldMessage(i.path ?? i.field, i.message as string));
+    if (sentences.length > 0) return Array.from(new Set(sentences)).join(" ");
+  }
+
+  if (raw && !GENERIC_BACKEND_MESSAGES.test(raw.trim()) && !TECHNICAL_PATTERNS.some((p) => p.test(raw))) {
     // The shared axios interceptor appends "(path: message)" details; keep the readable lead sentence.
     return raw.replace(/\s*\([^)]*:[^)]*\)\s*$/, '').trim() || fallback;
   }

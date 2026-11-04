@@ -530,6 +530,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleNavClick = (item: NavItem | SubNavItem) => {
     if (!item.path) return;
+    // Clicking the item of the page you are ALREADY on means "refresh this page". Clicking any other item is
+    // plain navigation: the target page reuses its cached responses while they are still fresh.
+    const isRefreshOfCurrentPage = location.pathname === item.path;
     if (onSelectTab) {
       onSelectTab(item.id);
     }
@@ -538,16 +541,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onClose();
     }
 
-    // Invalidate RTK Query cache tags and emit crm:sidebar-navigate event so active views immediately call backend APIs
+    if (!isRefreshOfCurrentPage) return;
+
+    // Explicit refresh: invalidate RTK Query cache tags and emit crm:sidebar-navigate so the mounted view reloads
     const tagMap: Record<string, any[]> = {
       '/sale-management/sales/customer': [{ type: 'Customer', id: 'LIST' }],
       '/sale-management/sales/sales-representatives': [{ type: 'SalesRepresentative', id: 'LIST' }],
       '/sale-management/sales/sales-representative': [{ type: 'SalesRepresentative', id: 'LIST' }],
-      '/sale-management/sales/quotation': [{ type: 'Quotation', id: 'LIST' }],
-      '/sale-management/sales/estimate': [{ type: 'Quotation', id: 'LIST' }],
-      '/sale-management/sales/proforma': [{ type: 'Proforma', id: 'LIST' }],
-      '/sale-management/sales/sale-order': [{ type: 'SalesOrder', id: 'LIST' }],
-      '/sale-management/sales/order': [{ type: 'SalesOrder', id: 'LIST' }],
+      '/sale-management/sales/quotation': [{ type: 'Estimation', id: 'LIST' }],
+      '/sale-management/sales/estimate': [{ type: 'Estimation', id: 'LIST' }],
+      '/sale-management/sales/proforma': [{ type: 'ProformaInvoice', id: 'LIST' }],
+      '/sale-management/sales/sale-order': [{ type: 'SaleOrder', id: 'LIST' }],
+      '/sale-management/sales/order': [{ type: 'SaleOrder', id: 'LIST' }],
       '/sale-management/sales/delivery-challan': [{ type: 'DeliveryChallan', id: 'LIST' }],
       '/sale-management/sales/challan': [{ type: 'DeliveryChallan', id: 'LIST' }],
       '/sale-management/sales/sale': [{ type: 'SalesInvoice', id: 'LIST' }],
@@ -560,7 +565,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       '/sale-management/inventory/subcategory': [{ type: 'Subcategory', id: 'LIST' }],
       '/sale-management/purchase/supplier': [{ type: 'Supplier', id: 'LIST' }],
       '/sale-management/purchase/request': [{ type: 'PurchaseRequest', id: 'LIST' }],
-      '/sale-management/purchase/purchase': [{ type: 'Purchase', id: 'LIST' }],
+      '/sale-management/purchase/purchase': [{ type: 'PurchaseBill', id: 'LIST' }, { type: 'PurchaseOrder', id: 'LIST' }],
       '/sale-management/purchase/return': [{ type: 'PurchaseReturn', id: 'LIST' }],
       '/sale-management/purchase/payment-out': [{ type: 'PaymentOut', id: 'LIST' }],
       '/sale-management/purchase/expense': [{ type: 'Expense', id: 'LIST' }],

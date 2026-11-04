@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   InvoiceListParams,
   InvoiceListResponse,
@@ -18,20 +18,20 @@ export const invoiceEndpoints = baseApi.injectEndpoints({
     getPlatformInvoices: builder.query<InvoiceListResponse, InvoiceListParams | void>({
       query: (params) => ({
         url: '/platform/invoices',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
       }),
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'SalesInvoice' as const, id })),
-              { type: 'SalesInvoice', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'PlatformInvoice' as const, id })),
+              { type: 'PlatformInvoice', id: 'LIST' },
             ]
-          : [{ type: 'SalesInvoice', id: 'LIST' }],
+          : [{ type: 'PlatformInvoice', id: 'LIST' }],
     }),
 
     getPlatformInvoiceById: builder.query<InvoiceSingleResponse, string>({
       query: (id) => `/platform/invoices/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'SalesInvoice', id }],
+      providesTags: (_result, _error, id) => [{ type: 'PlatformInvoice', id }],
     }),
 
     createPlatformInvoice: builder.mutation<InvoiceSingleResponse, CreateInvoiceRequest>({
@@ -40,7 +40,7 @@ export const invoiceEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'SalesInvoice', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'PlatformInvoice', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     updatePlatformInvoice: builder.mutation<
@@ -53,8 +53,8 @@ export const invoiceEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesInvoice', id },
-        { type: 'SalesInvoice', id: 'LIST' },
+        { type: 'PlatformInvoice', id },
+        { type: 'PlatformInvoice', id: 'LIST' },
       ],
     }),
 
@@ -63,7 +63,7 @@ export const invoiceEndpoints = baseApi.injectEndpoints({
         url: `/platform/invoices/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'SalesInvoice', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'PlatformInvoice', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     getPlatformInvoicePayments: builder.query<InvoicePaymentsListResponse, string>({
@@ -81,9 +81,9 @@ export const invoiceEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesInvoice', id },
+        { type: 'PlatformInvoice', id },
         { type: 'Payment', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
   }),
@@ -103,7 +103,7 @@ export const {
 export const invoiceApi = {
   getInvoices: async (params?: InvoiceListParams): Promise<InvoiceListResponse> => {
     const res = await baseClient.get<InvoiceListResponse>('/platform/invoices', {
-      params,
+      params: { ...params, ...buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) },
     });
     return res.data;
   },

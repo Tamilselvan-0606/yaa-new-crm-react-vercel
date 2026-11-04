@@ -115,7 +115,7 @@ export const platformPaymentEndpoints = baseApi.injectEndpoints({
           headers,
         };
       },
-      invalidatesTags: [{ type: 'Payment', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Payment', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     deletePlatformPayment: builder.mutation<DeletePlatformPaymentResponse, string>({
@@ -127,7 +127,7 @@ export const platformPaymentEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, id) => [
         { type: 'Payment', id },
         { type: 'Payment', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
   }),

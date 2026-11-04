@@ -172,6 +172,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         };
       },
       providesTags: [{ type: 'Stock', id: 'LIST' }],
+      keepUnusedDataFor: 5, // live data: stock availability must not be served from an old cache
     }),
 
     adjustCommerceStock: builder.mutation<AdjustStockResponse, AdjustStockPayload>({
@@ -193,7 +194,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'Stock', id: 'LIST' },
         { type: 'Stock', id: 'LEDGER' },
-        { type: 'Stock', id: 'BATCHES' },
+        { type: 'Batch', id: 'LIST' },
         { type: 'Stock', id: 'LOW' },
         { type: 'Product', id: 'LIST' },
       ],
@@ -230,6 +231,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         };
       },
       providesTags: [{ type: 'Stock', id: 'LEDGER' }],
+      keepUnusedDataFor: 5,
     }),
 
     getCommerceStockBatches: builder.query<StockBatchesResponse, StockBatchesParams | void>({
@@ -259,7 +261,8 @@ export const stockEndpoints = baseApi.injectEndpoints({
           params: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         };
       },
-      providesTags: [{ type: 'Stock', id: 'BATCHES' }],
+      providesTags: [{ type: 'Batch', id: 'LIST' }],
+      keepUnusedDataFor: 5, // live data: batch availability
     }),
 
     getCommerceLowStock: builder.query<LowStockResponse, LowStockParams | void>({
@@ -282,6 +285,7 @@ export const stockEndpoints = baseApi.injectEndpoints({
         };
       },
       providesTags: [{ type: 'Stock', id: 'LOW' }],
+      keepUnusedDataFor: 5,
     }),
   }),
   overrideExisting: false,

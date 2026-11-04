@@ -365,6 +365,8 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -384,6 +386,8 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -402,6 +406,8 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -417,6 +423,8 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],
@@ -436,6 +444,8 @@ export const commerceSalesInvoiceEndpoints = baseApi.injectEndpoints({
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'SalesRepresentative',
         'Dashboard',
       ],

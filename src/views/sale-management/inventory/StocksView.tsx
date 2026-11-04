@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -254,16 +253,6 @@ export const StocksView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingCategory, setPendingCategory] = useState("All");
   const [appliedCategory, setAppliedCategory] = useState("All");
   const [pendingStatus, setPendingStatus] = useState("All");
@@ -397,8 +386,20 @@ export const StocksView: React.FC = () => {
 
   // Load Stocks from API with strict deduplication guards and batch resolution
   const loadStocks = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedCategory}_${appliedStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        category?: string;
+        status?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetCategory = overrides?.category !== undefined ? overrides.category : appliedCategory;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetCategory}_${targetStatus}`;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
       const seq = ++requestSeqRef.current;
@@ -406,14 +407,14 @@ export const StocksView: React.FC = () => {
       setIsLoading(true);
 
       try {
-        const isLowStock = appliedStatus === "Low Stock";
+        const isLowStock = targetStatus === "Low Stock";
         const res = await stockApi.getStocks({
-          page_no: currentPage,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           sortOrder: "desc",
-          category: appliedCategory !== "All" && appliedCategory !== "ALL" ? appliedCategory : undefined,
+          category: targetCategory !== "All" && targetCategory !== "ALL" ? targetCategory : undefined,
           lowStock: isLowStock ? true : undefined,
         });
         if (seq !== requestSeqRef.current) return;
@@ -810,8 +811,9 @@ export const StocksView: React.FC = () => {
       });
       toast.success(`Updated stock details for "${updated.productName}".`);
       setIsEditModalOpen(false);
-      setCurrentPage(1);
-      loadStocks(true);
+      // Page change already triggers the list effect; only force a refetch when staying on page 1
+      if (currentPage === 1) loadStocks(true);
+      else setCurrentPage(1);
     } catch (err: any) {
       // Do not pretend the save worked: keep the modal open with the entered values.
       const apiFields = extractApiFieldErrors(err);
@@ -924,8 +926,9 @@ export const StocksView: React.FC = () => {
           `Stock for "${selectedStock.productName}" adjusted successfully (${delta > 0 ? `+${delta}` : delta} ${selectedStock.unit})${effectiveBatchNo ? ` [Batch: ${effectiveBatchNo}]` : ""}`,
         );
         setIsAdjustModalOpen(false);
-        setCurrentPage(1);
-        loadStocks(true);
+        // Page change already triggers the list effect; only force a refetch when staying on page 1
+        if (currentPage === 1) loadStocks(true);
+        else setCurrentPage(1);
         return;
       }
       toast.error("The stock adjustment could not be saved. Please try again.");
@@ -1551,15 +1554,7 @@ export const StocksView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedCategory === "All" &&
-            pendingCategory === "All" &&
-            appliedStatus === "All" &&
-            pendingStatus === "All" &&
-            currentPage === 1;
-
+          lastFetchKeyRef.current = null;
           setPendingSearch("");
           setAppliedSearch("");
           setPendingCategory("All");
@@ -1567,10 +1562,12 @@ export const StocksView: React.FC = () => {
           setPendingStatus("All");
           setAppliedStatus("All");
           setCurrentPage(1);
-
-          if (isSame) {
-            loadStocks(true);
-          }
+          loadStocks(true, {
+            search: "",
+            category: "All",
+            status: "All",
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

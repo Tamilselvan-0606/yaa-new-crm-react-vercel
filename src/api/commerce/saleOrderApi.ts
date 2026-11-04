@@ -343,15 +343,15 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'SalesOrder' as const, id })),
-              { type: 'SalesOrder', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'SaleOrder' as const, id })),
+              { type: 'SaleOrder', id: 'LIST' },
             ]
-          : [{ type: 'SalesOrder', id: 'LIST' }],
+          : [{ type: 'SaleOrder', id: 'LIST' }],
     }),
 
     getCommerceSaleOrderById: builder.query<SaleOrderSingleResponse, string>({
       query: (id) => `/commerce/orders/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'SalesOrder', id }],
+      providesTags: (_result, _error, id) => [{ type: 'SaleOrder', id }],
     }),
 
     createCommerceSaleOrder: builder.mutation<SaleOrderSingleResponse, CreateSaleOrderPayload>({
@@ -360,7 +360,7 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'SalesOrder', id: 'LIST' }],
+      invalidatesTags: [{ type: 'SaleOrder', id: 'LIST' }],
     }),
 
     updateCommerceSaleOrder: builder.mutation<
@@ -373,8 +373,8 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesOrder', id },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id },
+        { type: 'SaleOrder', id: 'LIST' },
       ],
     }),
 
@@ -388,8 +388,8 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesOrder', id },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id },
+        { type: 'SaleOrder', id: 'LIST' },
       ],
     }),
 
@@ -399,8 +399,8 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         method: 'DELETE',
       }),
       invalidatesTags: (_result, _error, id) => [
-        { type: 'SalesOrder', id },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id },
+        { type: 'SaleOrder', id: 'LIST' },
       ],
     }),
 
@@ -414,8 +414,8 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesOrder', id },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id },
+        { type: 'SaleOrder', id: 'LIST' },
       ],
     }),
 
@@ -429,8 +429,8 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'SalesOrder', id },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id },
+        { type: 'SaleOrder', id: 'LIST' },
         { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },
@@ -447,7 +447,7 @@ export const commerceSaleOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: [
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'SaleOrder', id: 'LIST' },
         { type: 'DeliveryChallan', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
         { type: 'Stock', id: 'LIST' },

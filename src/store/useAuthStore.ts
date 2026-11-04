@@ -39,7 +39,7 @@ const notificationTypesFor = (type: 'SALES' | 'CLIENT', platformAdmin: boolean):
   platformAdmin ? ['SUPER_ADMIN', type] : [type];
 
 // De-duplicates notification refreshes: one shared in-flight request and a short cool-down.
-const REMINDER_MIN_INTERVAL_MS = 30_000;
+const REMINDER_MIN_INTERVAL_MS = 120_000;
 const reminderFetch: { key: string; at: number; promise: Promise<void> | null } = {
   key: '',
   at: 0,
@@ -198,9 +198,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   refreshReminders: async (type) => {
-    const reminderType = type ?? get().reminderType;
-    set({ reminderType });
     if (!get().token) return;
+    const reminderType = type ?? get().reminderType;
     const { isSuperAdmin, isOrgSuperAdmin } = get();
     const platformAdmin = isSuperAdmin && !isOrgSuperAdmin;
     const key = `${reminderType}:${platformAdmin}`;
@@ -209,6 +208,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // and skip the call when the same data was fetched moments ago.
     if (reminderFetch.promise && reminderFetch.key === key) return reminderFetch.promise;
     if (reminderFetch.key === key && Date.now() - reminderFetch.at < REMINDER_MIN_INTERVAL_MS) return;
+
+    if (get().reminderType !== reminderType) {
+      set({ reminderType });
+    }
 
     const run = async () => {
       try {
@@ -261,6 +264,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setUsers: (users: User[]) => set({ users }),
 }));
+
+// A successful create/update/delete can create a notification on the server (and the unread count with it).
+// queryCache emits one 'crm:data-mutated' per mutation; refresh the bell once for a burst of them.
+if (typeof window !== 'undefined') {
+  let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  window.addEventListener('crm:data-mutated', () => {
+    if (!useAuthStore.getState().token) return;
+    if (notifyTimer) clearTimeout(notifyTimer);
+    notifyTimer = setTimeout(() => {
+      notifyTimer = null;
+      void useAuthStore.getState().refreshReminders();
+    }, 5000);
+  });
+}
 
 // The refresh cookie is gone or rejected: stored credentials were already cleared, so drop to the login screen.
 if (typeof window !== 'undefined') {

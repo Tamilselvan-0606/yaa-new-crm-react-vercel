@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { SupplierSearchableSelect } from "../../../components/common/paginated-select";
 import React, {
@@ -61,6 +60,7 @@ import {
   mapUiToCreatePurchaseOrderPayload,
   mapUiToUpdatePurchaseOrderPayload,
   productApi,
+  resolveBaseUnitId,
   ApiProduct,
   CreateProductPayload,
   supplierApi,
@@ -486,6 +486,21 @@ const mapPurchaseApiFieldKey = (path: string): string => {
   return top[path] || path;
 };
 
+// Payment terms offered on a purchase bill: 15 to 120 days.
+const PAYMENT_TERM_DAYS = [15, 30, 45, 60, 90, 120];
+const PAYMENT_TERM_OPTIONS = PAYMENT_TERM_DAYS.map((d) => `Net ${d} Days`);
+
+/**
+ * Maps a stored term ("30 Days" on the supplier master, "Net 30 Days" on a bill) onto one of the
+ * offered options. Anything else (e.g. "Immediate / Advance") is returned unchanged.
+ */
+const toBillPaymentTerms = (value?: string | null): string => {
+  const raw = String(value || "").trim();
+  const match = raw.match(/(\d+)\s*day/i);
+  if (match && PAYMENT_TERM_DAYS.includes(Number(match[1]))) return `Net ${Number(match[1])} Days`;
+  return raw;
+};
+
 export const PurchaseOrderView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -665,12 +680,19 @@ export const PurchaseOrderView: React.FC = () => {
 
     setIsCreatingProduct(true);
     try {
+      let baseUnitId: string | undefined = undefined;
+      const resolved = await resolveBaseUnitId(quickProductForm.unit || "PCS");
+      if (resolved) {
+        baseUnitId = resolved.baseUnitId;
+      }
+
       const payload: CreateProductPayload = {
         itemType: "Product",
         productName: quickProductForm.productName.trim(),
         productCode: quickProductForm.productCode.trim() || undefined,
         category: quickProductForm.category.trim() || "General",
-        unit: quickProductForm.unit || "PCS",
+        unit: quickProductForm.unit || resolved?.unitCode || "PCS",
+        baseUnitId,
         purchasePrice: purchasePriceNum,
         salePrice: salePriceNum,
         taxRate: quickProductForm.taxRate,
@@ -1202,7 +1224,7 @@ export const PurchaseOrderView: React.FC = () => {
         shipping: 0,
         otherCharges: 0,
         paymentMethod: "Bank Transfer",
-        paymentTerms: matchedSupplier?.paymentTerms || "Net 30 Days",
+        paymentTerms: toBillPaymentTerms(matchedSupplier?.paymentTerms) || "Net 30 Days",
         paidAmount: 0,
         purchaseStatus: "Pending",
         roundMode: "none",
@@ -1246,16 +1268,6 @@ export const PurchaseOrderView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPurchaseStatus, setPendingPurchaseStatus] = useState("All");
   const [appliedPurchaseStatus, setAppliedPurchaseStatus] = useState("All");
   const [pendingPaymentStatus, setPendingPaymentStatus] = useState("All");
@@ -1279,8 +1291,18 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Fetch Purchase Orders from Work API with deduplication
   const fetchPurchaseOrders = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedPurchaseStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedPurchaseStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}`;
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
@@ -1290,12 +1312,12 @@ export const PurchaseOrderView: React.FC = () => {
 
       try {
         const statusParam =
-          appliedPurchaseStatus !== "All" ? appliedPurchaseStatus : undefined;
+          targetStatus !== "All" ? targetStatus : undefined;
 
         const response = await workPurchaseOrderApi.getPurchaseOrders({
-          page: currentPage,
+          page: targetPage,
           limit: pageSize,
-          search: appliedSearch.trim() || undefined,
+          search: targetSearch.trim() || undefined,
           status: statusParam,
           pagination_required: true,
         });
@@ -1448,7 +1470,21 @@ export const PurchaseOrderView: React.FC = () => {
       completedCount,
     };
   }, [isApiConnected, livePurchases, purchases, totalApiRecords]);
-  const summary = apiSummary ?? localSummary;
+  const summary = useMemo(() => {
+    if (apiSummary) {
+      const returnDeduction = Number(apiSummary.totalPurchaseReturnAmount || 0);
+      const effectiveTotalAmount = returnDeduction > 0
+        ? Math.max(0, Number(apiSummary.totalAmount) - returnDeduction)
+        : Number(apiSummary.totalAmount);
+      return {
+        ...apiSummary,
+        totalAmount: effectiveTotalAmount,
+        originalTotalAmount: Number(apiSummary.totalAmount),
+        totalPurchaseReturnAmount: returnDeduction,
+      };
+    }
+    return localSummary;
+  }, [apiSummary, localSummary]);
 
   // Open Create Modal (No mock data: uses live products/suppliers if available or clean empty inputs)
   const handleOpenCreateModal = () => {
@@ -1560,7 +1596,7 @@ export const PurchaseOrderView: React.FC = () => {
       shipping: po.shipping || 0,
       otherCharges: po.otherCharges || 0,
       paymentMethod: po.paymentMethod || "Bank Transfer",
-      paymentTerms: po.paymentTerms || "",
+      paymentTerms: toBillPaymentTerms(po.paymentTerms) || "Net 30 Days",
       paidAmount: po.paidAmount || 0,
       purchaseStatus: po.purchaseStatus,
       roundMode: (po as any).roundMode || "none",
@@ -1597,7 +1633,7 @@ export const PurchaseOrderView: React.FC = () => {
       shipping: po.shipping || 0,
       otherCharges: po.otherCharges || 0,
       paymentMethod: po.paymentMethod || "Bank Transfer",
-      paymentTerms: po.paymentTerms || "",
+      paymentTerms: toBillPaymentTerms(po.paymentTerms) || "Net 30 Days",
       paidAmount: 0,
       purchaseStatus: "Pending",
       roundMode: (po as any).roundMode || "none",
@@ -1742,6 +1778,26 @@ export const PurchaseOrderView: React.FC = () => {
           : []),
         ...(targetPo.purchaseInvoiceNo
           ? [{ label: "Supplier Invoice #", value: targetPo.purchaseInvoiceNo }]
+          : []),
+        ...(targetPo.totalReturned && targetPo.totalReturned > 0
+          ? [
+              {
+                label: "Original Bill Amount",
+                value: `₹${(targetPo.originalBillAmount ?? targetPo.subtotal + (targetPo.tax || 0) - (targetPo.discount || 0)).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+              },
+              {
+                label: "Purchase Return",
+                value: `-₹${targetPo.totalReturned.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+              },
+              ...(targetPo.supplierCredit && targetPo.supplierCredit > 0
+                ? [
+                    {
+                      label: "Supplier Credit",
+                      value: `₹${targetPo.supplierCredit.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+                    },
+                  ]
+                : []),
+            ]
           : []),
       ],
       items: (targetPo.items || []).map((it) => ({
@@ -1891,7 +1947,7 @@ export const PurchaseOrderView: React.FC = () => {
         ...prev,
         supplierId: sup.id,
         supplierName: sup.name,
-        paymentTerms: sup.paymentTerms || prev.paymentTerms,
+        paymentTerms: toBillPaymentTerms(sup.paymentTerms) || prev.paymentTerms,
       }));
     } else {
       setFormData((prev) => ({
@@ -3056,7 +3112,7 @@ export const PurchaseOrderView: React.FC = () => {
           dispatch(
             baseApi.util.invalidateTags([
               { type: "Stock", id: "LIST" },
-              { type: "Stock", id: "BATCHES" },
+              { type: "Batch", id: "LIST" },
               { type: "Stock", id: "LEDGER" },
               { type: "Product", id: "LIST" },
             ]),
@@ -3138,7 +3194,7 @@ export const PurchaseOrderView: React.FC = () => {
         dispatch(
           baseApi.util.invalidateTags([
             { type: "Stock", id: "LIST" },
-            { type: "Stock", id: "BATCHES" },
+            { type: "Batch", id: "LIST" },
             { type: "Stock", id: "LEDGER" },
             { type: "Product", id: "LIST" },
           ]),
@@ -3185,7 +3241,7 @@ export const PurchaseOrderView: React.FC = () => {
         dispatch(
           baseApi.util.invalidateTags([
             { type: "Stock", id: "LIST" },
-            { type: "Stock", id: "BATCHES" },
+            { type: "Batch", id: "LIST" },
             { type: "Stock", id: "LEDGER" },
             { type: "Product", id: "LIST" },
           ]),
@@ -3978,18 +4034,29 @@ export const PurchaseOrderView: React.FC = () => {
 
                 <div>
                   <FormLabel>Payment Terms</FormLabel>
-                  <input
-                    type="text"
-                    value={formData.paymentTerms}
+                  <select
+                    value={toBillPaymentTerms(formData.paymentTerms) || "Net 30 Days"}
                     onChange={(e) =>
                       setFormData((prev) => ({
                         ...prev,
                         paymentTerms: e.target.value,
                       }))
                     }
-                    placeholder="Net 30 Days"
-                    className={FORM_INPUT_CLS}
-                  />
+                    className={FORM_SELECT_CLS}
+                  >
+                    {PAYMENT_TERM_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                    {/* Keep an existing value that is not one of the standard terms selectable */}
+                    {toBillPaymentTerms(formData.paymentTerms) &&
+                      !PAYMENT_TERM_OPTIONS.includes(toBillPaymentTerms(formData.paymentTerms)) && (
+                        <option value={toBillPaymentTerms(formData.paymentTerms) || "Net 30 Days"}>
+                          {toBillPaymentTerms(formData.paymentTerms)}
+                        </option>
+                      )}
+                  </select>
                 </div>
               </div>
 
@@ -4112,18 +4179,7 @@ export const PurchaseOrderView: React.FC = () => {
                           #
                         </th>
                         <th className="py-2.5 px-3 text-left border-r border-white/20 min-w-[210px] text-white">
-                          <div className="flex items-center justify-between">
-                            <span>Product Name</span>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenAddProductModal()}
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/30 text-[10px] font-semibold tracking-normal normal-case text-white cursor-pointer transition-colors"
-                              title="Create new product master record"
-                            >
-                              <Plus className="w-3 h-3 stroke-[2.5]" />
-                              <span>+ Add Product</span>
-                            </button>
-                          </div>
+                          <span>Product Name</span>
                         </th>
                         <th className="py-2.5 px-2 text-center border-r border-white/20 min-w-[150px] text-[11px] text-white">
                           Batch No
@@ -4681,16 +4737,7 @@ export const PurchaseOrderView: React.FC = () => {
                     >
                       Add Item
                     </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      onClick={() => handleOpenAddProductModal()}
-                      icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
-                      className="!text-[#33077C] !border-[#33077C]/30 hover:!bg-[#33077C]/5 font-semibold"
-                    >
-                      + Add Product
-                    </Button>
+                    
                   </div>
 
                   <div className="pt-6 mt-2">
@@ -5960,6 +6007,11 @@ export const PurchaseOrderView: React.FC = () => {
                 </div>
                 <div className="text-xs text-slate-500 mt-0.5">
                   {summary.totalCount} orders total
+                  {Boolean((summary as any).totalPurchaseReturnAmount && (summary as any).totalPurchaseReturnAmount > 0) && (
+                    <span className="text-rose-600 font-semibold ml-1.5">
+                      (Returns: -₹{Number((summary as any).totalPurchaseReturnAmount).toLocaleString("en-IN")})
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -6072,17 +6124,8 @@ export const PurchaseOrderView: React.FC = () => {
               }
             }}
             onReset={() => {
-              const isSame =
-                appliedSearch === "" &&
-                pendingSearch === "" &&
-                appliedPurchaseStatus === "All" &&
-                pendingPurchaseStatus === "All" &&
-                appliedPaymentStatus === "All" &&
-                pendingPaymentStatus === "All" &&
-                appliedSupplier === "All" &&
-                pendingSupplier === "All" &&
-                currentPage === 1;
-
+              isFetchingRef.current = false;
+              lastFetchKeyRef.current = null;
               setPendingSearch("");
               setAppliedSearch("");
               setPendingPurchaseStatus("All");
@@ -6092,10 +6135,11 @@ export const PurchaseOrderView: React.FC = () => {
               setPendingSupplier("All");
               setAppliedSupplier("All");
               setCurrentPage(1);
-
-              if (isSame) {
-                fetchPurchaseOrders(true);
-              }
+              fetchPurchaseOrders(true, {
+                search: "",
+                status: "All",
+                page: 1,
+              });
             }}
             filterSlot={
               <div className="flex items-center gap-2.5 flex-wrap">
@@ -6303,6 +6347,11 @@ export const PurchaseOrderView: React.FC = () => {
                                 minimumFractionDigits: 2,
                               })}
                             </span>
+                            {po.totalReturned && po.totalReturned > 0 ? (
+                              <span className="text-[10px] text-rose-600 block font-semibold leading-tight mt-0.5">
+                                Return: -₹{po.totalReturned.toLocaleString("en-IN")}
+                              </span>
+                            ) : null}
                           </td>
 
                           {/* 5. Paid */}
@@ -6783,15 +6832,52 @@ export const PurchaseOrderView: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="border-t border-slate-200 pt-1 flex justify-between font-bold text-sm text-purple-900">
-                      <span>Grand Total:</span>
-                      <span>
-                        ₹
-                        {selectedPurchase.grandTotal.toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
+                    {selectedPurchase.totalReturned && selectedPurchase.totalReturned > 0 ? (
+                      <>
+                        <div className="border-t border-slate-200 pt-1 flex justify-between text-xs text-slate-500 font-medium">
+                          <span>Original Bill Amount:</span>
+                          <span>
+                            ₹
+                            {(
+                              selectedPurchase.originalBillAmount ??
+                              selectedPurchase.subtotal +
+                                (selectedPurchase.tax || 0) -
+                                (selectedPurchase.discount || 0)
+                            ).toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                            })}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-xs text-rose-600 font-semibold">
+                          <span>Purchase Return Deduction:</span>
+                          <span>
+                            -₹
+                            {selectedPurchase.totalReturned.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                            })}
+                          </span>
+                        </div>
+                        <div className="border-t border-dashed border-purple-300 pt-1 flex justify-between font-bold text-sm text-purple-900">
+                          <span>Net Bill Amount:</span>
+                          <span>
+                            ₹
+                            {selectedPurchase.grandTotal.toLocaleString("en-IN", {
+                              minimumFractionDigits: 2,
+                            })}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="border-t border-slate-200 pt-1 flex justify-between font-bold text-sm text-purple-900">
+                        <span>Grand Total:</span>
+                        <span>
+                          ₹
+                          {selectedPurchase.grandTotal.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-emerald-700 font-semibold">
                       <span>Amount Paid:</span>
                       <span>
@@ -6801,6 +6887,20 @@ export const PurchaseOrderView: React.FC = () => {
                         })}
                       </span>
                     </div>
+                    {Boolean(
+                      selectedPurchase.supplierCredit &&
+                        selectedPurchase.supplierCredit > 0,
+                    ) && (
+                      <div className="flex justify-between items-center text-xs text-purple-800 bg-purple-100/70 p-2 rounded-lg border border-purple-200 font-semibold">
+                        <span>Supplier Credit (Refund Pending):</span>
+                        <span className="font-bold">
+                          ₹
+                          {selectedPurchase.supplierCredit?.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-amber-600 font-bold border-t border-slate-200 pt-1">
                       <span>Balance Payable:</span>
                       <span>

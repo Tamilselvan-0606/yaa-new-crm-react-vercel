@@ -50,13 +50,18 @@ import { subscriptionPlanApi } from '../../api/platform/subscriptionPlanApi';
 import { getStoredOrganizationId } from '../../api/config';
 import { extractApiFieldErrors } from '../../utils/formValidation';
 import {
+  alphabetsOnly,  lettersOnly,
   alphanumericUpper,
   digitsOnly,
   emailAddress,
   validGst,
   indianMobile,
+  liveGstError,
+  livePanError,
   liveMobileStartError,
   validPan,
+  pincodeMatching,
+  cleanPincode,
   pickFieldErrors,
   required,
   requiredWhen,
@@ -67,13 +72,17 @@ import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { ORGANIZATION_STATUS_TONES, StatusBadge } from '../../components/common/StatusBadge';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
 import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { LocationFields, LocationMeta } from '../../components/common/LocationFields';
 import { getApiErrorMessage } from '../../utils/apiErrorMessage';
 
 interface OrganizationItem {
   id: string;
   name: string;
   code: string;
-  legalName: string;
+  country: string;
+  state: string;
+  district: string;
+  pincode: string;
   subOrganizationType?: number | string | null;
   organizationType?: string;
   industry: string;
@@ -93,6 +102,10 @@ interface OrganizationItem {
   registrationType?: string;
   address?: string;
   subOrganizationSupport?: boolean;
+  /** Login user of a sub-organization (only known after the detail call). */
+  adminName?: string;
+  adminEmail?: string;
+  adminRole?: string;
 }
 
 const ORGANIZATION_TYPE_OPTIONS = [
@@ -138,7 +151,10 @@ const mapApiOrgToItem = (apiOrg: OrganizationApiItem): OrganizationItem => {
     id: apiOrg.id,
     name: apiOrg.name || 'Unnamed Organization',
     code: apiOrg.code || 'ORG',
-    legalName: apiOrg.legalName || apiOrg.name || '',
+    country: apiOrg.country || '',
+    state: apiOrg.state || '',
+    district: apiOrg.district || '',
+    pincode: apiOrg.pincode || '',
     organizationType: formatOrganizationTypeName(apiOrg.organizationType),
     industry: apiOrg.industry || '',
     location: apiOrg.location || '',
@@ -175,7 +191,10 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     id: sub.id,
     name: sub.name || 'Unnamed Sub-Organization',
     code: sub.code || 'SUB-01',
-    legalName: sub.legalName || sub.name || '',
+    country: sub.country || '',
+    state: sub.state || '',
+    district: sub.district || '',
+    pincode: sub.pincode || '',
     subOrganizationType: sub.subOrganizationType,
     organizationType: formatOrganizationTypeName(sub.organizationType),
     industry: sub.industry || '',
@@ -195,6 +214,9 @@ const mapSubOrgToItem = (sub: SubOrganizationApiItem): OrganizationItem => {
     address: sub.address || '',
     logo: sub.logo || '',
     subOrganizationSupport: sub.subOrganizationSupport ?? false,
+    adminName: sub.user?.name || '',
+    adminEmail: sub.user?.email || '',
+    adminRole: sub.user?.role?.name || '',
   };
 };
 
@@ -337,8 +359,11 @@ export const OrganizationView: React.FC = () => {
     }
   };
 
-  const fetchOrganizations = async (page: number, limit: number) => {
-    const res = await organizationApi.getOrganizations(page, limit);
+  const fetchOrganizations = async (page: number, limit: number, search: string, status: string) => {
+    const res = await organizationApi.getOrganizations(page, limit, {
+      search,
+      status, // the organizations API takes Active | Inactive | Suspend | All (not "Suspended")
+    });
     if (!res?.success || !Array.isArray(res.data)) return { items: [] as OrganizationItem[], total: 0 };
     const items = res.data.map(mapApiOrgToItem);
     return { items, total: res.pagination?.totalRecords || items.length };
@@ -350,7 +375,7 @@ export const OrganizationView: React.FC = () => {
     try {
       const { items, total } = isSubOrgMode
         ? await fetchSubOrganizations(page, limit, search, status)
-        : await fetchOrganizations(page, limit);
+        : await fetchOrganizations(page, limit, search, status);
       setOrganizations(items);
       setTotalRecords(total);
     } catch (err: any) {
@@ -370,23 +395,76 @@ export const OrganizationView: React.FC = () => {
     loadOrganizations(currentPage, pageSize, appliedSearch, appliedStatus);
   }, [currentPage, pageSize, appliedSearch, appliedStatus, isSubOrgMode, parentOrgContext?.id, isOrgSuperAdmin, isSaleManagement]);
 
-  // Load subscription plans from API once on mount
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Subscription plans are only needed by the Add / Edit form, so they load when it opens (and are kept after).
   useEffect(() => {
-    subscriptionPlanApi.getSubscriptionPlans({ limit: 100, status: 'Active' })
+    if (!isModalOpen || subscriptionPlanOptions.length > 0) return;
+    subscriptionPlanApi
+      .getSubscriptionPlans({ limit: 100, status: 'Active' })
       .then((res) => {
         if (res?.success && Array.isArray(res.data)) {
           setSubscriptionPlanOptions(res.data.map((p) => p.name));
         }
       })
       .catch(() => {
-        // Silently fall back to empty list; user can still type manually
+        // Leave the dropdown empty; it retries the next time the form opens
       });
-  }, []);
-
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  }, [isModalOpen]);
   const [apiModalError, setApiModalError] = useState<string | null>(null);
   const [editingOrg, setEditingOrg] = useState<OrganizationItem | null>(null);
   const [viewingOrg, setViewingOrg] = useState<OrganizationItem | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const viewingOrgId = viewingOrg?.id;
+  // Sub-organization rows (Org Admin, or a Platform Admin drilled into an organization) are not organization ids.
+  const viewingSubOrg = isOrgSuperAdmin || !!parentOrgContext;
+
+  // Opening "View" shows the row immediately, then loads the full record (GET organization by id, or
+  // GET sub-organization by id) so the details are accurate.
+  // The response is cached and refreshed after an edit, so reopening the same organization is free.
+  useEffect(() => {
+    if (!viewingOrgId) return;
+    let cancelled = false;
+    setViewLoading(true);
+    const request = viewingSubOrg
+      ? subOrganizationApi.getSubOrganizationById(viewingOrgId, parentOrgContext?.id).then((res) => {
+          if (!res?.success || !res.data) return null;
+          // This endpoint carries less than the list row (no phone/GST/PAN/address), so it only adds
+          // the login user and branches and refreshes the basics; it never blanks a field the row has.
+          const d = res.data;
+          const patch: Partial<OrganizationItem> = {
+            adminName: d.user?.name || '',
+            adminEmail: d.user?.email || '',
+            adminRole: d.user?.role?.name || '',
+          };
+          if (Array.isArray(d.branches)) patch.branchesCount = d.branches.length;
+          if (d.name) patch.name = d.name;
+          if (d.code) patch.code = d.code;
+          if (d.location) patch.location = d.location;
+          if (d.subscriptionPlan) patch.subscriptionPlan = d.subscriptionPlan;
+          if (d.status) patch.status = mapSubOrgToItem(d).status;
+          return { id: d.id, patch };
+        })
+      : organizationApi.getOrganizationById(viewingOrgId).then((res) => {
+          if (!res?.success || !res.data) return null;
+          const detail = mapApiOrgToItem(res.data);
+          return { id: detail.id, patch: detail as Partial<OrganizationItem> };
+        });
+    request
+      .then((out) => {
+        if (cancelled || !out) return;
+        setViewingOrg((cur) => (cur && cur.id === out.id ? { ...cur, ...out.patch } : cur));
+      })
+      .catch(() => {
+        /* keep the list data that is already on screen */
+      })
+      .finally(() => {
+        if (!cancelled) setViewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingOrgId, viewingSubOrg]);
   // 3-dots row menu + click-to-copy contact buttons (shared hooks)
   const rowMenu = useRowActionMenu(240);
   const { copiedKey, copy: handleCopy } = useCopyToClipboard();
@@ -462,7 +540,15 @@ export const OrganizationView: React.FC = () => {
   // Form states
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
-  const [legalName, setLegalName] = useState('');
+  const [country, setCountry] = useState('');
+  const [stateName, setStateName] = useState('');
+  const [district, setDistrict] = useState('');
+  // Master-data ids sent to the API; set when the user picks from the dropdowns.
+  const [countryId, setCountryId] = useState('');
+  const [stateId, setStateId] = useState('');
+  const [districtId, setDistrictId] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [locationMeta, setLocationMeta] = useState<LocationMeta>({ stateRequired: true, districtRequired: true });
   const [organizationType, setOrganizationType] = useState('');
   const [industry, setIndustry] = useState('');
   const [location, setLocation] = useState('');
@@ -520,7 +606,13 @@ export const OrganizationView: React.FC = () => {
     setEditingOrg(null);
     setName('');
     setCode('');
-    setLegalName('');
+    setCountry('');
+    setStateName('');
+    setDistrict('');
+    setCountryId('');
+    setStateId('');
+    setDistrictId('');
+    setPincode('');
     setOrganizationType(isOrgSuperAdmin ? (isSaleManagement ? 'Sales Management' : 'Client Management') : '');
     setIndustry('');
     setLocation('');
@@ -547,7 +639,13 @@ export const OrganizationView: React.FC = () => {
     setEditingOrg(org);
     setName(org.name);
     setCode(org.code);
-    setLegalName(org.legalName);
+    setCountry(org.country || '');
+    setStateName(org.state || '');
+    setDistrict(org.district || '');
+    setCountryId('');
+    setStateId('');
+    setDistrictId('');
+    setPincode(org.pincode || '');
     const resolvedType = formatOrganizationTypeName(org.organizationType);
     setOrganizationType(resolvedType); // 0 = All is shown as All, not swapped for the active suite
     setIndustry(org.industry);
@@ -576,11 +674,10 @@ export const OrganizationView: React.FC = () => {
   /** Only the fields the user actually changed, so the PATCH stays minimal. */
   const buildEditPatch = (current: OrganizationItem): Record<string, any> => {
     const t = (v: string) => v.trim();
-    const legal = t(legalName) || t(name);
 
     const next: Record<string, string> = {
       name: t(name),
-      legalName: legal,
+      pincode: t(pincode),
       industry: t(industry),
       location: t(location),
       subscriptionPlan: t(subscriptionPlan),
@@ -596,7 +693,7 @@ export const OrganizationView: React.FC = () => {
     };
     const existing: Record<string, string> = {
       name: current.name,
-      legalName: current.legalName,
+      pincode: current.pincode || '',
       industry: current.industry || '',
       location: current.location || '',
       subscriptionPlan: current.subscriptionPlan || '',
@@ -619,6 +716,10 @@ export const OrganizationView: React.FC = () => {
     if ((organizationType || 'All') !== (current.organizationType || 'All')) {
       patch.organizationType = parseOrganizationTypeNumber(organizationType);
     }
+    // Country / State / District go as master ids, only when the user picked a new value.
+    if (countryId && country !== current.country) patch.countryId = countryId;
+    if (stateId && stateName !== current.state) patch.stateId = stateId;
+    if (districtId && district !== current.district) patch.districtId = districtId;
     if (formStatus !== current.status) patch.status = formStatus;
     if (subOrganizationSupport !== !!current.subOrganizationSupport) patch.subOrganizationSupport = subOrganizationSupport;
     if (t(password)) patch.password = t(password); // only when a new password is entered
@@ -630,7 +731,10 @@ export const OrganizationView: React.FC = () => {
     const optional = (v: string) => v.trim() || undefined;
     return {
       name: name.trim(),
-      legalName: legalName.trim() || name.trim(),
+      countryId: optional(countryId),
+      stateId: optional(stateId),
+      districtId: optional(districtId),
+      pincode: optional(pincode),
       industry: optional(industry),
       location: optional(location),
       subscriptionPlan: optional(subscriptionPlan),
@@ -700,8 +804,12 @@ export const OrganizationView: React.FC = () => {
       ['subscriptionPlan', subscriptionPlan, requiredWhen(create, 'Subscription Plan is required')],
       ['gstNumber', gstNumber, requiredWhen(create, 'GST Number is required', [validGst])],
       ['panNumber', panNumber, requiredWhen(create, 'PAN Number is required', [validPan])],
-      ['location', location, requiredWhen(create, 'Location / HQ City is required')],
-      ['contactPerson', contactPerson, requiredWhen(create, 'Contact Person Name is required')],
+      ['country', country, requiredWhen(create, 'Country is required')],
+      ['state', stateName, requiredWhen(create && locationMeta.stateRequired, 'State is required')],
+      ['district', district, requiredWhen(create && locationMeta.districtRequired, 'District is required')],
+      ['pincode', pincode, requiredWhen(create, 'Pincode is required', [pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)])],
+      ['location', location, requiredWhen(create, 'Location / HQ City is required', [alphabetsOnly('Location / HQ City')])],
+      ['contactPerson', contactPerson, requiredWhen(create, 'Contact Person Name is required', [alphabetsOnly('Contact Person Name')])],
       ['phone', phone, requiredWhen(create, 'Contact Phone is required', [indianMobile('Contact Phone')])],
       ['whatsapp', whatsapp, [indianMobile('WhatsApp Number')]],
       ['email', email, requiredWhen(create, 'Official Email is required', [emailAddress])],
@@ -735,7 +843,6 @@ export const OrganizationView: React.FC = () => {
   const searchedOrgs = organizations.filter(
     (o) =>
       o.name.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      o.legalName.toLowerCase().includes(appliedSearch.toLowerCase()) ||
       o.code.toLowerCase().includes(appliedSearch.toLowerCase()) ||
       (o.organizationType && o.organizationType.toLowerCase().includes(appliedSearch.toLowerCase())) ||
       o.location.toLowerCase().includes(appliedSearch.toLowerCase()) ||
@@ -1216,12 +1323,31 @@ export const OrganizationView: React.FC = () => {
                 )}
               </div>
 
-              {/* Field 5: Legal Entity Name */}
+              {/* Field 5: Country / State / District (master data) */}
+              <LocationFields
+                country={country}
+                state={stateName}
+                district={district}
+                errors={{ country: formErrors.country, state: formErrors.state, district: formErrors.district }}
+                onMeta={setLocationMeta}
+                onChange={(patch) => {
+                  if (patch.countryId !== undefined) setCountryId(patch.countryId);
+                  if (patch.stateId !== undefined) setStateId(patch.stateId);
+                  if (patch.districtId !== undefined) setDistrictId(patch.districtId);
+                  if (patch.country !== undefined) { setCountry(patch.country); clearFieldError('country'); }
+                  if (patch.state !== undefined) { setStateName(patch.state); clearFieldError('state'); }
+                  if (patch.district !== undefined) { setDistrict(patch.district); clearFieldError('district'); }
+                }}
+              />
               <TextField
-                label="Legal Entity Name"
-                value={legalName}
-                placeholder="Enter legal entity name"
-                onValueChange={setLegalName}
+                label="Pincode"
+                required
+                inputMode="numeric"
+                maxLength={10}
+                value={pincode}
+                error={formErrors.pincode}
+                placeholder="e.g. 600001"
+                onValueChange={fieldHandler(setPincode, 'pincode', (v) => cleanPincode(v, locationMeta.pincodeRegex))}
               />
 
               {/* Field 6: Company Registration Type */}
@@ -1289,7 +1415,7 @@ export const OrganizationView: React.FC = () => {
                 value={gstNumber}
                 error={formErrors.gstNumber}
                 placeholder="e.g. 33AAAAA0000A1Z5"
-                onValueChange={fieldHandler(setGstNumber, 'gstNumber', (v) => alphanumericUpper(v, 15))}
+                onValueChange={fieldHandler(setGstNumber, 'gstNumber', (v) => alphanumericUpper(v, 15), liveGstError)}
               />
 
               {/* Field 10: PAN Number */}
@@ -1301,7 +1427,7 @@ export const OrganizationView: React.FC = () => {
                 value={panNumber}
                 error={formErrors.panNumber}
                 placeholder="e.g. AAAAA0000A"
-                onValueChange={fieldHandler(setPanNumber, 'panNumber', (v) => alphanumericUpper(v, 10))}
+                onValueChange={fieldHandler(setPanNumber, 'panNumber', (v) => alphanumericUpper(v, 10), livePanError)}
               />
 
               {/* Field 11: Industry / Domain */}
@@ -1318,8 +1444,8 @@ export const OrganizationView: React.FC = () => {
                 required
                 value={location}
                 error={formErrors.location}
-                placeholder="e.g. Chennai, Tamil Nadu"
-                onValueChange={fieldHandler(setLocation, 'location')}
+                placeholder="e.g. Chennai"
+                onValueChange={fieldHandler(setLocation, 'location', lettersOnly)}
               />
 
               {/* Field 13: Contact Person Name */}
@@ -1329,7 +1455,7 @@ export const OrganizationView: React.FC = () => {
                 value={contactPerson}
                 error={formErrors.contactPerson}
                 placeholder="Enter contact person name"
-                onValueChange={fieldHandler(setContactPerson, 'contactPerson')}
+                onValueChange={fieldHandler(setContactPerson, 'contactPerson', lettersOnly)}
               />
 
               {/* Field 14: Contact Phone */}
@@ -1485,7 +1611,8 @@ export const OrganizationView: React.FC = () => {
           showBackIcon={true}
           hideCloseButton={true}
         >
-          <div className="space-y-5">
+          <div className="space-y-5" aria-busy={viewLoading}>
+            {viewLoading && <p className="text-[11px] font-medium text-slate-400">Loading latest details…</p>}
             {/* Top Overview / Profile Header Card (Matching Card Design) */}
             <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
               <div className="flex items-center gap-4">
@@ -1513,7 +1640,7 @@ export const OrganizationView: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs font-medium text-slate-500 mt-0.5">{viewingOrg.legalName || viewingOrg.name}</p>
+                  
                   <div className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500 font-medium">
                     <MapPin className="w-3.5 h-3.5 text-slate-400" />
                     <span>{viewingOrg.location}</span>
@@ -1568,6 +1695,22 @@ export const OrganizationView: React.FC = () => {
                     <span className="text-slate-400 font-medium shrink-0">Location / HQ City</span>
                     <span className="font-bold text-slate-800 text-right">{viewingOrg.location || '-'}</span>
                   </div>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Country</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.country || '-'}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">State</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.state || '-'}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">District</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.district || '-'}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Pincode</span>
+                    <span className="font-bold text-slate-800 text-right">{viewingOrg.pincode || '-'}</span>
+                  </div>
                 </div>
               </div>
 
@@ -1609,6 +1752,25 @@ export const OrganizationView: React.FC = () => {
                     <span className="text-slate-400 font-medium shrink-0">Address</span>
                     <span className="font-bold text-slate-800 text-right leading-snug">{viewingOrg.address || viewingOrg.location || '-'}</span>
                   </div>
+
+                  {/* Login user of the sub-organization (from the detail call) */}
+                  {viewingSubOrg && (viewingOrg.adminEmail || viewingOrg.adminName) && (
+                    <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                      <span className="text-slate-400 font-medium shrink-0">Admin Login</span>
+                      <span className="font-bold text-slate-800 text-right leading-snug break-all">
+                        {viewingOrg.adminName || '-'}
+                        {viewingOrg.adminEmail && (
+                          <span className="block text-[11px] font-medium text-slate-500">{viewingOrg.adminEmail}</span>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {viewingSubOrg && (
+                    <div className="flex items-center justify-between gap-4 pt-2.5 border-t border-slate-100">
+                      <span className="text-slate-400 font-medium shrink-0">Branches</span>
+                      <span className="font-bold text-slate-800 text-right">{viewingOrg.branchesCount ?? 0}</span>
+                    </div>
+                  )}
 
                   {/* Sub-Organization Support (Super Admin Only) */}
                   {isSuperAdmin && (

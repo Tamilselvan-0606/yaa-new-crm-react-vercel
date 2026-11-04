@@ -43,10 +43,13 @@ import { CustomSelect } from '../../components/common/CustomSelect';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import { useScopeLock } from '../../hooks/useScopeLock';
 import {
+  alphabetsOnly,  lettersOnly,
   alphanumericUpper,
   digitsOnly,
   emailAddress,
   indianMobile,
+  liveGstError,
+  livePanError,
   liveMobileStartError,
   required,
   requiredWhen,
@@ -104,6 +107,28 @@ export const ProductsView: React.FC = () => {
   // View Product Modal State
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<ClientProductApiItem | null>(null);
+  const viewingProductId = isViewModalOpen ? viewingProduct?.id : undefined;
+
+  // Opening "View" shows the list row at once, then loads the full record (GET product by id) so the
+  // profile, contact details and branch are exactly what is saved. The detail never blanks a field the
+  // row already has. The response is cached (ClientProduct tag) and refreshed after any product change.
+  useEffect(() => {
+    if (!viewingProductId) return;
+    let cancelled = false;
+    clientProductApi
+      .getProductById(viewingProductId, viewingProduct?.organizationId)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return;
+        const kept = Object.fromEntries(Object.entries(res.data).filter(([, v]) => v !== '' && v != null));
+        setViewingProduct((cur) => (cur && cur.id === res.data.id ? ({ ...cur, ...kept } as ClientProductApiItem) : cur));
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingProductId]);
 
   // Confirmation Modal State (Inactive / Suspend / Delete)
   const [confirmAction, setConfirmAction] = useState<{
@@ -378,19 +403,18 @@ export const ProductsView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadOrganizationSubOrgsAndBranches();
-  }, []);
-
-  useEffect(() => {
     const storedSubId = localStorage.getItem('active_sub_organization_id') || undefined;
     const storedBranchId = localStorage.getItem('active_branch_id') || undefined;
     loadProducts(storedSubId, storedBranchId);
   }, [page, pageSize, appliedSearch, appliedStatus]);
 
+  // Organization / sub-organization / branch lists only feed the Add, Edit and View forms: load them the first
+  // time one opens (not when the page loads) and keep them for later opens.
+  const formDataLoaded = useRef(false);
   useEffect(() => {
-    if (isModalOpen || isViewModalOpen) {
-      loadOrganizationSubOrgsAndBranches();
-    }
+    if (!(isModalOpen || isViewModalOpen) || formDataLoaded.current) return;
+    formDataLoaded.current = true;
+    loadOrganizationSubOrgsAndBranches();
   }, [isModalOpen, isViewModalOpen]);
 
 
@@ -503,13 +527,13 @@ export const ProductsView: React.FC = () => {
       ['name', formData.name, [required('Product / Org Name is required')]],
       ['subOrganizationId', formData.subOrganizationId, requiredWhen(subOrganizations.length > 0, 'Select Sub-Organization is required')],
       ['branchId', formData.branchId, requiredWhen(branches.length > 0, 'Select Branch is required')],
-      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required')]],
+      ['contactPerson', formData.contactPerson, [required('Contact Person Name is required'), alphabetsOnly('Contact Person Name')]],
       ['mobileNumber', formData.mobileNumber, [required('Mobile Number is required'), indianMobile('Mobile Number')]],
       ['supportWhatsapp', formData.supportWhatsapp, [indianMobile('WhatsApp Number')]],
       ['supportEmail', formData.supportEmail, [required('Email is required'), emailAddress]],
       ['gstNumber', formData.gstNumber, [required('GST Number is required'), validGst]],
       ['panNumber', formData.panNumber, [required('PAN Number is required'), validPan]],
-      ['hqCity', formData.hqCity, [required('HQ City is required')]],
+      ['hqCity', formData.hqCity, [required('HQ City is required'), alphabetsOnly('HQ City')]],
       ['address', formData.address, [required('Address is required')]],
       ['status', formData.status, [required('Status is required')]],
     ]);
@@ -1120,7 +1144,7 @@ export const ProductsView: React.FC = () => {
               value={formData.contactPerson}
               error={formErrors.contactPerson}
               placeholder="Enter contact person name"
-              onValueChange={(v) => updateField('contactPerson', v)}
+              onValueChange={(v) => updateField('contactPerson', lettersOnly(v))}
             />
           </div>
 
@@ -1172,7 +1196,7 @@ export const ProductsView: React.FC = () => {
               value={formData.gstNumber}
               error={formErrors.gstNumber}
               placeholder="e.g. 33AAAAA0000A1Z5"
-              onValueChange={(v) => updateField('gstNumber', alphanumericUpper(v, 15))}
+              onValueChange={(v) => updateField('gstNumber', alphanumericUpper(v, 15), liveGstError(alphanumericUpper(v, 15)))}
             />
             <TextField
               label="PAN Number"
@@ -1182,7 +1206,7 @@ export const ProductsView: React.FC = () => {
               value={formData.panNumber}
               error={formErrors.panNumber}
               placeholder="e.g. AAAAA0000A"
-              onValueChange={(v) => updateField('panNumber', alphanumericUpper(v, 10))}
+              onValueChange={(v) => updateField('panNumber', alphanumericUpper(v, 10), livePanError(alphanumericUpper(v, 10)))}
             />
             <TextField
               label="HQ City"
@@ -1190,7 +1214,7 @@ export const ProductsView: React.FC = () => {
               value={formData.hqCity}
               error={formErrors.hqCity}
               placeholder="e.g. Chennai"
-              onValueChange={(v) => updateField('hqCity', v)}
+              onValueChange={(v) => updateField('hqCity', lettersOnly(v))}
             />
           </div>
 
@@ -1355,7 +1379,8 @@ export const ProductsView: React.FC = () => {
                             b.id === (viewingProduct as any).branch_id
                         )?.name ||
                         (viewingProduct as any).branchName ||
-                        (viewingProduct as any).branch_name,
+                        (viewingProduct as any).branch_name ||
+                        viewingProduct.branch?.name,
                     },
                     { label: 'Product / Org Code', value: viewingProduct.code },
                     { label: 'GST Number', value: viewingProduct.gstNumber },

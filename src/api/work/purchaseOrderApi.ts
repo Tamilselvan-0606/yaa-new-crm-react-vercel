@@ -84,7 +84,21 @@ export const mapApiPurchaseOrderToUi = (
   const subTotal = Number(apiPo.subTotal ?? 0);
   const taxAmount = Number(apiPo.taxAmount ?? 0);
   const discountAmount = Number(apiPo.discountAmount ?? 0);
-  const grandTotal = Number(apiPo.grandTotal ?? (subTotal + taxAmount - discountAmount));
+
+  // Return and net calculations
+  const originalBill = Number(
+    apiPo.originalBillAmount ??
+    apiPo.grandTotal ??
+    (subTotal + taxAmount - discountAmount)
+  );
+  const totalReturnAmount = Number(apiPo.totalPurchaseReturnAmount ?? apiPo.totalReturned ?? 0);
+  const netPayable = Number(
+    apiPo.netPayableAmount ??
+    apiPo.netPayable ??
+    Math.max(0, originalBill - totalReturnAmount)
+  );
+  // When purchase returns exist, reduce the purchase bill amount to the net payable amount
+  const effectiveGrandTotal = totalReturnAmount > 0 ? netPayable : Number(apiPo.grandTotal ?? originalBill);
 
   // Determine status & payment status
   const normalizedStatus = (apiPo.status as PurchaseStatus) || 'Pending';
@@ -120,7 +134,7 @@ export const mapApiPurchaseOrderToUi = (
         if (found) {
           if (!hasVouchers) {
             // Only consider paid if explicitly entered/recorded
-            if (found.hasManualPayment || (Number(found.paidAmount || 0) > 0 && Number(found.paidAmount || 0) < grandTotal)) {
+            if (found.hasManualPayment || (Number(found.paidAmount || 0) > 0 && Number(found.paidAmount || 0) < effectiveGrandTotal)) {
               existingPaid = Number(found.paidAmount || 0);
             }
           }
@@ -132,11 +146,36 @@ export const mapApiPurchaseOrderToUi = (
   } catch {}
 
   // The API tracks what was paid; the browser-stored amount is only a fallback for older records
-  const apiPaid = apiPo.paidAmount !== undefined && apiPo.paidAmount !== null ? Number(apiPo.paidAmount) : undefined;
-  const paidAmount = Math.min(grandTotal, apiPaid ?? existingPaid);
-  const balance = Math.max(0, grandTotal - paidAmount);
+  const apiPaid =
+    apiPo.totalPaidAmount !== undefined && apiPo.totalPaidAmount !== null
+      ? Number(apiPo.totalPaidAmount)
+      : apiPo.totalPaid !== undefined && apiPo.totalPaid !== null
+      ? Number(apiPo.totalPaid)
+      : apiPo.paidAmount !== undefined && apiPo.paidAmount !== null
+      ? Number(apiPo.paidAmount)
+      : undefined;
+
+  const paidAmount = apiPaid ?? existingPaid;
+
+  const supplierCredit = Number(
+    apiPo.supplierCreditAmount ??
+    apiPo.supplierCredit ??
+    apiPo.supplierCreditGeneratedAmount ??
+    (paidAmount > effectiveGrandTotal ? paidAmount - effectiveGrandTotal : 0)
+  );
+
+  const balance = Number(
+    apiPo.outstandingBalance ??
+    apiPo.outstandingAmount ??
+    apiPo.balance ??
+    Math.max(0, effectiveGrandTotal - paidAmount)
+  );
+
+  const rawPaymentStatus = apiPo.paymentStatus;
   const paymentStatus: PurchasePaymentStatus =
-    balance <= 0 && grandTotal > 0 && paidAmount >= grandTotal
+    rawPaymentStatus === 'Paid' || rawPaymentStatus === 'Partial' || rawPaymentStatus === 'Unpaid'
+      ? (rawPaymentStatus as PurchasePaymentStatus)
+      : balance <= 0 && effectiveGrandTotal > 0 && paidAmount >= effectiveGrandTotal
       ? 'Paid'
       : paidAmount > 0
       ? 'Partial'
@@ -178,9 +217,21 @@ export const mapApiPurchaseOrderToUi = (
     igst: 0,
     shipping: 0,
     otherCharges: 0,
-    grandTotal: grandTotal,
+    grandTotal: effectiveGrandTotal,
+    originalBillAmount: originalBill,
+    totalPurchaseReturnAmount: totalReturnAmount,
+    totalReturned: totalReturnAmount,
+    netPayableAmount: netPayable,
+    netPayable: netPayable,
     paidAmount: paidAmount,
+    totalPaidAmount: paidAmount,
+    totalPaid: paidAmount,
     balance: balance,
+    outstandingBalance: balance,
+    supplierCreditAmount: supplierCredit,
+    supplierCredit: supplierCredit,
+    remainingSupplierCredit: Number(apiPo.remainingSupplierCredit ?? supplierCredit),
+    refundStatus: apiPo.refundStatus || (supplierCredit > 0 ? 'Pending' : undefined),
     paymentMethod: existingPaymentMethod,
     paymentTerms: existingPaymentTerms,
     paymentStatus: paymentStatus,
@@ -337,10 +388,17 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
       providesTags: (result) =>
         result?.data && Array.isArray(result.data)
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Purchase' as const, id })),
-              { type: 'Purchase' as const, id: 'LIST' },
+              ...result.data.flatMap(({ id }) => [
+                { type: 'PurchaseOrder' as const, id },
+                { type: 'PurchaseBill' as const, id },
+              ]),
+              { type: 'PurchaseOrder' as const, id: 'LIST' },
+              { type: 'PurchaseBill' as const, id: 'LIST' },
             ]
-          : [{ type: 'Purchase' as const, id: 'LIST' }],
+          : [
+              { type: 'PurchaseOrder' as const, id: 'LIST' },
+              { type: 'PurchaseBill' as const, id: 'LIST' },
+            ],
     }),
 
     getWorkPurchaseOrderById: builder.query<PurchaseOrderSingleResponse, string>({
@@ -348,7 +406,10 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         url: `/work/purchase-orders/${id}`,
         method: 'GET',
       }),
-      providesTags: (_result, _error, id) => [{ type: 'Purchase', id }],
+      providesTags: (_result, _error, id) => [
+        { type: 'PurchaseOrder', id },
+        { type: 'PurchaseBill', id },
+      ],
     }),
 
     createWorkPurchaseOrder: builder.mutation<
@@ -369,7 +430,11 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         };
       },
       invalidatesTags: [
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
       ],
@@ -393,8 +458,14 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         };
       },
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Purchase', id },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id },
+
+        { type: 'PurchaseBill', id },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
       ],
@@ -418,8 +489,14 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         };
       },
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Purchase', id },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id },
+
+        { type: 'PurchaseBill', id },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
       ],
@@ -435,8 +512,14 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Purchase', id },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id },
+
+        { type: 'PurchaseBill', id },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
       ],
@@ -448,8 +531,14 @@ export const workPurchaseOrderEndpoints = baseApi.injectEndpoints({
         method: 'DELETE',
       }),
       invalidatesTags: (_result, _error, id) => [
-        { type: 'Purchase', id },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id },
+
+        { type: 'PurchaseBill', id },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Stock', id: 'LIST' },
         { type: 'Supplier', id: 'LIST' },
       ],

@@ -33,6 +33,12 @@ export interface BranchApiItem {
   location?: string;
   city?: string;
   state?: string;
+  country?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   address?: string;
   gstNumber?: string;
   productId?: string;
@@ -101,6 +107,12 @@ export interface CreateBranchRequest {
   address?: string;
   city?: string;
   state?: string;
+  country?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   status?: string;
   user?: {
     email?: string;
@@ -122,6 +134,12 @@ export interface UpdateBranchRequest {
   address?: string;
   city?: string;
   state?: string;
+  country?: string;
+  district?: string;
+  pincode?: string;
+  countryId?: string;
+  stateId?: string;
+  districtId?: string;
   status?: string;
   organizationId?: string;
   subOrganizationId?: string;

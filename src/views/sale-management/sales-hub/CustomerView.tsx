@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -120,6 +119,7 @@ import {
 } from "../utils/formUtils";
 
 import { formatDate } from '../utils/dateUtils';
+import { evictApiCache } from "../../../api/queryCache";
 export const CustomerView: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -248,16 +248,6 @@ export const CustomerView: React.FC = () => {
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState("All");
   const [appliedStatus, setAppliedStatus] = useState("All");
   const [pendingType, setPendingType] = useState("All");
@@ -601,8 +591,20 @@ export const CustomerView: React.FC = () => {
 
   // Master API Loader with strict deduplication guards to ensure zero redundant calls
   const loadCustomers = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedType}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        type?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetType = overrides?.type !== undefined ? overrides.type : appliedType;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}_${targetType}`;
 
       // Prevent concurrent calls or redundant re-fetching of identical parameters
       if (isFetchingRef.current) return;
@@ -615,15 +617,15 @@ export const CustomerView: React.FC = () => {
       try {
         const [res, assignRes] = await Promise.all([
           customerApi.getCustomers({
-            page_no: currentPage,
+            page_no: targetPage,
             page_size: pageSize,
             pagination_required: true,
-            search: appliedSearch.trim() || undefined,
+            search: targetSearch.trim() || undefined,
             sortOrder: "desc",
             status:
-              appliedStatus.toUpperCase() !== "ALL" ? appliedStatus : undefined,
+              targetStatus.toUpperCase() !== "ALL" ? targetStatus : undefined,
             customerType:
-              appliedType.toUpperCase() !== "ALL" ? appliedType : undefined,
+              targetType.toUpperCase() !== "ALL" ? targetType : undefined,
           }),
           forceRefresh || !customerAssignmentsCacheRef.current
             ? collectionApi.getCustomerAssignments({ limit: 200 }).catch(() => null)
@@ -739,7 +741,8 @@ export const CustomerView: React.FC = () => {
       ) {
         lastFetchKeyRef.current = null;
         loadCustomers(true);
-        loadSalesReps(true);
+        // Reps are only needed once a rep UI has opened; refresh only if already loaded
+        if (hasLoadedRepsRef.current) loadSalesReps(true);
       }
     };
     window.addEventListener("crm:sidebar-navigate", handleSidebarNav);
@@ -750,9 +753,10 @@ export const CustomerView: React.FC = () => {
 
 
   const handleManualRefresh = () => {
+    evictApiCache(["Customer", "SalesRepresentative"]); // explicit refresh bypasses the cache
     lastFetchKeyRef.current = null;
     loadCustomers(true);
-    loadSalesReps(true);
+    if (hasLoadedRepsRef.current) loadSalesReps(true);
     toast.info("Refreshing customers from Commerce API...");
   };
 
@@ -2428,17 +2432,8 @@ export const CustomerView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedStatus === "All" &&
-            pendingStatus === "All" &&
-            appliedType === "All" &&
-            pendingType === "All" &&
-            appliedOutstanding === "All" &&
-            pendingOutstanding === "All" &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch("");
           setAppliedSearch("");
           setPendingStatus("All");
@@ -2448,10 +2443,12 @@ export const CustomerView: React.FC = () => {
           setPendingOutstanding("All");
           setAppliedOutstanding("All");
           setCurrentPage(1);
-
-          if (isSame) {
-            loadCustomers(true);
-          }
+          loadCustomers(true, {
+            search: "",
+            status: "All",
+            type: "All",
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

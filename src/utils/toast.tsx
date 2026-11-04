@@ -38,6 +38,20 @@ const listeners = new Set<() => void>();
 
 const emit = () => listeners.forEach((l) => l());
 
+// Timers live in the store (not in the toast component) so a toast always closes on schedule, even when the window is
+// blurred or the pointer rests on it, and is always removed even if no exit-transition callback fires.
+const EXIT_ANIMATION_MS = 400;
+const hideTimers = new Map<ToastId, ReturnType<typeof setTimeout>>();
+const removeTimers = new Map<ToastId, ReturnType<typeof setTimeout>>();
+
+const clearTimer = (map: Map<ToastId, ReturnType<typeof setTimeout>>, id: ToastId) => {
+  const t = map.get(id);
+  if (t !== undefined) {
+    clearTimeout(t);
+    map.delete(id);
+  }
+};
+
 const show = (type: ToastType, message: ToastMessage, opts: ToastOptions = {}): ToastId => {
   const now = Date.now();
   if (opts.id === undefined && type !== 'loading') {
@@ -68,19 +82,43 @@ const show = (type: ToastType, message: ToastMessage, opts: ToastOptions = {}): 
   } else {
     items = [...items, item].slice(-MAX_VISIBLE);
   }
+  // (Re)start the auto-hide clock for this toast; a replaced toast (loading -> success) restarts it.
+  clearTimer(hideTimers, id);
+  clearTimer(removeTimers, id);
+  if (item.duration !== null) {
+    hideTimers.set(
+      id,
+      setTimeout(() => dismiss(id), item.duration),
+    );
+  }
   emit();
   return id;
 };
 
-const dismiss = (id?: ToastId) => {
-  items = id === undefined ? items.map((t) => ({ ...t, open: false })) : items.map((t) => (t.id === id ? { ...t, open: false } : t));
+function dismiss(id?: ToastId) {
+  const ids = id === undefined ? items.map((t) => t.id) : [id];
+  ids.forEach((tid) => {
+    clearTimer(hideTimers, tid);
+    clearTimer(removeTimers, tid);
+    // Fallback: take the toast out after the exit animation even if the transition callback never runs.
+    removeTimers.set(
+      tid,
+      setTimeout(() => remove(tid), EXIT_ANIMATION_MS),
+    );
+  });
+  items = items.map((t) => (ids.includes(t.id) ? { ...t, open: false } : t));
   emit();
-};
+}
 
-const remove = (id: ToastId) => {
+function remove(id: ToastId) {
+  clearTimer(hideTimers, id);
+  clearTimer(removeTimers, id);
   items = items.filter((t) => t.id !== id);
   emit();
-};
+}
+
+/** Number of toasts currently held (visible or exiting). Used by tests. */
+export const getActiveToastCount = (): number => items.length;
 
 export const toast = {
   success: (message: ToastMessage, opts?: ToastOptions) => show('success', message, opts),
@@ -122,15 +160,8 @@ const ToastIcon: React.FC<{ type: ToastType }> = ({ type }) =>
 const EXIT_MS = 200;
 
 const ToastCard: React.FC<{ item: ToastItem }> = ({ item }) => {
-  const [hovered, setHovered] = useState(false);
-
-  // Auto-hide after `duration` (paused while the pointer is over the toast). A re-fired toast with the
-  // same id gets a new createdAt, which restarts the timer.
-  useEffect(() => {
-    if (!item.open || item.duration === null || hovered) return;
-    const timer = setTimeout(() => dismiss(item.id), item.duration);
-    return () => clearTimeout(timer);
-  }, [item.open, item.duration, item.id, item.createdAt, hovered]);
+  // Auto-hide is driven by the store timers (see show/dismiss), so a toast closes on schedule even while
+  // hovered or when the window is in the background.
 
   // Once closed, wait for the fade-out and then drop it from the list.
   useEffect(() => {
@@ -144,8 +175,6 @@ const ToastCard: React.FC<{ item: ToastItem }> = ({ item }) => {
   return (
     <div
       role="alert"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       className={`pointer-events-auto flex items-center w-full min-w-[280px] max-w-[420px] rounded px-4 py-1.5 text-sm leading-[1.43] text-white shadow-[0_3px_3px_-2px_rgba(0,0,0,0.2),0_3px_4px_0_rgba(0,0,0,0.14),0_1px_8px_0_rgba(0,0,0,0.12)] transition-all duration-200 ${SEVERITY_BG[severity]} ${
         item.open ? 'opacity-100 scale-100 animate-in fade-in zoom-in-75' : 'opacity-0 scale-75'
       }`}

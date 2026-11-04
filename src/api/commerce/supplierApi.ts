@@ -65,8 +65,8 @@ export const mapSupplierToPayload = (sup: Supplier | Partial<Supplier>): CreateS
 
   if ((sup as any).company?.trim()) payload.company = (sup as any).company.trim();
   if (sup.email?.trim()) payload.email = sup.email.trim();
-  if (sup.gstNumber?.trim()) payload.gstNumber = sup.gstNumber.trim();
-  if (sup.panNumber?.trim()) payload.panNumber = sup.panNumber.trim();
+  if (sup.gstNumber?.trim()) payload.gstNumber = sup.gstNumber.trim().toUpperCase();
+  if (sup.panNumber?.trim()) payload.panNumber = sup.panNumber.trim().toUpperCase();
   if (sup.paymentTerms?.trim()) payload.paymentTerms = sup.paymentTerms.trim();
 
   return payload;

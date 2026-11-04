@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -543,16 +542,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   // Search & Filters
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState('This Month');
   const [appliedPeriod, setAppliedPeriod] = useState('This Month');
   const [pendingStatus, setPendingStatus] = useState('ALL');
@@ -918,18 +907,28 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Fetch Delivery Challans from Live Backend API
   const isFetchingChallansRef = useRef(false);
-  const fetchDeliveryChallans = useCallback(async () => {
+  const fetchDeliveryChallans = useCallback(async (overrides?: {
+    page?: number;
+    search?: string;
+    status?: string;
+    period?: string;
+  }) => {
     if (isFetchingChallansRef.current) return;
     isFetchingChallansRef.current = true;
     setIsApiLoading(true);
     try {
-      const apiPeriod = mapPeriodToApiPeriod(appliedPeriod);
-      const apiStatus = appliedStatus === 'ALL' ? undefined : appliedStatus;
+      const targetPage = overrides?.page ?? page;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetPeriod = overrides?.period !== undefined ? overrides.period : appliedPeriod;
+
+      const apiPeriod = mapPeriodToApiPeriod(targetPeriod);
+      const apiStatus = targetStatus === 'ALL' ? undefined : targetStatus;
       const res = await commerceDeliveryChallanApi.getChallans({
-        page_no: page,
+        page_no: targetPage,
         page_size: pageSize,
         pagination_required: true,
-        search: appliedSearch.trim() || undefined,
+        search: targetSearch.trim() || undefined,
         status: apiStatus,
         period: apiPeriod,
         sortOrder: 'desc',
@@ -3617,7 +3616,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           isOpen={isAddCustomerModalOpen}
           onClose={() => setIsAddCustomerModalOpen(false)}
           onCustomerCreated={(newCust) => {
-            dispatch(baseApi.util.invalidateTags(['CommerceCustomer', 'Customer'] as any));
+            dispatch(baseApi.util.invalidateTags(['Customer']));
             handleSelectCustomer(newCust);
             loadMasterData();
           }}
@@ -3628,7 +3627,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           isOpen={isAddItemModalOpen}
           onClose={() => setIsAddItemModalOpen(false)}
           onProductCreated={(newProd) => {
-            dispatch(baseApi.util.invalidateTags(['Product', 'InventoryStock'] as any));
+            dispatch(baseApi.util.invalidateTags(['Product', 'Stock', 'Batch']));
             setLiveProducts((prev) => [newProd, ...prev]);
             loadMasterData();
             if (activeItemRowIndex !== null) {
@@ -3800,15 +3799,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedPeriod === 'This Month' &&
-            pendingPeriod === 'This Month' &&
-            appliedStatus === 'ALL' &&
-            pendingStatus === 'ALL' &&
-            page === 1;
-
           setPendingSearch('');
           setAppliedSearch('');
           setPendingPeriod('This Month');
@@ -3816,11 +3806,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           setPendingStatus('ALL');
           setAppliedStatus('ALL');
           setPage(1);
-
-          if (isSame) {
-            isFetchingChallansRef.current = false;
-            fetchDeliveryChallans();
-          }
+          isFetchingChallansRef.current = false;
+          fetchDeliveryChallans({ page: 1, search: '', status: 'ALL', period: 'This Month' });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

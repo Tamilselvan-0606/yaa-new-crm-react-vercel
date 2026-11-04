@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   PlatformLeadListParams,
   PlatformLeadListResponse,
@@ -17,7 +17,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getPlatformLeads: builder.query<PlatformLeadListResponse, PlatformLeadListParams | void>({
       query: (params) => {
-        const queryParams: Record<string, any> = {};
+        const queryParams: Record<string, any> = params ? buildListParams(params as any, { sortBy: 'createdAt', sortOrder: 'desc' }) : {};
         if (params) {
           if (params.page !== undefined) queryParams.page = params.page;
           if (params.limit !== undefined) queryParams.limit = params.limit;
@@ -70,7 +70,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: payload,
       }),
-      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'PlatformDashboard'],
     }),
 
     updatePlatformLead: builder.mutation<
@@ -85,7 +85,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Lead', id },
         { type: 'Lead', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -101,7 +101,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Lead', id },
         { type: 'Lead', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -117,7 +117,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Lead', id },
         { type: 'Lead', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -133,7 +133,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
       invalidatesTags: [
         { type: 'Lead', id: 'LIST' },
         { type: 'Organization', id: 'LIST' },
-        'Dashboard',
+        'PlatformDashboard',
       ],
     }),
 
@@ -142,7 +142,7 @@ export const leadEndpoints = baseApi.injectEndpoints({
         url: `/platform/leads/${id}`,
         method: 'DELETE',
       }),
-      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'Dashboard'],
+      invalidatesTags: [{ type: 'Lead', id: 'LIST' }, 'PlatformDashboard'],
     }),
   }),
   overrideExisting: false,

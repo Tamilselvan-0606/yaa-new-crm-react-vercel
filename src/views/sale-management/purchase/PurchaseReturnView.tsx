@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { SupplierSearchableSelect, ProductSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -315,16 +314,6 @@ export const PurchaseReturnView: React.FC = () => {
   // Filter & Pagination State
   const [pendingSearch, setPendingSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setCurrentPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingStatus, setPendingStatus] = useState('All');
   const [appliedStatus, setAppliedStatus] = useState('All');
   const [pendingRefundStatus, setPendingRefundStatus] = useState('All');
@@ -413,9 +402,11 @@ export const PurchaseReturnView: React.FC = () => {
     }
   }, []);
 
-  // Automatically load initial products list when return form modal opens
+  // Load initial products list when the return form modal first opens (once per screen session)
+  const hasLoadedInitialProductsRef = useRef(false);
   useEffect(() => {
-    if (isCreateModalOpen) {
+    if (isCreateModalOpen && !hasLoadedInitialProductsRef.current) {
+      hasLoadedInitialProductsRef.current = true;
       handleProductSearch('');
     }
   }, [isCreateModalOpen, handleProductSearch]);
@@ -534,8 +525,20 @@ export const PurchaseReturnView: React.FC = () => {
   // 2. Fetch Purchase Returns from Commerce API with deduplication
   // ---------------------------------------------------------
   const fetchPurchaseReturns = useCallback(
-    async (forceRefresh = false) => {
-      const fetchKey = `${currentPage}_${pageSize}_${appliedSearch.trim()}_${appliedStatus}_${appliedRefundStatus}`;
+    async (
+      forceRefresh = false,
+      overrides?: {
+        search?: string;
+        status?: string;
+        refundStatus?: string;
+        page?: number;
+      }
+    ) => {
+      const targetPage = overrides?.page ?? currentPage;
+      const targetSearch = overrides?.search !== undefined ? overrides.search : appliedSearch;
+      const targetStatus = overrides?.status !== undefined ? overrides.status : appliedStatus;
+      const targetRefund = overrides?.refundStatus !== undefined ? overrides.refundStatus : appliedRefundStatus;
+      const fetchKey = `${targetPage}_${pageSize}_${targetSearch.trim()}_${targetStatus}_${targetRefund}`;
       if (isFetchingRef.current) return;
       if (!forceRefresh && lastFetchKeyRef.current === fetchKey) return;
 
@@ -545,13 +548,13 @@ export const PurchaseReturnView: React.FC = () => {
 
       try {
         const response = await commercePurchaseReturnApi.getPurchaseReturns({
-          page_no: currentPage,
+          page_no: targetPage,
           page_size: pageSize,
           pagination_required: true,
           sortOrder: 'desc',
-          search: appliedSearch.trim() || undefined,
-          returnStatus: appliedStatus !== 'All' ? appliedStatus : undefined,
-          refundStatus: appliedRefundStatus !== 'All' ? appliedRefundStatus : undefined,
+          search: targetSearch.trim() || undefined,
+          returnStatus: targetStatus !== 'All' ? targetStatus : undefined,
+          refundStatus: targetRefund !== 'All' ? targetRefund : undefined,
         });
 
         if (response && response.success && Array.isArray(response.data)) {
@@ -1073,7 +1076,7 @@ export const PurchaseReturnView: React.FC = () => {
             dispatch(
               baseApi.util.invalidateTags([
                 { type: 'Stock', id: 'LIST' },
-                { type: 'Stock', id: 'BATCHES' },
+                { type: 'Batch', id: 'LIST' },
                 { type: 'Stock', id: 'LEDGER' },
                 { type: 'Product', id: 'LIST' },
               ])
@@ -1172,7 +1175,7 @@ export const PurchaseReturnView: React.FC = () => {
             dispatch(
               baseApi.util.invalidateTags([
                 { type: 'Stock', id: 'LIST' },
-                { type: 'Stock', id: 'BATCHES' },
+                { type: 'Batch', id: 'LIST' },
                 { type: 'Stock', id: 'LEDGER' },
                 { type: 'Product', id: 'LIST' },
               ])
@@ -1277,7 +1280,7 @@ export const PurchaseReturnView: React.FC = () => {
           dispatch(
             baseApi.util.invalidateTags([
               { type: 'Stock', id: 'LIST' },
-              { type: 'Stock', id: 'BATCHES' },
+              { type: 'Batch', id: 'LIST' },
               { type: 'Stock', id: 'LEDGER' },
               { type: 'Product', id: 'LIST' },
             ])
@@ -1670,15 +1673,8 @@ export const PurchaseReturnView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === '' &&
-            pendingSearch === '' &&
-            appliedStatus === 'All' &&
-            pendingStatus === 'All' &&
-            appliedRefundStatus === 'All' &&
-            pendingRefundStatus === 'All' &&
-            currentPage === 1;
-
+          isFetchingRef.current = false;
+          lastFetchKeyRef.current = null;
           setPendingSearch('');
           setAppliedSearch('');
           setPendingStatus('All');
@@ -1686,10 +1682,12 @@ export const PurchaseReturnView: React.FC = () => {
           setPendingRefundStatus('All');
           setAppliedRefundStatus('All');
           setCurrentPage(1);
-
-          if (isSame) {
-            fetchPurchaseReturns(true);
-          }
+          fetchPurchaseReturns(true, {
+            search: '',
+            status: 'All',
+            refundStatus: 'All',
+            page: 1,
+          });
         }}
         filterSlot={
           <div className="flex items-center gap-2.5 flex-wrap">

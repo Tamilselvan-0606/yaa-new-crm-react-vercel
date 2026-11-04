@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { pdf } from '@react-pdf/renderer';
 import { useAuth } from '../../context/AuthContext';
+import { useAppDispatch } from '../../hooks/redux';
 import { EstimatePDFDocument, SellerInfo } from '../../components/quotes/EstimatePDFDocument';
 import { Button } from '../../components/common/Button';
 import { SearchBar } from '../../components/common/SearchBar';
@@ -42,13 +43,22 @@ import { Pagination } from '../../components/common/Pagination';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { ConfirmationModal } from '../../utils/confirmationModal';
 import {
+  alphabetsOnly,
+  digitsOnly,
+  firstError,
+  indianMobile,
+  lettersOnly,
+  liveMobileStartError,
+  required,
+} from '../../utils/fieldValidators';
+import {
   quoteApi,
+  baseApi,
+  useGetPlatformQuotesQuery,
   organizationApi,
   subOrganizationApi,
-  clientProductApi,
   platformLeadApi,
   OrganizationApiItem,
-  ClientProductApiItem,
   QuoteApiItem,
   CreateQuoteRequest,
   getStoredOrganizationId,
@@ -124,8 +134,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
   const [loadingClients, setLoadingClients] = useState(false);
 
   // Real Platform Products
-  const [platformProducts, setPlatformProducts] = useState<ClientProductApiItem[]>([]);
-  const [loadingProducts, setLoadingProducts] = useState(false);
 
   const getOrgInfo = (companyName: string) => {
     const name = (companyName || '').trim();
@@ -142,35 +150,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     const loadClientsAndProducts = async () => {
       const orgId = currentUser?.organizationId || getStoredOrganizationId();
 
-      // For Platform Administrator (Super Admin):
-      // Only fetch registered organizations (for the Select Organization dropdown).
-      // Do NOT fetch seller org details, sub-organizations, leads, or products.
-      if (isSuperAdmin && !isOrgSuperAdmin) {
-        setLoadingClients(true);
-        try {
-          const orgsRes = await organizationApi.getOrganizations(1, 100);
-          if (isMounted && orgsRes && Array.isArray(orgsRes.data)) {
-            const orgClients: AvailableClient[] = orgsRes.data
-              .filter((o) => !!o.id)
-              .map((o) => ({
-                id: o.id,
-                name: o.contactPerson || o.user?.name || o.name,
-                company: o.name,
-                contactPerson: o.contactPerson || o.user?.name || '',
-                email: o.email || '',
-                phone: o.phone || '',
-                location: o.address || o.location || '',
-                type: 'Organization',
-              }));
-            setAvailableClients(orgClients);
-          }
-        } catch (e) {
-          console.warn('Notice: Could not load organizations for platform administrator:', e);
-        } finally {
-          if (isMounted) setLoadingClients(false);
-        }
-        return;
-      }
+      // Platform Administrator: nothing to load up front. The organization list (for the Select Organization
+      // dropdown and the Organization filter) is loaded by loadOrganizationOptions when one of them opens.
+      if (isSuperAdmin && !isOrgSuperAdmin) return;
 
       // 1. Fetch Seller Info: Check if logged in / active as Sub-Organization first, else Parent Organization
       let sellerConfigResolved = false;
@@ -288,57 +270,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
         const orgLogo = parentOrg.logo || (parentOrg as any)?.logoUrl;
         if (orgLogo) setQuotationFromLogo(orgLogo);
       }
-
-      // 2. Fetch real clients from Client API for Org Admin
-      setLoadingClients(true);
-      const clientsMap = new Map<string, AvailableClient>();
-
-      try {
-        const clientRes = await platformClientApi.getClients({ page: 1, limit: 100, organization_id: orgId || undefined });
-        if (clientRes && Array.isArray(clientRes.data)) {
-          clientRes.data.forEach((c) => {
-            if (c.id) {
-              const displayName = c.name || c.legalName || c.contactPerson || 'Client';
-              clientsMap.set(c.id, {
-                id: c.id,
-                name: c.contactPerson || displayName,
-                company: displayName,
-                contactPerson: c.contactPerson || '',
-                email: c.email || '',
-                phone: c.phone || c.whatsapp || '',
-                location: c.address || c.location || '',
-                type: 'Client',
-                gstin: c.gstNumber || '',
-                pan: c.panNumber || '',
-              });
-            }
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to load clients for quotes:', e);
-      }
-
-      if (isMounted) {
-        setAvailableClients(Array.from(clientsMap.values()));
-        setLoadingClients(false);
-      }
-
-      // 3. Fetch real products
-      setLoadingProducts(true);
-      try {
-        const prodRes = await clientProductApi.getProducts({ page: 1, limit: 100 });
-        if (isMounted && prodRes && Array.isArray(prodRes.data)) {
-          setPlatformProducts(prodRes.data);
-          if (prodRes.data.length > 0) {
-            setSelectedProductSuiteName(prodRes.data[0].name);
-            setProjectName((prev) => prev || prodRes.data[0].name);
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to load products for quotes:', e);
-      } finally {
-        if (isMounted) setLoadingProducts(false);
-      }
     };
 
     loadClientsAndProducts();
@@ -361,7 +292,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   // Real backend quotes state
   const [quotes, setQuotes] = useState<Quotation[]>([]);
-  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false);
   const [totalRecords, setTotalRecords] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -454,9 +384,130 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedQuote, setSelectedQuote] = useState<Quotation | null>(null);
+  const selectedQuoteId = selectedQuote?.id;
+
+  // Opening a quotation shows the list row at once, then loads the full record (GET quote by id) so the
+  // page always shows the saved items, totals and status. A failed call keeps the row that is on screen.
+  // The response is cached (PlatformQuote tag) and refreshed after any quote change.
+  useEffect(() => {
+    if (!selectedQuoteId) return;
+    let cancelled = false;
+    quoteApi
+      .getQuoteById(selectedQuoteId)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return;
+        const detail = mapApiQuoteToUi(res.data);
+        setSelectedQuote((cur) => {
+          if (!cur || cur.id !== detail.id) return cur;
+          // never blank a field the list row already has
+          const kept = Object.fromEntries(Object.entries(detail).filter(([, v]) => v !== '' && v != null));
+          return { ...cur, ...kept, items: detail.items.length ? detail.items : cur.items } as Quotation;
+        });
+      })
+      .catch(() => {
+        /* keep the list data */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedQuoteId]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(
     initialCreateOpen || location.pathname === '/quotes/new'
   );
+
+  // Platform Administrator: the organization list feeds the Select Organization dropdown (form) and the
+  // Organization filter (list). It is fetched the first time either one opens, then kept.
+  const orgOptionsRequested = useRef(false);
+  const loadOrganizationOptions = async () => {
+    if (!(isSuperAdmin && !isOrgSuperAdmin) || orgOptionsRequested.current) return;
+    orgOptionsRequested.current = true;
+    setLoadingClients(true);
+    try {
+      const orgsRes = await organizationApi.getOrganizations(1, 100);
+      if (orgsRes && Array.isArray(orgsRes.data)) {
+        setAvailableClients(
+          orgsRes.data
+            .filter((o) => !!o.id)
+            .map((o) => ({
+              id: o.id,
+              name: o.contactPerson || o.user?.name || o.name,
+              company: o.name,
+              contactPerson: o.contactPerson || o.user?.name || '',
+              email: o.email || '',
+              phone: o.phone || '',
+              location: o.address || o.location || '',
+              type: 'Organization',
+            }))
+        );
+      } else {
+        orgOptionsRequested.current = false; // retry on the next open
+      }
+    } catch (e) {
+      orgOptionsRequested.current = false;
+      console.warn('Notice: Could not load organizations for platform administrator:', e);
+    } finally {
+      setLoadingClients(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isCreateModalOpen) loadOrganizationOptions();
+  }, [isCreateModalOpen]);
+
+  // Organization / sub-organization users: the client picker only feeds the quotation form,
+  // so it loads the first time the form opens (not when the quotations list opens). If the organization or
+  // sub-organization changes afterwards it is refreshed.
+  const formClientsRequested = useRef(false);
+  const loadFormClients = async () => {
+    if (isSuperAdmin && !isOrgSuperAdmin) return;
+    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+
+    setLoadingClients(true);
+    const clientsMap = new Map<string, AvailableClient>();
+    try {
+      const clientRes = await platformClientApi.getClients({ page: 1, limit: 100, organization_id: orgId || undefined });
+      if (clientRes && Array.isArray(clientRes.data)) {
+        clientRes.data.forEach((c) => {
+          if (!c.id) return;
+          const displayName = c.name || c.legalName || c.contactPerson || 'Client';
+          clientsMap.set(c.id, {
+            id: c.id,
+            name: c.contactPerson || displayName,
+            company: displayName,
+            contactPerson: c.contactPerson || '',
+            email: c.email || '',
+            phone: c.phone || c.whatsapp || '',
+            location: c.address || c.location || '',
+            type: 'Client',
+            gstin: c.gstNumber || '',
+            pan: c.panNumber || '',
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to load clients for quotes:', e);
+    }
+    setAvailableClients(Array.from(clientsMap.values()));
+    setLoadingClients(false);
+  };
+
+  useEffect(() => {
+    if (!isCreateModalOpen || formClientsRequested.current) return;
+    formClientsRequested.current = true;
+    loadFormClients();
+  }, [isCreateModalOpen]);
+
+  useEffect(() => {
+    const refreshIfLoaded = () => {
+      if (formClientsRequested.current) loadFormClients();
+    };
+    window.addEventListener('subOrgChanged', refreshIfLoaded);
+    window.addEventListener('orgChanged', refreshIfLoaded);
+    return () => {
+      window.removeEventListener('subOrgChanged', refreshIfLoaded);
+      window.removeEventListener('orgChanged', refreshIfLoaded);
+    };
+  }, [isSuperAdmin, isOrgSuperAdmin, currentUser]);
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionDropdownPos, setActionDropdownPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const [isActionStatusSubmenuOpen, setIsActionStatusSubmenuOpen] = useState(false);
@@ -548,70 +599,74 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     navigate('/quotes');
   };
 
-  // Fetch Quotes from Backend API
-  const fetchQuotes = async () => {
-    try {
-      setIsLoadingQuotes(true);
-      const orgId = currentUser?.organizationId || getStoredOrganizationId();
-      const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
-      const activeSubOrgName = localStorage.getItem('active_sub_organization');
+  // Quotations list: RTK Query hook (no result is kept after leaving the page). Anything that changes a quotation
+  // invalidates the 'Quotation' tag, and the list below refetches by itself.
+  const dispatch = useAppDispatch();
+  const [scopeTick, setScopeTick] = useState(0); // bumps when the header's sub-org / branch selection changes
 
-      const params: any = {
-        page: currentPage,
-        limit: pageSize,
-        search: appliedSearch.trim() || undefined,
-        status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
-        sortBy: 'createdAt' as const,
-        sortOrder: 'desc' as const,
-      };
+  const quoteListParams = useMemo(() => {
+    const orgId = currentUser?.organizationId || getStoredOrganizationId();
+    const activeSubOrgId = localStorage.getItem('active_sub_organization_id');
+    const activeSubOrgName = localStorage.getItem('active_sub_organization');
 
-      // Parameter scoping according to API spec:
-      // - Super Admin: sees only documents they created. Passing organization_id narrows documents billed to that organization.
-      // - Tenant logins: must pass own organization_id (outside scope returns 403).
-      if (isSuperAdmin && !isOrgSuperAdmin) {
-        if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
-          params.organization_id = appliedBilledOrgId;
-        }
-      } else {
-        if (orgId) {
-          params.organization_id = orgId;
-        }
-        if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
-          params.sub_organization_id = activeSubOrgId;
-        }
-        const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
-        const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
-        if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
-          params.branch_id = activeBranchId;
-        }
+    const params: any = {
+      page: currentPage,
+      limit: pageSize,
+      search: appliedSearch.trim() || undefined,
+      status: appliedStatus !== 'ALL' ? appliedStatus : undefined,
+      sortBy: 'createdAt' as const,
+      sortOrder: 'desc' as const,
+    };
+
+    // Parameter scoping according to API spec:
+    // - Super Admin: sees only documents they created. Passing organization_id narrows documents billed to that organization.
+    // - Tenant logins: must pass own organization_id (outside scope returns 403).
+    if (isSuperAdmin && !isOrgSuperAdmin) {
+      if (appliedBilledOrgId && appliedBilledOrgId !== 'ALL') {
+        params.organization_id = appliedBilledOrgId;
       }
-
-      const res = await quoteApi.getQuotes(params);
-      if (res && res.data) {
-        setQuotes(res.data.map(mapApiQuoteToUi));
-        setTotalRecords(res.pagination?.totalRecords ?? res.data.length);
-      } else {
-        setQuotes([]);
-        setTotalRecords(0);
-      }
-    } catch (err: any) {
-      console.error('Failed to load quotes:', err);
-      showToast('error', 'Failed to Load Quotes', err?.response?.data?.error?.message || 'Could not fetch quotes');
-      setQuotes([]);
-      setTotalRecords(0);
-    } finally {
-      setIsLoadingQuotes(false);
+      return params;
     }
-  };
+    if (orgId) params.organization_id = orgId;
+    if (activeSubOrgId && activeSubOrgName && activeSubOrgName !== 'All') {
+      params.sub_organization_id = activeSubOrgId;
+    }
+    const activeBranchId = localStorage.getItem('active_branch_id_sales') || localStorage.getItem('active_branch_id');
+    const activeBranchName = localStorage.getItem('active_branch_sales') || localStorage.getItem('active_branch');
+    if (activeBranchId && activeBranchName && activeBranchName !== 'All') {
+      params.branch_id = activeBranchId;
+    }
+    return params;
+  }, [currentPage, pageSize, appliedSearch, appliedStatus, appliedBilledOrgId, scopeTick, currentUser?.organizationId, isSuperAdmin, isOrgSuperAdmin]);
+
+  const quotesQuery = useGetPlatformQuotesQuery(quoteListParams);
+  const isLoadingQuotes = quotesQuery.isFetching;
 
   useEffect(() => {
-    fetchQuotes();
-  }, [currentPage, pageSize, appliedSearch, appliedStatus, appliedBilledOrgId]);
+    if (quotesQuery.data?.data) {
+      setQuotes(quotesQuery.data.data.map(mapApiQuoteToUi));
+      setTotalRecords(quotesQuery.data.pagination?.totalRecords ?? quotesQuery.data.data.length);
+    }
+  }, [quotesQuery.data]);
+
+  useEffect(() => {
+    if (!quotesQuery.isError) return;
+    const err: any = quotesQuery.error;
+    console.error('Failed to load quotes:', err);
+    showToast('error', 'Failed to Load Quotes', err?.data?.error?.message || err?.error || 'Could not fetch quotes');
+    setQuotes([]);
+    setTotalRecords(0);
+  }, [quotesQuery.isError]);
+
+  /** Marks every cached quotation list stale so the visible one reloads. Used after any change and by Refresh. */
+  const fetchQuotes = () => {
+    dispatch(baseApi.util.invalidateTags([{ type: 'PlatformQuote', id: 'LIST' }]));
+  };
 
   useEffect(() => {
     const handleFilterChange = () => {
       setCurrentPage(1);
-      fetchQuotes();
+      setScopeTick((t) => t + 1);
     };
     window.addEventListener('subOrgChanged', handleFilterChange);
     window.addEventListener('branchChanged', handleFilterChange);
@@ -889,14 +944,6 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
     }
   };
 
-  const handleProductSelect = (prodId: string) => {
-    const prod = platformProducts.find((p) => p.id === prodId || p.name === prodId);
-    if (prod) {
-      setProjectName(prod.name);
-      setSelectedProductSuiteName(prod.name);
-    }
-  };
-
   // Item table manipulation helpers
   const handleAddItem = () => {
     const newItem: FormItem = {
@@ -1127,8 +1174,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (!selectedClientId) {
         errors.organization = 'Select Organization is required';
       }
-      if (!customerName.trim()) {
-        errors.customerName = 'Customer Name is required';
+      const customerNameError = firstError(customerName, [required('Customer Name is required'), alphabetsOnly('Customer Name')]);
+      if (customerNameError) {
+        errors.customerName = customerNameError;
       }
       if (!estimateDate.trim()) {
         errors.estimateDate = 'Date is required';
@@ -1142,10 +1190,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
       if (!customerEmail.trim()) {
         errors.customerEmail = 'Email Communications is required';
       }
-      if (!customerPhone.trim()) {
-        errors.customerPhone = 'Contact Number is required';
-      } else if (customerPhone.trim().length !== 10) {
-        errors.customerPhone = 'Contact Number must be exactly 10 digits';
+      const customerPhoneError = firstError(customerPhone, [required('Contact Number is required'), indianMobile('Contact Number')]);
+      if (customerPhoneError) {
+        errors.customerPhone = customerPhoneError;
       }
       if (!customerLocation.trim()) {
         errors.customerLocation = 'Address is required';
@@ -1902,7 +1949,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     type="text"
                     value={customerName}
                     onChange={(e) => {
-                      setCustomerName(e.target.value);
+                      setCustomerName(lettersOnly(e.target.value));
                       if (formErrors.customerName) setFormErrors((prev) => ({ ...prev, customerName: '' }));
                     }}
                     placeholder="Enter customer name"
@@ -2084,9 +2131,9 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                     maxLength={10}
                     value={customerPhone}
                     onChange={(e) => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      const val = digitsOnly(e.target.value);
                       setCustomerPhone(val);
-                      if (formErrors.customerPhone) setFormErrors((prev) => ({ ...prev, customerPhone: '' }));
+                      setFormErrors((prev) => ({ ...prev, customerPhone: liveMobileStartError('Contact Number', val) }));
                     }}
                     placeholder="e.g. 9876543210"
                     className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
@@ -2945,6 +2992,7 @@ export const QuotesView: React.FC<QuotesViewProps> = ({ initialCreateOpen = fals
                 ]}
                 value={pendingBilledOrgId}
                 onChange={(val) => setPendingBilledOrgId(val)}
+                onOpen={loadOrganizationOptions}
               />
             )}
             <FilterDropdown

@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import {
   SubscriptionPlanListResponse,
   SubscriptionPlanSingleResponse,
@@ -15,7 +15,7 @@ export const subscriptionPlanEndpoints = baseApi.injectEndpoints({
     getPlatformSubscriptionPlans: builder.query<SubscriptionPlanListResponse, SubscriptionPlanListParams | void>({
       query: (params) => ({
         url: '/platform/subscription-plans',
-        params: params || {},
+        params: { ...params, ...buildListParams(params as any, { sortBy: 'name' }) },
       }),
       providesTags: (result) =>
         result?.data
@@ -79,7 +79,7 @@ export const subscriptionPlanApi = {
     params?: SubscriptionPlanListParams
   ): Promise<SubscriptionPlanListResponse> => {
     const res = await baseClient.get<SubscriptionPlanListResponse>('/platform/subscription-plans', {
-      params,
+      params: { ...params, ...buildListParams(params as any, { sortBy: 'name' }) },
     });
     return res.data;
   },

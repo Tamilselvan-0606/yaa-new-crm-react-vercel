@@ -324,15 +324,15 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
       providesTags: (result) =>
         result?.data
           ? [
-              ...result.data.map(({ id }) => ({ type: 'Proforma' as const, id })),
-              { type: 'Proforma', id: 'LIST' },
+              ...result.data.map(({ id }) => ({ type: 'ProformaInvoice' as const, id })),
+              { type: 'ProformaInvoice', id: 'LIST' },
             ]
-          : [{ type: 'Proforma', id: 'LIST' }],
+          : [{ type: 'ProformaInvoice', id: 'LIST' }],
     }),
 
     getCommerceProformaInvoiceById: builder.query<ProformaSingleResponse, string>({
       query: (id) => `/commerce/proformas/${id}`,
-      providesTags: (_result, _error, id) => [{ type: 'Proforma', id }],
+      providesTags: (_result, _error, id) => [{ type: 'ProformaInvoice', id }],
     }),
 
     createCommerceProformaInvoice: builder.mutation<ProformaSingleResponse, CreateProformaPayload>({
@@ -346,7 +346,7 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
           body,
         };
       },
-      invalidatesTags: [{ type: 'Proforma', id: 'LIST' }],
+      invalidatesTags: [{ type: 'ProformaInvoice', id: 'LIST' }],
     }),
 
     updateCommerceProformaInvoice: builder.mutation<
@@ -359,8 +359,8 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
+        { type: 'ProformaInvoice', id },
+        { type: 'ProformaInvoice', id: 'LIST' },
       ],
     }),
 
@@ -374,8 +374,8 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
+        { type: 'ProformaInvoice', id },
+        { type: 'ProformaInvoice', id: 'LIST' },
       ],
     }),
 
@@ -385,8 +385,8 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         method: 'DELETE',
       }),
       invalidatesTags: (_result, _error, id) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
+        { type: 'ProformaInvoice', id },
+        { type: 'ProformaInvoice', id: 'LIST' },
       ],
     }),
 
@@ -400,8 +400,8 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
+        { type: 'ProformaInvoice', id },
+        { type: 'ProformaInvoice', id: 'LIST' },
       ],
     }),
 
@@ -415,9 +415,9 @@ export const commerceProformaEndpoints = baseApi.injectEndpoints({
         body: payload,
       }),
       invalidatesTags: (_result, _error, { id }) => [
-        { type: 'Proforma', id },
-        { type: 'Proforma', id: 'LIST' },
-        { type: 'SalesOrder', id: 'LIST' },
+        { type: 'ProformaInvoice', id },
+        { type: 'ProformaInvoice', id: 'LIST' },
+        { type: 'SaleOrder', id: 'LIST' },
         { type: 'SalesInvoice', id: 'LIST' },
       ],
     }),

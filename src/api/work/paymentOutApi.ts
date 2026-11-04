@@ -218,7 +218,11 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       },
       invalidatesTags: [
         { type: 'PaymentOut', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Supplier', id: 'LIST' },
       ],
     }),
@@ -243,7 +247,11 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Supplier', id: 'LIST' },
       ],
     }),
@@ -268,7 +276,11 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Supplier', id: 'LIST' },
       ],
     }),
@@ -281,7 +293,11 @@ export const workPaymentOutEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, id) => [
         { type: 'PaymentOut', id },
         { type: 'PaymentOut', id: 'LIST' },
-        { type: 'Purchase', id: 'LIST' },
+        { type: 'PurchaseOrder', id: 'LIST' },
+
+        { type: 'PurchaseBill', id: 'LIST' },
+
+        { type: 'SupplierLedger' },
         { type: 'Supplier', id: 'LIST' },
       ],
     }),

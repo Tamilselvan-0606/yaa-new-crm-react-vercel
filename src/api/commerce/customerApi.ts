@@ -300,6 +300,8 @@ export const customerEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Customer', id },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'Dashboard',
       ],
     }),
@@ -313,6 +315,8 @@ export const customerEndpoints = baseApi.injectEndpoints({
       invalidatesTags: (_result, _error, { id }) => [
         { type: 'Customer', id },
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
       ],
     }),
 
@@ -326,7 +330,8 @@ export const customerEndpoints = baseApi.injectEndpoints({
 
     getCommerceCustomerLedger: builder.query<CustomerLedgerResponse, string>({
       query: (id) => `/commerce/customers/${encodeURIComponent(id)}/ledger`,
-      providesTags: (_result, _error, id) => [{ type: 'Customer', id: `LEDGER_${id}` }],
+      providesTags: (_result, _error, id) => [{ type: 'CustomerLedger', id }],
+      keepUnusedDataFor: 5, // financial balance: always fresh
     }),
 
     bulkUploadCommerceCustomers: builder.mutation<CustomerBulkUploadResponse, FormData>({
@@ -337,6 +342,8 @@ export const customerEndpoints = baseApi.injectEndpoints({
       }),
       invalidatesTags: [
         { type: 'Customer', id: 'LIST' },
+
+        { type: 'CustomerLedger' },
         'Dashboard',
       ],
     }),

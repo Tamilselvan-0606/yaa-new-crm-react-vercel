@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   SubOrganizationListResponse,
@@ -27,11 +27,7 @@ export const subOrganizationEndpoints = baseApi.injectEndpoints({
           headers: orgId ? { 'x-organization-id': orgId } : undefined,
           params: {
             ...(orgId ? { organization_id: orgId } : {}),
-            page_no: p.page_no ?? 1,
-            page_size: p.page_size ?? 10,
-            pagination_required: p.pagination_required ?? 'true',
-            search: p.search || undefined,
-            status: p.status && p.status !== 'All' ? p.status : undefined,
+            ...buildListParams(p, { sortBy: 'name' }),
           },
         };
       },
@@ -132,9 +128,7 @@ export const subOrganizationApi = {
     const orgId = rawOrgId && rawOrgId !== '11111111-1111-4111-8111-111111111111' ? rawOrgId : undefined;
     const queryParams: Record<string, any> = {
       ...(orgId ? { organization_id: orgId } : {}),
-      page_no: params?.page_no ?? 1,
-      page_size: params?.page_size ?? 10,
-      pagination_required: params?.pagination_required ?? 'true',
+      ...buildListParams(params, { sortBy: 'name' }),
     };
     if (params?.search) queryParams.search = params.search;
     if (params?.status && params.status !== 'All') queryParams.status = params.status;
@@ -174,6 +168,15 @@ export const subOrganizationApi = {
 
     inFlightSubOrgRequests.set(cacheKey, requestPromise);
     return requestPromise;
+  },
+
+  /** Get one sub-organization with its login user and branches (GET /sub-organizations/{id}). */
+  getSubOrganizationById: async (id: string, parentOrgId?: string): Promise<SubOrganizationSingleResponse> => {
+    const orgId = parentOrgId || getStoredOrganizationId();
+    const res = await baseClient.get<SubOrganizationSingleResponse>(`/sub-organizations/${id}`, {
+      headers: orgId ? { 'x-organization-id': orgId } : undefined,
+    });
+    return res.data;
   },
 
   /**

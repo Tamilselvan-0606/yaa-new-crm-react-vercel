@@ -53,6 +53,7 @@ import { SearchBar } from '../../components/common/SearchBar';
 import { FilterDropdown } from '../../components/common/FilterDropdown';
 import { ContactCopyButtons } from '../../components/common/ContactCopyButtons';
 import { PlanBadge, PlanStatusBadge, SubscriptionStatusBadge, dotColorFor } from '../../components/common/SubscriptionBadges';
+import {  alphabetsOnly,  digitsOnly,  emailAddress,  indianMobile,  lettersOnly,  liveMobileStartError,  nonNegativeAmount,  required,  validateFields,} from '../../utils/fieldValidators';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { Button } from '../../components/common/Button';
@@ -89,6 +90,10 @@ export interface OrgSubscriptionItem {
   plan: string;
   billingCycle: BillingCycle;
   amount: number;
+  discount?: number;
+  gstRate?: number;
+  amountWithGst?: number;
+  bonusMonths?: number;
   startDate: string;
   endDate: string;
   status: 'Active' | 'Expiring Soon' | 'Expired' | 'Cancelled';
@@ -165,6 +170,107 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [planModalProductId, setPlanModalProductId] = useState<string>('prod_1');
   const [editingPlan, setEditingPlan] = useState<ProductPlan | null>(null);
 
+  // View an organization subscription: opens with the list row, then loads the full record (GET by id).
+  const [viewingOrgSubId, setViewingOrgSubId] = useState<string | null>(null);
+  const [viewingOrgSubDetail, setViewingOrgSubDetail] = useState<OrganizationSubscriptionApiItem | null>(null);
+  const [viewOrgSubLoading, setViewOrgSubLoading] = useState(false);
+  useEffect(() => {
+    setViewingOrgSubDetail(null);
+    if (!viewingOrgSubId) return;
+    let cancelled = false;
+    setViewOrgSubLoading(true);
+    organizationSubscriptionApi
+      .getOrganizationSubscriptionById(viewingOrgSubId)
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) setViewingOrgSubDetail(res.data);
+      })
+      .catch(() => {
+        /* keep the list row that is already on screen */
+      })
+      .finally(() => {
+        if (!cancelled) setViewOrgSubLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingOrgSubId]);
+
+  // View a product subscription plan: opens with the list row, then loads the full plan (GET product plan by id).
+  const [viewingProductPlan, setViewingProductPlan] = useState<{ productId: string; planId: string } | null>(null);
+  const [viewingProductPlanDetail, setViewingProductPlanDetail] = useState<ProductPlanApiItem | null>(null);
+  const [viewProductPlanLoading, setViewProductPlanLoading] = useState(false);
+  const viewingProductPlanKey = viewingProductPlan ? `${viewingProductPlan.productId}/${viewingProductPlan.planId}` : '';
+  useEffect(() => {
+    setViewingProductPlanDetail(null);
+    if (!viewingProductPlan) return;
+    let cancelled = false;
+    setViewProductPlanLoading(true);
+    productPlanApi
+      .getProductPlanById(viewingProductPlan.productId, viewingProductPlan.planId)
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) setViewingProductPlanDetail(res.data);
+      })
+      .catch(() => {
+        /* keep the list row that is already on screen */
+      })
+      .finally(() => {
+        if (!cancelled) setViewProductPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingProductPlanKey]);
+
+  // View a client subscription: opens with the list row, then loads the full record (GET by id).
+  const [viewingClientSubId, setViewingClientSubId] = useState<string | null>(null);
+  const [viewingClientSubDetail, setViewingClientSubDetail] = useState<ClientSubscriptionApiItem | null>(null);
+  const [viewClientSubLoading, setViewClientSubLoading] = useState(false);
+  useEffect(() => {
+    setViewingClientSubDetail(null);
+    if (!viewingClientSubId) return;
+    let cancelled = false;
+    setViewClientSubLoading(true);
+    clientSubscriptionApi
+      .getClientSubscriptionById(viewingClientSubId)
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) setViewingClientSubDetail(res.data);
+      })
+      .catch(() => {
+        /* keep the list row that is already on screen */
+      })
+      .finally(() => {
+        if (!cancelled) setViewClientSubLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingClientSubId]);
+
+  // View a subscription plan: opens with the list row, then loads the full record (GET plan by id).
+  const [viewingPlanId, setViewingPlanId] = useState<string | null>(null);
+  const [viewingPlanDetail, setViewingPlanDetail] = useState<SubscriptionPlanApiItem | null>(null);
+  const [viewPlanLoading, setViewPlanLoading] = useState(false);
+  useEffect(() => {
+    setViewingPlanDetail(null);
+    if (!viewingPlanId) return;
+    let cancelled = false;
+    setViewPlanLoading(true);
+    subscriptionPlanApi
+      .getSubscriptionPlanById(viewingPlanId)
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) setViewingPlanDetail(res.data);
+      })
+      .catch(() => {
+        /* keep the list row that is already on screen */
+      })
+      .finally(() => {
+        if (!cancelled) setViewPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingPlanId]);
+
   // Modals for Customer Subscriptions
   const [isSubModalOpen, setIsSubModalOpen] = useState(false);
   const [editingSub, setEditingSub] = useState<SubscriptionItem | null>(null);
@@ -213,6 +319,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [orgSubPlan, setOrgSubPlan] = useState('');
   const [orgSubBillingCycle, setOrgSubBillingCycle] = useState<string>('Monthly');
   const [orgSubAmount, setOrgSubAmount] = useState<number>(0);
+  const [orgSubDiscount, setOrgSubDiscount] = useState<string>('');
+  const [orgSubGstRate, setOrgSubGstRate] = useState<string>('');
+  const [orgSubAmountWithGst, setOrgSubAmountWithGst] = useState<string>('');
+  const [orgSubBonusMonths, setOrgSubBonusMonths] = useState<string>('');
+
   const [orgSubStartDate, setOrgSubStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [orgSubEndDate, setOrgSubEndDate] = useState('');
   const [orgSubAutoRenew, setOrgSubAutoRenew] = useState(true);
@@ -251,7 +362,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     if (isSuperAdmin) return;
     setLoading(true);
     try {
-      const [prodsData, custsData] = await Promise.all([
+      const [prodsData] = await Promise.all([
         clientProductApi.getProducts({ limit: 100 })
           .then((res) => {
             if (res && res.success && Array.isArray(res.data)) {
@@ -272,37 +383,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             return [];
           })
           .catch(() => []),
-        platformClientApi.getClients({ limit: 100 })
-          .then((res) => {
-            if (res && res.success && Array.isArray(res.data)) {
-              return res.data.map((c: PlatformClientItem) => ({
-                id: c.id,
-                clientId: c.code || c.id,
-                clientName: c.name,
-                businessName: c.legalName || c.name,
-                name: c.name,
-                company: c.legalName || c.name,
-                email: c.email || '',
-                phone: c.phone || '',
-                whatsapp: c.whatsapp || c.phone || '',
-                contactPerson: c.contactPerson || c.name,
-                address: c.address || c.location || '',
-                location: c.location || '',
-                city: c.location || '',
-                industry: c.industry || '',
-                gstin: c.gstNumber || '',
-                pan: c.panNumber || '',
-                status: c.status || (c.active ? 'Active' : 'Inactive'),
-                linkedProducts: [],
-              })) as Customer[];
-            }
-            return [];
-          })
-          .catch(() => []),
       ]);
       const prods = prodsData || [];
       setProducts(prods);
-      setCustomers(custsData || []);
 
       const firstProdId = prods[0]?.id || '';
       if (firstProdId) {
@@ -323,6 +406,48 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       setLoading(false);
     }
   };
+
+  // Clients are only needed for the customer dropdown in the Assign Subscription form,
+  // so they load the first time that form opens (once), not with either list tab.
+  const customersRequested = useRef(false);
+  const loadCustomers = async () => {
+    if (isSuperAdmin || customersRequested.current) return;
+    customersRequested.current = true;
+    const loaded = await (
+      platformClientApi.getClients({ limit: 100 })
+        .then((res) => {
+          if (res && res.success && Array.isArray(res.data)) {
+            return res.data.map((c: PlatformClientItem) => ({
+              id: c.id,
+              clientId: c.code || c.id,
+              clientName: c.name,
+              businessName: c.legalName || c.name,
+              name: c.name,
+              company: c.legalName || c.name,
+              email: c.email || '',
+              phone: c.phone || '',
+              whatsapp: c.whatsapp || c.phone || '',
+              contactPerson: c.contactPerson || c.name,
+              address: c.address || c.location || '',
+              location: c.location || '',
+              city: c.location || '',
+              industry: c.industry || '',
+              gstin: c.gstNumber || '',
+              pan: c.panNumber || '',
+              status: c.status || (c.active ? 'Active' : 'Inactive'),
+              linkedProducts: [],
+            })) as Customer[];
+          }
+          return [];
+        })
+        .catch(() => [])
+    );
+    setCustomers((loaded as Customer[]) || []);
+  };
+
+  useEffect(() => {
+    if (isSubModalOpen) loadCustomers();
+  }, [isSubModalOpen, isSuperAdmin]);
 
   const loadClientSubscriptions = async (
     page = subsPage,
@@ -950,6 +1075,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setOrgSubPlan('');
     setOrgSubBillingCycle('');
     setOrgSubAmount(0);
+    setOrgSubDiscount('');
+    setOrgSubGstRate('');
+    setOrgSubAmountWithGst('');
+    setOrgSubBonusMonths('');
     setOrgSubStartDate('');
     setOrgSubEndDate('');
     setOrgSubAutoRenew(false);
@@ -975,6 +1104,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     setOrgSubPlan(sub.plan);
     setOrgSubBillingCycle(sub.billingCycle);
     setOrgSubAmount(sub.amount);
+    setOrgSubDiscount(sub.discount ? String(sub.discount) : '');
+    setOrgSubGstRate(sub.gstRate !== undefined && sub.gstRate !== null ? String(sub.gstRate) : String(apiPlans.find((p) => p.id === sub.planId)?.gstRate ?? ''));
+    setOrgSubAmountWithGst(sub.amountWithGst ? String(sub.amountWithGst) : '');
+    setOrgSubBonusMonths(sub.bonusMonths ? String(sub.bonusMonths) : '');
     setOrgSubStartDate(sub.startDate);
     setOrgSubEndDate(sub.endDate);
     setOrgSubAutoRenew(sub.autoRenew);
@@ -1012,6 +1145,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     const foundApiPlan = apiPlans.find((p) => p.name === planName);
     if (foundApiPlan) {
       setOrgSubPlanId(foundApiPlan.id);
+      if (foundApiPlan.gstRate !== undefined && foundApiPlan.gstRate !== null) setOrgSubGstRate(String(foundApiPlan.gstRate));
       const monthly = foundApiPlan.monthlyPrice || 0;
       const annual = foundApiPlan.annualPrice || (monthly * 10);
       setOrgSubAmount(orgSubBillingCycle === 'Annually' ? annual : monthly);
@@ -1068,45 +1202,22 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   const handleSaveOrgSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
-    const errors: Record<string, string> = {};
-
-    if (!orgSubOrgId || orgSubOrgId === 'org_custom') {
-      errors.organization = 'Select Organization is required';
-    }
-    if (!orgSubPlan) {
-      errors.plan = 'Subscription Plan is required';
-    }
-    if (!orgSubBillingCycle) {
-      errors.billingCycle = 'Billing Cycle is required';
-    }
-    if (!orgSubAmount || Number(orgSubAmount) <= 0) {
-      errors.amount = 'Fee Amount is required';
-    }
-    if (!orgSubStartDate) {
-      errors.startDate = 'Start Date is required';
-    }
-    if (!orgSubEndDate) {
-      errors.endDate = 'Next Renewal Date is required';
-    }
-    if (!orgSubContactPerson.trim()) {
-      errors.contactPerson = 'Contact Person is required';
-    }
-    if (!orgSubEmail.trim()) {
-      errors.email = 'Email Address is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(orgSubEmail.trim())) {
-      errors.email = 'Please enter a valid email address';
-    }
-    if (!orgSubPhone.trim()) {
-      errors.phone = 'Phone Number is required';
-    } else if (orgSubPhone.trim().length !== 10) {
-      errors.phone = 'Phone Number must be exactly 10 digits';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setOrgSubErrors(errors);
-      return;
-    }
-    setOrgSubErrors({});
+    const errors = validateFields([
+      ['organization', orgSubOrgId === 'org_custom' ? '' : orgSubOrgId, [required('Select Organization is required')]],
+      ['plan', String(orgSubPlan ?? ''), [required('Subscription Plan is required')]],
+      ['billingCycle', String(orgSubBillingCycle ?? ''), [required('Billing Cycle is required')]],
+      ['amount', Number(orgSubAmount) > 0 ? String(orgSubAmount) : '', [required('Fee Amount is required')]],
+      ['discount', orgSubDiscount, [nonNegativeAmount('Discount'), (v) => (Number(v) > Number(orgSubAmount) ? 'Discount cannot exceed the fee amount' : null)]],
+      ['gstRate', orgSubGstRate, [required('GST Rate is required')]],
+      ['bonusMonths', orgSubBonusMonths, [(v) => (v.trim() === '' || /^d{1,3}$/.test(v.trim()) ? null : 'Bonus Month must be a whole number')]],
+      ['startDate', orgSubStartDate, [required('Start Date is required')]],
+      ['endDate', orgSubEndDate, [required('Next Renewal Date is required')]],
+      ['contactPerson', orgSubContactPerson, [required('Contact Person is required'), alphabetsOnly('Contact Person')]],
+      ['email', orgSubEmail, [required('Email Address is required'), emailAddress]],
+      ['phone', orgSubPhone, [required('Phone Number is required'), indianMobile('Phone Number')]],
+    ]);
+    setOrgSubErrors(errors);
+    if (Object.keys(errors).length > 0) return;
 
     const resolvedPlan = apiPlans.find((p) => p.name === orgSubPlan || p.id === orgSubPlanId);
     if (!resolvedPlan) {
@@ -1123,6 +1234,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         endDate: orgSubEndDate || undefined,
         autoRenew: orgSubAutoRenew,
         notes: orgSubNotes || undefined,
+        discount: orgSubDiscount.trim() === '' ? undefined : Number(orgSubDiscount),
+        gstRate: orgSubGstRate === '' ? undefined : Number(orgSubGstRate),
+        amountWithGst: orgSubAmountWithGst.trim() === '' ? undefined : Number(orgSubAmountWithGst),
+        bonusMonths: orgSubBonusMonths.trim() === '' ? undefined : Number(orgSubBonusMonths),
       });
       showToast('success', 'Subscription Created', `Enrolled ${orgSubOrgName || 'organization'} in ${resolvedPlan.name}`);
       setIsOrgSubModalOpen(false);
@@ -1163,6 +1278,14 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     }
   };
 
+
+  // Amount with GST = (fee amount - discount) + the selected GST rate. Calculated, not typed.
+  useEffect(() => {
+    const rate = Number(orgSubGstRate || 0);
+    const taxable = Math.max(0, Number(orgSubAmount || 0) - Number(orgSubDiscount || 0));
+    setOrgSubAmountWithGst(orgSubAmount > 0 ? String(Math.round(taxable * (1 + rate / 100) * 100) / 100) : '');
+  }, [orgSubAmount, orgSubDiscount, orgSubGstRate]);
+
   // Map live API Organization Subscriptions into OrgSubscriptionItem format
   const mappedOrgSubs: OrgSubscriptionItem[] = useMemo(() => {
     return apiOrgSubs.map((item) => ({
@@ -1178,6 +1301,10 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       plan: item.planName || 'Plan',
       billingCycle: (item.billingCycle as BillingCycle) || 'Monthly',
       amount: item.amount,
+      discount: item.discount,
+      gstRate: item.gstRate,
+      amountWithGst: item.amountWithGst,
+      bonusMonths: item.bonusMonths,
       startDate: item.startDate,
       endDate: item.endDate,
       status: (item.status as any) || 'Active',
@@ -1608,6 +1735,23 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         type="button"
                                         onClick={() => {
                                           rowMenu.close();
+                                          setViewingOrgSubId(sub.id);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#F97316] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Eye style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>View</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          rowMenu.close();
                                           handleRenewOrgSubscription(sub);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -1791,14 +1935,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                       ) : (
                         pagedSubs.map((sub: any, idx) => {
                           const prodName = sub.product?.name || sub.productOrService || sub.productName || 'CRM Product';
-                          const matchedCust = customers.find(
-                            (c) => c.id === sub.customerId || (sub.customer?.id && c.id === sub.customer.id)
-                          );
                           const displayId = sub.subscriptionNumber || formatDisplaySubId(sub.id, (safeSubsPage - 1) * subsPageSize + 101 + idx);
-                          const contactName = sub.customer?.name || matchedCust?.contactPerson || 'Primary Account Holder';
-                          const phone = sub.customer?.phone || matchedCust?.phone || '+1 (555) 234-5678';
-                          const whatsapp = (matchedCust as any)?.whatsapp || phone;
-                          const email = sub.customer?.email || matchedCust?.email || 'contact@client.com';
+                          const contactName = sub.customer?.name || 'Primary Account Holder';
+                          const phone = sub.customer?.phone || '';
+                          const whatsapp = (sub.customer as any)?.whatsapp || '';
+                          const email = sub.customer?.email || '';
 
                           return (
                             <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1818,7 +1959,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                 <ContactCopyButtons
                                   id={sub.id}
                                   phone={phone}
-                                  whatsapp={whatsapp || phone}
+                                  whatsapp={whatsapp}
                                   email={email}
                                   copiedKey={copiedKey}
                                   onCopy={handleCopy}
@@ -1886,6 +2027,23 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          rowMenu.close();
+                                          setViewingClientSubId(sub.id);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#F97316] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Eye style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>View</span>
+                                      </button>
+
                                       <button
                                         type="button"
                                         onClick={() => {
@@ -2151,6 +2309,23 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         right: `${rowMenu.pos.right}px`,
                                       }}
                                     >
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          rowMenu.close();
+                                          setViewingPlanId(plan.id);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#F97316] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Eye style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>View</span>
+                                      </button>
+
                                       <button
                                         type="button"
                                         onClick={() => {
@@ -2428,6 +2603,23 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                                         type="button"
                                         onClick={() => {
                                           rowMenu.close();
+                                          setViewingProductPlan({ productId: product.id, planId: plan.id });
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
+                                      >
+                                        <span
+                                          style={{ width: '26.25px', height: '26.25px' }}
+                                          className="rounded-full bg-[#F97316] flex items-center justify-center shrink-0 shadow-2xs"
+                                        >
+                                          <Eye style={{ width: '13.13px', height: '13.13px' }} className="text-white stroke-[2.2]" />
+                                        </span>
+                                        <span>View</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          rowMenu.close();
                                           handleOpenEditPlan(product, plan);
                                         }}
                                         className="w-full px-3 py-2 text-left text-[13px] font-bold text-slate-800 hover:bg-slate-50 rounded-xl flex items-center gap-3 cursor-pointer transition-colors"
@@ -2514,6 +2706,469 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Modal: View Product Subscription Plan */}
+      {viewingProductPlan && (() => {
+        const productRow = products.find((x) => x.id === viewingProductPlan.productId);
+        const row0 = (productPlansByProductId[viewingProductPlan.productId] || productRow?.plans || []).find(
+          (x: ProductPlan) => x.id === viewingProductPlan.planId
+        );
+        const d = viewingProductPlanDetail;
+        // detail wins; the list row fills anything the detail does not carry
+        const p = d
+          ? {
+              name: d.name || row0?.name || '-',
+              code: d.code || '',
+              price: Number(d.price) || 0,
+              billingCycle: d.billingCycle || row0?.billingCycle || '-',
+              features: d.features?.length ? d.features : row0?.features || [],
+              status: d.status || row0?.status || 'Active',
+              createdAt: d.createdAt,
+              updatedAt: d.updatedAt,
+            }
+          : row0
+            ? {
+                name: row0.name,
+                code: '',
+                price: Number(row0.price) || 0,
+                billingCycle: row0.billingCycle,
+                features: row0.features || [],
+                status: row0.status || 'Active',
+                createdAt: '',
+                updatedAt: '',
+              }
+            : null;
+        if (!p) return null;
+        const money = (n?: number) => `₹${(Number(n) || 0).toLocaleString('en-IN')}`;
+        const rowEl = (label: string, value: React.ReactNode, first = false) => (
+          <div className={`flex items-start justify-between gap-4 ${first ? '' : 'pt-2.5 border-t border-slate-100'}`}>
+            <span className="text-slate-400 font-medium shrink-0">{label}</span>
+            <span className="font-bold text-slate-800 text-right leading-snug">{value || '-'}</span>
+          </div>
+        );
+        return (
+          <Modal
+            isOpen
+            onClose={() => setViewingProductPlan(null)}
+            title="Subscription Plan Details"
+            subtitle="View plan pricing, billing cycle and included features"
+            maxWidth="4xl"
+            headerGradient={true}
+            showBackIcon={true}
+            hideCloseButton={true}
+          >
+            <div className="space-y-5" aria-busy={viewProductPlanLoading}>
+              {viewProductPlanLoading && <p className="text-[11px] font-medium text-slate-400">Loading latest details…</p>}
+
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{p.name}</h3>
+                    {p.code && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">{p.code}</span>
+                    )}
+                    {productRow?.name && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">{productRow.name}</span>
+                    )}
+                  </div>
+                </div>
+                <PlanStatusBadge status={p.status} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Tag className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Pricing & Billing</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {rowEl('Price', money(p.price), true)}
+                    {rowEl('Price incl. 18% GST', money(Math.round(p.price * 1.18)))}
+                    {rowEl('Billing Cycle', p.billingCycle)}
+                    {rowEl('Product', productRow?.name)}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Check className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Included Features</span>
+                  </div>
+                  {p.features.length === 0 ? (
+                    <p className="text-xs text-slate-400">No features listed.</p>
+                  ) : (
+                    <ul className="space-y-2 text-xs sm:text-[13px]">
+                      {p.features.map((f: string) => (
+                        <li key={f} className="flex items-start gap-2 font-medium text-slate-700">
+                          <Check className="w-3.5 h-3.5 mt-0.5 text-emerald-600 shrink-0" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              {(p.createdAt || p.updatedAt) && (
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3 text-xs sm:text-[13px]">
+                  {rowEl('Created', formatDisplayDate(p.createdAt), true)}
+                  {rowEl('Last Updated', formatDisplayDate(p.updatedAt))}
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setViewingProductPlan(null)}
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                >
+                  <X className="w-4 h-4 text-slate-500" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* Modal: View Client Subscription */}
+      {viewingClientSubId && (() => {
+        const list = apiClientSubs.find((x) => x.id === viewingClientSubId);
+        const d = viewingClientSubDetail;
+        // detail wins, but never blanks what the list row already carries (customer / product / plan objects)
+        const s = d ? ({ ...list, ...d, customer: d.customer ?? list?.customer, product: d.product ?? list?.product, plan: d.plan ?? list?.plan } as ClientSubscriptionApiItem) : list;
+        if (!s) return null;
+        const money = (n?: number) => `₹${(Number(n) || 0).toLocaleString('en-IN')}`;
+        const row = (label: string, value: React.ReactNode, first = false) => (
+          <div className={`flex items-start justify-between gap-4 ${first ? '' : 'pt-2.5 border-t border-slate-100'}`}>
+            <span className="text-slate-400 font-medium shrink-0">{label}</span>
+            <span className="font-bold text-slate-800 text-right leading-snug break-all">{value || '-'}</span>
+          </div>
+        );
+        const days = s.daysRemaining;
+        const clientName = s.customer?.company || s.customer?.name || 'Client';
+        return (
+          <Modal
+            isOpen
+            onClose={() => setViewingClientSubId(null)}
+            title="Client Subscription Details"
+            subtitle="View client, product, plan, billing period and renewal information"
+            maxWidth="4xl"
+            headerGradient={true}
+            showBackIcon={true}
+            hideCloseButton={true}
+          >
+            <div className="space-y-5" aria-busy={viewClientSubLoading}>
+              {viewClientSubLoading && <p className="text-[11px] font-medium text-slate-400">Loading latest details…</p>}
+
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{clientName}</h3>
+                    {s.customer?.customerCode && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">{s.customer.customerCode}</span>
+                    )}
+                    {s.subscriptionNumber && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">{s.subscriptionNumber}</span>
+                    )}
+                  </div>
+                  {s.customer?.company && s.customer?.name && (
+                    <p className="text-xs font-medium text-slate-500 mt-0.5">{s.customer.name}</p>
+                  )}
+                </div>
+                <SubscriptionStatusBadge status={s.status} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Repeat className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Product & Billing</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {row('Product', s.product?.name, true)}
+                    {row('Plan', s.plan?.name ? `${s.plan.name}${s.plan.code ? ` (${s.plan.code})` : ''}` : '')}
+                    {row('Billing Cycle', s.billingCycle)}
+                    {row('Amount', money(s.amount))}
+                    {row('Discount', money(s.discount))}
+                    {row('GST Rate', s.gstRate !== undefined && s.gstRate !== null ? `${s.gstRate}%` : '-')}
+                    {row('Amount with GST', money(s.amountWithGst))}
+                    {row('Bonus Months', s.bonusMonths ? `${s.bonusMonths} month${s.bonusMonths === 1 ? '' : 's'}` : '0')}
+                    {row('Start Date', formatDisplayDate(s.startDate))}
+                    {row('Next Renewal', formatDisplayDate(s.endDate))}
+                    {row('Days Remaining', days === null || days === undefined ? '-' : `${days} day${days === 1 ? '' : 's'}`)}
+                    {row('Auto Renew', s.autoRenew ? 'Enabled' : 'Disabled')}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Building2 className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Client & History</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {row('Contact Person', s.customer?.name, true)}
+                    {row('Email', s.customer?.email)}
+                    {row('Phone', s.customer?.phone)}
+                    {row('Last Renewed', s.lastRenewedAt ? formatDisplayDate(s.lastRenewedAt) : '-')}
+                    {s.cancelledAt && row('Cancelled On', formatDisplayDate(s.cancelledAt))}
+                    {row('Created', formatDisplayDate(s.createdAt))}
+                  </div>
+                </div>
+              </div>
+
+              {s.notes && (
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-2">
+                  <p className="text-slate-900 font-bold text-sm">Notes</p>
+                  <p className="text-xs sm:text-[13px] text-slate-600 whitespace-pre-wrap">{s.notes}</p>
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setViewingClientSubId(null)}
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                >
+                  <X className="w-4 h-4 text-slate-500" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* Modal: View Organization Subscription (Platform Admin) */}
+      {viewingOrgSubId && (() => {
+        const s = viewingOrgSubDetail ?? apiOrgSubs.find((x) => x.id === viewingOrgSubId);
+        if (!s) return null;
+        const money = (n?: number) => `₹${(Number(n) || 0).toLocaleString('en-IN')}`;
+        const row = (label: string, value: React.ReactNode, first = false) => (
+          <div className={`flex items-start justify-between gap-4 ${first ? '' : 'pt-2.5 border-t border-slate-100'}`}>
+            <span className="text-slate-400 font-medium shrink-0">{label}</span>
+            <span className="font-bold text-slate-800 text-right leading-snug break-all">{value || '-'}</span>
+          </div>
+        );
+        const days = s.daysRemaining;
+        return (
+          <Modal
+            isOpen
+            onClose={() => setViewingOrgSubId(null)}
+            title="Organization Subscription Details"
+            subtitle="View plan, billing period, renewal and contact information"
+            maxWidth="4xl"
+            headerGradient={true}
+            showBackIcon={true}
+            hideCloseButton={true}
+          >
+            <div className="space-y-5" aria-busy={viewOrgSubLoading}>
+              {viewOrgSubLoading && <p className="text-[11px] font-medium text-slate-400">Loading latest details…</p>}
+
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{s.orgName || 'Organization'}</h3>
+                    {s.orgCode && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">{s.orgCode}</span>
+                    )}
+                    {s.subscriptionNumber && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">{s.subscriptionNumber}</span>
+                    )}
+                  </div>
+                  {s.industry && <p className="text-xs font-medium text-slate-500 mt-0.5">{s.industry}</p>}
+                </div>
+                <div className="flex sm:flex-col items-start sm:items-end gap-2 shrink-0">
+                  <SubscriptionStatusBadge status={s.status} />
+                  <PlanBadge planName={s.planName} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Repeat className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Plan & Billing</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {row('Plan', `${s.planName || '-'}${s.planCode ? ` (${s.planCode})` : ''}`, true)}
+                    {row('Billing Cycle', s.billingCycle)}
+                    {row('Amount', money(s.amount))}
+                    {row('Start Date', formatDisplayDate(s.startDate))}
+                    {row('Expiry Date', formatDisplayDate(s.endDate))}
+                    {row('Days Remaining', days === null || days === undefined ? '-' : `${days} day${days === 1 ? '' : 's'}`)}
+                    {row('Auto Renew', s.autoRenew ? 'Enabled' : 'Disabled')}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Building2 className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Contact & History</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {row('Contact Person', s.contactPerson, true)}
+                    {row('Email', s.email)}
+                    {row('Phone', s.phone)}
+                    {row('Last Renewed', s.lastRenewedAt ? formatDisplayDate(s.lastRenewedAt) : '-')}
+                    {s.cancelledAt && row('Cancelled On', formatDisplayDate(s.cancelledAt))}
+                    {s.cancelledAt && row('Cancellation Reason', s.cancellationReason)}
+                    {row('Created', formatDisplayDate(s.createdAt))}
+                  </div>
+                </div>
+              </div>
+
+              {s.notes && (
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-2">
+                  <p className="text-slate-900 font-bold text-sm">Notes</p>
+                  <p className="text-xs sm:text-[13px] text-slate-600 whitespace-pre-wrap">{s.notes}</p>
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setViewingOrgSubId(null)}
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                >
+                  <X className="w-4 h-4 text-slate-500" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* Modal: View Subscription Plan (Platform Admin) */}
+      {viewingPlanId && (() => {
+        const p = viewingPlanDetail ?? apiPlans.find((x) => x.id === viewingPlanId);
+        if (!p) return null;
+        const gst = Number(p.gstRate) || 0;
+        const money = (n?: number) => `₹${(Number(n) || 0).toLocaleString('en-IN')}`;
+        const fmtDate = (d?: string) => (d ? new Date(d).toLocaleDateString('en-GB') : '-');
+        const row = (label: string, value: React.ReactNode, first = false) => (
+          <div className={`flex items-start justify-between gap-4 ${first ? '' : 'pt-2.5 border-t border-slate-100'}`}>
+            <span className="text-slate-400 font-medium shrink-0">{label}</span>
+            <span className="font-bold text-slate-800 text-right leading-snug">{value}</span>
+          </div>
+        );
+        const limits = Object.entries(p.limits || {}).filter(([, v]) => v !== null && v !== undefined);
+        const limitLabel = (k: string) => k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+        return (
+          <Modal
+            isOpen
+            onClose={() => setViewingPlanId(null)}
+            title="Subscription Plan Details"
+            subtitle="View plan pricing, limits and included features"
+            maxWidth="4xl"
+            headerGradient={true}
+            showBackIcon={true}
+            hideCloseButton={true}
+          >
+            <div className="space-y-5" aria-busy={viewPlanLoading}>
+              {viewPlanLoading && <p className="text-[11px] font-medium text-slate-400">Loading latest details…</p>}
+
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">{p.name}</h3>
+                    {p.code && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">{p.code}</span>
+                    )}
+                    {p.isPopular && (
+                      <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">Popular</span>
+                    )}
+                  </div>
+                  {p.tier && <p className="text-xs font-medium text-slate-500 mt-0.5">{p.tier}</p>}
+                  {p.description && <p className="text-xs text-slate-500 mt-1.5 max-w-xl">{p.description}</p>}
+                </div>
+                <PlanStatusBadge status={(p.status as 'Active' | 'Inactive') || 'Active'} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <Tag className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Pricing & Billing</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {row('Monthly Price', money(p.monthlyPrice), true)}
+                    {row('Annual Price', money(p.annualPrice))}
+                    {row('GST Rate', `${gst}%`)}
+                    {row('Monthly Price incl. GST', money(Math.round((Number(p.monthlyPrice) || 0) * (1 + gst / 100))))}
+                    {row('Billing Cycle', p.billingCycle || '-')}
+                    {row('Plan Type', p.pricingType || '-')}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3.5">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    </div>
+                    <span>Limits & Usage</span>
+                  </div>
+                  <div className="space-y-3 text-xs sm:text-[13px]">
+                    {limits.length === 0
+                      ? row('Limits', '-', true)
+                      : limits.map(([k, v], i) => row(limitLabel(k), k.toLowerCase().includes('storage') ? `${v} GB` : String(v), i === 0))}
+                    {row('Active Subscriptions', p.activeSubscriptions ?? 0)}
+                    {row('Created', fmtDate(p.createdAt))}
+                    {row('Last Updated', fmtDate(p.updatedAt))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-2xs space-y-3">
+                <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-slate-900 font-bold text-sm">
+                  <div className="w-6 h-6 rounded-lg bg-indigo-50 text-[#33077C] flex items-center justify-center">
+                    <Check className="w-3.5 h-3.5" />
+                  </div>
+                  <span>Included Features</span>
+                </div>
+                {(p.features || []).length === 0 ? (
+                  <p className="text-xs text-slate-400">No features listed.</p>
+                ) : (
+                  <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs sm:text-[13px]">
+                    {p.features.map((f) => (
+                      <li key={f} className="flex items-start gap-2 font-medium text-slate-700">
+                        <Check className="w-3.5 h-3.5 mt-0.5 text-emerald-600 shrink-0" />
+                        <span>{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="pt-4 flex justify-end items-center gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setViewingPlanId(null)}
+                  className="h-10 px-4 rounded-xl border border-slate-200 hover:border-slate-300 text-xs sm:text-[13px] font-bold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-all cursor-pointer shadow-2xs flex items-center gap-2"
+                >
+                  <X className="w-4 h-4 text-slate-500" />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {/* Plan Form Modal */}
       <PlanFormModal
@@ -2977,6 +3632,84 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
             </div>
 
+            {/* Row 2b: Discount, GST Rate, Amount with GST */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Discount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="e.g. 500"
+                  value={orgSubDiscount}
+                  onChange={(e) => {
+                    setOrgSubDiscount(e.target.value);
+                    if (orgSubErrors.discount) setOrgSubErrors((prev) => ({ ...prev, discount: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.discount
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {orgSubErrors.discount && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.discount}</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  GST Rate <span className="text-rose-500 font-bold">*</span>
+                </label>
+                <CustomSelect
+                  value={orgSubGstRate}
+                  error={!!orgSubErrors.gstRate}
+                  onChange={(val) => {
+                    setOrgSubGstRate(val);
+                    if (orgSubErrors.gstRate) setOrgSubErrors((prev) => ({ ...prev, gstRate: '' }));
+                  }}
+                  options={[
+                    { value: '18', label: '18% (Standard GST)' },
+                    { value: '12', label: '12% GST' },
+                    { value: '5', label: '5% GST' },
+                    { value: '0', label: '0% (Tax Exempt)' },
+                  ]}
+                  placeholder="Select GST Rate"
+                  activeColor="brand"
+                />
+                {orgSubErrors.gstRate && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.gstRate}</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Amount with GST (₹)
+                </label>
+                <input
+                  readOnly
+                  tabIndex={-1}
+                  type="number"
+                  min="0"
+                  step="any"
+                  placeholder="e.g. 11800"
+                  value={orgSubAmountWithGst}
+                  onChange={(e) => {
+                    setOrgSubAmountWithGst(e.target.value);
+                    if (orgSubErrors.amountWithGst) setOrgSubErrors((prev) => ({ ...prev, amountWithGst: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.amountWithGst
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {orgSubErrors.amountWithGst && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.amountWithGst}</p>
+                )}
+              </div>
+            </div>
+
             {/* Row 3: Contact Person, Email Address, Phone Number (3 columns) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
@@ -2987,7 +3720,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   type="text"
                   value={orgSubContactPerson}
                   onChange={(e) => {
-                    setOrgSubContactPerson(e.target.value);
+                    setOrgSubContactPerson(lettersOnly(e.target.value));
                     if (orgSubErrors.contactPerson) setOrgSubErrors((prev) => ({ ...prev, contactPerson: '' }));
                   }}
                   placeholder="Enter contact person"
@@ -3035,9 +3768,9 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                   maxLength={10}
                   value={orgSubPhone}
                   onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    const val = digitsOnly(e.target.value);
                     setOrgSubPhone(val);
-                    if (orgSubErrors.phone) setOrgSubErrors((prev) => ({ ...prev, phone: '' }));
+                    setOrgSubErrors((prev) => ({ ...prev, phone: liveMobileStartError('Phone Number', val) }));
                   }}
                   placeholder="e.g. 9876543210"
                   className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
@@ -3052,8 +3785,32 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
               </div>
             </div>
 
-            {/* Row 4: Notes & Terms (1 column width in 3-column grid) */}
+            {/* Row 4: Bonus Month, Notes & Terms */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                  Bonus Month
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="e.g. 1"
+                  value={orgSubBonusMonths}
+                  onChange={(e) => {
+                    setOrgSubBonusMonths(e.target.value);
+                    if (orgSubErrors.bonusMonths) setOrgSubErrors((prev) => ({ ...prev, bonusMonths: '' }));
+                  }}
+                  className={`w-full h-11 px-4 bg-white rounded-xl text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all ${
+                    orgSubErrors.bonusMonths
+                      ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                      : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                  }`}
+                />
+                {orgSubErrors.bonusMonths && (
+                  <p className="text-[11px] font-medium text-red-500 mt-1">{orgSubErrors.bonusMonths}</p>
+                )}
+              </div>
               <div>
                 <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                   Notes & Terms

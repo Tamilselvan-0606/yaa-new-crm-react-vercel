@@ -34,6 +34,7 @@ import { ApiUser, ApiLoginResponse } from '../api/auth/authTypes';
 import { baseClient } from '../api/baseApi';
 import { CreatePlatformLeadRequest, UpdatePlatformLeadRequest } from '../api/platform/leadTypes';
 import { retryWithRefreshedToken } from '../api/tokenRefresh';
+import { clearApiCache } from '../api/queryCache';
 
 export { authApi };
 export type { ApiUser, ApiLoginResponse };
@@ -105,6 +106,7 @@ class ApiService {
 
   removeToken() {
     removeStoredToken();
+    clearApiCache();
   }
 
   setUserId(id: string) {
@@ -288,6 +290,22 @@ class ApiService {
     };
   }
 
+  /** Message to show when the user's organization / sub-organization is Inactive or Suspend(ed); null when allowed. */
+  private getBlockedAccountReason(apiUser: any): string | null {
+    const isBlocked = (s: unknown) => /^(inactive|suspend|suspended)$/i.test(String(s ?? '').trim());
+    const candidates: Array<{ kind: string; status: unknown }> = [
+      { kind: 'organization', status: apiUser?.organization?.status ?? apiUser?.organizationStatus },
+      { kind: 'sub-organization', status: apiUser?.subOrganization?.status ?? apiUser?.subOrganizationStatus },
+    ];
+    for (const m of apiUser?.memberships || []) {
+      candidates.push({ kind: 'organization', status: m?.organization?.status });
+      candidates.push({ kind: 'sub-organization', status: m?.subOrganization?.status });
+    }
+    const hit = candidates.find((c) => isBlocked(c.status));
+    if (!hit) return null;
+    return `Your ${hit.kind} is ${String(hit.status).toLowerCase().startsWith('suspend') ? 'suspended' : 'inactive'}. Please contact your administrator.`;
+  }
+
   // Auth: Delegated to centralized src/api/auth/authApi.ts
   async login(email: string, password?: string): Promise<{ success: boolean; token: string; user: User }> {
     const data = await authApi.login({ email, password });
@@ -299,7 +317,16 @@ class ApiService {
     const userObj = data?.user || data?.data?.user;
 
     if (token && userObj) {
+      // An inactive / suspended organization or sub-organization must not get a session: every API call would fail.
+      const blocked = this.getBlockedAccountReason(userObj);
+      if (blocked) {
+        this.removeToken();
+        try { await authApi.logout(); } catch { /* the session may not exist */ }
+        throw new Error(blocked);
+      }
       const appUser = this.mapApiUserToAppUser(userObj);
+      // A new session must never see another user's or organisation's cached responses.
+      clearApiCache();
       this.setToken(token);
       this.setUserId(appUser.id);
       localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));

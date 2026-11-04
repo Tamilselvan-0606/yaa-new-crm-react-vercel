@@ -1,4 +1,4 @@
-import { baseClient, baseApi } from '../baseApi';
+import { baseClient, baseApi, buildListParams } from '../baseApi';
 import { getStoredOrganizationId } from '../config';
 import {
   ClientProductApiItem,
@@ -22,10 +22,7 @@ export const clientProductEndpoints = baseApi.injectEndpoints({
     >({
       query: (params) => {
         const p = params || {};
-        const queryParams: Record<string, any> = {
-          page: p.page ?? 1,
-          limit: p.limit ?? 10,
-        };
+        const queryParams: Record<string, any> = buildListParams(p, { sortBy: 'name' });
         if (p.search && p.search.trim()) queryParams.search = p.search.trim();
         if (p.status && p.status !== 'All' && p.status !== 'ALL') queryParams.status = p.status;
         if (p.sortBy) queryParams.sortBy = p.sortBy;
@@ -236,10 +233,7 @@ export const clientProductApi = {
       headers['x-organization-id'] = activeOrgId;
     }
 
-    const queryParams: Record<string, any> = {
-      page: params?.page ?? 1,
-      limit: params?.limit ?? 10,
-    };
+    const queryParams: Record<string, any> = buildListParams(params, { sortBy: 'name' });
     if (params?.search && params.search.trim()) queryParams.search = params.search.trim();
     if (params?.status && params.status !== 'All' && params.status !== 'ALL') queryParams.status = params.status;
     if (params?.sortBy) queryParams.sortBy = params.sortBy;

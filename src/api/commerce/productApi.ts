@@ -1,4 +1,5 @@
 import { baseClient, baseApi } from '../baseApi';
+import { resolveBaseUnitId } from './unitApi';
 import {
   ApiProduct,
   ProductFilterParams,
@@ -204,6 +205,8 @@ export const mapProductItemToPayload = (item: Partial<ProductItemModel>): Create
     productName: item.productName || '',
     hsnCode: item.hsnCode || undefined,
     unit: item.unit || 'PCS',
+    baseUnitId: item.baseUnitId || (item as any).base_unit_id || undefined,
+    secondaryUnitId: item.secondaryUnitId || (item as any).secondary_unit_id || undefined,
     category: item.category || 'General',
     subcategory: item.subcategory || undefined,
     itemImage: base64Img,
@@ -330,11 +333,23 @@ export const productEndpoints = baseApi.injectEndpoints({
     }),
 
     createCommerceProduct: builder.mutation<ProductSingleResponse, CreateProductPayload>({
-      query: (payload) => ({
-        url: '/commerce/products',
-        method: 'POST',
-        body: sanitizeProductPayload(payload as any),
-      }),
+      queryFn: async (arg, _queryApi, _extraOptions, fetchWithBQ) => {
+        const cleanPayload = sanitizeProductPayload(arg as any);
+        if (!cleanPayload.baseUnitId) {
+          const resolved = await resolveBaseUnitId(cleanPayload.unit);
+          if (resolved) {
+            cleanPayload.baseUnitId = resolved.baseUnitId;
+            if (!cleanPayload.unit) cleanPayload.unit = resolved.unitCode;
+          }
+        }
+        const result = await fetchWithBQ({
+          url: '/commerce/products',
+          method: 'POST',
+          body: cleanPayload,
+        });
+        if (result.error) return { error: result.error as any };
+        return { data: result.data as ProductSingleResponse };
+      },
       invalidatesTags: [{ type: 'Product', id: 'LIST' }, { type: 'Stock', id: 'LIST' }],
     }),
 
@@ -462,7 +477,15 @@ export const productApi = {
    * POST /commerce/products
    */
   createProduct: async (payload: CreateProductPayload): Promise<ProductSingleResponse> => {
-    const response = await baseClient.post<ProductSingleResponse>('/commerce/products', sanitizeProductPayload(payload as any));
+    const cleanPayload = sanitizeProductPayload(payload as any);
+    if (!cleanPayload.baseUnitId) {
+      const resolved = await resolveBaseUnitId(cleanPayload.unit);
+      if (resolved) {
+        cleanPayload.baseUnitId = resolved.baseUnitId;
+        if (!cleanPayload.unit) cleanPayload.unit = resolved.unitCode;
+      }
+    }
+    const response = await baseClient.post<ProductSingleResponse>('/commerce/products', cleanPayload);
     return response.data;
   },
 

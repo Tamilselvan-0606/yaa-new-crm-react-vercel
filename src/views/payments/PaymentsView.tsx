@@ -19,7 +19,6 @@ import { PaymentFormModal } from '../../components/forms/PaymentFormModal';
 import {
   useGetPlatformPaymentsQuery,
   useDeletePlatformPaymentMutation,
-  clientProductApi,
 } from '../../api';
 
 const formatDateHelper = (dateStr?: string | null): string => {
@@ -54,7 +53,6 @@ export const PaymentsView: React.FC = () => {
   const [appliedStatus, setAppliedStatus] = useState('ALL');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [productList, setProductList] = useState<Array<{ id: string; name: string }>>([]);
 
   // 3-Dots Action Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
@@ -74,21 +72,6 @@ export const PaymentsView: React.FC = () => {
   });
 
   const [deletePlatformPayment] = useDeletePlatformPaymentMutation();
-
-  // Load available products for filter dropdown
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        const res = await clientProductApi.getProducts({ limit: 100 });
-        if (res?.success && Array.isArray(res.data)) {
-          setProductList(res.data);
-        }
-      } catch (e) {
-        console.warn('Failed to load products for payment filter:', e);
-      }
-    };
-    fetchProducts();
-  }, []);
 
   // Close dropdown on outside click or scroll
   useEffect(() => {
@@ -247,14 +230,6 @@ export const PaymentsView: React.FC = () => {
     const start = (safePage - 1) * pageSize;
     return filteredPayments.slice(start, start + pageSize);
   }, [filteredPayments, safePage, pageSize]);
-
-  const productFilterOptions = useMemo(() => {
-    const base = [{ label: 'All Products & Services', value: 'ALL' }];
-    if (productList.length > 0) {
-      return [...base, ...productList.map((p) => ({ label: p.name, value: p.name }))];
-    }
-    return base;
-  }, [productList]);
 
   const statusFilterOptions = [
     { label: 'Status : All', value: 'ALL' },

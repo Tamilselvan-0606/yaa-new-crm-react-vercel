@@ -18,6 +18,14 @@ export interface OrganizationSubscriptionApiItem {
   planCode: string;
   billingCycle: OrgSubscriptionBillingCycle | string;
   amount: number;
+  /** Discount given on the plan price (₹). */
+  discount?: number;
+  /** Final payable amount including GST (₹). */
+  /** GST rate (%) applied on the amount after discount. */
+  gstRate?: number;
+  amountWithGst?: number;
+  /** Extra free months added to the subscription. */
+  bonusMonths?: number;
   startDate: string;
   endDate: string;
   status: 'Active' | 'Expiring Soon' | 'Expired' | 'Cancelled' | string;
@@ -88,6 +96,10 @@ export interface CreateOrganizationSubscriptionRequest {
   endDate?: string;
   autoRenew?: boolean;
   notes?: string;
+  discount?: number;
+  gstRate?: number;
+  amountWithGst?: number;
+  bonusMonths?: number;
 }
 
 export interface RenewOrganizationSubscriptionRequest {

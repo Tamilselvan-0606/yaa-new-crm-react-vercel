@@ -1,4 +1,3 @@
-import { useDebounce } from 'use-debounce';
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, {
@@ -167,6 +166,7 @@ import {
 } from "../../../utils/formValidation";
 import { useBatchStock } from "../../../hooks/useBatchStock";
 import { FormError } from "../../../components/common/FormError";
+import { evictApiCache } from "../../../api/queryCache";
 
 const PRODUCT_PICK_MSG = "Please choose the product from the list.";
 
@@ -548,16 +548,6 @@ export const EstimateQuotationView: React.FC = () => {
   // Search & Filter states (for list view)
   const [pendingSearch, setPendingSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
-  const [debouncedSearch] = useDebounce(pendingSearch, 400);
-
-  // Auto-apply debounced search (min 2 chars or cleared to reset)
-  useEffect(() => {
-    const trimmed = debouncedSearch.trim();
-    if (trimmed === "" || trimmed.length >= 2) {
-      setAppliedSearch(trimmed);
-      setPage(1);
-    }
-  }, [debouncedSearch]);
   const [pendingPeriod, setPendingPeriod] = useState("all");
   const [appliedPeriod, setAppliedPeriod] = useState("all");
   const [pendingStatus, setPendingStatus] = useState("ALL");
@@ -2807,8 +2797,8 @@ export const EstimateQuotationView: React.FC = () => {
         updateQuotationStatus(quot.id, "Converted");
         store.dispatch(
           baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
-            { type: "Proforma", id: "LIST" },
+            { type: "Estimation", id: "LIST" },
+            { type: "ProformaInvoice", id: "LIST" },
           ]),
         );
         toast.success(
@@ -2905,8 +2895,8 @@ export const EstimateQuotationView: React.FC = () => {
         updateQuotationStatus(quot.id, "Converted");
         store.dispatch(
           baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
-            { type: "SalesOrder", id: "LIST" },
+            { type: "Estimation", id: "LIST" },
+            { type: "SaleOrder", id: "LIST" },
           ]),
         );
         toast.success(
@@ -3038,7 +3028,7 @@ export const EstimateQuotationView: React.FC = () => {
         updateQuotationStatus(quot.id, "Converted");
         store.dispatch(
           baseApi.util.invalidateTags([
-            { type: "Quotation", id: "LIST" },
+            { type: "Estimation", id: "LIST" },
             { type: "DeliveryChallan", id: "LIST" },
           ]),
         );
@@ -5314,15 +5304,17 @@ export const EstimateQuotationView: React.FC = () => {
             <div className="flex items-center gap-2.5 mt-2 flex-wrap">
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  // Explicit refresh: skip the cached response and read from the server.
+                  evictApiCache(["Estimation"]);
                   fetchQuotations(
                     page,
                     pageSize,
                     appliedSearch,
                     appliedStatus,
                     appliedPeriod,
-                  )
-                }
+                  );
+                }}
                 disabled={isApiLoading}
                 className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-[#33077C] transition-colors px-2 py-0.5 rounded hover:bg-slate-100 cursor-pointer"
                 title="Sync from API"
@@ -5462,15 +5454,6 @@ export const EstimateQuotationView: React.FC = () => {
           }
         }}
         onReset={() => {
-          const isSame =
-            appliedSearch === "" &&
-            pendingSearch === "" &&
-            appliedPeriod === "all" &&
-            pendingPeriod === "all" &&
-            appliedStatus === "ALL" &&
-            pendingStatus === "ALL" &&
-            page === 1;
-
           setPendingSearch("");
           setAppliedSearch("");
           setPendingPeriod("all");
@@ -5478,10 +5461,7 @@ export const EstimateQuotationView: React.FC = () => {
           setPendingStatus("ALL");
           setAppliedStatus("ALL");
           setPage(1);
-
-          if (isSame) {
-            fetchQuotations(1, pageSize, "", "ALL", "all");
-          }
+          fetchQuotations(1, pageSize, "", "ALL", "all");
         }}
         placeholder="Search by customer name, estimate #..."
         filterSlot={

@@ -22,7 +22,7 @@ export const authEndpoints = baseApi.injectEndpoints({
         method: 'POST',
         body: credentials,
       }),
-      invalidatesTags: ['User', 'Dashboard'],
+      invalidatesTags: ['User', 'PlatformDashboard'],
     }),
 
     refreshToken: builder.mutation<ApiRefreshTokenResponse, void>({
@@ -41,7 +41,7 @@ export const authEndpoints = baseApi.injectEndpoints({
         url: '/auth/logout',
         method: 'POST',
       }),
-      invalidatesTags: ['User', 'Dashboard'],
+      invalidatesTags: ['User', 'PlatformDashboard'],
     }),
 
     logoutAll: builder.mutation<void, void>({
@@ -49,7 +49,7 @@ export const authEndpoints = baseApi.injectEndpoints({
         url: '/auth/logout-all',
         method: 'POST',
       }),
-      invalidatesTags: ['User', 'Dashboard'],
+      invalidatesTags: ['User', 'PlatformDashboard'],
     }),
 
     verifyToken: builder.query<ApiVerifyTokenResponse, void>({

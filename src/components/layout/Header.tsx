@@ -205,17 +205,12 @@ export const Header: React.FC<HeaderProps> = ({
   const notificationType = isSaleManagement ? 'SALES' : 'CLIENT';
   useEffect(() => {
     refreshReminders(notificationType);
-    // Poll every 5 minutes, and only while the tab is visible; catch up when the tab regains focus.
+    // Poll every 5 minutes while the tab is active
     const timer = setInterval(() => {
       if (!document.hidden) refreshReminders(notificationType);
     }, 5 * 60 * 1000);
-    const onVisible = () => {
-      if (!document.hidden) refreshReminders(notificationType);
-    };
-    document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [notificationType, currentUser?.id]);
 
@@ -1246,7 +1241,12 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="relative" ref={notifRef}>
           <button
             id="notification-bell-button"
-            onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+            onClick={() => {
+              if (!isNotificationsOpen) {
+                refreshReminders(notificationType);
+              }
+              setIsNotificationsOpen(!isNotificationsOpen);
+            }}
             className="relative p-2 rounded-full text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-center"
             title="Notifications & Reminders"
           >
