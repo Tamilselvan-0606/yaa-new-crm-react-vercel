@@ -1,3 +1,5 @@
+import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
+import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import React, {
   useState,
@@ -90,6 +92,8 @@ import {
   formatInvoiceShare,
 } from "../../../utils/shareUtils";
 import { SalesGraphModal } from "./SalesGraphModal";
+import { salesRepresentativeApi } from "../../../api/commerce/salesRepresentativeApi";
+import { collectionApi } from "../../../api/commerce/collectionApi";
 import { SaleActionDropdown } from "../utils";
 import { useAppDispatch } from "../../../hooks/redux";
 import { baseApi } from "../../../api/baseApi";
@@ -607,10 +611,7 @@ const CustomCustomerSelect: React.FC<CustomCustomerSelectProps> = ({
             ) : (
               filteredCustomers.map((c) => {
                 const isSelected = value === c.id;
-                const metrics = getCustomerMetrics
-                  ? getCustomerMetrics(c.id)
-                  : null;
-                const out = metrics?.outstandingAmount ?? c.outstandingAmount ?? c.openingBalance;
+                const out = c.outstandingAmount ?? c.openingBalance;
 
                 return (
                   <div
@@ -697,24 +698,43 @@ export const SalesView: React.FC = () => {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const {
-    sales,
-    customers = [],
-    salesRepresentatives = [],
-    assignCustomerSalesRep,
-    saveSale,
+    saveSale: storeSaveSale,
     deleteSale,
     updateSalePayment,
     saveCustomer,
     setCustomersList,
     setStocksList,
-    setSalesList,
-    getCustomerMetrics,
-    stocks,
+    setSalesList: storeSetSalesList,
     adjustStock,
     savePaymentIn,
     updateQuotationStatus,
   } = useSalesManagementStore();
+  // Everything displayed comes from component state filled ONLY by API responses.
+  const [sales, setSales] = useState<SaleTransaction[]>([]);
+  const [stocks, setStocks] = useState<any[]>([]);
+  const [salesRepresentatives, setSalesRepresentatives] = useState<any[]>([]);
   const [customerList, setCustomerList] = useState<any[]>([]);
+  const customers = customerList;
+  // Keep shared session memory in sync for other screens, but never read it here.
+  const setSalesList = useCallback(
+    (list: SaleTransaction[]) => {
+      setSales(list);
+      storeSetSalesList(list);
+    },
+    [storeSetSalesList],
+  );
+  // Upsert an API-returned invoice into the displayed list.
+  const saveSale = useCallback(
+    (sale: SaleTransaction) => {
+      setSales((prev) =>
+        prev.some((s) => s.id === sale.id)
+          ? prev.map((s) => (s.id === sale.id ? sale : s))
+          : [sale, ...prev],
+      );
+      storeSaveSale(sale);
+    },
+    [storeSaveSale],
+  );
   const [productList, setProductList] = useState<any[]>([]);
 
   // Deduplicated customer master data loader (only runs once on mount)
@@ -727,11 +747,9 @@ export const SalesView: React.FC = () => {
         .getCustomers({ pagination_required: false, page_size: 100 })
         .catch(() => null);
       const rawCust = unpackProducts(custRes);
-      if (rawCust.length > 0) {
-        const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
-        setCustomerList(mapped);
-        setCustomersList(mapped);
-      }
+      const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
+      setCustomerList(mapped);
+      setCustomersList(mapped);
     } catch (err) {
       console.warn("Failed to load customers in SalesView:", err);
     }
@@ -740,6 +758,22 @@ export const SalesView: React.FC = () => {
   useEffect(() => {
     loadCustomersData();
   }, [loadCustomersData]);
+
+  // Sales representatives for filters / assignment pickers come from the API only.
+  useEffect(() => {
+    let cancelled = false;
+    salesRepresentativeApi
+      .getList({ page: 1, limit: 100 }, { fresh: true })
+      .then((res) => {
+        if (!cancelled) setSalesRepresentatives(Array.isArray(res?.data) ? res.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSalesRepresentatives([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Search & Filter State
   const [pendingSearch, setPendingSearch] = useState("");
@@ -964,7 +998,7 @@ export const SalesView: React.FC = () => {
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const productSearchTimerRef = useRef<any>(null);
 
-  // Robust live product loader with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  // Robust live product loader with multi-source fallback (Commerce products, client products, stocks)
   const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
     if (isFetchingProductsRef.current) return;
     isFetchingProductsRef.current = true;
@@ -1048,21 +1082,6 @@ export const SalesView: React.FC = () => {
         }
       }
 
-      // 5. Fifth attempt: fallback to local storage
-      if (prods.length === 0) {
-        try {
-          const localSaved = localStorage.getItem("yaa_crm_inventory_stocks");
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              prods = parsed;
-            }
-          }
-        } catch (locErr) {
-          console.warn("localStorage stock load fallback error in SalesView:", locErr);
-        }
-      }
-
       if (prods.length > 0) {
         setProductList((prev) => {
           const map = new Map<string, any>();
@@ -1114,7 +1133,9 @@ export const SalesView: React.FC = () => {
         .catch(() => null);
       const rawStocks = unpackProducts(stockRes);
       if (rawStocks.length > 0) {
-        setStocksList(rawStocks.map(mapApiStockToInventoryStockItem));
+        const mappedStocks = rawStocks.map(mapApiStockToInventoryStockItem);
+        setStocks(mappedStocks);
+        setStocksList(mappedStocks);
       }
     } catch (err) {
       console.warn("Failed to load stocks for form modal in SalesView:", err);
@@ -1547,33 +1568,17 @@ export const SalesView: React.FC = () => {
     };
   }, [activeDropdownId, activeShareDropdownId]);
 
-  // Summary Metrics
-  const summary = useMemo(() => {
-    const totalSalesAmount = sales.reduce((acc, s) => acc + s.grandTotal, 0);
-    const todayStr = new Date().toISOString().split("T")[0];
-    const todaySales = sales.filter((s) => s.saleDate === todayStr);
-    const todayAmount = todaySales.reduce((acc, s) => acc + s.grandTotal, 0);
-    const pendingPaymentsAmount = sales.reduce((acc, s) => acc + s.balance, 0);
-    const completedCount = sales.filter(
-      (s) => s.saleStatus === "Completed",
-    ).length;
-    const cancelledCount = sales.filter(
-      (s) => s.saleStatus === "Cancelled",
-    ).length;
-
-    return {
-      totalCount: sales.length,
-      totalSalesAmount,
-      todayAmount,
-      todayCount: todaySales.length,
-      pendingPaymentsAmount,
-      completedCount,
-      cancelledCount,
-    };
-  }, [sales]);
-
-  // KPI card metrics: prefer API summary, fall back to in-browser computation
-  const cardSummary = apiSummary ?? summary;
+  // KPI card metrics come ONLY from the API summary (zeros until the API responds).
+  const cardSummary = {
+    totalCount: apiSummary?.totalCount ?? 0,
+    totalSalesAmount: apiSummary?.totalSalesAmount ?? 0,
+    todayAmount: apiSummary?.todayAmount ?? 0,
+    todayCount: apiSummary?.todayCount ?? 0,
+    pendingPaymentsAmount: apiSummary?.pendingPaymentsAmount ?? 0,
+    completedCount: apiSummary?.completedCount ?? 0,
+    cancelledCount: apiSummary?.cancelledCount ?? 0,
+  };
+  const summary = cardSummary;
 
   // Helper to extract batches for a product
   const getBatchesForProduct = useCallback(
@@ -1684,7 +1689,7 @@ export const SalesView: React.FC = () => {
       }
     });
 
-    return Array.from(map.values()).filter((s: any) => {
+    return attachStockQty(Array.from(map.values()), stocks).filter((s: any) => {
       const pid = String(s.productId || s.id || "").trim();
       const name = String(s.name || s.productName || "").trim();
       if (!pid && !name) return false;
@@ -1703,6 +1708,26 @@ export const SalesView: React.FC = () => {
       badge: p.sku,
     }));
   }, [availableProducts]);
+
+  // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
+  // reflects what the last saved document changed (the stock endpoint is never cached).
+  useEffect(() => {
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    let cancelled = false;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        const raw = unpackProducts(res);
+        if (raw.length > 0) setStocks(raw.map(mapApiStockToInventoryStockItem));
+      })
+      .catch(() => {
+        /* keep the quantities already shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openProductDropdownRow]);
 
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
@@ -1877,6 +1902,54 @@ export const SalesView: React.FC = () => {
     });
     setEditingSale(sale);
     setIsFormModalOpen(true);
+  };
+
+  // Duplicate: open the New Invoice form prefilled from this invoice. Nothing is saved until the user presses Save,
+  // so the copy is created through the API like any other new invoice (it is never a hidden local draft).
+  const handleDuplicateSale = (sale: SaleTransaction) => {
+    resetFormErrors();
+    const today = new Date().toISOString().split("T")[0];
+    const dayMs = 86_400_000;
+    const termDays =
+      sale.dueDate && sale.saleDate
+        ? Math.max(0, Math.round((new Date(sale.dueDate).getTime() - new Date(sale.saleDate).getTime()) / dayMs))
+        : 0;
+    const dueDate = new Date(Date.now() + termDays * dayMs).toISOString().split("T")[0];
+    setFormData({
+      invoiceNo: "",
+      referenceNo: "",
+      saleDate: today,
+      dueDate,
+      customerId: sale.customerId,
+      customerName: sale.customerName,
+      customerCompany: sale.customerCompany || "",
+      customerPhone: sale.customerPhone || "",
+      customerEmail: sale.customerEmail || "",
+      billingAddress: sale.billingAddress,
+      shippingAddress: sale.shippingAddress,
+      items: JSON.parse(JSON.stringify(sale.items)),
+      withGst: sale.withGst !== undefined ? sale.withGst : true,
+      gstType: sale.gstType || "intra_state",
+      overallDiscount:
+        sale.overallDiscount !== undefined ? sale.overallDiscount : sale.totalDiscount || 0,
+      shippingCharges: sale.shippingCharges,
+      otherCharges: sale.otherCharges,
+      paymentMethod: sale.paymentMethod,
+      paymentSplits: [
+        { id: "ps_1", method: sale.paymentMethod || "Bank Transfer", amount: 0, referenceNo: "" },
+      ],
+      paymentTerms: sale.paymentTerms,
+      paidAmount: 0,
+      roundMode: (sale as any).roundMode || "none",
+      invoiceStatus: "Draft",
+      paymentRecords: [],
+      saleStatus: "Draft",
+      salesperson: sale.salesperson,
+      notes: sale.notes || "",
+    });
+    setEditingSale(null);
+    setIsFormModalOpen(true);
+    toast.info(`Review the copy of ${sale.invoiceNo} and press Save to create the new invoice.`);
   };
 
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -2321,11 +2394,9 @@ export const SalesView: React.FC = () => {
   };
 
   const customerSelectOptions = useMemo(() => {
-    const list =
-      customers && customers.length > 0 ? customers : (customerList as any[]);
+    const list = customerList as any[];
     return list.map((c) => {
-      const metrics = getCustomerMetrics ? getCustomerMetrics(c.id) : null;
-      const out = metrics?.outstandingAmount || 0;
+      const out = Number(c.outstandingAmount) || 0;
       return {
         value: c.id,
         label: c.name + (c.company ? ` (${c.company})` : ""),
@@ -2333,13 +2404,21 @@ export const SalesView: React.FC = () => {
         badge: c.customerCode,
       };
     });
-  }, [customers, customerList, getCustomerMetrics]);
+  }, [customerList]);
 
-  // Selected Customer Credit Stats
+  // Selected Customer Credit Stats (from the customer API record)
   const selectedCustomerFinancials = useMemo(() => {
-    if (!formData.customerId || !getCustomerMetrics) return null;
-    return getCustomerMetrics(formData.customerId);
-  }, [formData.customerId, getCustomerMetrics, sales]);
+    if (!formData.customerId) return null;
+    const c = customerList.find((x: any) => x.id === formData.customerId);
+    if (!c) return null;
+    const creditLimit = Number(c.creditLimit) || 0;
+    const outstandingAmount = Number(c.outstandingAmount) || 0;
+    return {
+      creditLimit,
+      outstandingAmount,
+      availableCredit: Math.max(0, creditLimit - outstandingAmount),
+    };
+  }, [formData.customerId, customerList]);
 
   // Handle URL Query Params for creating sale with preselected customer
   useEffect(() => {
@@ -2357,9 +2436,7 @@ export const SalesView: React.FC = () => {
   // Customer Select Change
   const handleCustomerChange = (custId: string) => {
     clearFormError("customer");
-    const cust =
-      (customers && customers.find((c) => c.id === custId)) ||
-      customerList.find((c) => c.id === custId);
+    const cust = customerList.find((c) => c.id === custId);
     if (cust) {
       setFormData((prev) => ({
         ...prev,
@@ -3105,19 +3182,6 @@ export const SalesView: React.FC = () => {
               console.warn("Backend order status update notice:", soErr);
             }
           }
-          try {
-            const rawOrders = localStorage.getItem("yaa_crm_sale_orders");
-            if (rawOrders) {
-              const orders = JSON.parse(rawOrders);
-              const convTime = new Date().toISOString();
-              const updatedOrders = orders.map((o: any) =>
-                (orderNo && o.orderNo === orderNo) || (orderId && o.id === orderId)
-                  ? { ...o, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
-                  : o,
-              );
-              localStorage.setItem("yaa_crm_sale_orders", JSON.stringify(updatedOrders));
-            }
-          } catch {}
           syncOrderStatusInStorage(orderId || orderNo, "Converted", {
             type: "Invoice",
             documentNo: savedApiSale.invoiceNo,
@@ -3148,19 +3212,6 @@ export const SalesView: React.FC = () => {
         if (srcType === "Proforma" || refNo.startsWith("PRO-")) {
           const proformaId = srcId || "";
           const proformaNo = srcInfo?.sourceNo || refNo;
-          try {
-            const rawPros = localStorage.getItem("yaa_crm_proforma_invoices");
-            if (rawPros) {
-              const pros = JSON.parse(rawPros);
-              const convTime = new Date().toISOString();
-              const updatedPros = pros.map((p: any) =>
-                (proformaNo && p.proformaNo === proformaNo) || (proformaId && p.id === proformaId)
-                  ? { ...p, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
-                  : p,
-              );
-              localStorage.setItem("yaa_crm_proforma_invoices", JSON.stringify(updatedPros));
-            }
-          } catch {}
           syncProformaStatusInStorage(proformaId || proformaNo, "Converted", {
             type: "Invoice",
             documentNo: savedApiSale.invoiceNo,
@@ -3184,19 +3235,6 @@ export const SalesView: React.FC = () => {
         if (srcType === "Challan" || refNo.startsWith("DC-")) {
           const challanId = srcId || "";
           const challanNo = srcInfo?.sourceNo || refNo;
-          try {
-            const rawChallans = localStorage.getItem("yaa_crm_delivery_challans");
-            if (rawChallans) {
-              const challans = JSON.parse(rawChallans);
-              const convTime = new Date().toISOString();
-              const updatedChallans = challans.map((c: any) =>
-                (challanNo && c.challanNo === challanNo) || (challanId && c.id === challanId)
-                  ? { ...c, status: "Converted", convertedToInvoiceNo: savedApiSale.invoiceNo, convertedAt: convTime }
-                  : c,
-              );
-              localStorage.setItem("yaa_crm_delivery_challans", JSON.stringify(updatedChallans));
-            }
-          } catch {}
           recordDocumentConversion({
             fromType: "Challan",
             fromId: challanId || undefined,
@@ -3451,21 +3489,6 @@ export const SalesView: React.FC = () => {
       setSalesList(
         sales.filter((s) => s.id !== deleteTargetSale.id && s.invoiceNo !== deleteTargetSale.invoiceNo),
       );
-      try {
-        const rawLocal = localStorage.getItem("yaa_crm_sales_transactions");
-        if (rawLocal) {
-          const list: SaleTransaction[] = JSON.parse(rawLocal);
-          const updated = list.filter(
-            (s) => s.id !== deleteTargetSale.id && s.invoiceNo !== deleteTargetSale.invoiceNo,
-          );
-          localStorage.setItem(
-            "yaa_crm_sales_transactions",
-            JSON.stringify(updated),
-          );
-        }
-      } catch (e) {
-        console.warn("Local storage delete notice:", e);
-      }
       dispatch(
         baseApi.util.invalidateTags([
           { type: "SalesInvoice", id: deleteTargetSale.id },
@@ -3564,7 +3587,7 @@ export const SalesView: React.FC = () => {
         notes: formData.notes,
         updatedAt: new Date().toISOString(),
       };
-      saveSale(targetSale);
+      storeSaveSale(targetSale);
       setEditingSale(targetSale);
     } else {
       const validItems = formData.items.filter(
@@ -3617,7 +3640,7 @@ export const SalesView: React.FC = () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      saveSale(targetSale);
+      storeSaveSale(targetSale);
       setEditingSale(targetSale);
     }
 
@@ -3675,6 +3698,25 @@ export const SalesView: React.FC = () => {
     field: keyof PaymentSplitItem,
     value: string | number,
   ) => {
+    if (field === "amount" && selectedSale) {
+      const due =
+        selectedSale.balance !== undefined
+          ? selectedSale.balance
+          : Math.max(0, selectedSale.grandTotal - (selectedSale.paidAmount || 0));
+      const otherRows = paymentModalSplits.reduce(
+        (acc, p, i) => (i === index ? acc : acc + (Number(p.amount) || 0)),
+        0,
+      );
+      const room = Math.max(0, round2(due - otherRows));
+      if (Number(value) > room + 0.005) {
+        value = room;
+        paymentFe.merge({
+          [`payment.${index}.amount`]: `Payment cannot exceed the outstanding balance of ₹${due.toFixed(2)}.`,
+        });
+      } else {
+        paymentFe.clearError(`payment.${index}.amount`);
+      }
+    }
     setPaymentModalSplits((prev) => {
       const newSplits = [...prev];
       newSplits[index] = { ...newSplits[index], [field]: value };
@@ -3824,7 +3866,9 @@ export const SalesView: React.FC = () => {
         createdAt: now.toISOString(),
       }));
 
-    const updatedSalesList = updateSalePayment(
+    // Shared session memory is updated for other screens, but this screen never displays from it:
+    // the list is re-fetched from the API right after, and the open dialog mirrors the recorded payment.
+    updateSalePayment(
       selectedSale.id,
       totalAllocated,
       primaryMethod,
@@ -3833,9 +3877,7 @@ export const SalesView: React.FC = () => {
       newRecords,
     );
 
-    const updatedSale = updatedSalesList.find(
-      (s) => s.id === selectedSale.id,
-    ) || {
+    const updatedSale = {
       ...selectedSale,
       paidAmount: (selectedSale.paidAmount || 0) + totalAllocated,
       balance: Math.max(
@@ -3957,14 +3999,39 @@ export const SalesView: React.FC = () => {
     setIsAssignInvoiceModalOpen(true);
   };
 
+  // Assign the representative on the server (the same API the Customer screen uses). Returns true only when it was saved.
+  const assignRepViaApi = async (customerId: string, repId: string): Promise<boolean> => {
+    if (!customerId) return true;
+    try {
+      const res = await collectionApi.assignCustomer({
+        customerId,
+        salesRepresentativeId: repId,
+        assignmentType: "Primary",
+      });
+      if (res && res.success === false) throw new Error(res.message || "The assignment was not saved");
+      const assigned = salesRepresentatives.find((r) => r.id === repId);
+      setCustomerList((prev) =>
+        prev.map((c: any) =>
+          c.id === customerId
+            ? { ...c, salesRepresentativeId: repId, salesRepresentativeName: assigned?.name || c.salesRepresentativeName }
+            : c,
+        ),
+      );
+      return true;
+    } catch (err: any) {
+      toast.error("Could not assign the sales representative", {
+        description: err?.response?.data?.error?.message || err?.message || "Please try again.",
+      });
+      return false;
+    }
+  };
+
   // Save Quick Assignment
-  const handleSaveQuickAssignInvoice = () => {
+  const handleSaveQuickAssignInvoice = async () => {
     if (!assignInvoiceTarget) return;
     if (!assignFe.validateAll(validateAssignRep(assignRepId, "assignRepId"))) return;
     const cust = customers.find((c) => c.id === assignInvoiceTarget.customerId);
-    if (assignInvoiceTarget.customerId) {
-      assignCustomerSalesRep(assignInvoiceTarget.customerId, assignRepId);
-    }
+    if (!(await assignRepViaApi(assignInvoiceTarget.customerId, assignRepId))) return;
     const rep = salesRepresentatives.find((r) => r.id === assignRepId);
 
     toast.success(
@@ -3978,13 +4045,11 @@ export const SalesView: React.FC = () => {
   };
 
   // Save Assignment from Invoice Details Modal Card
-  const handleSaveDetailAssignment = () => {
+  const handleSaveDetailAssignment = async () => {
     if (!selectedSale) return;
     if (!detailFe.validateAll(validateAssignRep(detailRepId, "detailRepId"))) return;
     const cust = customers.find((c) => c.id === selectedSale.customerId);
-    if (selectedSale.customerId) {
-      assignCustomerSalesRep(selectedSale.customerId, detailRepId);
-    }
+    if (!(await assignRepViaApi(selectedSale.customerId, detailRepId))) return;
     const rep = salesRepresentatives.find((r) => r.id === detailRepId);
 
     setSelectedSale({
@@ -5103,7 +5168,7 @@ export const SalesView: React.FC = () => {
                                                       <span className="font-mono text-slate-600">
                                                         SKU: {pSku}
                                                       </span>
-                                                      {pUnit && <span>• {pUnit}</span>}
+                                                      <ProductStockLabel qty={p.stockQty} unit={pUnit} />
                                                       {p.hsnCode && (
                                                         <span className="text-slate-400 font-mono text-[10px]">
                                                           • HSN: {p.hsnCode}
@@ -5703,13 +5768,22 @@ export const SalesView: React.FC = () => {
                                     ? `${parts[0]}.${parts[1].slice(0, 2)}`
                                     : clean;
                                 let newAmount = parseFloat(cleanDecimals);
+                                let typed = cleanDecimals;
                                 if (isNaN(newAmount) || newAmount < 0) {
                                   newAmount = 0;
                                 }
-                                // Over-payment is reported inline on submit (no clamping / toast).
+                                // More than the invoice total cannot be paid: hold the amount at the total and say why, inline.
+                                const invoiceTotal = calculatedTotals.grandTotal;
+                                if (invoiceTotal > 0 && newAmount > invoiceTotal + 0.005) {
+                                  newAmount = invoiceTotal;
+                                  typed = String(invoiceTotal);
+                                  mergeFormErrors({
+                                    paidAmount: `Paid amount cannot exceed the invoice total of ₹${invoiceTotal.toFixed(2)}.`,
+                                  });
+                                }
                                 setFormData((prev) => ({
                                   ...prev,
-                                  paidAmount: cleanDecimals.endsWith(".") ? (cleanDecimals as any) : newAmount,
+                                  paidAmount: typed.endsWith(".") ? (typed as any) : newAmount,
                                   paymentSplits:
                                     prev.paymentSplits.length > 0
                                       ? [{ ...prev.paymentSplits[0], amount: newAmount }]
@@ -6724,28 +6798,7 @@ export const SalesView: React.FC = () => {
                                   {
                                     label: "Duplicate",
                                     variant: "duplicate",
-                                    onClick: () => {
-                                      const duplicatedSale: SaleTransaction = {
-                                        ...sale,
-                                        id: `sale_${Date.now()}`,
-                                        invoiceNo: "",
-                                        saleDate: new Date()
-                                          .toISOString()
-                                          .split("T")[0],
-                                        paidAmount: 0,
-                                        balance: sale.grandTotal,
-                                        paymentStatus: "Unpaid",
-                                        saleStatus: "Draft",
-                                        paymentRecords: [],
-                                        paymentSplits: [],
-                                        createdAt: new Date().toISOString(),
-                                        updatedAt: new Date().toISOString(),
-                                      };
-                                      saveSale(duplicatedSale);
-                                      toast.success(
-                                        `Duplicated ${sale.invoiceNo} as a new draft invoice!`,
-                                      );
-                                    },
+                                    onClick: () => handleDuplicateSale(sale),
                                   },
                                   {
                                     label: "Preview",

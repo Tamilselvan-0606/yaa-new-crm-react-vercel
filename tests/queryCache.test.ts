@@ -173,6 +173,30 @@ describe('Client Management policies', () => {
   });
 });
 
+describe('announcements', () => {
+  it('caches the admin list and a record, keeps the inbox and counts live', () => {
+    assert.ok(mod.getCachePolicy('/platform/announcements?page_no=1'));
+    assert.ok(mod.getCachePolicy(`/platform/announcements/${ID1}`));
+    for (const u of ['/platform/announcements/inbox', '/platform/announcements/inbox/unread-count', `/platform/announcements/inbox/${ID1}`, '/platform/announcements/recipient-count', `/platform/announcements/${ID1}/recipients`]) {
+      assert.equal(mod.getCachePolicy(u), null, u);
+    }
+  });
+
+  it('a send or delete evicts the announcement list', () => {
+    assert.ok(has(mod.getInvalidationTags('/platform/announcements', 'post'), 'Announcement', 'LIST'));
+    assert.ok(has(mod.getInvalidationTags(`/platform/announcements/${ID1}`, 'delete'), 'Announcement', 'LIST'));
+  });
+});
+
+describe('announcement templates', () => {
+  it('caches the list and a record; a change evicts them', () => {
+    assert.ok(mod.getCachePolicy('/platform/announcement-templates?page_no=1'));
+    assert.ok(mod.getCachePolicy('/platform/announcement-templates/maintenance'));
+    assert.ok(has(mod.getInvalidationTags('/platform/announcement-templates', 'post'), 'AnnouncementTemplate', 'LIST'));
+    assert.ok(has(mod.getInvalidationTags(`/platform/announcement-templates/${ID1}`, 'patch'), 'AnnouncementTemplate', 'LIST'));
+  });
+});
+
 describe('request helpers', () => {
   it('normalizes params: sorted, no undefined/null', () => {
     assert.deepEqual(mod.normalizeParams({ b: 2, a: 1, c: undefined, d: null }), { a: 1, b: 2 });

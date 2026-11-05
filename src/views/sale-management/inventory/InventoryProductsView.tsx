@@ -260,54 +260,20 @@ const COMMON_HSN_CODES = [
 ];
 
 // =========================================================================
-// PRODUCT THUMBNAIL WITH RESILIENT FALLBACK COMPONENT & PERSISTENT CACHE
+// PRODUCT THUMBNAIL WITH RESILIENT FALLBACK COMPONENT
+// Product images are shown only from what the API returns. Nothing is cached in the browser.
 // =========================================================================
-const PRODUCT_IMAGE_CACHE_PREFIX = "crm_prod_img_";
 
+// Intentionally inert: product images are never written to browser storage.
 export const saveProductImageToCache = (
-  key?: string | null,
-  dataUrl?: string | null,
-) => {
-  if (!key || !dataUrl) return;
-  const cleanUrl = dataUrl.trim();
-  if (!cleanUrl || cleanUrl === "null" || cleanUrl === "undefined") return;
-  try {
-    const cleanKey = key.trim();
-    if (!cleanKey) return;
-    localStorage.setItem(`${PRODUCT_IMAGE_CACHE_PREFIX}${cleanKey}`, cleanUrl);
-  } catch (e) {
-    // Quota exceeded or storage restricted
-  }
-};
+  _key?: string | null,
+  _dataUrl?: string | null,
+) => {};
 
+// Intentionally inert: product images are never read from browser storage.
 export const getProductImageFromCache = (
-  ...keys: Array<string | null | undefined>
-): string | undefined => {
-  for (const key of keys) {
-    if (!key || typeof key !== "string") continue;
-    const cleanKey = key.trim();
-    if (!cleanKey) continue;
-    try {
-      const cached = localStorage.getItem(
-        `${PRODUCT_IMAGE_CACHE_PREFIX}${cleanKey}`,
-      );
-      if (
-        cached &&
-        cached !== "null" &&
-        cached !== "undefined" &&
-        (cached.startsWith("data:") ||
-          cached.startsWith("http") ||
-          cached.startsWith("/") ||
-          cached.startsWith("blob:"))
-      ) {
-        return cached;
-      }
-    } catch (e) {
-      // Storage access error
-    }
-  }
-  return undefined;
-};
+  ..._keys: Array<string | null | undefined>
+): string | undefined => undefined;
 
 interface ProductThumbnailProps {
   src?: string | null;

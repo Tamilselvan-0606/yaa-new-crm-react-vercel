@@ -102,6 +102,13 @@ export const phoneNumber =
   (v) => {
     if (isEmpty(v)) return null;
     const digits = v.replace(/\D/g, '');
+    // India (+91): exactly 10 digits after the code, starting with 6, 7, 8 or 9.
+    if (v.trim().startsWith('+91')) {
+      const national = digits.slice(2);
+      if (!/^[6-9]/.test(national)) return `${label} must start with 6, 7, 8 or 9`;
+      if (national.length !== 10) return `${label} must be exactly 10 digits`;
+      return null;
+    }
     if (digits.length < 10) return `${label} must be at least 10 digits`;
     if (digits.length > PHONE_MAX_DIGITS) return `${label} must be at most ${PHONE_MAX_DIGITS} digits`;
     return null;

@@ -36,6 +36,9 @@ export interface BranchApiItem {
   country?: string;
   district?: string;
   pincode?: string;
+  organizationType?: string;
+  /** Client Management or Sales Management: the module the branch belongs to. */
+  branchType?: number | string;
   countryId?: string;
   stateId?: string;
   districtId?: string;
@@ -111,6 +114,9 @@ export interface CreateBranchRequest {
   country?: string;
   district?: string;
   pincode?: string;
+  organizationType?: string;
+  /** Client Management or Sales Management: the module the branch belongs to. */
+  branchType?: number | string;
   countryId?: string;
   stateId?: string;
   districtId?: string;
@@ -139,6 +145,9 @@ export interface UpdateBranchRequest {
   country?: string;
   district?: string;
   pincode?: string;
+  organizationType?: string;
+  /** Client Management or Sales Management: the module the branch belongs to. */
+  branchType?: number | string;
   countryId?: string;
   stateId?: string;
   districtId?: string;

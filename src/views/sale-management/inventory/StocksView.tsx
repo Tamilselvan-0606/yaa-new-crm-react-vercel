@@ -43,7 +43,6 @@ import {
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import {
-  useSalesManagementStore,
   InventoryStockItem,
   StockBatch,
 } from "../../../store/useSalesManagementStore";
@@ -69,7 +68,6 @@ import {
   productApi,
   categoryApi,
 } from "../../../api";
-import { getProductImageFromCache } from "./InventoryProductsView";
 import { FormError } from "../../../components/common/FormError";
 import {
   useFieldErrors,
@@ -139,13 +137,6 @@ const StockProductThumbnail: React.FC<StockProductThumbnailProps> = ({
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    const cached = getProductImageFromCache(productId, sku, src);
-    if (cached) {
-      setCurrentSrc(cached);
-      setTriedFallback(true);
-      setHasError(false);
-      return;
-    }
     if (src) {
       setCurrentSrc(src);
       setTriedFallback(false);
@@ -166,12 +157,6 @@ const StockProductThumbnail: React.FC<StockProductThumbnailProps> = ({
     ) {
       setTriedFallback(true);
       setCurrentSrc(fallbackSrc);
-      return;
-    }
-    const cached = getProductImageFromCache(productId, sku, src, currentSrc);
-    if (!triedFallback && cached && cached !== currentSrc) {
-      setTriedFallback(true);
-      setCurrentSrc(cached);
       return;
     }
     setHasError(true);
@@ -207,16 +192,6 @@ const StockProductThumbnail: React.FC<StockProductThumbnailProps> = ({
 };
 
 export const StocksView: React.FC = () => {
-  const {
-    stocks: storeStocks,
-    adjustStock: adjustStockInStore,
-    updateStockItem: updateStockItemInStore,
-    sales,
-    purchases,
-    purchaseReturns,
-    salesReturns,
-  } = useSalesManagementStore();
-
   // Live API Stocks State - zero initial mock data
   const [stocks, setStocks] = useState<InventoryStockItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -230,14 +205,6 @@ export const StocksView: React.FC = () => {
   const requestSeqRef = useRef(0); // latest request wins; a superseded response is ignored
   const lastFetchKeyRef = useRef<string | null>(null);
   const cachedBatchesRef = useRef<Map<string, StockBatch[]> | null>(null);
-  const storeStocksRef = useRef(storeStocks);
-  useEffect(() => {
-    storeStocksRef.current = storeStocks;
-  }, [storeStocks]);
-  const purchaseReturnsRef = useRef(purchaseReturns);
-  useEffect(() => {
-    purchaseReturnsRef.current = purchaseReturns;
-  }, [purchaseReturns]);
 
   // Catalog products & categories from API for modal dropdowns and filters
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductItem[]>([]);
@@ -489,15 +456,12 @@ export const StocksView: React.FC = () => {
             const cat = currentCatalog.find(
               (p) => p.id === stk.productId || p.id === stk.id || p.sku === stk.sku,
             );
-            const storeItem = storeStocksRef.current.find(
-              (s) => s.productId === stk.productId || s.sku === stk.sku,
-            );
 
             // Determine authoritative stock from API response
             let effectiveInStock =
               typeof stk.inStock === 'number' && !isNaN(stk.inStock)
                 ? stk.inStock
-                : (storeItem?.inStock ?? 0);
+                : 0;
 
             // Determine authoritative batch from product master data or API stock item
             // The stock API response is the source of truth. Catalog batch data is only a
@@ -532,11 +496,7 @@ export const StocksView: React.FC = () => {
 
             // If no batches exist for this item, create at most one fallback batch
             if (itemBatches.length === 0) {
-              const fallbackBatchNo = (
-                authoritativeBatchNo ||
-                storeItem?.batches?.[0]?.batchNo ||
-                ''
-              ).trim();
+              const fallbackBatchNo = (authoritativeBatchNo || '').trim();
               if (fallbackBatchNo) {
                 itemBatches.push({
                   id: `bat_${stk.productId}_${fallbackBatchNo}`,
@@ -545,8 +505,8 @@ export const StocksView: React.FC = () => {
                   quantity: effectiveInStock,
                   costPrice: stk.unitCost || cat?.unitCost || 0,
                   sellingPrice: stk.unitPrice || cat?.unitPrice || 0,
-                  mfgDate: cat?.mfgDate || storeItem?.batches?.[0]?.mfgDate,
-                  expDate: cat?.expDate || storeItem?.batches?.[0]?.expDate,
+                  mfgDate: cat?.mfgDate,
+                  expDate: cat?.expDate,
                   status: effectiveInStock > 0 ? 'Active' : 'Depleted',
                   receivedDate: new Date().toISOString().split('T')[0],
                 });
@@ -570,7 +530,6 @@ export const StocksView: React.FC = () => {
 
             const effImage =
               stk.itemImage ||
-              getProductImageFromCache(stk.productId, stk.id, stk.sku, (stk as any).productCode) ||
               cat?.itemImage;
 
             return {
@@ -967,12 +926,6 @@ export const StocksView: React.FC = () => {
 
       const res = await stockApi.adjustStock(payload);
       if (res?.success) {
-        adjustStockInStore(selectedStock.productId, delta, effectiveBatchNo, {
-          costPrice: selectedStock.unitCost,
-          sellingPrice: selectedStock.unitPrice,
-          mfgDate: batchMfgDate,
-          expDate: batchExpDate,
-        });
         toast.success(
           `Stock for "${selectedStock.productName}" adjusted successfully (${delta > 0 ? `+${delta}` : delta} ${selectedStock.unit})${effectiveBatchNo ? ` [Batch: ${effectiveBatchNo}]` : ""}`,
         );
@@ -1322,101 +1275,6 @@ export const StocksView: React.FC = () => {
       setIsDownloadingStocksReport(false);
     }
   };
-
-  // Stock Movements for selected product
-  const stockMovements = useMemo(() => {
-    if (!selectedStock) return [];
-    const movements: Array<{
-      id: string;
-      date: string;
-      type:
-        | "Purchase Received"
-        | "Sale Delivered"
-        | "Sales Return Inward"
-        | "Purchase Return Outward"
-        | "Manual Adjustment";
-      reference: string;
-      batchNo?: string;
-      quantity: number;
-      direction: "in" | "out";
-      balanceAfter?: number;
-      unitPrice: number;
-      notes?: string;
-    }> = [];
-
-    // Check Purchases
-    purchases.forEach((po) => {
-      const item = po.items?.find(
-        (i) => i.productId === selectedStock.productId,
-      );
-      if (
-        item &&
-        (po.purchaseStatus === "Completed" || po.purchaseStatus === "Received")
-      ) {
-        movements.push({
-          id: `mv_po_${po.id}`,
-          date: po.purchaseDate || po.createdAt,
-          type: "Purchase Received",
-          reference: po.purchaseNo,
-          batchNo: item.batch || "General Lot",
-          quantity: item.quantity,
-          direction: "in",
-          unitPrice: item.purchasePrice,
-          notes: `Received from ${po.supplierName}`,
-        });
-      }
-    });
-
-    // Check Sales
-    sales.forEach((so) => {
-      const item = so.items?.find(
-        (i) => i.productId === selectedStock.productId,
-      );
-      if (item && so.saleStatus === "Completed") {
-        movements.push({
-          id: `mv_so_${so.id}`,
-          date: so.saleDate || so.createdAt,
-          type: "Sale Delivered",
-          reference: so.invoiceNo,
-          batchNo: item.batch || "Auto FIFO",
-          quantity: item.quantity,
-          direction: "out",
-          unitPrice: item.unitPrice,
-          notes: `Billed to ${so.customerName}`,
-        });
-      }
-    });
-
-    // Check Sales Returns
-    salesReturns.forEach((sr) => {
-      const item = sr.items?.find(
-        (i) => i.productId === selectedStock.productId,
-      );
-      if (
-        item &&
-        (sr.returnStatus === "Received" ||
-          sr.returnStatus === "Refunded" ||
-          sr.returnStatus === "Approved")
-      ) {
-        movements.push({
-          id: `mv_sr_${sr.id}`,
-          date: sr.returnDate || sr.createdAt,
-          type: "Sales Return Inward",
-          reference: sr.returnNo,
-          batchNo: item.batch || "Restocked Lot",
-          quantity: item.returnQuantity,
-          direction: "in",
-          unitPrice: item.unitPrice,
-          notes: `Return from ${sr.customerName} (${item.reason})`,
-        });
-      }
-    });
-
-    // Sort newest first
-    return movements.sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-    );
-  }, [selectedStock, purchases, sales, salesReturns]);
 
   return (
     <div className="space-y-6 pb-12 font-sans">
@@ -2849,64 +2707,6 @@ export const StocksView: React.FC = () => {
                         </tr>
                       );
                     })
-                  ) : stockMovements.length > 0 ? (
-                    stockMovements.map((mv) => (
-                      <tr
-                        key={mv.id}
-                        className="hover:bg-slate-50 transition-colors"
-                      >
-                        <td className="py-3 px-3.5 text-slate-600 font-medium whitespace-nowrap">
-                          {formatDate(mv.date)}
-                        </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                              mv.direction === "in"
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : "bg-rose-50 text-rose-700 border border-rose-200"
-                            }`}
-                          >
-                            {mv.direction === "in" ? (
-                              <ArrowUpRight className="w-3 h-3 text-emerald-600" />
-                            ) : (
-                              <ArrowDownRight className="w-3 h-3 text-rose-600" />
-                            )}
-                            {mv.type}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 font-mono font-bold text-slate-800 whitespace-nowrap">
-                          {mv.reference}
-                        </td>
-                        <td className="py-3 px-3 font-mono text-purple-700 font-semibold whitespace-nowrap">
-                          {mv.batchNo}
-                        </td>
-                        <td className="py-3 px-3 text-center whitespace-nowrap font-bold">
-                          <span
-                            className={
-                              mv.direction === "in"
-                                ? "text-emerald-700"
-                                : "text-rose-700"
-                            }
-                          >
-                            {mv.direction === "in"
-                              ? `+${mv.quantity}`
-                              : `-${mv.quantity}`}{" "}
-                            {selectedStock.unit}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-right font-mono font-semibold text-slate-700 whitespace-nowrap">
-                          {mv.balanceAfter !== undefined
-                            ? `${mv.balanceAfter} ${selectedStock.unit}`
-                            : "—"}
-                        </td>
-                        <td
-                          className="py-3 px-3 text-slate-500 max-w-[180px] truncate"
-                          title={mv.notes}
-                        >
-                          {mv.notes || "—"}
-                        </td>
-                      </tr>
-                    ))
                   ) : (
                     <tr>
                       <td

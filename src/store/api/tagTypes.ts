@@ -74,6 +74,8 @@ export const PLATFORM_TAG_TYPES = [
   'Subscription',
   'SubscriptionPlan',
   'OrgSubscription',
+  'Announcement',
+  'AnnouncementTemplate',
   'CrmCustomer',
   'CrmProduct',
   'CrmReport',

@@ -78,7 +78,9 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
       ? chosen
       : parsedCountry ?? defaultCountry;
   const code = active?.mobileCode?.startsWith('+') ? active.mobileCode : active ? `+${digitsOf(active.mobileCode)}` : '';
-  const maxNational = Math.max(1, PHONE_MAX_DIGITS - digitsOf(code).length);
+  // India (+91): exactly 10 digits starting with 6-9. Other countries keep the 15-digit limit (code included).
+  const isIndia = digitsOf(code) === '91';
+  const maxNational = isIndia ? 10 : Math.max(1, PHONE_MAX_DIGITS - digitsOf(code).length);
 
   const emit = (c: string, nat: string) => onChange(nat ? `${c}${nat}` : '');
 
@@ -146,7 +148,11 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
           value={national}
           maxLength={maxNational}
           placeholder={placeholder || 'Phone number'}
-          onChange={(e) => emit(code, digitsOf(e.target.value).slice(0, maxNational))}
+          onChange={(e) => {
+            const typed = digitsOf(e.target.value).slice(0, maxNational);
+            if (isIndia && typed && !/^[6-9]/.test(typed)) return; // an Indian number cannot start with 0-5
+            emit(code, typed);
+          }}
           className="flex-1 min-w-0 h-full px-3 bg-transparent outline-none text-xs sm:text-[13px] font-medium text-slate-800 placeholder:text-slate-400"
         />
       </div>
@@ -185,8 +191,10 @@ export const PhoneField: React.FC<PhoneFieldProps> = ({ label, required, value, 
                       setOpen(false);
                       setQuery('');
                       // Keep the typed number; only the code changes (the digit cap may trim it).
-                      const cap = Math.max(1, PHONE_MAX_DIGITS - digitsOf(cCode).length);
-                      emit(cCode, national.slice(0, cap));
+                      const toIndia = digitsOf(cCode) === '91';
+                      const cap = toIndia ? 10 : Math.max(1, PHONE_MAX_DIGITS - digitsOf(cCode).length);
+                      const keep = national.slice(0, cap);
+                      emit(cCode, toIndia && keep && !/^[6-9]/.test(keep) ? '' : keep);
                     }}
                     className={`px-2.5 py-1.5 text-[11.5px] flex items-center gap-2 cursor-pointer rounded ${
                       selected ? 'bg-[#33077C]/10 text-[#33077C] font-bold' : 'text-slate-700 font-medium hover:bg-purple-50/60'

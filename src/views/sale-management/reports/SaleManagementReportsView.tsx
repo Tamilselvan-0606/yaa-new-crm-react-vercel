@@ -51,7 +51,19 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
+import type { SalesRepresentative } from '../../../store/useSalesManagementStore';
+import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
+import { commerceSalesReturnApi, mapApiSalesReturnToSalesReturn } from '../../../api/commerce/salesReturnApi';
+import { commercePurchaseReturnApi, mapApiPurchaseReturnToUi } from '../../../api/commerce/purchaseReturnApi';
+import { commercePurchaseRequestApi, mapApiPurchaseRequestToUi } from '../../../api/commerce/purchaseRequestApi';
+import { commercePaymentInApi, mapApiPaymentInToSalePaymentIn } from '../../../api/commerce/paymentInApi';
+import { quotationApi, mapApiQuotationToSaleQuotation } from '../../../api/commerce/quotationApi';
+import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
+import { supplierApi, mapApiSupplierToSupplier } from '../../../api/commerce/supplierApi';
+import { stockApi, mapApiStockToInventoryStockItem } from '../../../api/commerce/stockApi';
+import { salesRepresentativeApi } from '../../../api/commerce/salesRepresentativeApi';
+import { workPurchaseOrderApi, mapApiPurchaseOrderToUi } from '../../../api/work/purchaseOrderApi';
+import { workPaymentOutApi, mapApiPaymentOutToUi } from '../../../api/work/paymentOutApi';
 import { Modal } from '../../../components/common/Modal';
 import { toast } from "../../../utils/toast";
 import { downloadTableReport } from '../../../utils/printUtils';
@@ -188,20 +200,88 @@ const REPORT_MENU: { category: ReportCategory; label: string; icon: any; items: 
 
 export const SaleManagementReportsView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
-  const {
-    sales = [],
-    salesReturns = [],
-    purchases = [],
-    purchaseReturns = [],
-    customers = [],
-    suppliers = [],
-    stocks = [],
-    salesRepresentatives = [],
-    quotations = [],
-    paymentIns = [],
-    paymentOuts = [],
-    purchaseRequests = [],
-  } = useSalesManagementStore();
+  // Every dataset below comes from API list endpoints only (nothing from browser storage)
+  const [sales, setSales] = useState<ReturnType<typeof mapApiInvoiceToSaleTransaction>[]>([]);
+  const [salesReturns, setSalesReturns] = useState<ReturnType<typeof mapApiSalesReturnToSalesReturn>[]>([]);
+  const [purchases, setPurchases] = useState<ReturnType<typeof mapApiPurchaseOrderToUi>[]>([]);
+  const [purchaseReturns, setPurchaseReturns] = useState<ReturnType<typeof mapApiPurchaseReturnToUi>[]>([]);
+  const [customers, setCustomers] = useState<ReturnType<typeof mapApiCustomerToSalesCustomer>[]>([]);
+  const [suppliers, setSuppliers] = useState<ReturnType<typeof mapApiSupplierToSupplier>[]>([]);
+  const [stocks, setStocks] = useState<ReturnType<typeof mapApiStockToInventoryStockItem>[]>([]);
+  const [salesRepresentatives, setSalesRepresentatives] = useState<SalesRepresentative[]>([]);
+  const [quotations, setQuotations] = useState<ReturnType<typeof mapApiQuotationToSaleQuotation>[]>([]);
+  const [paymentIns, setPaymentIns] = useState<ReturnType<typeof mapApiPaymentInToSalePaymentIn>[]>([]);
+  const [paymentOuts, setPaymentOuts] = useState<ReturnType<typeof mapApiPaymentOutToUi>[]>([]);
+  const [purchaseRequests, setPurchaseRequests] = useState<ReturnType<typeof mapApiPurchaseRequestToUi>[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const PAGE_SIZE = 100;
+    const MAX_PAGES = 30;
+    const loadAll = async <A, U>(
+      fetchPage: (page: number, size: number) => Promise<{ data?: A[]; pagination?: { hasNextPage?: boolean } } | undefined>,
+      map: (row: A) => U,
+    ): Promise<U[]> => {
+      const out: U[] = [];
+      try {
+        for (let page = 1; page <= MAX_PAGES; page++) {
+          const res = await fetchPage(page, PAGE_SIZE);
+          const rows = Array.isArray(res?.data) ? res!.data! : [];
+          out.push(...rows.map(map));
+          const hasNext = res?.pagination?.hasNextPage ?? rows.length >= PAGE_SIZE;
+          if (!hasNext || rows.length === 0) break;
+        }
+      } catch (err) {
+        console.warn('Reports: failed to load a dataset from the API', err);
+      }
+      return out;
+    };
+    const pg = (page: number, size: number) => ({ page_no: page, page_size: size, pagination_required: true });
+    (async () => {
+      const [inv, sret, po, pret, cust, sup, stk, reps, quo, pin, pout, preq] = await Promise.all([
+        loadAll((p, n) => commerceInvoiceApi.getInvoices(pg(p, n)), mapApiInvoiceToSaleTransaction),
+        loadAll((p, n) => commerceSalesReturnApi.getSalesReturns(pg(p, n)), mapApiSalesReturnToSalesReturn),
+        loadAll((p, n) => workPurchaseOrderApi.getPurchaseOrders(pg(p, n)) as any, mapApiPurchaseOrderToUi),
+        loadAll((p, n) => commercePurchaseReturnApi.getPurchaseReturns(pg(p, n)) as any, mapApiPurchaseReturnToUi),
+        loadAll((p, n) => customerApi.getCustomers(pg(p, n)) as any, mapApiCustomerToSalesCustomer),
+        loadAll((p, n) => supplierApi.getSuppliers(pg(p, n)) as any, mapApiSupplierToSupplier),
+        loadAll((p, n) => stockApi.getStocks(pg(p, n)) as any, mapApiStockToInventoryStockItem),
+        loadAll(
+          (p, n) => salesRepresentativeApi.getList({ page: p, limit: n }) as any,
+          (r: any): SalesRepresentative => ({
+            id: r.id,
+            name: r.name,
+            mobile: r.mobile,
+            email: r.email,
+            designation: r.designation,
+            status: r.status,
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          }),
+        ),
+        loadAll((p, n) => quotationApi.getQuotations(pg(p, n)) as any, mapApiQuotationToSaleQuotation),
+        loadAll((p, n) => commercePaymentInApi.getPaymentIns(pg(p, n)) as any, mapApiPaymentInToSalePaymentIn),
+        loadAll((p, n) => workPaymentOutApi.getPaymentsOut(pg(p, n)) as any, mapApiPaymentOutToUi),
+        loadAll((p, n) => commercePurchaseRequestApi.getPurchaseRequests(pg(p, n)) as any, mapApiPurchaseRequestToUi),
+      ]);
+      if (cancelled) return;
+      setSales(inv as any);
+      setSalesReturns(sret as any);
+      setPurchases(po as any);
+      setPurchaseReturns(pret as any);
+      setCustomers(cust as any);
+      setSuppliers(sup as any);
+      setStocks(stk as any);
+      setSalesRepresentatives(reps);
+      setQuotations(quo as any);
+      setPaymentIns(pin as any);
+      setPaymentOuts(pout as any);
+      setPurchaseRequests(preq as any);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [activeReport, setActiveReport] = useState<ReportId>('bill_wise_profit');
   const [timeRange, setTimeRange] = useState<'today' | 'this_week' | 'this_month' | 'this_year' | 'all' | 'custom'>('this_month');

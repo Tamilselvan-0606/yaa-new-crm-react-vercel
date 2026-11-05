@@ -2,7 +2,6 @@ import React, { useMemo, useCallback } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
 import { usePaginatedDropdown } from '../../../hooks/usePaginatedDropdown';
 import { supplierApi, ApiSupplier } from '../../../api/commerce/supplierApi';
-import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
 
 export interface SupplierSearchableSelectProps {
   value: string;
@@ -34,47 +33,27 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
   triggerClassName = '',
   size = 'md',
 }) => {
-  const { suppliers = [] } = useSalesManagementStore();
-
   const fetchPage = useCallback(
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
-      try {
-        const res = await supplierApi.getSuppliers({
-          page,
-          limit,
-          page_no: page,
-          page_size: limit,
-          pagination_required: true,
-          search: search || undefined,
-        });
+      const res = await supplierApi.getSuppliers({
+        page,
+        limit,
+        page_no: page,
+        page_size: limit,
+        pagination_required: true,
+        search: search || undefined,
+      });
 
-        const data = res?.data || [];
-        const pagination = res?.pagination;
+      const data = res?.data || [];
+      const pagination = res?.pagination;
 
-        return {
-          data,
-          hasNextPage: pagination?.hasNextPage ?? (data.length >= limit),
-          totalRecords: pagination?.totalRecords,
-        };
-      } catch (err) {
-        console.warn('SupplierSearchableSelect fetch error:', err);
-        const q = search.toLowerCase();
-        const filtered = suppliers.filter(
-          (s) =>
-            s.name.toLowerCase().includes(q) ||
-            (s.supplierCode && s.supplierCode.toLowerCase().includes(q)) ||
-            (s.phone && s.phone.toLowerCase().includes(q))
-        );
-        const start = (page - 1) * limit;
-        const paged = filtered.slice(start, start + limit);
-        return {
-          data: paged as any[],
-          hasNextPage: start + limit < filtered.length,
-          totalRecords: filtered.length,
-        };
-      }
+      return {
+        data,
+        hasNextPage: pagination?.hasNextPage ?? (data.length >= limit),
+        totalRecords: pagination?.totalRecords,
+      };
     },
-    [suppliers]
+    []
   );
 
   const {
@@ -116,18 +95,8 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
       };
     }
 
-    const inStore = suppliers.find((s) => s.id === value);
-    if (inStore) {
-      return {
-        value: inStore.id,
-        label: inStore.name + (inStore.supplierCode ? ` (${inStore.supplierCode})` : ''),
-        subLabel: `${inStore.supplierCode || ''} • ${inStore.phone || ''}`,
-        badge: inStore.supplierCode,
-        data: inStore,
-      };
-    }
     return undefined;
-  }, [value, options, selectedSupplier, suppliers]);
+  }, [value, options, selectedSupplier]);
 
   const staticOptions: SearchableOption[] = useMemo(() => {
     if (!allowNone) return [];

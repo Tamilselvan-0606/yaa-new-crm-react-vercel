@@ -159,15 +159,6 @@ const getDateRangeForPeriod = (
 };
 
 export const ExpenseView: React.FC = () => {
-  // Purge any old local mock data from storage on mount
-  useEffect(() => {
-    try {
-      localStorage.removeItem('crm_expenses_list');
-    } catch {
-      // ignore
-    }
-  }, []);
-
   // Live Expenses State
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -646,13 +637,7 @@ export const ExpenseView: React.FC = () => {
   };
 
   const handleOpenDetailModal = async (exp: ExpenseItem) => {
-    let currentReceipt = exp.receiptImage;
-    if (!currentReceipt && exp.id) {
-      currentReceipt =
-        localStorage.getItem(`crm_exp_receipt_${exp.id}`) ||
-        (exp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${exp.expenseNo}`) : '') ||
-        '';
-    }
+    const currentReceipt = exp.receiptImage;
     const updatedExp = currentReceipt ? { ...exp, receiptImage: currentReceipt } : exp;
     setSelectedExpense(updatedExp);
     setIsDetailModalOpen(true);
@@ -674,8 +659,6 @@ export const ExpenseView: React.FC = () => {
           (detail.data as any)?.fileUrl ||
           '';
         if (fetchedImage) {
-          localStorage.setItem(`crm_exp_receipt_${exp.id}`, fetchedImage);
-          if (exp.expenseNo) localStorage.setItem(`crm_exp_receipt_${exp.expenseNo}`, fetchedImage);
           setSelectedExpense((prev) => (prev && prev.id === exp.id ? { ...prev, receiptImage: fetchedImage } : prev));
           setExpenses((prev) => prev.map((e) => (e.id === exp.id ? { ...e, receiptImage: fetchedImage } : e)));
         }
@@ -686,13 +669,7 @@ export const ExpenseView: React.FC = () => {
   };
 
   const handleOpenBillModal = async (exp: ExpenseItem) => {
-    let currentReceipt = exp.receiptImage;
-    if (!currentReceipt && exp.id) {
-      currentReceipt =
-        localStorage.getItem(`crm_exp_receipt_${exp.id}`) ||
-        (exp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${exp.expenseNo}`) : '') ||
-        '';
-    }
+    const currentReceipt = exp.receiptImage;
     const initialExp = currentReceipt ? { ...exp, receiptImage: currentReceipt } : exp;
     setSelectedBillExpense(initialExp);
     setIsBillModalOpen(true);
@@ -711,8 +688,6 @@ export const ExpenseView: React.FC = () => {
           (detail.data as any)?.fileUrl ||
           '';
         if (fetchedImage) {
-          localStorage.setItem(`crm_exp_receipt_${exp.id}`, fetchedImage);
-          if (exp.expenseNo) localStorage.setItem(`crm_exp_receipt_${exp.expenseNo}`, fetchedImage);
           setSelectedBillExpense((prev) => (prev && prev.id === exp.id ? { ...prev, receiptImage: fetchedImage } : prev));
           setExpenses((prev) => prev.map((e) => (e.id === exp.id ? { ...e, receiptImage: fetchedImage } : e)));
         }
@@ -895,10 +870,6 @@ export const ExpenseView: React.FC = () => {
         });
 
         await workExpenseApi.updateExpense(editingExpenseId, payload);
-        if (finalReceiptImage) {
-          localStorage.setItem(`crm_exp_receipt_${editingExpenseId}`, finalReceiptImage);
-          if (data.expenseNo) localStorage.setItem(`crm_exp_receipt_${data.expenseNo}`, finalReceiptImage);
-        }
         toast.success(`Expense ${data.expenseNo || ''} updated successfully.`);
       } else {
         // Create new expense via POST /work/expenses
@@ -917,10 +888,6 @@ export const ExpenseView: React.FC = () => {
 
         const res = await workExpenseApi.createExpense(payload);
         const createdNo = res.data?.expenseNo || 'new expense';
-        if (finalReceiptImage) {
-          if (res.data?.id) localStorage.setItem(`crm_exp_receipt_${res.data.id}`, finalReceiptImage);
-          if (res.data?.expenseNo) localStorage.setItem(`crm_exp_receipt_${res.data.expenseNo}`, finalReceiptImage);
-        }
         toast.success(`Expense ${createdNo} created successfully.`);
       }
 

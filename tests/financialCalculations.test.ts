@@ -6,6 +6,7 @@ import {
   determineGstType,
   round2,
 } from '../src/utils/financialCalculations';
+import { calculateCustomerOutstanding } from '../src/utils/outstandingBalance';
 
 describe('Financial Calculation Engine & GST Statutory Audit Tests', () => {
   it('Test A — GST-exclusive invoice (Standard Sequence: Quantity 10, Price 100, Discount 10%, GST 18%)', () => {
@@ -272,5 +273,31 @@ describe('Financial Calculation Engine & GST Statutory Audit Tests', () => {
     assert.equal(determineGstType('29-Karnataka'), 'inter_state');
     assert.equal(determineGstType('32-Kerala'), 'inter_state');
     assert.equal(determineGstType(null), 'intra_state');
+  });
+});
+
+describe('Customer totals are linked by id, not by name or code', () => {
+  const OLD_ID = '11111111-1111-4111-8111-111111111111';
+  const NEW_ID = '22222222-2222-4222-8222-222222222222';
+  const oldInvoice = { id: 'inv-1', customerId: OLD_ID, customerName: 'Sujay', saleStatus: 'Confirmed', grandTotal: 123894.1, paidAmount: 0 };
+
+  it('a brand-new customer with the same name and code as a deleted one gets none of its sales', () => {
+    const fresh = { id: NEW_ID, name: 'Sujay', customerCode: 'CUST-0001', openingBalance: 0 };
+    const m = calculateCustomerOutstanding(fresh as any, [oldInvoice] as any, [], []);
+    assert.equal(m.totalSalesAmount, 0);
+    assert.equal(m.totalPaidAmount, 0);
+  });
+
+  it('the customer who owns the invoice (same id) still gets it', () => {
+    const owner = { id: OLD_ID, name: 'Sujay', customerCode: 'CUST-0001', openingBalance: 0 };
+    const m = calculateCustomerOutstanding(owner as any, [oldInvoice] as any, [], []);
+    assert.equal(m.totalSalesAmount, 123894.1);
+  });
+
+  it('an old record saved without any id can still be matched by name', () => {
+    const legacy = { id: 'local-1', name: 'Sujay', customerCode: 'CUST-0001', openingBalance: 0 };
+    const noId = { id: 'inv-2', customerId: '', customerName: 'Sujay', saleStatus: 'Confirmed', grandTotal: 500, paidAmount: 0 };
+    const m = calculateCustomerOutstanding(legacy as any, [noId] as any, [], []);
+    assert.equal(m.totalSalesAmount, 500);
   });
 });

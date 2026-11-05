@@ -57,13 +57,38 @@ import {
   Calendar,
 } from "lucide-react";
 import {
-  useSalesManagementStore,
   SalesCustomer,
   CustomerStatus,
   CustomerType,
   SaleQuotation,
-  SalesRepresentative,
+  SaleTransaction,
+  SalesReturn,
 } from "../../../store/useSalesManagementStore";
+import {
+  quotationApi,
+  mapApiQuotationToSaleQuotation,
+} from "../../../api/commerce/quotationApi";
+import {
+  commerceProformaApi,
+  mapApiProformaToSaleProforma,
+} from "../../../api/commerce/proformaApi";
+import {
+  commerceSaleOrderApi,
+  mapApiSaleOrderToSaleOrderRecord,
+} from "../../../api/commerce/saleOrderApi";
+import {
+  commerceDeliveryChallanApi,
+  mapApiDeliveryChallanToRecord,
+} from "../../../api/commerce/deliveryChallanApi";
+import {
+  commerceInvoiceApi,
+  mapApiInvoiceToSaleTransaction,
+  UUID_REGEX,
+} from "../../../api/commerce/invoiceApi";
+import {
+  commerceSalesReturnApi,
+  mapApiSalesReturnToSalesReturn,
+} from "../../../api/commerce/salesReturnApi";
 import { Badge } from "../../../components/common/Badge";
 import { Button } from "../../../components/common/Button";
 import { Modal } from "../../../components/common/Modal";
@@ -89,7 +114,10 @@ import {
   ApiSalesRepresentative,
 } from "../../../api/commerce/salesRepresentativeApi";
 import { SalesRepSearchableSelect } from "./SalesRepSearchableSelect";
-import { collectionApi } from "../../../api/commerce/collectionApi";
+import {
+  collectionApi,
+  CustomerTimelineEvent,
+} from "../../../api/commerce/collectionApi";
 import {
   normalizeIndianPhoneTo10Digits,
   isValidIndianPhone,
@@ -116,7 +144,6 @@ import {
 import { FormError } from "../../../components/common/FormError";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
-import { calculateCustomerOutstanding } from "../../../utils/outstandingBalance";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -130,23 +157,6 @@ import { evictApiCache } from "../../../api/queryCache";
 
 export const CustomerView: React.FC = () => {
   const navigate = useNavigate();
-  const {
-    customers,
-    sales,
-    quotations,
-    salesReturns,
-    paymentIns,
-    salesRepresentatives,
-    setSalesRepresentativesList,
-    collectionFollowUps,
-    promisesToPay,
-    assignCustomerSalesRep,
-    saveCustomer,
-    setCustomersList,
-    deleteCustomer,
-    updateCustomerStatus,
-    getCustomerMetrics,
-  } = useSalesManagementStore();
 
   // Live Commerce API State
   const [liveCustomers, setLiveCustomers] = useState<SalesCustomer[]>([]);
@@ -193,13 +203,8 @@ export const CustomerView: React.FC = () => {
   );
   const [isSalesRepsLoading, setIsSalesRepsLoading] = useState(false);
 
-  // Available sales representatives (active API list prioritized, fallback to store)
-  const availableSalesReps = useMemo(() => {
-    if (liveSalesReps && liveSalesReps.length > 0) {
-      return liveSalesReps;
-    }
-    return salesRepresentatives;
-  }, [liveSalesReps, salesRepresentatives]);
+  // Available sales representatives (API list only)
+  const availableSalesReps = liveSalesReps;
 
   // Customer Ledger & Financials Cache by customerId (prevents repeated calls on tab switching)
   const ledgerCacheRef = useRef<Record<string, CustomerLedgerData>>({});
@@ -208,14 +213,26 @@ export const CustomerView: React.FC = () => {
   >({});
   const [isLoadingLedger, setIsLoadingLedger] = useState(false);
 
+  // Customer documents for the detail dialog (Commerce API only, loaded on open)
+  const [detailDocs, setDetailDocs] = useState<{
+    customerId: string;
+    quotations: SaleQuotation[];
+    proformas: any[];
+    orders: any[];
+    challans: any[];
+    sales: SaleTransaction[];
+    returns: SalesReturn[];
+    timeline: CustomerTimelineEvent[];
+  } | null>(null);
+  const [isLoadingDetailDocs, setIsLoadingDetailDocs] = useState(false);
+  const detailDocsReqRef = useRef(0);
+
   // Fetch lock refs to guarantee single execution (no double-fetches)
   const isFetchingRef = useRef(false);
   const lastFetchKeyRef = useRef<string | null>(null);
   const isFetchingRepsRef = useRef(false);
   const hasLoadedRepsRef = useRef(false);
   const customerAssignmentsCacheRef = useRef<Map<string, any> | null>(null);
-  const setSalesRepresentativesListRef = useRef(setSalesRepresentativesList);
-  setSalesRepresentativesListRef.current = setSalesRepresentativesList;
 
   // Load sales representatives from Commerce API with deduplication guards
   const loadSalesReps = useCallback(async (forceRefresh = false) => {
@@ -231,17 +248,6 @@ export const CustomerView: React.FC = () => {
       if (res && res.success && Array.isArray(res.data)) {
         hasLoadedRepsRef.current = true;
         setLiveSalesReps(res.data);
-        const mappedReps: SalesRepresentative[] = res.data.map((r) => ({
-          id: r.id,
-          name: r.name,
-          mobile: r.mobile,
-          email: r.email,
-          designation: r.designation,
-          status: r.status,
-          createdAt: r.createdAt || new Date().toISOString(),
-          updatedAt: r.updatedAt || new Date().toISOString(),
-        }));
-        setSalesRepresentativesListRef.current(mappedReps);
       }
     } catch (err: any) {
       console.warn(
@@ -405,17 +411,7 @@ export const CustomerView: React.FC = () => {
         return;
       }
 
-      // 2. Update central store
-      assignCustomerSalesRep(
-        changeRepTargetCustomer.id,
-        selectedRepIdForCustomer,
-        repAssignmentType,
-        repEffectiveFrom,
-        repAssignmentNotes,
-        repName,
-      );
-
-      // 3. Update liveCustomers state in CustomerView
+      // 2. Update liveCustomers state in CustomerView
       setLiveCustomers((prev) =>
         prev.map((c) =>
           c.id === changeRepTargetCustomer.id
@@ -680,39 +676,29 @@ export const CustomerView: React.FC = () => {
           const apiData = res.data;
           const assignmentMap =
             customerAssignmentsCacheRef.current || new Map<string, any>();
-          const storeCustMap = new Map<string, SalesCustomer>();
-          customers.forEach((c) => storeCustMap.set(c.id, c));
 
           const mapped = apiData.map((c) => {
             const base = mapApiCustomerToSalesCustomer(c);
             const assignment = assignmentMap.get(base.id);
-            const existing = storeCustMap.get(base.id);
 
             const salesRepresentativeId =
               base.salesRepresentativeId ||
               assignment?.salesRepresentative?.id ||
-              assignment?.salesRepresentativeId ||
-              existing?.salesRepresentativeId;
+              assignment?.salesRepresentativeId;
 
             const salesRepresentativeName =
               base.salesRepresentativeName ||
               assignment?.salesRepresentative?.name ||
-              assignment?.salesRepresentativeName ||
-              existing?.salesRepresentativeName;
+              assignment?.salesRepresentativeName;
 
             const salesRepresentativeType =
               base.salesRepresentativeType ||
               assignment?.salesRepresentative?.type ||
-              existing?.salesRepresentativeType ||
               "Primary";
 
-            const assignedDate =
-              base.assignedDate ||
-              assignment?.assignedDate ||
-              existing?.assignedDate;
+            const assignedDate = base.assignedDate || assignment?.assignedDate;
 
-            const assignmentNotes =
-              base.assignmentNotes || existing?.assignmentNotes;
+            const assignmentNotes = base.assignmentNotes;
 
             return {
               ...base,
@@ -734,17 +720,11 @@ export const CustomerView: React.FC = () => {
             setTotalApiRecords(res.pagination.totalRecords);
             setTotalApiPages(res.pagination.totalPages);
           }
-
-          // Keep local store in sync
-          setCustomersList(mapped);
         }
       } catch (err: any) {
-        console.warn(
-          "Commerce Customer API call failed, falling back to local storage cache:",
-          err?.message || err,
-        );
+        console.warn("Commerce Customer API call failed:", err?.message || err);
         setIsApiConnected(false);
-        setApiErrorMessage(err?.message || "Using local database");
+        setApiErrorMessage(err?.message || "Unable to load customers");
       } finally {
         isFetchingRef.current = false;
         setIsApiLoading(false);
@@ -756,7 +736,6 @@ export const CustomerView: React.FC = () => {
       appliedSearch,
       appliedStatus,
       appliedType,
-      setCustomersList,
     ],
   );
 
@@ -793,63 +772,15 @@ export const CustomerView: React.FC = () => {
     toast.info("Refreshing customers from Commerce API...");
   };
 
-  // Real-time calculation of customer summaries
-  const customerFinancialMap = useMemo(() => {
-    const map = new Map<
-      string,
-      ReturnType<typeof calculateCustomerOutstanding>
-    >();
-    const allKnown =
-      isApiConnected && liveCustomers.length > 0 ? liveCustomers : customers;
-    allKnown.forEach((c) => {
-      map.set(
-        c.id,
-        calculateCustomerOutstanding(
-          c,
-          sales as any,
-          salesReturns as any,
-          paymentIns as any,
-        ),
-      );
-    });
-    return map;
-  }, [
-    customers,
-    liveCustomers,
-    isApiConnected,
-    sales,
-    salesReturns,
-    paymentIns,
-  ]);
-
-  // Paid Amount Date Resolver (from customer API object or customer's payment receipts)
-  const getCustomerPaidDate = useCallback(
-    (cust: SalesCustomer): string | null => {
-      if (cust.paidAmountDate) return cust.paidAmountDate;
-      if (cust.lastPaymentDate) return cust.lastPaymentDate;
-      if ((cust as any).paidDate) return (cust as any).paidDate;
-      if ((cust as any).lastPayment?.date)
-        return (cust as any).lastPayment.date;
-      if ((cust as any).paymentDate) return (cust as any).paymentDate;
-      // Fallback to customer's payments in paymentIns
-      const custPayments = paymentIns
-        .filter(
-          (p) =>
-            p.customerId === cust.id ||
-            (p as any).customerCode === cust.customerCode,
-        )
-        .sort((a, b) =>
-          (b.paymentDate || b.date || "").localeCompare(
-            a.paymentDate || a.date || "",
-          ),
-        );
-      if (custPayments.length > 0) {
-        return custPayments[0].paymentDate || custPayments[0].date || null;
-      }
-      return null;
-    },
-    [paymentIns],
-  );
+  // Paid Amount Date Resolver (API customer object fields only)
+  const getCustomerPaidDate = useCallback((cust: SalesCustomer): string | null => {
+    if (cust.paidAmountDate) return cust.paidAmountDate;
+    if (cust.lastPaymentDate) return cust.lastPaymentDate;
+    if ((cust as any).paidDate) return (cust as any).paidDate;
+    if ((cust as any).lastPayment?.date) return (cust as any).lastPayment.date;
+    if ((cust as any).paymentDate) return (cust as any).paymentDate;
+    return null;
+  }, []);
 
   // Download CSV sample template for Bulk Upload (matching POST /commerce/customers/bulk-upload)
   const handleDownloadSampleCsv = () => {
@@ -1221,8 +1152,7 @@ export const CustomerView: React.FC = () => {
 
   // Overall Summary Metrics (5 Cards)
   const summary = useMemo(() => {
-    const listToAnalyze =
-      isApiConnected && liveCustomers.length > 0 ? liveCustomers : customers;
+    const listToAnalyze = liveCustomers;
     const totalCount =
       isApiConnected && totalApiRecords !== null
         ? totalApiRecords
@@ -1239,8 +1169,7 @@ export const CustomerView: React.FC = () => {
     let totalReceivable = 0;
 
     listToAnalyze.forEach((c) => {
-      const m = customerFinancialMap.get(c.id);
-      const out = m ? m.outstandingAmount : c.outstandingAmount || 0;
+      const out = c.outstandingAmount || 0;
       if (out > 0) {
         withOutstandingCount++;
         totalReceivable += out;
@@ -1265,14 +1194,7 @@ export const CustomerView: React.FC = () => {
       withOutstandingCount,
       totalReceivable,
     };
-  }, [
-    customers,
-    liveCustomers,
-    isApiConnected,
-    totalApiRecords,
-    customerFinancialMap,
-    apiSummary,
-  ]);
+  }, [liveCustomers, isApiConnected, totalApiRecords, apiSummary]);
 
   const handleCloseFormModal = () => {
     setIsFormModalOpen(false);
@@ -1363,7 +1285,7 @@ export const CustomerView: React.FC = () => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = customerCode.trim().toLowerCase();
 
-    return customers.filter((c) => {
+    return liveCustomers.filter((c) => {
       if (excludeId && c.id === excludeId) return false;
       const cPhone = normalizePhoneForSave(c.phone || "");
       const cEmail = (c.email || "").trim().toLowerCase();
@@ -1570,11 +1492,69 @@ export const CustomerView: React.FC = () => {
     commitSaveCustomer(payload);
   };
 
+  // Load the customer's documents (quotations, proformas, orders, challans, invoices,
+  // returns, collection timeline) from the Commerce APIs, filtered by customerId.
+  const loadCustomerDetailDocs = (customerId: string) => {
+    const reqId = ++detailDocsReqRef.current;
+    if (!UUID_REGEX.test(customerId)) {
+      setDetailDocs(null);
+      setIsLoadingDetailDocs(false);
+      return;
+    }
+    setDetailDocs(null);
+    setIsLoadingDetailDocs(true);
+    const params = {
+      customerId,
+      page_no: 1,
+      page_size: 100,
+      pagination_required: true,
+      sortOrder: "desc" as const,
+    };
+    Promise.allSettled([
+      quotationApi.getQuotations(params),
+      commerceProformaApi.getProformas(params),
+      commerceSaleOrderApi.getOrders(params),
+      commerceDeliveryChallanApi.getChallans(params),
+      commerceInvoiceApi.getInvoices(params),
+      commerceSalesReturnApi.getSalesReturns(params),
+      collectionApi.getCustomerTimeline(customerId),
+    ])
+      .then(([q, p, o, c, i, r, tl]) => {
+        if (reqId !== detailDocsReqRef.current) return;
+        const toList = (
+          res: PromiseSettledResult<any>,
+          map: (x: any) => any,
+        ): any[] =>
+          res.status === "fulfilled" && Array.isArray(res.value?.data)
+            ? res.value.data
+                .map(map)
+                .filter((d: any) => !d.customerId || d.customerId === customerId)
+            : [];
+        setDetailDocs({
+          customerId,
+          quotations: toList(q, mapApiQuotationToSaleQuotation),
+          proformas: toList(p, mapApiProformaToSaleProforma),
+          orders: toList(o, mapApiSaleOrderToSaleOrderRecord),
+          challans: toList(c, mapApiDeliveryChallanToRecord),
+          sales: toList(i, mapApiInvoiceToSaleTransaction),
+          returns: toList(r, mapApiSalesReturnToSalesReturn),
+          timeline:
+            tl.status === "fulfilled" && Array.isArray(tl.value?.data?.events)
+              ? tl.value.data.events
+              : [],
+        });
+      })
+      .finally(() => {
+        if (reqId === detailDocsReqRef.current) setIsLoadingDetailDocs(false);
+      });
+  };
+
   // Open Customer Detail Modal with on-demand cached ledger fetch
   const handleOpenDetailModal = (customer: SalesCustomer) => {
     setSelectedCustomer(customer);
     setActiveDetailTab("overview");
     setIsDetailModalOpen(true);
+    loadCustomerDetailDocs(customer.id);
 
     // Always fetch fresh details (GET /customers/:id); the ledger is fetched once and cached
     const needsLedger = !ledgerCacheRef.current[customer.id];
@@ -1676,16 +1656,7 @@ export const CustomerView: React.FC = () => {
                 } catch (assignErr) {
                   console.warn("Assign sales rep on update failed:", assignErr);
                 }
-                assignCustomerSalesRep(
-                  updated.id,
-                  payload.salesRepresentativeId,
-                  payload.salesRepresentativeType || "Primary",
-                  undefined,
-                  undefined,
-                  payload.salesRepresentativeName,
-                );
               }
-              saveCustomer(updated);
               setLiveCustomers((prev) =>
                 prev.map((c) => (c.id === updated.id ? updated : c)),
               );
@@ -1772,16 +1743,7 @@ export const CustomerView: React.FC = () => {
                 } catch (assignErr) {
                   console.warn("Assign sales rep on create failed:", assignErr);
                 }
-                assignCustomerSalesRep(
-                  created.id,
-                  payload.salesRepresentativeId,
-                  payload.salesRepresentativeType || "Primary",
-                  undefined,
-                  undefined,
-                  payload.salesRepresentativeName,
-                );
               }
-              saveCustomer(created);
               setLiveCustomers((prev) => [created, ...prev]);
               customerAssignmentsCacheRef.current = null;
               toast.success(
@@ -1859,7 +1821,6 @@ export const CustomerView: React.FC = () => {
       try {
         await customerApi.patchCustomer(target.id, { status: newStatus });
         toast.success(`Customer ${target.name} set to ${newStatus}.`);
-        updateCustomerStatus(target.id, newStatus);
         setLiveCustomers((prev) =>
           prev.map((c) =>
             c.id === target.id ? { ...c, status: newStatus } : c,
@@ -1905,7 +1866,6 @@ export const CustomerView: React.FC = () => {
           `Customer "${deleteTargetCustomer.name}" deleted successfully.`,
         );
         customerAssignmentsCacheRef.current = null;
-        deleteCustomer(deleteTargetCustomer.id);
         setLiveCustomers((prev) =>
           prev.filter((c) => c.id !== deleteTargetCustomer.id),
         );
@@ -1938,83 +1898,26 @@ export const CustomerView: React.FC = () => {
       }
     });
 
-  // Filtered and Paginated Customers
+  // Filtered customers: API page data only (outstanding filter applied on API fields)
   const filteredCustomers = useMemo(() => {
-    return customers.filter((c) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        c.name.toLowerCase().includes(q) ||
-        c.customerCode.toLowerCase().includes(q) ||
-        (c.company && c.company.toLowerCase().includes(q)) ||
-        c.email.toLowerCase().includes(q) ||
-        c.phone.toLowerCase().includes(q) ||
-        c.city.toLowerCase().includes(q);
-
-      const matchesStatus =
-        appliedStatus === "All" ||
-        c.status.toLowerCase() === appliedStatus.toLowerCase();
-
-      const matchesType =
-        appliedType === "All" ||
-        c.customerType.toLowerCase() === appliedType.toLowerCase();
-
-      const financials = customerFinancialMap.get(c.id);
-      const out = financials?.outstandingAmount || c.outstandingAmount || 0;
-      const matchesOutstanding =
-        appliedOutstanding === "All"
-          ? true
-          : appliedOutstanding === "With Outstanding"
-            ? out > 0
-            : out === 0;
-
-      return (
-        matchesSearch && matchesStatus && matchesType && matchesOutstanding
-      );
-    });
-  }, [
-    customers,
-    appliedSearch,
-    appliedStatus,
-    appliedType,
-    appliedOutstanding,
-    customerFinancialMap,
-  ]);
-
-  const totalPages = Math.ceil(filteredCustomers.length / pageSize) || 1;
-  const paginatedCustomers = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredCustomers.slice(start, start + pageSize);
-  }, [filteredCustomers, currentPage, pageSize]);
-
-  // Display Customers: Use live Commerce dataset when connected, fallback to local paginated
-  const displayCustomers = useMemo(() => {
-    let list: SalesCustomer[];
-    if (isApiConnected && liveCustomers.length > 0) {
-      if (appliedOutstanding === "With Outstanding") {
-        list = liveCustomers.filter((c) => (c.outstandingAmount || 0) > 0);
-      } else if (appliedOutstanding === "Zero Balance") {
-        list = liveCustomers.filter((c) => (c.outstandingAmount || 0) === 0);
-      } else {
-        list = liveCustomers;
-      }
-    } else {
-      list = filteredCustomers;
+    if (appliedOutstanding === "With Outstanding") {
+      return liveCustomers.filter((c) => (c.outstandingAmount || 0) > 0);
     }
+    if (appliedOutstanding === "Zero Balance") {
+      return liveCustomers.filter((c) => (c.outstandingAmount || 0) === 0);
+    }
+    return liveCustomers;
+  }, [liveCustomers, appliedOutstanding]);
 
+  // Display Customers: live Commerce API dataset only
+  const displayCustomers = useMemo(() => {
+    const list = filteredCustomers;
     if (list.length > pageSize) {
       const start = (currentPage - 1) * pageSize;
       return list.slice(start, start + pageSize);
     }
     return list;
-  }, [
-    isApiConnected,
-    liveCustomers,
-    appliedOutstanding,
-    filteredCustomers,
-    currentPage,
-    pageSize,
-  ]);
+  }, [filteredCustomers, currentPage, pageSize]);
 
   const displayedTotalRecords = useMemo(() => {
     if (isApiConnected && totalApiRecords !== null) {
@@ -2023,89 +1926,41 @@ export const CustomerView: React.FC = () => {
     return filteredCustomers.length;
   }, [isApiConnected, totalApiRecords, filteredCustomers.length]);
 
-  // Selected Customer Linked Entities
-  // Related Customer Documents
-  const selectedCustomerQuotations = useMemo(() => {
-    if (!selectedCustomer) return [];
-    return quotations.filter(
-      (q) =>
-        q.customerId === selectedCustomer.id ||
-        q.partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-    );
-  }, [quotations, selectedCustomer]);
+  // Selected Customer Linked Entities (all loaded from Commerce APIs on open)
+  const selectedDocs =
+    selectedCustomer && detailDocs && detailDocs.customerId === selectedCustomer.id
+      ? detailDocs
+      : null;
+  const selectedCustomerQuotations: SaleQuotation[] = selectedDocs?.quotations || [];
+  const selectedCustomerProformas: any[] = selectedDocs?.proformas || [];
+  const selectedCustomerOrders: any[] = selectedDocs?.orders || [];
+  const selectedCustomerChallans: any[] = selectedDocs?.challans || [];
+  const selectedCustomerSales: SaleTransaction[] = selectedDocs?.sales || [];
+  const selectedCustomerReturns: SalesReturn[] = selectedDocs?.returns || [];
 
-  const selectedCustomerProformas = useMemo(() => {
-    if (!selectedCustomer) return [];
-    try {
-      const raw = localStorage.getItem("yaa_crm_proforma_invoices");
-      const all = raw ? JSON.parse(raw) : [];
-      return all.filter(
-        (p: any) =>
-          p.customerId === selectedCustomer.id ||
-          p.partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-      );
-    } catch {
-      return [];
-    }
-  }, [selectedCustomer]);
-
-  const selectedCustomerOrders = useMemo(() => {
-    if (!selectedCustomer) return [];
-    try {
-      const raw = localStorage.getItem("yaa_crm_sale_orders");
-      const all = raw ? JSON.parse(raw) : [];
-      return all.filter(
-        (o: any) =>
-          o.customerId === selectedCustomer.id ||
-          o.partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-      );
-    } catch {
-      return [];
-    }
-  }, [selectedCustomer]);
-
-  const selectedCustomerChallans = useMemo(() => {
-    if (!selectedCustomer) return [];
-    try {
-      const raw = localStorage.getItem("yaa_crm_delivery_challans");
-      const all = raw ? JSON.parse(raw) : [];
-      return all.filter(
-        (c: any) =>
-          c.customerId === selectedCustomer.id ||
-          c.partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-      );
-    } catch {
-      return [];
-    }
-  }, [selectedCustomer]);
-
-  const selectedCustomerSales = useMemo(() => {
-    if (!selectedCustomer) return [];
-    return sales.filter(
-      (s) =>
-        s.customerId === selectedCustomer.id ||
-        s.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-    );
-  }, [sales, selectedCustomer]);
-
-  const selectedCustomerReturns = useMemo(() => {
-    if (!selectedCustomer) return [];
-    return salesReturns.filter(
-      (r) =>
-        r.customerId === selectedCustomer.id ||
-        r.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-    );
-  }, [salesReturns, selectedCustomer]);
-
+  // Customer financial metrics: API ledger first, then the API customer object
   const selectedCustomerMetrics = useMemo(() => {
     if (!selectedCustomer) return null;
-    return calculateCustomerOutstanding(
-      selectedCustomer,
-      sales as any,
-      salesReturns as any,
-      paymentIns as any,
+    const ledger = customerLedgerMap[selectedCustomer.id];
+    const creditLimit = Number(
+      ledger?.creditLimit ?? selectedCustomer.creditLimit ?? 0,
     );
-  }, [selectedCustomer, sales, salesReturns, paymentIns]);
+    const outstandingAmount = Number(
+      ledger?.outstandingAmount ?? selectedCustomer.outstandingAmount ?? 0,
+    );
+    return {
+      totalSalesAmount: Number(
+        ledger?.totalSales ?? selectedCustomer.totalSales ?? 0,
+      ),
+      totalSalesCount: Number(ledger?.totalInvoices ?? 0),
+      totalPaidAmount: Number(
+        ledger?.paidAmount ?? selectedCustomer.paidAmount ?? 0,
+      ),
+      totalReturnAmount: Number(ledger?.creditNotes ?? 0),
+      outstandingAmount,
+      availableCredit: Math.max(0, creditLimit - outstandingAmount),
+    };
+  }, [selectedCustomer, customerLedgerMap]);
 
   const selectedCustomerCollectionData = useMemo(() => {
     if (!selectedCustomer) return null;
@@ -2123,17 +1978,11 @@ export const CustomerView: React.FC = () => {
           }
         : null);
 
-    const custSales = sales.filter(
-      (s) =>
-        s.customerId === selectedCustomer.id ||
-        s.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase(),
-    );
+    const ledger = customerLedgerMap[selectedCustomer.id];
+    const custSales = selectedCustomerSales;
 
-    const totalOutstanding = custSales.reduce(
-      (acc, s) =>
-        acc +
-        (s.balance ?? Math.max(0, (s.grandTotal || 0) - (s.paidAmount || 0))),
-      0,
+    const totalOutstanding = Number(
+      ledger?.outstandingAmount ?? selectedCustomer.outstandingAmount ?? 0,
     );
 
     const overdueSales = custSales.filter((s) => {
@@ -2149,26 +1998,22 @@ export const CustomerView: React.FC = () => {
       0,
     );
 
-    const custPayments = paymentIns
-      .filter((p) => p.customerId === selectedCustomer.id)
-      .sort((a, b) => (b.paymentDate || "").localeCompare(a.paymentDate || ""));
-    const lastPayment = custPayments[0] || null;
+    // Last payment: most recent PAYMENT entry of the API customer ledger
+    const lastPaymentEntry =
+      (ledger?.activities || [])
+        .filter((a) => String(a.type).toUpperCase() === "PAYMENT")
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] || null;
+    const lastPayment = lastPaymentEntry
+      ? {
+          amount: Number(lastPaymentEntry.credit || 0),
+          paymentDate: String(lastPaymentEntry.date || "").split("T")[0],
+        }
+      : null;
 
-    const custFollowUps = collectionFollowUps
-      .filter((f) => f.customerId === selectedCustomer.id)
-      .sort((a, b) =>
-        (b.followUpDate || "").localeCompare(a.followUpDate || ""),
-      );
-    const nextFollowUp =
-      custFollowUps.find(
-        (f) => f.nextFollowUpDate && f.nextFollowUpDate >= todayStr,
-      ) ||
-      custFollowUps[0] ||
-      null;
-
-    const custPromises = promisesToPay
-      .filter((p) => p.customerId === selectedCustomer.id)
-      .sort((a, b) => (b.promiseDate || "").localeCompare(a.promiseDate || ""));
+    // Follow-ups and promises come from the API collection timeline
+    const timeline = selectedDocs?.timeline || [];
+    const custFollowUps = timeline.filter((e) => /follow/i.test(e.type || ""));
+    const custPromises = timeline.filter((e) => /promise/i.test(e.type || ""));
 
     return {
       rep,
@@ -2176,7 +2021,7 @@ export const CustomerView: React.FC = () => {
       overdueAmount,
       overdueCount: overdueSales.length,
       lastPayment,
-      nextFollowUpDate: nextFollowUp?.nextFollowUpDate || null,
+      nextFollowUpDate: null as string | null,
       followUps: custFollowUps,
       promises: custPromises,
       invoicesWithBalance: custSales.filter(
@@ -2188,10 +2033,9 @@ export const CustomerView: React.FC = () => {
   }, [
     selectedCustomer,
     availableSalesReps,
-    sales,
-    paymentIns,
-    collectionFollowUps,
-    promisesToPay,
+    customerLedgerMap,
+    selectedCustomerSales,
+    selectedDocs,
   ]);
 
   const getCustomerInitials = (name?: string): string => {
@@ -2237,7 +2081,6 @@ export const CustomerView: React.FC = () => {
     }
 
     const excelRows = filteredCustomers.map((c, idx) => {
-      const fin = customerFinancialMap.get(c.id);
       return {
         sNo: idx + 1,
         customerCode: c.customerCode,
@@ -2247,11 +2090,11 @@ export const CustomerView: React.FC = () => {
         email: c.email || "-",
         customerType: c.customerType,
         paymentDuePeriod: c.paymentDuePeriod || c.paymentTerms || "Net 30 Days",
-        totalSales: fin?.totalSalesAmount || c.totalSales || 0,
-        paidAmount: fin?.totalPaidAmount || c.paidAmount || 0,
+        totalSales: c.totalSales || 0,
+        paidAmount: c.paidAmount || 0,
         paidAmountDate: getCustomerPaidDate(c) || "-",
         creditLimit: Number(c.creditLimit || 0),
-        outstanding: fin?.outstandingAmount || Number(c.outstandingAmount || 0),
+        outstanding: Number(c.outstandingAmount || 0),
         status: c.status,
       };
     });
@@ -2337,7 +2180,6 @@ export const CustomerView: React.FC = () => {
     }
 
     const printRows = filteredCustomers.map((c, idx) => {
-      const fin = customerFinancialMap.get(c.id);
       return {
         sNo: idx + 1,
         customerCode: c.customerCode,
@@ -2347,10 +2189,10 @@ export const CustomerView: React.FC = () => {
         email: c.email || "-",
         customerType: c.customerType,
         paymentDuePeriod: c.paymentDuePeriod || c.paymentTerms || "Net 30 Days",
-        paidAmount: fin?.totalPaidAmount || c.paidAmount || 0,
+        paidAmount: c.paidAmount || 0,
         paidAmountDate: getCustomerPaidDate(c) || "-",
         creditLimit: Number(c.creditLimit || 0),
-        outstanding: fin?.outstandingAmount || Number(c.outstandingAmount || 0),
+        outstanding: Number(c.outstandingAmount || 0),
         status: c.status,
       };
     });
@@ -2705,38 +2547,22 @@ export const CustomerView: React.FC = () => {
                 </tr>
               ) : (
                 displayCustomers.map((cust) => {
-                  const localFin = customerFinancialMap.get(cust.id);
+                  const custOutstanding = cust.outstandingAmount || 0;
                   const fin = {
-                    totalSalesAmount:
-                      localFin && localFin.totalSalesAmount > 0
-                        ? localFin.totalSalesAmount
-                        : cust.totalSales || 0,
-                    totalPaidAmount:
-                      localFin && localFin.totalPaidAmount > 0
-                        ? localFin.totalPaidAmount
-                        : cust.paidAmount || 0,
-                    outstandingAmount:
-                      localFin && localFin.outstandingAmount > 0
-                        ? localFin.outstandingAmount
-                        : cust.outstandingAmount || 0,
+                    totalSalesAmount: cust.totalSales || 0,
+                    totalPaidAmount: cust.paidAmount || 0,
+                    outstandingAmount: custOutstanding,
                     creditLimit: cust.creditLimit || 0,
                     availableCredit: Math.max(
                       0,
-                      (cust.creditLimit || 0) -
-                        (localFin?.outstandingAmount ||
-                          cust.outstandingAmount ||
-                          0),
+                      (cust.creditLimit || 0) - custOutstanding,
                     ),
                     creditUtilizationPercent:
                       (cust.creditLimit || 0) > 0
                         ? Math.min(
                             100,
                             Math.round(
-                              ((localFin?.outstandingAmount ||
-                                cust.outstandingAmount ||
-                                0) /
-                                cust.creditLimit) *
-                                100,
+                              (custOutstanding / cust.creditLimit) * 100,
                             ),
                           )
                         : 0,
@@ -3824,6 +3650,13 @@ export const CustomerView: React.FC = () => {
               })}
             </div>
 
+            {isLoadingDetailDocs && (
+              <div className="p-3 rounded-xl bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-2 text-xs font-medium">
+                <Loader2 className="w-4 h-4 animate-spin text-[#4309A2]" />
+                <span>Loading customer documents from Commerce service...</span>
+              </div>
+            )}
+
             {/* Tab 1: Overview */}
             {activeDetailTab === "overview" && (
               <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
@@ -4474,19 +4307,15 @@ export const CustomerView: React.FC = () => {
                           >
                             <div className="flex items-center justify-between gap-1 flex-wrap">
                               <span className="font-semibold text-slate-800 dark:text-slate-200">
-                                {f.followUpDate}{" "}
-                                {f.followUpTime && `â€¢ ${f.followUpTime}`}
+                                {f.date ? String(f.date).split("T")[0] : "-"}
                               </span>
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-[#33077C]">
-                                {f.outcome}
+                                {f.title}
                               </span>
                             </div>
-                            <p className="text-slate-600 dark:text-slate-400 mt-1 italic">
-                              "{f.notes}"
-                            </p>
-                            {f.nextFollowUpDate && (
-                              <p className="text-[10px] text-purple-700 dark:text-purple-300 mt-1 font-semibold">
-                                Next Follow-up: {f.nextFollowUpDate}
+                            {(f.details || f.subtitle) && (
+                              <p className="text-slate-600 dark:text-slate-400 mt-1 italic">
+                                "{f.details || f.subtitle}"
                               </p>
                             )}
                           </div>
@@ -4515,32 +4344,23 @@ export const CustomerView: React.FC = () => {
                           >
                             <div className="flex items-center justify-between gap-1 flex-wrap">
                               <span className="font-bold text-slate-800 dark:text-slate-200">
-                                ₹
-                                {p.promisedAmount.toLocaleString("en-IN", {
-                                  minimumFractionDigits: 2,
-                                })}
+                                {p.title}
                               </span>
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                  p.status === "Honoured"
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : p.status === "Broken"
-                                      ? "bg-rose-100 text-rose-700"
-                                      : "bg-purple-100 text-[#33077C]"
-                                }`}
-                              >
-                                {p.status}
-                              </span>
+                              {p.subtitle && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-[#33077C]">
+                                  {p.subtitle}
+                                </span>
+                              )}
                             </div>
                             <p className="text-slate-600 dark:text-slate-400 mt-1">
-                              Promised Date:{" "}
+                              Date:{" "}
                               <span className="font-semibold">
-                                {p.promiseDate}
+                                {p.date ? String(p.date).split("T")[0] : "-"}
                               </span>
                             </p>
-                            {p.notes && (
+                            {p.details && (
                               <p className="text-slate-500 italic mt-0.5">
-                                "{p.notes}"
+                                "{p.details}"
                               </p>
                             )}
                           </div>

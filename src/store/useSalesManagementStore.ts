@@ -376,6 +376,8 @@ export interface Supplier {
   stateId?: string;
   districtId?: string;
   cityId?: string;
+  /** Display name of the saved district (the location pickers work by name). */
+  district?: string;
   pincode: string;
   gstNumber?: string;
   panNumber?: string;
@@ -428,6 +430,10 @@ export interface PurchaseRequest {
   items: PurchaseRequestItem[];
   supplierId?: string;
   supplierName?: string;
+  supplierCode?: string;
+  supplierPhone?: string;
+  supplierEmail?: string;
+  supplierAddress?: string;
   notes?: string;
   organizationId?: string;
   totalEstimatedAmount?: number;
@@ -689,209 +695,27 @@ const KEYS = {
   PROMISES_TO_PAY: 'yaa_crm_promises_to_pay',
 };
 
-const SEED_VERSION_KEY = 'yaa_crm_pure_db_v1';
 const INITIAL_PAYMENT_INS: SalePaymentIn[] = [];
 
+/**
+ * Shared session memory for every component that calls useSalesManagementStore().
+ * Nothing in it is read from or written to the browser's storage: after a reload every list starts empty and is
+ * filled again only by API responses. (It used to live in localStorage, which is how old or deleted records kept
+ * reappearing on screen.) The "storage updated" event is kept so components still refresh each other.
+ */
+const memory = new Map<string, unknown>();
+const clone = <T,>(value: T): T => {
+  if (value === undefined || value === null || typeof value !== 'object') return value;
+  return typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+};
+
 function getStorage<T>(key: string, initial: T): T {
-  try {
-    const isCleanSeeded = localStorage.getItem(SEED_VERSION_KEY);
-    if (!isCleanSeeded) {
-      localStorage.setItem(KEYS.SALES, JSON.stringify(INITIAL_SALES));
-      localStorage.setItem(KEYS.SALES_RETURNS, JSON.stringify(INITIAL_SALES_RETURNS));
-      localStorage.setItem(KEYS.CUSTOMERS, JSON.stringify(INITIAL_CUSTOMERS));
-      localStorage.setItem(KEYS.SUPPLIERS, JSON.stringify(INITIAL_SUPPLIERS));
-      localStorage.setItem(KEYS.PURCHASE_REQUESTS, JSON.stringify(INITIAL_PURCHASE_REQUESTS));
-      localStorage.setItem(KEYS.PURCHASES, JSON.stringify(INITIAL_PURCHASES));
-      localStorage.setItem(KEYS.PURCHASE_RETURNS, JSON.stringify(INITIAL_PURCHASE_RETURNS));
-      localStorage.setItem(KEYS.PAYMENTS_OUT, JSON.stringify(INITIAL_PAYMENTS_OUT));
-      localStorage.setItem(KEYS.STOCKS, JSON.stringify(INITIAL_INVENTORY_STOCKS));
-      localStorage.setItem(KEYS.QUOTATIONS, JSON.stringify(INITIAL_QUOTATIONS));
-      localStorage.setItem(KEYS.PAYMENT_INS, JSON.stringify(INITIAL_PAYMENT_INS));
-      localStorage.setItem(KEYS.SALES_REPRESENTATIVES, JSON.stringify(INITIAL_SALES_REPRESENTATIVES));
-      localStorage.setItem(KEYS.COLLECTION_FOLLOW_UPS, JSON.stringify(INITIAL_COLLECTION_FOLLOW_UPS));
-      localStorage.setItem(KEYS.PROMISES_TO_PAY, JSON.stringify(INITIAL_PROMISES_TO_PAY));
-      localStorage.setItem('yaa_crm_proforma_invoices', JSON.stringify([]));
-      localStorage.setItem('yaa_crm_sale_orders', JSON.stringify([]));
-      localStorage.setItem(SEED_VERSION_KEY, 'true');
-      return initial;
-    }
-
-    const raw = localStorage.getItem(key);
-    if (!raw) {
-      localStorage.setItem(key, JSON.stringify(initial));
-      return initial;
-    }
-
-    const parsed = JSON.parse(raw);
-
-    // Auto-purge mock/legacy stocks & stale test batches
-    if (key === KEYS.STOCKS && Array.isArray(parsed)) {
-      let modified = false;
-      const cleaned = parsed.filter(
-        (s) =>
-          !String(s.productId || s.id).startsWith('PROD_10') &&
-          !String(s.id).startsWith('stk_') &&
-          !String(s.productName || '').includes('India Gate')
-      );
-      if (cleaned.length !== parsed.length) modified = true;
-
-      // Purge any stale QA-EXP batches from stored stock records
-      cleaned.forEach((s: any) => {
-        if (Array.isArray(s.batches)) {
-          const beforeLen = s.batches.length;
-          s.batches = s.batches.filter((b: any) => !String(b.batchNo || '').startsWith('QA-EXP'));
-          if (s.batches.length !== beforeLen) modified = true;
-        }
-      });
-
-      if (modified) {
-        localStorage.setItem(KEYS.STOCKS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock quotations
-    if (key === KEYS.QUOTATIONS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (q) =>
-          q.id !== 'quot-1' &&
-          q.quotationNo !== 'EST-001' &&
-          q.partyName !== 'Keerthivasan'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.QUOTATIONS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock sales returns
-    if (key === KEYS.SALES_RETURNS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (r) =>
-          r.id !== 'ret_1' &&
-          r.returnNo !== 'SR-2026-0001' &&
-          r.customerName !== 'Ramesh Kumar'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.SALES_RETURNS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock payments-in
-    if (key === KEYS.PAYMENT_INS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (p) =>
-          p.id !== 'pay_in_1' &&
-          p.id !== 'pay_in_2' &&
-          p.receiptNo !== 'REC-2026-0001' &&
-          p.receiptNo !== 'REC-2026-0002'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PAYMENT_INS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock purchase requests
-    if (key === KEYS.PURCHASE_REQUESTS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (pr) =>
-          pr.id !== 'pr_1' &&
-          pr.id !== 'pr_2' &&
-          pr.requestNo !== 'PR-2026-0041' &&
-          pr.requestNo !== 'PR-2026-0042'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PURCHASE_REQUESTS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock purchase orders
-    if (key === KEYS.PURCHASES && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (po) =>
-          po.id !== 'po_1' &&
-          po.id !== 'po_1_2' &&
-          po.id !== 'po_2' &&
-          po.id !== 'po_3' &&
-          po.id !== 'po_4' &&
-          po.id !== 'po-uuid-0001' &&
-          !String(po.purchaseNo || '').startsWith('PO-2026-020')
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PURCHASES, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock purchase returns
-    if (key === KEYS.PURCHASE_RETURNS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (pret) =>
-          pret.id !== 'pret_1' &&
-          pret.id !== 'pret_5501' &&
-          pret.returnNo !== 'PR-RET-2026-001'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PURCHASE_RETURNS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock payment outs
-    if (key === KEYS.PAYMENTS_OUT && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (pout) =>
-          pout.id !== 'pay_out_1' &&
-          pout.id !== 'pay_out_2' &&
-          pout.id !== 'pay_out_3' &&
-          pout.id !== 'pout-uuid-0001' &&
-          !String(pout.paymentNo || '').startsWith('VPA-2026-00')
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PAYMENTS_OUT, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock collection follow-ups
-    if (key === KEYS.COLLECTION_FOLLOW_UPS && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (fup) => fup.id !== 'fup_1' && fup.id !== 'fup_2' && fup.id !== 'fup_3'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.COLLECTION_FOLLOW_UPS, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    // Auto-purge mock promises to pay
-    if (key === KEYS.PROMISES_TO_PAY && Array.isArray(parsed)) {
-      const cleaned = parsed.filter(
-        (ptp) => ptp.id !== 'ptp_1' && ptp.id !== 'ptp_2'
-      );
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(KEYS.PROMISES_TO_PAY, JSON.stringify(cleaned));
-        return cleaned as unknown as T;
-      }
-    }
-
-    return parsed;
-  } catch (err) {
-    console.error(`Failed to read from localStorage for ${key}`, err);
-    return initial;
-  }
+  return memory.has(key) ? clone(memory.get(key) as T) : initial;
 }
 
 function setStorage<T>(key: string, data: T) {
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-    window.dispatchEvent(new Event('sales_management_storage_updated'));
-  } catch (err) {
-    console.error(`Failed to write to localStorage for ${key}`, err);
-  }
+  memory.set(key, clone(data));
+  window.dispatchEvent(new Event('sales_management_storage_updated'));
 }
 
 export const useSalesManagementStore = () => {

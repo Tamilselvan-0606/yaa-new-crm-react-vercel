@@ -45,8 +45,8 @@ import {
   Printer,
 } from 'lucide-react';
 import {
-  useSalesManagementStore,
   SaleTransaction,
+  SalePaymentIn,
   SalesCustomer,
   SalesRepresentative,
   CollectionFollowUp,
@@ -81,7 +81,6 @@ import { FormError } from '../../../components/common/FormError';
 import { SaleActionDropdown } from '../utils';
 import { store } from '../../../store/store';
 import { baseApi } from '../../../api/baseApi';
-import { calculateCustomerOutstanding } from '../../../utils/outstandingBalance';
 import {
   collectionApi,
   ApiCollectionInvoiceItem,
@@ -94,6 +93,7 @@ import {
 } from '../../../api/commerce/collectionApi';
 import { salesRepresentativeApi, ApiSalesRepresentative } from '../../../api/commerce/salesRepresentativeApi';
 import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
+import { commercePaymentInApi, mapApiPaymentInToSalePaymentIn } from '../../../api/commerce/paymentInApi';
 import { customerApi, mapApiCustomerToSalesCustomer } from '../../../api/commerce/customerApi';
 import { FormLabel, FORM_INPUT_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
 
@@ -109,23 +109,44 @@ export const CollectionsView: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const {
-    sales,
-    customers,
-    salesReturns,
-    paymentIns,
-    collectionFollowUps,
-    promisesToPay,
-    recordCollectionPayment,
-    assignCustomerSalesRep,
-    addCollectionFollowUp,
-    savePromiseToPay,
-    getCollectionDashboardMetrics,
-    setSalesList,
-    setCustomersList,
-  } = useSalesManagementStore();
+  // Customers and invoices shown on this screen come only from Commerce API responses.
+  const [customers, setCustomers] = useState<SalesCustomer[]>([]);
+  const [sales, setSales] = useState<SaleTransaction[]>([]);
 
-  // Load Customers list from API once if not yet populated
+  // Customer documents for the collection detail / follow-up dialogs (Commerce API only)
+  const [customerDocs, setCustomerDocs] = useState<{
+    customerId: string;
+    sales: SaleTransaction[];
+    payments: SalePaymentIn[];
+    followUps: CollectionFollowUpItem[];
+  } | null>(null);
+
+  const loadCustomerDocs = async (customerId?: string, customerName?: string) => {
+    if (!customerId || !isUuid(customerId)) {
+      setCustomerDocs(null);
+      return;
+    }
+    const [invRes, payRes, fuRes] = await Promise.allSettled([
+      commerceInvoiceApi.getInvoices({ customerId, pagination_required: false, page_size: 200 }),
+      commercePaymentInApi.getPaymentIns({ customerId, pagination_required: false, page_size: 200 }),
+      collectionApi.getFollowUps({ search: customerName || undefined, limit: 200 }),
+    ]);
+    const invList =
+      invRes.status === 'fulfilled' && Array.isArray(invRes.value?.data)
+        ? invRes.value.data.map(mapApiInvoiceToSaleTransaction).filter((s) => !s.customerId || s.customerId === customerId)
+        : [];
+    const payList =
+      payRes.status === 'fulfilled' && Array.isArray(payRes.value?.data)
+        ? payRes.value.data.map(mapApiPaymentInToSalePaymentIn).filter((p) => !p.customerId || p.customerId === customerId)
+        : [];
+    const fuList =
+      fuRes.status === 'fulfilled' && Array.isArray(fuRes.value?.data)
+        ? fuRes.value.data.filter((f) => f.customerId === customerId)
+        : [];
+    setCustomerDocs({ customerId, sales: invList, payments: payList, followUps: fuList });
+  };
+
+  // Load Customers list from API once
   const hasLoadedCustomersRef = useRef(false);
   useEffect(() => {
     if (hasLoadedCustomersRef.current) return;
@@ -134,11 +155,11 @@ export const CollectionsView: React.FC = () => {
       .getCustomers({ pagination_required: false, page_size: 200 })
       .then((res) => {
         if (res?.success && Array.isArray(res.data)) {
-          setCustomersList(res.data.map(mapApiCustomerToSalesCustomer));
+          setCustomers(res.data.map(mapApiCustomerToSalesCustomer));
         }
       })
       .catch((e) => console.warn('Customer load error in Collections:', e));
-  }, [setCustomersList]);
+  }, []);
 
   // Live sales representatives from API
   const [liveReps, setLiveReps] = React.useState<ApiSalesRepresentative[]>([]);
@@ -410,7 +431,7 @@ export const CollectionsView: React.FC = () => {
 
       if (invRes.status === 'fulfilled' && invRes.value?.success && Array.isArray(invRes.value.data)) {
         const mappedSales = invRes.value.data.map(mapApiInvoiceToSaleTransaction);
-        setSalesList(mappedSales);
+        setSales(mappedSales);
       }
 
       setApiInvoices(colInvoices);
@@ -438,7 +459,6 @@ export const CollectionsView: React.FC = () => {
     dueDateFilter,
     statusFilter,
     paymentStatusFilter,
-    setSalesList,
   ]);
 
   const loadAssignments = React.useCallback(async () => {
@@ -713,17 +733,9 @@ export const CollectionsView: React.FC = () => {
         const outstandingAmount =
           sale.balance !== undefined ? Number(sale.balance) : Math.max(0, invoiceTotal - paidAmount);
 
-        const ptp = promisesToPay.find(
-          (p) =>
-            (p.invoiceId && (p.invoiceId === sale.id || p.invoiceNo === sale.invoiceNo)) &&
-            ((p.status as string) === 'Pending' || (p.status as string) === 'Active')
-        );
-
         let status: 'Overdue' | 'Due Today' | 'Upcoming' | 'Promise to Pay' | 'Paid' = 'Paid';
         if (outstandingAmount > 0) {
-          if (ptp) {
-            status = 'Promise to Pay';
-          } else if (sale.dueDate && sale.dueDate < todayStr) {
+          if (sale.dueDate && sale.dueDate < todayStr) {
             status = 'Overdue';
           } else if (sale.dueDate && sale.dueDate === todayStr) {
             status = 'Due Today';
@@ -782,8 +794,8 @@ export const CollectionsView: React.FC = () => {
           outstandingAmount,
           status,
           paymentStatus: pStatus,
-          hasPendingPromise: !!ptp,
-          pendingPromise: ptp as any,
+          hasPendingPromise: false,
+          pendingPromise: undefined,
           lastPaymentDate: undefined,
           isCancelled,
         });
@@ -791,7 +803,7 @@ export const CollectionsView: React.FC = () => {
     }
 
     return Array.from(itemsMap.values());
-  }, [apiInvoices, apiAssignments, sales, customers, liveReps, promisesToPay, todayStr]);
+  }, [apiInvoices, apiAssignments, sales, customers, liveReps, todayStr]);
 
   // Client-side filtering by Tab, Rep, Customer, Due Date, Status, Payment Status, Search
   const filteredItems = useMemo<CollectionItem[]>(() => {
@@ -928,19 +940,8 @@ export const CollectionsView: React.FC = () => {
       apiAssignments.forEach((ca) => {
         const rep = liveReps.find((r) => r.id === ca.salesRepresentative?.id);
         const matchedCust = customers.find((c) => c.id === ca.id);
-        const custForCalc = matchedCust || {
-          id: ca.id,
-          name: ca.customerName,
-          customerCode: ca.customerCode,
-          openingBalance: Number((ca as any).openingBalance || 0),
-          outstandingAmount: Number(ca.totalOutstanding || 0),
-        };
-        const metrics = calculateCustomerOutstanding(
-          custForCalc as any,
-          (sales || []) as any,
-          (salesReturns || []) as any,
-          (paymentIns || []) as any
-        );
+        // Outstanding comes from the API (assignment record, then customer record)
+        const apiOutstanding = Number(ca.totalOutstanding ?? matchedCust?.outstandingAmount ?? 0);
         map.set(ca.id, {
           customer: matchedCust || ({
             id: ca.id,
@@ -953,7 +954,7 @@ export const CollectionsView: React.FC = () => {
             assignedDate: ca.assignedDate,
             status: ca.status,
           } as any),
-          outstanding: metrics.outstandingAmount,
+          outstanding: apiOutstanding,
           rep,
           repName: ca.salesRepresentative?.name || rep?.name || 'Unassigned',
           repType: ca.salesRepresentative?.type || 'Primary',
@@ -967,15 +968,9 @@ export const CollectionsView: React.FC = () => {
       customers.forEach((cust) => {
         if (!map.has(cust.id)) {
           const rep = liveReps.find((r) => r.id === cust.salesRepresentativeId);
-          const metrics = calculateCustomerOutstanding(
-            cust as any,
-            (sales || []) as any,
-            (salesReturns || []) as any,
-            (paymentIns || []) as any
-          );
           map.set(cust.id, {
             customer: cust,
-            outstanding: metrics.outstandingAmount,
+            outstanding: Number(cust.outstandingAmount || 0),
             rep,
             repName: cust.salesRepresentativeName || rep?.name || 'Unassigned',
             repType: cust.salesRepresentativeType || 'Primary',
@@ -987,7 +982,7 @@ export const CollectionsView: React.FC = () => {
     }
 
     return Array.from(map.values());
-  }, [apiAssignments, customers, liveReps, sales, salesReturns, paymentIns]);
+  }, [apiAssignments, customers, liveReps]);
 
   const filteredCustomerAssignments = customerAssignmentsList;
   const paginatedCustomerAssignments = useMemo(() => {
@@ -1251,16 +1246,6 @@ export const CollectionsView: React.FC = () => {
         salesRepresentativeId: paymentRepId || undefined,
       });
 
-      recordCollectionPayment({
-        invoiceId: selectedInvoice.id,
-        amount: Number(paymentAmount),
-        paymentDate: paymentDate || todayStr,
-        paymentMethod,
-        referenceNo: paymentReference || undefined,
-        notes: paymentNotes || undefined,
-        salesRepresentativeId: paymentRepId || undefined,
-      });
-
       toast.success(
         `Recorded payment of �${Number(paymentAmount).toLocaleString('en-IN', {
           minimumFractionDigits: 2,
@@ -1317,6 +1302,7 @@ export const CollectionsView: React.FC = () => {
     setFollowUpPromiseDate('');
     setFollowUpPromiseAmount(item.outstandingAmount);
     setIsFollowUpModalOpen(true);
+    loadCustomerDocs(item.customerId, item.customerName);
     setActiveActionId(null);
   };
 
@@ -1347,44 +1333,6 @@ export const CollectionsView: React.FC = () => {
         promiseDate: followUpHasPromise ? followUpPromiseDate : undefined,
         nextFollowUpDate: nextFollowUpDate || (followUpHasPromise ? followUpPromiseDate : undefined),
       });
-
-      addCollectionFollowUp({
-        customerId: selectedCustomer.id,
-        customerName: selectedCustomer.name,
-        invoiceId: selectedInvoice.id,
-        invoiceNo: selectedInvoice.invoiceNo,
-        salesRepresentativeId:
-          followUpRepId || selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
-        salesRepresentativeName:
-          liveReps.find((r) => r.id === followUpRepId)?.name ||
-          selectedInvoice.salesRepresentativeName ||
-          'Sales Rep',
-        contactMethod: followUpContactMethod,
-        followUpDate,
-        followUpTime,
-        outcome: savedOutcome,
-        notes: followUpNotes.trim(),
-        hasPromiseToPay: followUpHasPromise,
-        promisedAmount: followUpHasPromise ? Number(followUpPromiseAmount) : undefined,
-        promiseDate: followUpHasPromise ? followUpPromiseDate : undefined,
-        nextFollowUpDate: nextFollowUpDate || (followUpHasPromise ? followUpPromiseDate : undefined),
-        createdBy: liveReps.find((r) => r.id === followUpRepId)?.name || 'Rep',
-      });
-
-      if (followUpHasPromise && followUpPromiseAmount > 0 && followUpPromiseDate) {
-        savePromiseToPay({
-          customerId: selectedCustomer.id,
-          customerName: selectedCustomer.name,
-          invoiceId: selectedInvoice.id,
-          invoiceNo: selectedInvoice.invoiceNo,
-          salesRepresentativeId: followUpRepId || selectedInvoice.salesRepresentativeId,
-          salesRepresentativeName: liveReps.find((r) => r.id === followUpRepId)?.name,
-          promisedAmount: Number(followUpPromiseAmount),
-          promiseDate: followUpPromiseDate,
-          notes: `Promise to Pay recorded during follow-up: ${followUpNotes.trim()}`,
-          status: 'Pending',
-        });
-      }
 
       toast.success(`Follow-up saved for ${selectedCustomer.name}`);
       setIsFollowUpModalOpen(false);
@@ -1451,7 +1399,6 @@ export const CollectionsView: React.FC = () => {
       const targetCust = customers.find((c) => c.id === assignCustomerId);
       const targetRep = liveReps.find((r) => r.id === assignRepId);
       const resolvedRepName = targetRep?.name || 'Sales Rep';
-      assignCustomerSalesRep(assignCustomerId, assignRepId, assignType, assignEffectiveFrom, assignNotes, resolvedRepName);
       setApiInvoices((prev) =>
         prev.map((inv) =>
           inv.customerId === assignCustomerId
@@ -1563,24 +1510,6 @@ export const CollectionsView: React.FC = () => {
         notes: promiseNotes.trim() || 'Customer promised payment',
       });
 
-      savePromiseToPay({
-        customerId: selectedCustomer.id,
-        customerName: selectedCustomer.name,
-        invoiceId: selectedInvoice.id,
-        invoiceNo: selectedInvoice.invoiceNo,
-        salesRepresentativeId: selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId,
-        salesRepresentativeName:
-          liveReps.find(
-            (r) =>
-              r.id ===
-              (selectedInvoice.salesRepresentativeId || selectedCustomer.salesRepresentativeId)
-          )?.name || 'Admin',
-        promisedAmount: Number(promisedAmount),
-        promiseDate,
-        notes: promiseNotes.trim() || 'Customer promised payment',
-        status: 'Pending',
-      });
-
       toast.success(
         `Promise to Pay recorded for �${Number(promisedAmount).toLocaleString()} on ${promiseDate}`
       );
@@ -1616,6 +1545,7 @@ export const CollectionsView: React.FC = () => {
     setTimelineSearch('');
     setIsTimelineModalOpen(true);
     setActiveActionId(null);
+    loadCustomerDocs(item.customerId, item.customerName);
 
     if (item.customerId) {
       try {
@@ -3343,9 +3273,9 @@ export const CollectionsView: React.FC = () => {
               </h5>
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {(() => {
-                  const items = apiFollowUps.length > 0
-                    ? apiFollowUps.filter((f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id)
-                    : collectionFollowUps.filter((f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id);
+                  const items = (customerDocs?.followUps || []).filter(
+                    (f) => f.customerId === selectedCustomer.id || f.invoiceId === selectedInvoice.id
+                  );
                   if (items.length === 0) {
                     return (
                       <p className="text-[11px] text-slate-400 italic py-2 text-center">
@@ -3480,11 +3410,8 @@ export const CollectionsView: React.FC = () => {
           onBack={() => setIsTimelineModalOpen(false)}
         >
           {(() => {
-            const custSales = sales.filter(
-              (s) =>
-                s.customerId === selectedCustomer.id ||
-                s.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase()
-            );
+            const docsForCustomer = customerDocs && customerDocs.customerId === selectedCustomer.id ? customerDocs : null;
+            const custSales = docsForCustomer?.sales || [];
 
             // Separate active open, settled, and cancelled invoices
             const openSales = custSales.filter((s) => {
@@ -3516,22 +3443,21 @@ export const CollectionsView: React.FC = () => {
               0
             );
 
-            const custPayments = paymentIns
-              .filter((p) => p.customerId === selectedCustomer.id || (p as any).partyName?.toLowerCase() === selectedCustomer.name?.toLowerCase() || (p as any).customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
+            const custPayments = (docsForCustomer?.payments || [])
+              .slice()
               .sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || ''));
             const lastPayment = custPayments[0] || null;
 
-            const custFollowUps = collectionFollowUps
-              .filter((f) => f.customerId === selectedCustomer.id || f.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
+            const custFollowUps = (docsForCustomer?.followUps || [])
+              .slice()
               .sort((a, b) => (b.followUpDate || '').localeCompare(a.followUpDate || ''));
             const nextFollowUp =
               custFollowUps.find((f) => f.nextFollowUpDate && f.nextFollowUpDate >= todayStr) ||
               custFollowUps[0] ||
               null;
 
-            const custPromises = promisesToPay
-              .filter((p) => p.customerId === selectedCustomer.id || p.customerName?.toLowerCase() === selectedCustomer.name?.toLowerCase())
-              .sort((a, b) => (b.promiseDate || '').localeCompare(a.promiseDate || ''));
+            // Promises to pay are shown from the API collection timeline only
+            const custPromises: any[] = [];
 
             const rep = liveReps.find(
               (r) => r.id === selectedCustomer.salesRepresentativeId
@@ -3600,7 +3526,7 @@ export const CollectionsView: React.FC = () => {
                 });
               });
             } else {
-              // Construct unified events from store records if API timeline is not loaded
+              // Construct unified events from API-fetched customer records if the API timeline is not loaded
               custPayments.forEach((p) => {
                 const { formatted, relative } = formatTimelineTimestamp(p.paymentDate || p.createdAt);
                 unifiedEvents.push({

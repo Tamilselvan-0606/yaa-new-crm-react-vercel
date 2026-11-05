@@ -49,16 +49,21 @@ import {
   Printer,
 } from "lucide-react";
 import {
-  useSalesManagementStore,
   Supplier,
+  PurchaseReturn,
   SupplierStatus,
   PurchaseOrder,
 } from "../../../store/useSalesManagementStore";
+import {
+  commercePurchaseReturnApi,
+  mapApiPurchaseReturnToUi,
+} from "../../../api/commerce/purchaseReturnApi";
 import {
   supplierApi,
   mapApiPurchaseOrderToUi,
   mapApiSupplierToSupplier,
   mapSupplierToPayload,
+  bankFieldsForPayload,
   ApiSupplier,
   CreateSupplierPayload,
   UpdateSupplierPayload,
@@ -123,18 +128,13 @@ export const SupplierView: React.FC = () => {
     cityRequired: true,
   });
   // country/state/city are driven by LocationFields (setValue); keep them registered with the form
-  const {
-    suppliers: storeSuppliers,
-    purchases,
-    purchaseReturns,
-    saveSupplier,
-    deleteSupplier,
-    setSuppliersList,
-  } = useSalesManagementStore();
-
   // The selected supplier's purchase bills as the API reports them (with paid amount and balance)
   const [apiSupplierBills, setApiSupplierBills] = useState<
     PurchaseOrder[] | null
+  >(null);
+  // The selected supplier's purchase returns as the API reports them
+  const [apiSupplierReturns, setApiSupplierReturns] = useState<
+    PurchaseReturn[] | null
   >(null);
 
   // API State
@@ -418,13 +418,6 @@ export const SupplierView: React.FC = () => {
         if (res && res.data && Array.isArray(res.data)) {
           const mapped = res.data.map(mapApiSupplierToSupplier);
           setApiSuppliers(mapped);
-          if (
-            currentPage === 1 &&
-            !appliedSearch.trim() &&
-            appliedStatus === "All"
-          ) {
-            setSuppliersList(mapped);
-          }
 
           setApiSummary(res.summary ?? null);
           if (res.pagination) {
@@ -438,14 +431,14 @@ export const SupplierView: React.FC = () => {
             setTotalPages(Math.ceil(mapped.length / pageSize) || 1);
           }
         } else {
-          setApiSuppliers(storeSuppliers.length > 0 ? storeSuppliers : []);
-          setTotalRecords(storeSuppliers.length);
+          setApiSuppliers([]);
+          setTotalRecords(0);
           setTotalPages(1);
         }
       } catch (err: any) {
         console.error("Failed to load suppliers from API:", err);
-        setApiSuppliers(storeSuppliers.length > 0 ? storeSuppliers : []);
-        setTotalRecords(storeSuppliers.length);
+        setApiSuppliers([]);
+        setTotalRecords(0);
         setTotalPages(1);
 
         if (forceRefresh) {
@@ -467,8 +460,6 @@ export const SupplierView: React.FC = () => {
       pageSize,
       appliedSearch,
       appliedStatus,
-      storeSuppliers,
-      setSuppliersList,
     ],
   );
 
@@ -570,6 +561,9 @@ export const SupplierView: React.FC = () => {
       status: (sup.status as "Active" | "Inactive" | "Blocked") || "Active",
       notes: sup.notes || "",
     });
+    // The location pickers work by name; restore the saved district and ids too (older rows may lack them).
+    setLocationDistrict(sup.district || "");
+    setLocationIds({ countryId: sup.countryId, stateId: sup.stateId, districtId: sup.districtId, cityId: sup.cityId });
     setEditingSupplier(sup);
     setIsFormModalOpen(true);
   };
@@ -582,14 +576,18 @@ export const SupplierView: React.FC = () => {
     setSelectedSupplier(sup);
     setActiveTab(tab);
     setApiSupplierBills(null);
+    setApiSupplierReturns(null);
     setIsDetailModalOpen(true);
 
     try {
       setIsDetailLoading(true);
-      const [res, bills] = await Promise.all([
+      const [res, bills, returns] = await Promise.all([
         supplierApi.getSupplierById(sup.id),
         supplierApi
           .getSupplierPurchaseBills(sup.id, { limit: 100 })
+          .catch(() => null),
+        commercePurchaseReturnApi
+          .getPurchaseReturns({ supplierId: sup.id, page_no: 1, page_size: 100, pagination_required: true })
           .catch(() => null),
       ]);
       if (res && res.data) {
@@ -598,8 +596,11 @@ export const SupplierView: React.FC = () => {
       if (bills && Array.isArray(bills.data)) {
         setApiSupplierBills(bills.data.map(mapApiPurchaseOrderToUi));
       }
+      if (returns && Array.isArray(returns.data)) {
+        setApiSupplierReturns(returns.data.map(mapApiPurchaseReturnToUi));
+      }
     } catch {
-      // Use cached sup
+      // Keep the supplier row already loaded from the API
     } finally {
       setIsDetailLoading(false);
     }
@@ -633,6 +634,8 @@ export const SupplierView: React.FC = () => {
         ? `[Duplicate of ${sup.supplierCode}] ${sup.notes}`
         : `Duplicate of ${sup.supplierCode}`,
     });
+    setLocationDistrict(sup.district || "");
+    setLocationIds({ countryId: sup.countryId, stateId: sup.stateId, districtId: sup.districtId, cityId: sup.cityId });
     setIsFormModalOpen(true);
     toast.info(`Cloned details from "${sup.name}" into form.`);
   };
@@ -700,6 +703,7 @@ export const SupplierView: React.FC = () => {
           payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
+        Object.assign(payload, bankFieldsForPayload(data));
 
         const res = await supplierApi.updateSupplier(
           editingSupplier.id,
@@ -711,7 +715,6 @@ export const SupplierView: React.FC = () => {
           );
         }
         const updated = mapApiSupplierToSupplier(res.data);
-        saveSupplier(updated);
         toast.success(`Supplier "${data.name}" updated successfully.`);
       } else {
         const payload: CreateSupplierPayload = {
@@ -740,6 +743,7 @@ export const SupplierView: React.FC = () => {
           payload.panNumber = data.panNumber.trim().toUpperCase();
         if (data.paymentTerms?.trim())
           payload.paymentTerms = data.paymentTerms.trim();
+        Object.assign(payload, bankFieldsForPayload(data));
 
         const res = await supplierApi.createSupplier(payload);
         if (!res || !res.data) {
@@ -748,7 +752,6 @@ export const SupplierView: React.FC = () => {
           );
         }
         const created = mapApiSupplierToSupplier(res.data);
-        saveSupplier(created);
         toast.success(`Supplier "${data.name}" added successfully.`);
       }
 
@@ -829,16 +832,13 @@ export const SupplierView: React.FC = () => {
   // Supplier Details Data Links
   const supplierPurchases = useMemo(() => {
     if (!selectedSupplier) return [];
-    return (
-      apiSupplierBills ??
-      purchases.filter((p) => p.supplierId === selectedSupplier.id)
-    );
-  }, [apiSupplierBills, purchases, selectedSupplier]);
+    return apiSupplierBills ?? [];
+  }, [apiSupplierBills, selectedSupplier]);
 
   const supplierReturns = useMemo(() => {
     if (!selectedSupplier) return [];
-    return purchaseReturns.filter((r) => r.supplierId === selectedSupplier.id);
-  }, [purchaseReturns, selectedSupplier]);
+    return apiSupplierReturns ?? [];
+  }, [apiSupplierReturns, selectedSupplier]);
 
   const getSupplierInitials = (name?: string): string => {
     if (!name) return "SU";

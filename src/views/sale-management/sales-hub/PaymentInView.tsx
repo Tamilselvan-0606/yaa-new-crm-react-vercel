@@ -219,14 +219,12 @@ export const PaymentInView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
   const dispatch = useAppDispatch();
   const {
-    customers,
-    setCustomersList,
-    sales,
-    setSalesList,
     savePaymentIn,
     deletePaymentIn: deleteStorePaymentIn,
-    saveCustomer,
   } = useSalesManagementStore();
+  // Customers and invoices shown in the UI come only from the Commerce API
+  const [customers, setCustomersList] = useState<SalesCustomer[]>([]);
+  const [sales, setSalesList] = useState<SaleTransaction[]>([]);
 
   // API & List State
   const [paymentIns, setPaymentIns] = useState<SalePaymentIn[]>([]);
@@ -296,18 +294,7 @@ export const PaymentInView: React.FC = () => {
 
   // Custom Payment Types list
   const [availablePaymentTypes, setAvailablePaymentTypes] = useState<string[]>(
-    () => {
-      const saved = localStorage.getItem("yaa_crm_custom_payment_types");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return Array.from(new Set([...DEFAULT_PAYMENT_TYPES, ...parsed]));
-          }
-        } catch {}
-      }
-      return DEFAULT_PAYMENT_TYPES;
-    },
+    () => DEFAULT_PAYMENT_TYPES,
   );
   const [isAddPaymentTypeOpen, setIsAddPaymentTypeOpen] = useState(false);
   const [newPaymentTypeName, setNewPaymentTypeName] = useState("");
@@ -465,7 +452,7 @@ export const PaymentInView: React.FC = () => {
         }
       })
       .catch((e) => console.warn("Customer load error in PaymentIn:", e));
-  }, [setCustomersList]);
+  }, []);
 
   // Load Invoices for linking ONLY when Create or Edit Modal is opened
   const hasLoadedInvoicesRef = useRef(false);
@@ -482,7 +469,7 @@ export const PaymentInView: React.FC = () => {
     } catch (e) {
       console.warn("Invoices fetch for PaymentIn modal failed:", e);
     }
-  }, [setSalesList]);
+  }, []);
 
   useEffect(() => {
     if (isCreateModalOpen || editingPaymentIn) {
@@ -784,7 +771,7 @@ export const PaymentInView: React.FC = () => {
       });
       if (res?.success && res.data) {
         const mapped = mapApiCustomerToSalesCustomer(res.data);
-        saveCustomer(mapped);
+        setCustomersList((prev) => [mapped, ...prev.filter((c) => c.id !== mapped.id)]);
         setSelectedCustomerId(mapped.id);
         setSelectedCustomerObj(mapped);
         setFormPartyQuery(mapped.name);
@@ -832,10 +819,6 @@ export const PaymentInView: React.FC = () => {
     if (!typeFE.validateAll(validateTypeName())) return;
     const updated = [...availablePaymentTypes, formatted];
     setAvailablePaymentTypes(updated);
-    localStorage.setItem(
-      "yaa_crm_custom_payment_types",
-      JSON.stringify(updated),
-    );
     setFormPaymentType(formatted as PaymentInType);
     payFE.clearError("paymentType");
     setIsAddPaymentTypeOpen(false);

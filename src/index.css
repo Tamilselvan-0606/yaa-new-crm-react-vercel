@@ -420,3 +420,68 @@ input, select, textarea, button, optgroup, table {
     page-break-inside: avoid !important;
   }
 }
+
+/* Rich text content (announcement editor and previews): Tailwind resets headings, lists and tables. */
+.rte-content { color: #334155; font-size: 14px; line-height: 1.65; word-wrap: break-word; }
+.rte-content h1 { font-size: 1.6em; font-weight: 700; margin: 0.6em 0 0.3em; color: #0F172A; }
+.rte-content h2 { font-size: 1.35em; font-weight: 700; margin: 0.6em 0 0.3em; color: #0F172A; }
+.rte-content h3 { font-size: 1.15em; font-weight: 700; margin: 0.6em 0 0.3em; color: #0F172A; }
+.rte-content p { margin: 0 0 0.6em; }
+.rte-content ul { list-style: disc; padding-left: 1.5em; margin: 0 0 0.6em; }
+.rte-content ol { list-style: decimal; padding-left: 1.5em; margin: 0 0 0.6em; }
+.rte-content blockquote { border-left: 3px solid #33077C; margin: 0.6em 0; padding: 0.2em 0 0.2em 0.9em; color: #475569; background: #F8FAFC; }
+.rte-content a { color: #33077C; text-decoration: underline; }
+.rte-content hr { border: 0; border-top: 1px solid #CBD5E1; margin: 1em 0; }
+.rte-content code { background: #F1F5F9; border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.9em; }
+.rte-content table { border-collapse: collapse; width: 100%; margin: 0.6em 0; }
+.rte-content th, .rte-content td { border: 1px solid #CBD5E1; padding: 6px 10px; text-align: left; }
+.rte-content th { background: #F1F5F9; font-weight: 600; }
+.rte-content .rte-callout { border: 1px solid #DDD6FE; background: #F5F3FF; border-left: 4px solid #33077C; border-radius: 6px; padding: 10px 14px; margin: 0.6em 0; }
+.rte-content img { max-width: 100%; height: auto; }
+.rte-editor:empty::before { content: attr(data-placeholder); color: #94A3B8; pointer-events: none; }
+/* AI Copilot — small looping effects (thinking halo, text shimmer, loading skeleton, scrollbar). One-shot animations live in motion/react. */
+
+@keyframes ai-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ai-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Spinning conic halo around the bot avatar while it is thinking. */
+.ai-orb-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  background: conic-gradient(from 0deg, #33077C, #8B5CF6, #EC4899, #F59E0B, #33077C);
+  animation: ai-spin 1.6s linear infinite;
+}
+
+.ai-shimmer-text {
+  background: linear-gradient(90deg, #64748B 0%, #64748B 40%, #7C3AED 50%, #64748B 60%, #64748B 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ai-shimmer 2.2s linear infinite;
+}
+
+/* Skeleton shimmer for loading history. */
+.ai-skeleton {
+  background: linear-gradient(90deg, #F1F5F9 0%, #E9E5F7 50%, #F1F5F9 100%);
+  background-size: 200% 100%;
+  animation: ai-shimmer 1.6s linear infinite;
+}
+
+.ai-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.ai-scroll::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 9999px; }
+.ai-scroll::-webkit-scrollbar-thumb:hover { background: #A78BFA; }
+.ai-scroll::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-orb-ring, .ai-shimmer-text, .ai-skeleton {
+    animation: none;
+  }
+}

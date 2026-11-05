@@ -34,7 +34,6 @@ import {
   CartesianGrid,
   Tooltip as RechartsTooltip,
 } from 'recharts';
-import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
 import { useAuth } from '../../../context/AuthContext';
 import {
   salesDashboardApi,
@@ -44,7 +43,9 @@ import {
   SalesDashboardRecentTransactionsData,
   RecentTransactionType,
   getStoredOrganizationId,
+  commerceInvoiceApi,
 } from '../../../api';
+import { salesReportApi } from '../../../api/commerce/salesReportApi';
 
 import { formatDate as sharedFormatDate } from '../utils/dateUtils';
 import { evictApiCache } from "../../../api/queryCache";
@@ -54,8 +55,6 @@ type ModuleTab = 'all' | 'inventory' | 'sales_hub' | 'purchase' | 'reports';
 export const SaleManagementDashboardView: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { sales, purchases } = useSalesManagementStore();
-
   const [timeRange, setTimeRange] = useState<TimeRange>('month');
   const [activeModuleTab, setActiveModuleTab] = useState<ModuleTab>('all');
   const [recentTab, setRecentTab] = useState<RecentTransactionType>('sales_invoices');
@@ -97,6 +96,12 @@ export const SaleManagementDashboardView: React.FC = () => {
   const [topProductsData, setTopProductsData] = useState<SalesDashboardTopProductsData | null>(null);
   const [recentTransactionsData, setRecentTransactionsData] = useState<SalesDashboardRecentTransactionsData | null>(null);
 
+  // Chart data, strictly from API responses
+  const [monthlyComparisonData, setMonthlyComparisonData] = useState<
+    { month: string; Sales: number; Purchases: number; Profit: number }[]
+  >([]);
+  const [paymentStatusCounts, setPaymentStatusCounts] = useState({ paid: 0, partial: 0, unpaid: 0 });
+
   // Loading & Refreshing States
   const [loadingModules, setLoadingModules] = useState(false);
   const [loadingLowStock, setLoadingLowStock] = useState(false);
@@ -134,6 +139,55 @@ export const SaleManagementDashboardView: React.FC = () => {
     if (timeRange === 'quarter') return 'this_quarter';
     return timeRange;
   }, [timeRange]);
+
+  // Monthly Sales vs Purchases: one GET /commerce/sales/report-summary per calendar month
+  useEffect(() => {
+    let cancelled = false;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const now = new Date();
+    const months = [5, 4, 3, 2, 1, 0].map((i) => {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      return { label: start.toLocaleString('en-US', { month: 'short' }), from: fmt(start), to: fmt(end) };
+    });
+    Promise.all(
+      months.map((m) =>
+        salesReportApi
+          .getReportSummary({ from: m.from, to: m.to, branchId: activeBranchId })
+          .then((res) => ({
+            month: m.label,
+            Sales: Number(res?.data?.totalSales || 0),
+            Purchases: Number(res?.data?.totalPurchases || 0),
+          }))
+          .catch(() => ({ month: m.label, Sales: 0, Purchases: 0 })),
+      ),
+    ).then((rows) => {
+      if (cancelled) return;
+      setMonthlyComparisonData(rows.map((r) => ({ ...r, Profit: Math.max(0, r.Sales - r.Purchases) })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranchId]);
+
+  // Sales collection status: invoice counts per payment status from GET /commerce/invoices (pagination.totalRecords)
+  useEffect(() => {
+    let cancelled = false;
+    const count = (paymentStatus: string) =>
+      commerceInvoiceApi
+        .getInvoices({ page_no: 1, page_size: 1, pagination_required: true, paymentStatus, branchId: activeBranchId })
+        .then((res) => Number(res?.pagination?.totalRecords ?? 0))
+        .catch(() => 0);
+    Promise.all([count('Paid'), count('Partial'), count('Unpaid'), count('Pending')]).then(
+      ([paid, partial, unpaid, pending]) => {
+        if (!cancelled) setPaymentStatusCounts({ paid, partial, unpaid: unpaid + pending });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBranchId]);
 
   // Main Dashboard APIs fetcher
   const fetchAllDashboardApis = useCallback(
@@ -278,58 +332,17 @@ export const SaleManagementDashboardView: React.FC = () => {
     const grossProfit = Number(modulesData?.saleReport?.grossProfit || 0);
     const grossProfitMargin = Number(modulesData?.saleReport?.grossMarginPercent || 0);
 
-    // Dynamic last 6 calendar months
-    const monthNames: string[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      monthNames.push(d.toLocaleString('en-US', { month: 'short' }));
-    }
-
-    // Monthly comparison strictly calculated from real sales & purchases without mock multipliers
-    const monthlyComparisonData = monthNames.map((month) => {
-      const monthSales = (sales || [])
-        .filter((s) => {
-          if (s.saleStatus === 'Cancelled') return false;
-          const d = new Date(s.saleDate || s.createdAt);
-          return !isNaN(d.getTime()) && d.toLocaleString('en-US', { month: 'short' }) === month;
-        })
-        .reduce((sum, s) => sum + (s.grandTotal || 0), 0);
-
-      const monthPurchases = (purchases || [])
-        .filter((p) => {
-          if (p.purchaseStatus === 'Cancelled') return false;
-          const d = new Date(p.purchaseDate || p.createdAt);
-          return !isNaN(d.getTime()) && d.toLocaleString('en-US', { month: 'short' }) === month;
-        })
-        .reduce((sum, p) => sum + (p.grandTotal || 0), 0);
-
-      return {
-        month,
-        Sales: monthSales,
-        Purchases: monthPurchases,
-        Profit: Math.max(0, monthSales - monthPurchases),
-      };
-    });
-
-    const activeSales = (sales || []).filter((s) => s.saleStatus !== 'Cancelled');
-    const fullyPaid = activeSales.filter((s) => s.paymentStatus === 'Paid').length;
-    const partial = activeSales.filter((s) => s.paymentStatus === 'Partial').length;
-    const unpaid = activeSales.filter((s) => s.paymentStatus === 'Unpaid' || s.paymentStatus === 'Pending').length;
-
-    const paymentStatusDistribution = [
-      { name: 'Fully Paid', value: fullyPaid, color: '#10B981' },
-      { name: 'Partial', value: partial, color: '#F59E0B' },
-      { name: 'Unpaid / Due', value: unpaid, color: '#EF4444' },
-    ];
-
     return {
       grossProfit,
       grossProfitMargin,
-      monthlyComparisonData,
-      paymentStatusDistribution,
     };
-  }, [modulesData, sales, purchases]);
+  }, [modulesData]);
+
+  const paymentStatusDistribution = [
+    { name: 'Fully Paid', value: paymentStatusCounts.paid, color: '#10B981' },
+    { name: 'Partial', value: paymentStatusCounts.partial, color: '#F59E0B' },
+    { name: 'Unpaid / Due', value: paymentStatusCounts.unpaid, color: '#EF4444' },
+  ];
 
   // Helper date formatter
   const formatDate = (dateStr?: string) => {
@@ -1190,7 +1203,7 @@ export const SaleManagementDashboardView: React.FC = () => {
             <div className="h-64 sm:h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
-                  data={reportAnalytics.monthlyComparisonData}
+                  data={monthlyComparisonData}
                   margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
                 >
                   <defs>
@@ -1256,7 +1269,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={reportAnalytics.paymentStatusDistribution}
+                      data={paymentStatusDistribution}
                       cx="50%"
                       cy="50%"
                       innerRadius={50}
@@ -1264,7 +1277,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                       paddingAngle={4}
                       dataKey="value"
                     >
-                      {reportAnalytics.paymentStatusDistribution.map((entry, index) => (
+                      {paymentStatusDistribution.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -1279,7 +1292,7 @@ export const SaleManagementDashboardView: React.FC = () => {
 
             {/* Legend & Quick Info */}
             <div className="space-y-2 pt-4 border-t border-slate-100">
-              {reportAnalytics.paymentStatusDistribution.map((item, idx) => (
+              {paymentStatusDistribution.map((item, idx) => (
                 <div key={idx} className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -1327,7 +1340,7 @@ export const SaleManagementDashboardView: React.FC = () => {
             <div className="h-64 sm:h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
-                  data={reportAnalytics.monthlyComparisonData}
+                  data={monthlyComparisonData}
                   margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
                 >
                   <defs>

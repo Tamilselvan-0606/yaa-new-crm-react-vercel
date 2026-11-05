@@ -51,11 +51,6 @@ import { Pagination } from "../../../components/common/Pagination";
 import { SearchBar } from "../../../components/common/SearchBar";
 import { FormError } from "../../../components/common/FormError";
 import { toast } from "../../../utils/toast";
-import {
-  useSalesManagementStore,
-  SalesCustomer,
-  SalesRepresentative,
-} from "../../../store/useSalesManagementStore";
 
 import {
   normalizeIndianPhoneTo10Digits,
@@ -71,7 +66,6 @@ import {
 } from "../../../utils/formValidation";
 import { store } from "../../../store/store";
 import { baseApi } from "../../../api/baseApi";
-import { calculateRepMetrics } from "../../../utils/outstandingBalance";
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_ERROR_CLS, getFormInputCls } from "../utils/formUtils";
 
 import { formatDate } from '../utils/dateUtils';
@@ -93,17 +87,6 @@ const fmt = (n: number) =>
 
 export const SalesRepresentativeView: React.FC = () => {
   const navigate = useNavigate();
-  const {
-    saveSalesRepresentative,
-    deleteSalesRepresentative,
-    customers,
-    sales,
-    salesRepresentatives: storedSalesRepresentatives,
-    setSalesRepresentativesList,
-    salesReturns,
-    paymentIns,
-  } = useSalesManagementStore();
-
   // ── list state ──────────────────────────────────────────────────────────
   const [reps, setReps] = useState<ApiSalesRepresentative[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
@@ -241,16 +224,9 @@ export const SalesRepresentativeView: React.FC = () => {
       );
       if (fromCurrent) return fromCurrent;
 
-      const fromStore = (storedSalesRepresentatives || []).find(
-        (r) =>
-          r.id !== excludeRepId &&
-          normalizeIndianPhoneTo10Digits(r.mobile) === clean,
-      );
-      if (fromStore) return fromStore;
-
       return null;
     },
-    [reps, storedSalesRepresentatives],
+    [reps],
   );
 
   const findDuplicateRepByEmail = useCallback(
@@ -268,14 +244,9 @@ export const SalesRepresentativeView: React.FC = () => {
       );
       if (fromCurrent) return fromCurrent;
 
-      const fromStore = (storedSalesRepresentatives || []).find(
-        (r) => r.id !== excludeRepId && r.email?.trim().toLowerCase() === clean,
-      );
-      if (fromStore) return fromStore;
-
       return null;
     },
-    [reps, storedSalesRepresentatives],
+    [reps],
   );
 
 
@@ -391,35 +362,13 @@ export const SalesRepresentativeView: React.FC = () => {
           }
         });
 
-        // Merge any session / store inactive reps omitted by backend soft-filtering
+        // Merge any session-cached (API-sourced) inactive reps omitted by backend soft-filtering
         inactiveRepsRef.current.forEach((inactiveRep, id) => {
           if (!repMap.has(id)) {
             repMap.set(id, inactiveRep);
           } else {
             const current = repMap.get(id)!;
             repMap.set(id, { ...current, status: "Inactive" });
-          }
-        });
-
-        const storedReps = storedSalesRepresentatives || [];
-        storedReps.forEach((sr) => {
-          if (String(sr.status).toLowerCase() === "inactive" && !repMap.has(sr.id)) {
-            repMap.set(sr.id, {
-              id: sr.id,
-              organizationId: "",
-              name: sr.name,
-              email: sr.email || "",
-              mobile: sr.mobile || "",
-              designation: sr.designation,
-              status: "Inactive",
-              assignedCustomersCount: 0,
-              assignedInvoicesCount: 0,
-              totalOutstandingAmount: 0,
-              totalCollectedAmount: 0,
-              collectionRatePercent: 0,
-              createdAt: sr.createdAt,
-              updatedAt: sr.updatedAt,
-            });
           }
         });
 
@@ -451,28 +400,6 @@ export const SalesRepresentativeView: React.FC = () => {
           inactiveRepsRef.current.forEach((inactiveRep, id) => {
             if (!repMap.has(id)) {
               repMap.set(id, { ...inactiveRep, status: "Inactive" });
-            }
-          });
-
-          const storedReps = storedSalesRepresentatives || [];
-          storedReps.forEach((sr) => {
-            if (String(sr.status).toLowerCase() === "inactive" && !repMap.has(sr.id)) {
-              repMap.set(sr.id, {
-                id: sr.id,
-                organizationId: "",
-                name: sr.name,
-                email: sr.email || "",
-                mobile: sr.mobile || "",
-                designation: sr.designation,
-                status: "Inactive",
-                assignedCustomersCount: 0,
-                assignedInvoicesCount: 0,
-                totalOutstandingAmount: 0,
-                totalCollectedAmount: 0,
-                collectionRatePercent: 0,
-                createdAt: sr.createdAt,
-                updatedAt: sr.updatedAt,
-              });
             }
           });
 
@@ -511,29 +438,6 @@ export const SalesRepresentativeView: React.FC = () => {
 
       if (appliedStatus === "ALL" && !appliedSearch) {
         allRepsCacheRef.current = repList;
-        const currentStored = storedSalesRepresentatives || [];
-        const mappedReps: SalesRepresentative[] = repList.map((r) => ({
-          id: r.id,
-          name: r.name,
-          mobile: r.mobile,
-          email: r.email,
-          designation: r.designation,
-          status: r.status,
-          createdAt: r.createdAt || new Date().toISOString(),
-          updatedAt: r.updatedAt || new Date().toISOString(),
-        }));
-
-        const isDifferent =
-          currentStored.length !== mappedReps.length ||
-          mappedReps.some(
-            (r, i) =>
-              r.id !== currentStored[i]?.id ||
-              r.status !== currentStored[i]?.status,
-          );
-
-        if (isDifferent) {
-          setSalesRepresentativesList(mappedReps);
-        }
       }
     } catch (err: any) {
       const msg =
@@ -717,18 +621,6 @@ export const SalesRepresentativeView: React.FC = () => {
             setSelectedRep(updatedRepData);
           }
 
-          // Sync with central sales store
-          saveSalesRepresentative({
-            id: editingRep.id,
-            name: data.name.trim(),
-            mobile: cleanMobile,
-            email: data.email?.trim() || editingRep.email,
-            designation: newDesignation,
-            status: data.status,
-            createdAt: editingRep.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-
           // Sync with known inactive reps ref
           if (data.status === "Inactive") {
             inactiveRepsRef.current.set(editingRep.id, updatedRepData);
@@ -753,18 +645,6 @@ export const SalesRepresentativeView: React.FC = () => {
         if (res.success || (res as any).statusCode === 200 || res.data) {
           toast.success(`"${data.name}" created successfully`);
           setIsFormModalOpen(false);
-          if (res.data) {
-            saveSalesRepresentative({
-              id: res.data.id,
-              name: res.data.name,
-              mobile: res.data.mobile,
-              email: res.data.email,
-              designation: res.data.designation,
-              status: res.data.status,
-              createdAt: res.data.createdAt || new Date().toISOString(),
-              updatedAt: res.data.updatedAt || new Date().toISOString(),
-            });
-          }
           store.dispatch(
             baseApi.util.invalidateTags([
               { type: 'Customer', id: 'LIST' },
@@ -881,16 +761,6 @@ export const SalesRepresentativeView: React.FC = () => {
             prev ? { ...prev, status: newStatus } : null,
           );
         }
-        saveSalesRepresentative({
-          id: rep.id,
-          name: rep.name.trim(),
-          mobile: cleanMobile,
-          email: rep.email?.trim() || "",
-          designation: rep.designation?.trim() || "",
-          status: newStatus,
-          createdAt: rep.createdAt || new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
         if (newStatus === "Inactive") {
           inactiveRepsRef.current.set(rep.id, updatedRep);
         } else {
@@ -918,7 +788,6 @@ export const SalesRepresentativeView: React.FC = () => {
       await salesRepresentativeApi.remove(deleteTargetRep.id);
       toast.success(`"${deleteTargetRep.name}" deleted.`);
       inactiveRepsRef.current.delete(deleteTargetRep.id);
-      deleteSalesRepresentative(deleteTargetRep.id);
       if (selectedRep?.id === deleteTargetRep.id) {
         setIsDetailModalOpen(false);
         setSelectedRep(null);
@@ -943,6 +812,7 @@ export const SalesRepresentativeView: React.FC = () => {
   });
 
   // ── computed map of assigned customers and metrics per rep ─────────────────
+  // Per-rep metrics come straight from the API representative record (no local calculation)
   const repMetricsMap = useMemo(() => {
     const map = new Map<
       string,
@@ -957,46 +827,20 @@ export const SalesRepresentativeView: React.FC = () => {
       }
     >();
 
-    const allKnownCustomers = customers || [];
-
     reps.forEach((rep) => {
-      const computed = calculateRepMetrics(
-        rep,
-        allKnownCustomers,
-        (sales || []) as any,
-        (salesReturns || []) as any,
-        (paymentIns || []) as any
-      );
-
-      // Prioritize client calculated metrics if store has data, otherwise preserve server-calculated metrics
-      const customersCount = computed.customersCount > 0 
-        ? computed.customersCount 
-        : Number(rep.assignedCustomersCount || 0);
-      const invoicesCount = computed.invoicesCount > 0 
-        ? computed.invoicesCount 
-        : Number(rep.assignedInvoicesCount || 0);
-      const totalOutstanding = computed.totalOutstanding > 0 
-        ? computed.totalOutstanding 
-        : Number(rep.totalOutstandingAmount || 0);
-      const totalCollected = computed.totalCollected > 0 
-        ? computed.totalCollected 
-        : Number(rep.totalCollectedAmount || 0);
-      const collectionRatePercent = computed.collectionRatePercent > 0 
-        ? computed.collectionRatePercent 
-        : Number(rep.collectionRatePercent || 0);
-
       map.set(rep.id, {
-        ...computed,
-        customersCount,
-        invoicesCount,
-        totalOutstanding,
-        totalCollected,
-        collectionRatePercent,
+        assignedCustomers: [],
+        assignedInvoices: [],
+        customersCount: Number(rep.assignedCustomersCount || 0),
+        invoicesCount: Number(rep.assignedInvoicesCount || 0),
+        totalOutstanding: Number(rep.totalOutstandingAmount || 0),
+        totalCollected: Number(rep.totalCollectedAmount || 0),
+        collectionRatePercent: Number(rep.collectionRatePercent || 0),
       });
     });
 
     return map;
-  }, [reps, customers, sales, salesReturns, paymentIns]);
+  }, [reps]);
 
   const pagedReps = useMemo(() => {
     if (reps.length > pageSize) {
@@ -1009,14 +853,8 @@ export const SalesRepresentativeView: React.FC = () => {
   // ── derived portfolio values ──────────────────────────────────────────────
   const selectedRepMetrics = selectedRep ? repMetricsMap.get(selectedRep.id) : null;
   const summary = portfolio?.summary ?? null;
-  const portfolioCustomers =
-    portfolio?.customers && portfolio.customers.length > 0
-      ? portfolio.customers
-      : (selectedRepMetrics?.assignedCustomers ?? []);
-  const portfolioInvoices =
-    portfolio?.invoices && portfolio.invoices.length > 0
-      ? portfolio.invoices
-      : (selectedRepMetrics?.assignedInvoices ?? []);
+  const portfolioCustomers = portfolio?.customers ?? [];
+  const portfolioInvoices = portfolio?.invoices ?? [];
   const followUps =
     repFollowUps.length > 0 ? repFollowUps : (portfolio?.followUps ?? []);
   const history =

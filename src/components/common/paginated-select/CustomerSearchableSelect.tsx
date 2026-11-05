@@ -2,7 +2,6 @@ import React, { useMemo, useCallback } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
 import { usePaginatedDropdown } from '../../../hooks/usePaginatedDropdown';
 import { customerApi, ApiCustomer } from '../../../api/commerce/customerApi';
-import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
 
 export interface CustomerSearchableSelectProps {
   value: string;
@@ -35,8 +34,6 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
   triggerClassName = '',
   size = 'md',
 }) => {
-  const { customers = [] } = useSalesManagementStore();
-
   const fetchPage = useCallback(
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
       try {
@@ -57,24 +54,15 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
         };
       } catch (err) {
         console.warn('CustomerSearchableSelect fetch error:', err);
-        // Fallback to local store if API unreachable
-        const q = search.toLowerCase();
-        const filtered = customers.filter(
-          (c) =>
-            c.name.toLowerCase().includes(q) ||
-            c.phone.toLowerCase().includes(q) ||
-            (c.customerCode && c.customerCode.toLowerCase().includes(q))
-        );
-        const start = (page - 1) * limit;
-        const paged = filtered.slice(start, start + limit);
+        // API unreachable: show no options (never browser/store data)
         return {
-          data: paged as any[],
-          hasNextPage: start + limit < filtered.length,
-          totalRecords: filtered.length,
+          data: [] as ApiCustomer[],
+          hasNextPage: false,
+          totalRecords: 0,
         };
       }
     },
-    [customers]
+    []
   );
 
   const {
@@ -117,19 +105,8 @@ export const CustomerSearchableSelect: React.FC<CustomerSearchableSelectProps> =
         badge: selectedCustomer.customerCode,
       };
     }
-    // Check local store
-    const inStore = customers.find((c) => c.id === value);
-    if (inStore) {
-      return {
-        value: inStore.id,
-        label: inStore.name + (inStore.company ? ` (${inStore.company})` : ''),
-        subLabel: `${inStore.customerCode || ''} • ${inStore.phone || ''}`,
-        badge: inStore.customerCode,
-        data: inStore,
-      };
-    }
     return undefined;
-  }, [value, options, selectedCustomer, customers]);
+  }, [value, options, selectedCustomer]);
 
   // Static options (e.g. None / Unassigned)
   const staticOptions: SearchableOption[] = useMemo(() => {

@@ -3,7 +3,7 @@ import { AnimatePresence, animate, motion, useReducedMotion } from 'motion/react
 import { ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import {
   AlertTriangle, BadgePercent, BarChart3, CheckCircle2, Clock, FileText, IndianRupee, LineChart as LineChartIcon, ListChecks,
-  Mail, ReceiptText, ShieldCheck, Table2, Tag, TrendingUp, Wallet, XCircle, type LucideIcon,
+  Mail, ReceiptText, RefreshCw, ShieldCheck, Table2, Tag, Trash2, TrendingUp, Wallet, XCircle, type LucideIcon,
 } from 'lucide-react';
 import { Button } from '../../components/common/Button';
 import type { AiBlock, AiMetric, AiValueFormat } from '../../api/ai/aiTypes';
@@ -22,7 +22,7 @@ export function formatValue(value: unknown, format?: AiValueFormat, currency = '
   return String(value);
 }
 
-const card = 'relative bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-14px_rgba(51,7,124,0.18)]';
+const card = 'relative bg-white rounded-[18px] border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-14px_rgba(51,7,124,0.18)]';
 
 function CardHeader({ icon: Icon, title, right }: { icon: LucideIcon; title: string; right?: React.ReactNode }) {
   return (
@@ -209,12 +209,18 @@ function Fields({ fields }: { fields: AiMetric[] }) {
   );
 }
 
-export type ActionState = { status: 'pending' | 'working' | 'succeeded' | 'failed' | 'cancelled'; message?: string };
+/**
+ * partial: only part of it happened. unknown: the change was sent but no answer came back, so it may have been applied
+ * (never offer a retry: offer "Check again", which only looks the record up).
+ */
+export type ActionState = { status: 'pending' | 'working' | 'succeeded' | 'partial' | 'failed' | 'unknown' | 'cancelled' | 'expired'; message?: string; /** A read-only re-check is running (unknown outcome only). */ busy?: boolean };
 
 interface ActionProps {
   state?: ActionState;
   onConfirm: (actionId: string) => void;
   onCancel: (actionId: string) => void;
+  /** Read-only look-up after an "unknown" outcome. */
+  onRecheck?: (actionId: string) => void;
 }
 
 const resultMotion = {
@@ -224,10 +230,33 @@ const resultMotion = {
   transition: { duration: 0.3, ease: EASE_OUT },
 };
 
-function ActionFooter({ actionId, expiresAt, state, onConfirm, onCancel, confirmLabel }: ActionProps & { actionId: string; expiresAt?: string; confirmLabel: string }) {
-  const status = state?.status ?? 'pending';
+/** True once `expiresAt` has passed; flips on its own so an open card cannot be confirmed after it expires. */
+function useExpired(expiresAt?: string): boolean {
+  const target = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (isNaN(target)) return;
+    const wait = target - Date.now();
+    if (wait <= 0) { setNow(Date.now()); return; }
+    // setTimeout caps at ~24.8 days; confirmations live minutes, so this is safe.
+    const t = setTimeout(() => setNow(Date.now()), wait + 50);
+    return () => clearTimeout(t);
+  }, [target]);
+  return !isNaN(target) && now >= target;
+}
+
+function ActionFooter({ actionId, expiresAt, state, onConfirm, onCancel, onRecheck, confirmLabel, destructive }: ActionProps & { actionId: string; expiresAt?: string; confirmLabel: string; destructive?: boolean }) {
+  const timedOut = useExpired(expiresAt);
+  const raw = state?.status ?? 'pending';
+  const status = raw === 'pending' && timedOut ? 'expired' : raw;
   let content: React.ReactNode;
-  if (status === 'succeeded') {
+  if (status === 'expired') {
+    content = (
+      <motion.p key="expired" {...resultMotion} className="flex items-center gap-2 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+        <Clock className="w-4 h-4 shrink-0" />{state?.message ?? 'Expired — ask me again to prepare it.'}
+      </motion.p>
+    );
+  } else if (status === 'succeeded') {
     content = (
       <motion.p key="ok" {...resultMotion} className="flex items-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5">
         <motion.span initial={{ scale: 0, rotate: -90 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 400, damping: 15, delay: 0.1 }}>
@@ -235,6 +264,26 @@ function ActionFooter({ actionId, expiresAt, state, onConfirm, onCancel, confirm
         </motion.span>
         {state?.message ?? 'Done'}
       </motion.p>
+    );
+  } else if (status === 'partial') {
+    content = (
+      <motion.p key="partial" {...resultMotion} className="flex items-start gap-2 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+        <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />{state?.message ?? 'Only part of this was done. Check the details above.'}
+      </motion.p>
+    );
+  } else if (status === 'unknown') {
+    content = (
+      <motion.div key="unknown" {...resultMotion} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+        <p className="flex items-start gap-2 text-xs font-semibold text-amber-800">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          <span>{state?.message ?? 'We could not confirm whether this was applied. It may have been. Please check the record before trying again.'}</span>
+        </p>
+        {onRecheck && (
+          <Button variant="secondary" size="sm" disabled={state?.busy} onClick={() => onRecheck(actionId)}>
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${state?.busy ? 'animate-spin' : ''}`} /> {state?.busy ? 'Checking…' : 'Check again'}
+          </Button>
+        )}
+      </motion.div>
     );
   } else if (status === 'failed') {
     content = (
@@ -248,13 +297,13 @@ function ActionFooter({ actionId, expiresAt, state, onConfirm, onCancel, confirm
     content = (
       <motion.div key="pending" {...resultMotion} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
-          <ShieldCheck className="w-3.5 h-3.5 text-[#6D28D9]" />
+          <ShieldCheck className={`w-3.5 h-3.5 ${destructive ? 'text-rose-600' : 'text-[#6D28D9]'}`} />
           Nothing happens until you confirm{expiresAt ? ` · expires ${new Date(expiresAt).toLocaleTimeString()}` : ''}.
         </span>
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" disabled={status === 'working'} onClick={() => onCancel(actionId)}>Cancel</Button>
           <Button variant="primary" size="sm" loading={status === 'working'} onClick={() => onConfirm(actionId)}
-            className="bg-gradient-to-r from-[#33077C] to-[#7C3AED] hover:brightness-110">{confirmLabel}</Button>
+            className={destructive ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:brightness-110' : 'bg-gradient-to-r from-[#33077C] to-[#7C3AED] hover:brightness-110'}>{confirmLabel}</Button>
         </div>
       </motion.div>
     );
@@ -277,14 +326,21 @@ function Warnings({ warnings }: { warnings: string[] }) {
 
 const actionCard = `${card} border-violet-200 overflow-hidden before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-gradient-to-r before:from-[#33077C] before:via-violet-500 before:to-fuchsia-500`;
 
+/** Deleting is always a confirmation card, drawn in red so it cannot be mistaken for an ordinary change. */
+const dangerCard = `${card} border-rose-200 overflow-hidden before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-gradient-to-r before:from-rose-600 before:to-red-500`;
+
 function ConfirmationBlock({ block, ...actions }: { block: Extract<AiBlock, { type: 'confirmation' }> } & ActionProps) {
+  const destructive = typeof block.toolName === 'string' && block.toolName.startsWith('delete_');
   return (
-    <div className={actionCard}>
-      <CardHeader icon={ShieldCheck} title={block.title} right={<CountPill>Needs your approval</CountPill>} />
+    <div className={destructive ? dangerCard : actionCard}>
+      <CardHeader icon={destructive ? Trash2 : ShieldCheck} title={block.title}
+        right={destructive
+          ? <span className="shrink-0 rounded-full bg-rose-50 text-rose-700 text-[11px] font-semibold px-2.5 py-1 ring-1 ring-rose-200">Cannot be undone</span>
+          : <CountPill>Needs your approval</CountPill>} />
       <p className="text-xs text-slate-600 -mt-1 mb-3 leading-relaxed">{block.summary}</p>
       <Fields fields={block.fields} />
       <Warnings warnings={block.warnings} />
-      <ActionFooter {...actions} actionId={block.actionId} expiresAt={block.expiresAt} confirmLabel="Confirm" />
+      <ActionFooter {...actions} actionId={block.actionId} expiresAt={block.expiresAt} confirmLabel={destructive ? 'Delete' : 'Confirm'} destructive={destructive} />
     </div>
   );
 }
@@ -310,6 +366,7 @@ function EmailPreviewBlock({ block, ...actions }: { block: Extract<AiBlock, { ty
         ...(block.cc.length ? [{ label: 'CC', value: block.cc.join(', ') }] : []),
         ...(block.bcc.length ? [{ label: 'BCC', value: block.bcc.join(', ') }] : []),
         { label: 'Subject', value: block.subject },
+        ...((block.scheduledFor || block.scheduledAt) ? [{ label: 'Scheduled for', value: new Date((block.scheduledFor || block.scheduledAt)!).toLocaleString() }] : []),
         { label: 'Recipients', value: block.recipientCount, format: 'number' },
         { label: 'Attachments', value: block.attachments.length ? block.attachments.join(', ') : 'None' },
         ...(block.relatedEntity ? [{ label: `Related ${block.relatedEntity.type}`, value: block.relatedEntity.name ?? block.relatedEntity.id }] : []),
@@ -329,14 +386,14 @@ function EmailPreviewBlock({ block, ...actions }: { block: Extract<AiBlock, { ty
   );
 }
 
-export function AiBlockView({ block, actionStates, onConfirm, onCancel }: { block: AiBlock; actionStates: Record<string, ActionState>; onConfirm: (id: string) => void; onCancel: (id: string) => void }) {
+export function AiBlockView({ block, actionStates, onConfirm, onCancel, onRecheck }: { block: AiBlock; actionStates: Record<string, ActionState>; onConfirm: (id: string) => void; onCancel: (id: string) => void; onRecheck?: (id: string) => void }) {
   switch (block.type) {
     case 'report': return <ReportBlock block={block} />;
     case 'table': return <TableBlock block={block} />;
     case 'chart': return <ChartBlock block={block} />;
     case 'record_details': return <div className={card}><CardHeader icon={FileText} title={block.title} /><Fields fields={block.fields} /></div>;
-    case 'confirmation': return <ConfirmationBlock block={block} state={actionStates[block.actionId]} onConfirm={onConfirm} onCancel={onCancel} />;
-    case 'email_preview': return <EmailPreviewBlock block={block} state={block.actionId ? actionStates[block.actionId] : undefined} onConfirm={onConfirm} onCancel={onCancel} />;
+    case 'confirmation': return <ConfirmationBlock block={block} state={actionStates[block.actionId]} onConfirm={onConfirm} onCancel={onCancel} onRecheck={onRecheck} />;
+    case 'email_preview': return <EmailPreviewBlock block={block} state={block.actionId ? actionStates[block.actionId] : undefined} onConfirm={onConfirm} onCancel={onCancel} onRecheck={onRecheck} />;
     default: return null;
   }
 }

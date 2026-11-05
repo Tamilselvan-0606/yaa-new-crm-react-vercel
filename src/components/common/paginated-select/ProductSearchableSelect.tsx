@@ -72,6 +72,7 @@ export const ProductSearchableSelect: React.FC<ProductSearchableSelectProps> = (
     isLoading,
     isLoadingMore,
     hasMore,
+    totalRecords,
     handleSearch,
     loadMore,
     loadInitial,
@@ -133,6 +134,8 @@ export const ProductSearchableSelect: React.FC<ProductSearchableSelectProps> = (
       isLoadingMore={isLoadingMore}
       onAddNew={onAddNewProduct}
       addNewText="Add New Product"
+      countLabel={{ singular: 'product', plural: 'products' }}
+      totalCount={totalRecords}
       placeholder={placeholder}
       emptyText="No products found"
       disabled={disabled}

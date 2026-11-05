@@ -1,6 +1,19 @@
-﻿import { describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { numberToWordsIndian } from '../src/utils/printUtils';
+// printUtils pulls in app code that reads localStorage when it loads; Node has none, so give it a small stand-in
+// and import the module afterwards.
+const memory = new Map<string, string>();
+(globalThis as any).localStorage ??= {
+  getItem: (k: string) => (memory.has(k) ? memory.get(k)! : null),
+  setItem: (k: string, v: string) => void memory.set(k, String(v)),
+  removeItem: (k: string) => void memory.delete(k),
+  clear: () => memory.clear(),
+  key: (i: number) => Array.from(memory.keys())[i] ?? null,
+  get length() {
+    return memory.size;
+  },
+};
+const { numberToWordsIndian } = await import('../src/utils/printUtils');
 
 describe('Print Utilities & Financial Formatting', () => {
   it('converts small integer amounts to Indian currency words', () => {

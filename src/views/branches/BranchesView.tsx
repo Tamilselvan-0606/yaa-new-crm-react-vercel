@@ -57,6 +57,7 @@ import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useRowActionMenu } from '../../hooks/useRowActionMenu';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { ReadOnlyField, TextField } from '../../components/common/FormField';
+import { getApiErrorMessage } from '../../utils/apiErrorMessage';
 import { PhoneField } from '../../components/common/PhoneField';
 import { LocationFields, LocationMeta } from '../../components/common/LocationFields';
 import { confirmButtonLabel, nextStatus } from '../../utils/statusActions';
@@ -98,11 +99,45 @@ const mapApiBranchToBranch = (item: BranchApiItem): Branch => {
       '',
     subOrganizationName:
       (item as any).subOrganizationName || (item as any).sub_organization_name || (item as any).subOrganization?.name || '',
-    organizationType: (item as any).organizationType || (item as any).organization_type,
+    organizationType:
+      normalizeSuite((item as any).organizationType ?? (item as any).organization_type ?? (item as any).branchType) ||
+      readSuiteMap()[item.id],
     productId: item.productId,
     productName: item.productName,
   };
 };
+
+// Same two suites as the sub-organization type.
+const SUITE_MAP_KEY = 'yaa_crm_branch_suites';
+
+/** Suite (Client / Sales Management) remembered for a branch id, for when the API does not send the type back. */
+const readSuiteMap = (): Record<string, string> => {
+  try {
+    return JSON.parse(localStorage.getItem(SUITE_MAP_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+const rememberSuite = (id: string | undefined, suite: string) => {
+  if (!id) return;
+  try {
+    localStorage.setItem(SUITE_MAP_KEY, JSON.stringify({ ...readSuiteMap(), [id]: suite }));
+  } catch {
+    /* storage unavailable */
+  }
+};
+
+/** Normalises the API type (1 / 2 / 3 or a name) to 'Client Management', 'Sales Management' or 'All'. */
+const normalizeSuite = (raw: unknown): string | undefined => {
+  const t = String(raw ?? '').trim().toLowerCase();
+  if (!t) return undefined;
+  if (t === '1' || t.includes('client')) return 'Client Management';
+  if (t === '2' || t.includes('sale')) return 'Sales Management';
+  if (t === '0' || t === '3' || t === 'all' || t.includes('both')) return 'All';
+  return undefined;
+};
+
+const BRANCH_TYPES = ['Client Management', 'Sales Management'];
 
 export const BranchesView: React.FC = () => {
   const { showToast, currentUser } = useAuth();
@@ -190,6 +225,7 @@ export const BranchesView: React.FC = () => {
     districtId: '',
     cityId: '',
     pincode: '',
+    address: '',
     status: 'Active' as BranchStatus,
   });
 
@@ -327,11 +363,11 @@ export const BranchesView: React.FC = () => {
 
   const isBranchForSuite = (b: Branch) => {
     const typeStr = (b.organizationType || '').toLowerCase();
+    if (typeStr === 'all') return true;
     if (isSaleManagement) {
       return typeStr.includes('sale');
-    } else {
-      return typeStr.includes('client') || !typeStr.includes('sale');
     }
+    return typeStr.includes('client') || !typeStr.includes('sale');
   };
 
   const loadData = async (
@@ -401,7 +437,7 @@ export const BranchesView: React.FC = () => {
         .forEach((br) => {
           branchMap.set(br.name.toLowerCase(), {
             ...br,
-            organizationType: isSaleManagement ? 'Sales Management' : 'Client Management',
+            organizationType: br.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management'),
           });
         });
 
@@ -497,6 +533,7 @@ export const BranchesView: React.FC = () => {
       districtId: '',
       cityId: '',
       pincode: '',
+      address: '',
       status: 'Active',
     });
     setIsModalOpen(true);
@@ -528,6 +565,7 @@ export const BranchesView: React.FC = () => {
       districtId: '',
       cityId: '',
       pincode: branch.pincode || '',
+      address: branch.address || '',
       status: branch.status || 'Active',
     });
     setIsModalOpen(true);
@@ -553,9 +591,11 @@ export const BranchesView: React.FC = () => {
       ['country', formData.country, [required('Country is required')]],
       ['state', formData.state, requiredWhen(locationMeta.stateRequired, 'State is required')],
       ['district', formData.district, requiredWhen(locationMeta.districtRequired, 'District is required')],
+      ['organizationType', formData.organizationType, [required('Branch Type is required')]],
+      ['address', formData.address, [required('Address is required')]],
       ['pincode', formData.pincode, [required('Pincode is required'), pincodeMatching(locationMeta.pincodeRegex, locationMeta.pincodeFormat)]],
       ['email', formData.email, [required('Email is required'), emailAddress]],
-      ['password', formData.password, when(isCreate, [required('Password is required'), minLength(12, 'Password must be at least 12 characters')])],
+      ['password', formData.password, when(isCreate, [required('Password is required'), minLength(8, 'Password must be at least 8 characters')])],
       ['status', formData.status, [required('Status is required')]],
     ]);
     setFormErrors(errors);
@@ -567,6 +607,7 @@ export const BranchesView: React.FC = () => {
       const suiteType = formData.organizationType || (isSaleManagement ? 'Sales Management' : 'Client Management');
 
       if (editingBranch) {
+        rememberSuite(editingBranch.id, suiteType);
         await branchApi.updateBranch(editingBranch.id, {
           name: formData.name.trim(),
           organizationId: activeOrgId || undefined,
@@ -582,6 +623,8 @@ export const BranchesView: React.FC = () => {
           stateId: formData.stateId || undefined,
           districtId: formData.districtId || undefined,
           pincode: formData.pincode.trim(),
+          branchType: suiteType === 'Sales Management' ? 2 : 1, // 1 = Client Management, 2 = Sales Management
+          address: formData.address.trim(),
           status: formData.status,
         });
 
@@ -611,6 +654,7 @@ export const BranchesView: React.FC = () => {
           state: formData.state.trim(),
           district: formData.district.trim(),
           pincode: formData.pincode.trim(),
+          address: formData.address.trim(),
           status: formData.status,
         };
         const idx = catalogList.findIndex((b) => b.id === editingBranch.id || b.name.toLowerCase() === editingBranch.name.toLowerCase());
@@ -629,7 +673,7 @@ export const BranchesView: React.FC = () => {
         const trimmedCode = formData.code.trim();
         const trimmedName = formData.name.trim();
 
-        await branchApi.createBranch({
+        const createdRes: any = await branchApi.createBranch({
           name: trimmedName,
           email: trimmedEmail,
           password: trimmedPassword,
@@ -646,6 +690,8 @@ export const BranchesView: React.FC = () => {
           stateId: formData.stateId || undefined,
           districtId: formData.districtId || undefined,
           pincode: formData.pincode.trim(),
+          branchType: suiteType === 'Sales Management' ? 2 : 1, // 1 = Client Management, 2 = Sales Management
+          address: formData.address.trim(),
           status: formData.status,
           user: {
             email: trimmedEmail,
@@ -655,6 +701,7 @@ export const BranchesView: React.FC = () => {
           },
         });
 
+        rememberSuite(createdRes?.data?.id, suiteType); // so the branch stays in its own module even if the API does not return the type
         // Add to local catalog tagged with suite
         const newBranchObj: Branch = {
           id: `br_${Date.now()}`,
@@ -673,6 +720,7 @@ export const BranchesView: React.FC = () => {
           state: formData.state.trim(),
           district: formData.district.trim(),
           pincode: formData.pincode.trim(),
+          address: formData.address.trim(),
           status: formData.status,
           createdAt: new Date().toISOString(),
         };
@@ -695,12 +743,7 @@ export const BranchesView: React.FC = () => {
       loadData(page, pageSize, appliedSearch, appliedStatus);
     } catch (err: any) {
       console.error('Failed to save branch:', err);
-      const backendMsg =
-        err?.response?.data?.message ||
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.error?.fields?.[0]?.message ||
-        err.message ||
-        'Could not save branch';
+      const backendMsg = getApiErrorMessage(err, 'Could not save branch');
       showToast?.('error', 'Operation Failed', backendMsg);
     } finally {
       setSubmitting(false);
@@ -1231,10 +1274,26 @@ export const BranchesView: React.FC = () => {
               placeholder="Enter branch name"
               onValueChange={(v) => updateField('name', v)}
             />
-          </div>
 
-          {/* Row 2: Branch Code | Contact Person Name | Mobile Number */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Branch Type */}
+            <div>
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Branch Type <span className="text-rose-500 font-bold">*</span>
+              </label>
+              <CustomSelect
+                value={formData.organizationType}
+                onChange={(val) => updateField('organizationType', val)}
+                options={BRANCH_TYPES}
+                placeholder="Select branch type"
+                optionVariant="strong"
+                activeColor="brand"
+                error={!!formErrors.organizationType}
+              />
+              {formErrors.organizationType && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.organizationType}</p>
+              )}
+            </div>
+
             <ReadOnlyField label="Branch Code" value={formData.code} placeholder="Auto-generated" />
             <TextField
               label="Contact Person Name"
@@ -1252,10 +1311,7 @@ export const BranchesView: React.FC = () => {
               error={formErrors.mobileNumber}
               onChange={(v) => updateField('mobileNumber', v)}
             />
-          </div>
 
-          {/* Row 3: WhatsApp Number | Email | Password */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <PhoneField
               label="WhatsApp Number"
               placeholder="e.g. 9876543210"
@@ -1304,10 +1360,7 @@ export const BranchesView: React.FC = () => {
                 <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.password}</p>
               )}
             </div>
-          </div>
 
-          {/* Row 4-5: Status | Country | State | District | City | Pincode */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
                 Status <span className="text-rose-500 font-bold">*</span>
@@ -1356,6 +1409,27 @@ export const BranchesView: React.FC = () => {
               placeholder="e.g. 600001"
               onValueChange={(v) => updateField('pincode', cleanPincode(v, locationMeta.pincodeRegex))}
             />
+
+            {/* Address */}
+            <div className="md:col-span-3">
+              <label className="text-xs sm:text-[13px] font-medium text-slate-500 block mb-1.5">
+                Address <span className="text-rose-500 font-bold">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={formData.address}
+                onChange={(e) => updateField('address', e.target.value)}
+                placeholder="Enter complete address"
+                className={`w-full min-h-[88px] px-4 py-3 bg-white rounded-[4px] text-xs sm:text-[13px] font-medium text-slate-700 outline-none transition-all resize-y ${
+                  formErrors.address
+                    ? 'border border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10'
+                }`}
+              />
+              {formErrors.address && (
+                <p className="text-[11px] font-medium text-red-500 mt-1">{formErrors.address}</p>
+              )}
+            </div>
           </div>
 
           {/* Footer Submit Buttons */}
@@ -1548,6 +1622,14 @@ export const BranchesView: React.FC = () => {
                   <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
                     <span className="text-slate-400 font-medium shrink-0">Pincode</span>
                     <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.pincode || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Branch Type</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.organizationType || '-'}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4 pt-2.5 border-t border-slate-100">
+                    <span className="text-slate-400 font-medium shrink-0">Address</span>
+                    <span className="font-bold text-slate-800 text-right leading-snug">{viewBranch.address || '-'}</span>
                   </div>
                 </div>
               </div>

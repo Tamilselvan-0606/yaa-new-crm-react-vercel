@@ -1,3 +1,5 @@
+import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
+import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, {
@@ -121,12 +123,9 @@ import {
   syncConvertedChallanToStorage,
   syncProformaStatusInStorage,
   recordDocumentConversion,
-  findDocumentLineage,
   inferDocType,
   initializeWorkflowIntegrity,
-  resolveDocumentConvertedAt,
 } from "../../../utils/salesDocumentWorkflow";
-import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -502,14 +501,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 }) => {
   const companyProfile = useCompanyDocumentProfile();
   const navigate = useNavigate();
-  const {
-    customers,
-    stocks,
-    saveCustomer,
-    saveSale,
-    setCustomersList,
-    setStocksList,
-  } = useSalesManagementStore();
+  const { saveCustomer, saveSale } = useSalesManagementStore();
 
   const dispatch = useAppDispatch();
   const [liveProformas, setLiveProformas] = useState<SaleProformaInvoice[]>([]);
@@ -522,49 +514,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
   >(null);
   const [totalApiPages, setTotalApiPages] = useState<number | null>(null);
   const [liveCustomers, setLiveCustomers] = useState<SalesCustomer[]>([]);
+  // Customers shown in the UI come only from the Commerce customers API
+  const customers = liveCustomers;
   const [liveStocks, setLiveStocks] = useState<InventoryStockItem[]>([]);
   const [liveProducts, setLiveProducts] = useState<ProductItemModel[]>([]);
   const [liveBatches, setLiveBatches] = useState<ApiStockBatch[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fe = useFieldErrors();
   const { runOnce } = useSubmitGuard();
-
-  // Proforma state with localStorage persistence as offline fallback
-  const [proformaList, setProformaList] = useState<SaleProformaInvoice[]>(
-    () => {
-      try {
-        const saved = localStorage.getItem("yaa_crm_proforma_invoices");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            return parsed.filter(
-              (p) =>
-                p.id !== "pro_1" &&
-                p.id !== "pro_2" &&
-                !String(p.id).startsWith("pro_") &&
-                !String(p.partyName || "").includes("Keerthivasan") &&
-                !String(p.partyName || "").includes("Royal Spice"),
-            );
-          }
-        }
-        return [];
-      } catch {
-        return [];
-      }
-    },
-  );
-
-  const persistProformas = (updated: SaleProformaInvoice[]) => {
-    setProformaList(updated);
-    try {
-      localStorage.setItem(
-        "yaa_crm_proforma_invoices",
-        JSON.stringify(updated),
-      );
-    } catch (e) {
-      console.error("Failed to save proforma invoices", e);
-    }
-  };
 
   // View Mode: 'list' vs 'form'
   const [viewMode, setViewMode] = useState<"list" | "form">(initialMode);
@@ -733,8 +690,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           // Deduplicate any twin Proforma records created within 15s for the same customer & amount during Estimate conversion
           const duplicateIdsToDelete: string[] = [];
           const deduped = mapped.filter((item, idx, arr) => {
-            const itemLineage = findDocumentLineage(item.proformaNo, "Proforma");
-            const itemHasLineage = Boolean(itemLineage?.estimateNo);
+            const itemHasLineage =
+              String(item.notes || "").includes("Converted from Estimate") ||
+              String(item.referenceNo || "").toUpperCase().startsWith("EST-");
             if (itemHasLineage) return true;
 
             const itemTime = new Date(item.createdAt || item.date).getTime();
@@ -761,13 +719,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
               ) {
                 return false;
               }
-              const otherLineage = findDocumentLineage(
-                other.proformaNo,
-                "Proforma",
-              );
               return Boolean(
-                otherLineage?.estimateNo ||
-                  String(other.notes || "").includes(
+                String(other.notes || "").includes(
                     "Converted from Estimate",
                   ) ||
                   String(other.referenceNo || "")
@@ -811,11 +764,9 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         console.warn("Commerce Proformas API notice:", err);
         setIsApiConnected(false);
         setApiErrorMessage(err.message || "Commerce API not reachable");
-        setLiveProformas(proformaListRef.current);
-        setTotalApiRecords(proformaListRef.current.length);
-        setTotalApiPages(
-          Math.max(1, Math.ceil(proformaListRef.current.length / size)),
-        );
+        setLiveProformas([]);
+        setTotalApiRecords(0);
+        setTotalApiPages(1);
       } finally {
         setIsApiLoading(false);
         isFetchingRef.current = false;
@@ -866,42 +817,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     appliedPeriod,
   ]);
 
-  // Keep proformaListRef synced
-  const proformaListRef = useRef(proformaList);
-  useEffect(() => {
-    proformaListRef.current = proformaList;
-  }, [proformaList]);
 
-  // Initialize workflow integrity & purge mock data on mount
+  // Initialize workflow integrity on mount
   useEffect(() => {
     initializeWorkflowIntegrity();
-    try {
-      const raw = localStorage.getItem("yaa_crm_proforma_invoices");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter(
-            (p) =>
-              p.id !== "pro_1" &&
-              p.id !== "pro_2" &&
-              !String(p.partyName || "").includes("Keerthivasan") &&
-              !String(p.partyName || "").includes("Royal Spice"),
-          );
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem(
-              "yaa_crm_proforma_invoices",
-              JSON.stringify(cleaned),
-            );
-            setProformaList(cleaned);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Storage purge error:", e);
-    }
   }, []);
 
-  // Fetch live products with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  // Fetch live products with multi-source fallback (Commerce products, client products, stocks)
   const isFetchingProductsRef = useRef(false);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
@@ -990,21 +912,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         }
       }
 
-      // 5. Fifth attempt: fallback to local storage
-      if (prods.length === 0) {
-        try {
-          const localSaved = localStorage.getItem("yaa_crm_inventory_stocks");
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              prods = parsed;
-            }
-          }
-        } catch (locErr) {
-          console.warn("localStorage stock load fallback error:", locErr);
-        }
-      }
-
       if (prods.length > 0) {
         const mapped = prods.map((p, idx) =>
           mapApiProductToProductItem(p, idx),
@@ -1038,7 +945,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         if (isMounted && rawCust.length > 0) {
           const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
           setLiveCustomers(mapped);
-          setCustomersList(mapped);
         }
       })
       .catch((err) => console.warn("Customer load:", err));
@@ -1050,7 +956,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         if (isMounted && rawStocks.length > 0) {
           const mapped = rawStocks.map(mapApiStockToInventoryStockItem);
           setLiveStocks(mapped);
-          setStocksList(mapped);
         }
       })
       .catch((err) => console.warn("Stock load:", err));
@@ -1068,7 +973,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [setCustomersList, setStocksList]);
+  }, []);
 
   // Load products when entering form mode if not already loaded
   useEffect(() => {
@@ -1082,15 +987,8 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
   // Live products and live customers for selectors (strictly excluding mock customers)
   const availableCustomers = useMemo(() => {
-    if (liveCustomers.length > 0) return liveCustomers;
-    return customers.filter(
-      (c) =>
-        !c.id.startsWith("cust_") &&
-        !c.name.includes("Keerthi") &&
-        !c.name.includes("Royal Spice") &&
-        !c.name.includes("Green Valley"),
-    );
-  }, [liveCustomers, customers]);
+    return liveCustomers;
+  }, [liveCustomers]);
 
   const availableProducts = useMemo(() => {
     const list: Array<{
@@ -1123,7 +1021,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       return numMatch ? parseFloat(numMatch[1]) : 0;
     };
 
-    const sourceStocks = liveStocks.length > 0 ? liveStocks : stocks;
+    const sourceStocks = liveStocks;
 
     const getBatchesForProduct = (
       productId: string,
@@ -1277,48 +1175,36 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       }
     });
 
-    // 3. Fallback from store stocks if both lists are empty
-    if (list.length === 0 && Array.isArray(stocks)) {
-      stocks.forEach((s) => {
-        const pid = String(s.productId || s.id || "");
-        if (pid && !seenIds.has(pid)) {
-          seenIds.add(pid);
-          const sku = s.sku || "";
-          const name = s.productName || "Unnamed Product";
-          const batches = getBatchesForProduct(pid, sku, name, s.batches);
-          list.push({
-            productId: pid,
-            id: pid,
-            productName: name,
-            sku: sku,
-            unitPrice: Number(s.unitPrice) || 0,
-            category: s.category || "",
-            unit: s.unit || "PCS",
-            taxPercent: extractTaxPercent(
-              (s as any).taxRate ?? (s as any).taxPercent,
-            ),
-            hsnCode: (s as any).hsnCode || "",
-            imageUrl:
-              (s as any).images?.[0] ||
-              (s as any).image ||
-              (s as any).imageUrl ||
-              "",
-            batches,
-          });
-        }
-      });
-    }
-
-    return list.filter((s) => {
+    return attachStockQty(list, liveStocks).filter((s) => {
       const pid = String(s.productId || s.id || "").trim();
       const name = String(s.productName || "").trim();
       if (!pid && !name) return false;
       if (pid.startsWith("mock_")) return false;
       return true;
     });
-  }, [liveProducts, liveStocks, stocks, liveBatches]);
+  }, [liveProducts, liveStocks, liveBatches]);
 
   // Filter products for the active row dropdown
+  // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
+  // reflects what the last saved document changed (the stock endpoint is never cached).
+  useEffect(() => {
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    let cancelled = false;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        const raw = unpackProducts(res);
+        if (raw.length > 0) setLiveStocks(raw.map(mapApiStockToInventoryStockItem));
+      })
+      .catch(() => {
+        /* keep the quantities already shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openProductDropdownRow]);
+
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
     if (!q) return availableProducts;
@@ -2275,17 +2161,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         }
       }
 
-      // Also persist to local cache for offline resiliency
-      let updatedList: SaleProformaInvoice[];
-      if (editingProforma) {
-        updatedList = proformaList.map((p) =>
-          p.id === proformaId ? newProforma : p,
-        );
-      } else {
-        updatedList = [newProforma, ...proformaList];
-      }
-      persistProformas(updatedList);
-
       // Re-fetch live list from Commerce API
       fetchProformas(
         page,
@@ -2331,21 +2206,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       ) {
         return;
       }
-      let updatedList: SaleProformaInvoice[];
-      if (editingProforma) {
-        updatedList = proformaList.map((p) =>
-          p.id === proformaId ? newProforma : p,
-        );
-      } else {
-        updatedList = [newProforma, ...proformaList];
-      }
-      persistProformas(updatedList);
-      if (tabs.length > 1) {
-        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
-        setTabs(remainingTabs);
-      } else {
-        setViewMode("list");
-      }
+      return;
     } finally {
       setIsSubmitting(false);
     }
@@ -2353,10 +2214,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
   // Determine conversion status across all next stages
   const getProformaStages = (proforma: SaleProformaInvoice) => {
-    const proformaNoClean = proforma.proformaNo?.trim();
-    const lineage = proformaNoClean
-      ? findDocumentLineage(proformaNoClean, "Proforma")
-      : undefined;
+    const lineage: any = undefined;
 
     const isInvoiceConverted = Boolean(
       lineage?.invoiceNo ||
@@ -2503,15 +2361,13 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
     if (await isConvertBlockedByStock(proforma)) return;
     try {
-      const currentLineage = findDocumentLineage(proforma.proformaNo);
-      const upstreamQuotationNo = currentLineage?.estimateNo;
+      const upstreamQuotationNo = String(proforma.referenceNo || "")
+        .toUpperCase()
+        .startsWith("EST")
+        ? proforma.referenceNo
+        : undefined;
 
-      const existingOrders: SaleOrderRecord[] = JSON.parse(
-        localStorage.getItem("yaa_crm_sale_orders") || "[]",
-      );
-      let convertedNo =
-        currentLineage?.orderNo ||
-        "";
+      let convertedNo = "";
 
       const newOrder: SaleOrderRecord = {
         id: `so_${Date.now()}`,
@@ -2607,16 +2463,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       );
 
       const convertedTimestamp = new Date().toISOString();
-      const updated = proformaList.map((p) =>
-        p.id === proforma.id || p.proformaNo === proforma.proformaNo
-          ? {
-              ...p,
-              status: "Converted" as const,
-              convertedToInvoiceNo: convertedNo,
-              convertedAt: convertedTimestamp,
-            }
-          : p,
-      );
       setLiveProformas((prev) =>
         prev.map((p) =>
           p.id === proforma.id || p.proformaNo === proforma.proformaNo
@@ -2629,7 +2475,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
             : p,
         ),
       );
-      persistProformas(updated);
 
       toast.success(
         `Proforma ${proforma.proformaNo} converted to Sale Order${convertedNo ? ` ${convertedNo}` : ''}!`,
@@ -2667,13 +2512,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
     }
     if (await isConvertBlockedByStock(proforma)) return;
     try {
-      const currentLineage = findDocumentLineage(proforma.proformaNo);
-      const existingChallans = JSON.parse(
-        localStorage.getItem("yaa_crm_delivery_challans") || "[]",
-      );
-      const convertedNo =
-        currentLineage?.challanNo ||
-        "";
+      const convertedNo = "";
 
       const newChallan: DeliveryChallanRecord = {
         id: `dc_${Date.now()}`,
@@ -2825,8 +2664,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       console.warn("Duplicate API notice:", err);
       toast.info(`Duplicated ${proforma.proformaNo} locally.`);
     } finally {
-      const updated = [duplicated, ...proformaList];
-      persistProformas(updated);
       fetchProformas(
         page,
         pageSize,
@@ -2864,10 +2701,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           { type: "ProformaInvoice", id: "LIST" },
         ]),
       );
-      const updated = proformaList.filter(
-        (p) => p.id !== deleteTargetProforma.id,
-      );
-      persistProformas(updated);
       toast.success(
         `Proforma invoice "${deleteTargetProforma.proformaNo}" deleted successfully.`,
       );
@@ -2896,7 +2729,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       toast.error("This proforma invoice could not be found. Please refresh the list.");
       return;
     }
-    const current = proformaList.find((p) => p.id === id);
+    const current = liveProformas.find((p) => p.id === id);
     if (current) {
       if (current.status === "Converted") {
         toast.error(`Proforma ${current.proformaNo} is already converted and its status cannot be changed.`);
@@ -2924,10 +2757,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       console.warn("Status update API error:", err);
       toast.info(`Proforma status updated to ${newStatus}.`);
     } finally {
-      const updated = proformaList.map((p) =>
-        p.id === id ? { ...p, status: newStatus } : p,
-      );
-      persistProformas(updated);
       fetchProformas(
         page,
         pageSize,
@@ -3029,70 +2858,10 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
   // Displayed Proforma Invoices: Live API data merged with local cache and cross-module lineage
   const displayProformas = useMemo(() => {
-    const baseList = isApiConnected ? liveProformas : proformaList;
-    const mergedList = baseList.map((item) => {
-      const localMatch = proformaList.find(
-        (p) => p.id === item.id || p.proformaNo === item.proformaNo,
-      );
-      const lineage = findDocumentLineage(item.proformaNo);
-      const isConvertedInLineage = Boolean(
-        lineage && (lineage.orderNo || lineage.invoiceNo),
-      );
-      const effectiveStatus =
-        isConvertedInLineage ||
-        localMatch?.status === "Converted" ||
-        item.status === "Converted"
-          ? ("Converted" as const)
-          : item.status;
-      const resolvedConvAt = resolveDocumentConvertedAt("Proforma", item);
-      return {
-        ...item,
-        status: effectiveStatus,
-        convertedToInvoiceNo:
-          localMatch?.convertedToInvoiceNo ||
-          lineage?.orderNo ||
-          lineage?.invoiceNo ||
-          item.convertedToInvoiceNo,
-        convertedAt:
-          (item as any).convertedAt ||
-          (localMatch as any)?.convertedAt ||
-          resolvedConvAt ||
-          undefined,
-      };
-    });
-
-    // When API is connected, show strictly the live API list; only fallback to extra locals if offline
-    const combined = isApiConnected
-      ? mergedList
-      : (() => {
-          const seenNos = new Set(mergedList.map((p) => p.proformaNo));
-          const extraLocals = proformaList
-            .filter((p) => !seenNos.has(p.proformaNo))
-            .map((item) => {
-              const lineage = findDocumentLineage(item.proformaNo);
-              const isConvertedInLineage = Boolean(
-                lineage && (lineage.orderNo || lineage.invoiceNo),
-              );
-              const resolvedConvAt = resolveDocumentConvertedAt(
-                "Proforma",
-                item,
-              );
-              return {
-                ...item,
-                status:
-                  isConvertedInLineage || item.status === "Converted"
-                    ? ("Converted" as const)
-                    : item.status,
-                convertedToInvoiceNo:
-                  item.convertedToInvoiceNo ||
-                  lineage?.orderNo ||
-                  lineage?.invoiceNo,
-                convertedAt:
-                  (item as any).convertedAt || resolvedConvAt || undefined,
-              };
-            });
-          return [...extraLocals, ...mergedList];
-        })();
+    const combined = liveProformas.map((item) => ({
+      ...item,
+      convertedAt: (item as any).convertedAt || undefined,
+    }));
 
     return combined.filter((p) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -3110,9 +2879,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       return matchesSearch && matchesStatus && matchesPeriod;
     });
   }, [
-    isApiConnected,
     liveProformas,
-    proformaList,
     appliedSearch,
     appliedStatus,
     appliedPeriod,
@@ -3946,9 +3713,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                                                   (p as any).productCode ||
                                                   "PRD"}
                                               </span>
-                                              {p.unit && (
-                                                <span>• {p.unit}</span>
-                                              )}
+                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -4779,7 +4544,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     const excelRows = displayProformas.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
-      const convertedAt = resolveDocumentConvertedAt("Proforma", p);
+      const convertedAt = ((p as any).convertedAt || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
@@ -4860,7 +4625,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
 
     const printRows = displayProformas.map((p) => {
       const createdDt = formatDateTime(p.createdAt || p.date);
-      const convertedAt = resolveDocumentConvertedAt("Proforma", p);
+      const convertedAt = ((p as any).convertedAt || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         proformaNo: p.proformaNo,
@@ -5200,10 +4965,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                   const isConvertOpen = activeConvertDropdownId === item.id;
                   const isActionOpen = activeDropdownId === item.id;
                   const createdDt = formatDateTime(item.createdAt || item.date);
-                  const convertedAt = resolveDocumentConvertedAt(
-                    "Proforma",
-                    item,
-                  );
+                  const convertedAt = ((item as any).convertedAt || null);
                   const convertedDt = formatDateTime(convertedAt);
                   const resolvedCustomerCode =
                     (item as any).customerCode ||
@@ -5229,7 +4991,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           c.name.trim().toLowerCase() ===
                             item.partyName.trim().toLowerCase()),
                     )?.customerCode ||
-                    findDocumentLineage(item.proformaNo)?.customerCode ||
                     "";
 
                   return (
@@ -5243,17 +5004,6 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-[#33077C] border border-purple-200/80 font-mono text-xs font-bold">
                             {item.proformaNo || "—"}
                           </span>
-                          <DocumentLineageBadges
-                            docRef={item.proformaNo}
-                            currentType="Proforma"
-                            sourceDocNo={
-                              item.referenceNo &&
-                              inferDocType(item.referenceNo)
-                                ? item.referenceNo
-                                : undefined
-                            }
-                            className="justify-center"
-                          />
                         </div>
                       </td>
 

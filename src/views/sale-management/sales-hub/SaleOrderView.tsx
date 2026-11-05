@@ -1,3 +1,5 @@
+import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
+import { attachStockQty } from "../../../utils/stockDisplay";
 import { HistoryTimelineView } from "../../../components/common/HistoryTimelineView";
 import { CommonTableHead } from "../../../components/common/CommonTableHead";
 import { CustomerSearchableSelect } from "../../../components/common/paginated-select";
@@ -98,14 +100,10 @@ import {
   mapDeliveryChallanRecordToPayload,
 } from "../../../api/commerce/deliveryChallanApi";
 import {
-  syncConvertedInvoiceToStorage,
   syncConvertedChallanToStorage,
   syncOrderStatusInStorage,
   recordDocumentConversion,
-  findDocumentLineage,
-  resolveDocumentConvertedAt,
   initializeWorkflowIntegrity,
-  isMockChallan,
 } from "../../../utils/salesDocumentWorkflow";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import {
@@ -508,10 +506,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
   const {
-    customers: localCustomers,
-    stocks: localStocks,
-    saveCustomer: saveCustomerLocal,
-    saveSale,
     setCustomersList,
     setStocksList,
   } = useSalesManagementStore();
@@ -521,14 +515,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   }, []);
 
   // Live API States
-  const [saleOrders, setSaleOrders] = useState<SaleOrderRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem("yaa_crm_sale_orders");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [saleOrders, setSaleOrders] = useState<SaleOrderRecord[]>([]);
   const [isApiLoading, setIsApiLoading] = useState(false);
   const [isApiConnected, setIsApiConnected] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
@@ -560,11 +547,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   const persistSaleOrders = (updated: SaleOrderRecord[]) => {
     setSaleOrders(updated);
-    try {
-      localStorage.setItem("yaa_crm_sale_orders", JSON.stringify(updated));
-    } catch (e) {
-      console.error("Failed to save sale orders to local storage", e);
-    }
   };
 
   // View Mode: 'list' vs 'form'
@@ -701,7 +683,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const isFetchingProductsRef = useRef(false);
 
-  // Fetch live products with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  // Fetch live products with multi-source fallback (Commerce products, client products, stocks)
   const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
     if (isFetchingProductsRef.current) return;
     isFetchingProductsRef.current = true;
@@ -788,21 +770,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         }
       }
 
-      // 5. Fifth attempt: fallback to local storage
-      if (prods.length === 0) {
-        try {
-          const localSaved = localStorage.getItem("yaa_crm_inventory_stocks");
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              prods = parsed;
-            }
-          }
-        } catch (locErr) {
-          console.warn("localStorage stock load fallback error:", locErr);
-        }
-      }
-
       if (prods.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ApiProduct>();
@@ -851,11 +818,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         page_size: 100,
       });
       const rawCust = unpackProducts(custRes);
-      if (rawCust.length > 0) {
-        const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
-        setLiveCustomers(mapped);
-        setCustomersList(mapped);
-      }
+      const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
+      setLiveCustomers(mapped);
+      setCustomersList(mapped);
     } catch (e) {
       console.warn("Customer load error in SaleOrderView:", e);
     }
@@ -947,17 +912,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           mapApiSaleOrderToSaleOrderRecord(item),
         );
 
-        const merged = records.map((ord) => {
-          const lineage = findDocumentLineage(ord.orderNo);
-          const isConverted =
-            ord.status === "Converted" || Boolean(lineage?.invoiceNo);
-          return {
-            ...ord,
-            status: isConverted ? ("Converted" as const) : ord.status,
-            convertedToInvoiceNo:
-              ord.convertedToInvoiceNo || lineage?.invoiceNo,
-          };
-        });
+        const merged = records;
 
         persistSaleOrders(merged);
         setApiSummary(res.summary ?? null);
@@ -974,22 +929,13 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
     } catch (err: any) {
       console.warn(
-        "Could not reach Commerce Orders API, running with offline cache:",
+        "Could not reach Commerce Orders API:",
         err,
       );
-      const rawLocal = localStorage.getItem("yaa_crm_sale_orders");
-      const localList: SaleOrderRecord[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const updatedLocal = localList.map((ord) => {
-        const lineage = findDocumentLineage(ord.orderNo);
-        const isConverted =
-          ord.status === "Converted" || Boolean(lineage?.invoiceNo);
-        return {
-          ...ord,
-          status: isConverted ? ("Converted" as const) : ord.status,
-          convertedToInvoiceNo: ord.convertedToInvoiceNo || lineage?.invoiceNo,
-        };
-      });
-      persistSaleOrders(updatedLocal);
+      persistSaleOrders([]);
+      setApiSummary(null);
+      setTotalApiRecords(0);
+      setTotalApiPages(1);
       setIsApiConnected(false);
     } finally {
       setIsApiLoading(false);
@@ -1035,8 +981,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
         openingBalance: c.openingBalance || 0,
       }));
     }
-    return localCustomers;
-  }, [liveCustomers, localCustomers]);
+    return [] as typeof liveCustomers;
+  }, [liveCustomers]);
 
   // Helper to extract batches for a product
   const getBatchesForProduct = useCallback(
@@ -1153,46 +1099,14 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       }
     });
 
-    // 3. Fallback from local store stocks
-    if (map.size === 0 && Array.isArray(localStocks)) {
-      localStocks.forEach((s) => {
-        const pid = String((s as any).productId || s.id || "");
-        if (pid && !map.has(pid)) {
-          map.set(pid, {
-            id: s.id,
-            productId: pid,
-            productName: s.productName || (s as any).name || "Unnamed Product",
-            sku: s.sku || (s as any).itemCode || "",
-            unitPrice: Number(
-              s.unitPrice ??
-                (s as any).salePrice ??
-                (s as any).sellingPrice ??
-                (s as any).price ??
-                0,
-            ),
-            unit: s.unit || "PCS",
-            taxPercent: 5,
-            hsnCode: (s as any).hsnCode || "",
-            category: s.category || "",
-            imageUrl:
-              (s as any).images?.[0] ||
-              (s as any).image ||
-              (s as any).imageUrl ||
-              "",
-            batches: s.batches || [],
-          });
-        }
-      });
-    }
-
-    return Array.from(map.values()).filter((s: any) => {
+    return attachStockQty(Array.from(map.values()), liveStocks).filter((s: any) => {
       const pid = String(s.productId || s.id || "").trim();
       const name = String(s.productName || "").trim();
       if (!pid && !name) return false;
       if (pid.startsWith("mock_")) return false;
       return true;
     });
-  }, [liveProducts, liveStocks, localStocks, getBatchesForProduct]);
+  }, [liveProducts, liveStocks, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
     return allStockItems.map((s: any) => ({
@@ -1206,6 +1120,26 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
   }, [allStockItems]);
 
   // Filter products for the active row popover
+  // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
+  // reflects what the last saved document changed (the stock endpoint is never cached).
+  useEffect(() => {
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    let cancelled = false;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        const raw = unpackProducts(res);
+        if (raw.length > 0) setLiveStocks(raw.map(mapApiStockToInventoryStockItem));
+      })
+      .catch(() => {
+        /* keep the quantities already shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openProductDropdownRow]);
+
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
     if (!q) return allStockItems;
@@ -1831,22 +1765,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
   // Determine conversion status across all next stages
   const getOrderStages = (order: SaleOrderRecord) => {
-    const orderNoClean = order.orderNo?.trim();
-    const lineage = orderNoClean
-      ? findDocumentLineage(orderNoClean, "Order")
-      : undefined;
-
+    // Conversion state comes only from the sale order API record.
     const isInvoiceConverted = Boolean(
-      lineage?.invoiceNo ||
-      lineage?.invoiceId ||
       order.status === "Converted" ||
       (order.convertedToInvoiceNo &&
         order.convertedToInvoiceNo.startsWith("INV-")),
     );
 
     const isChallanConverted = Boolean(
-      lineage?.challanNo ||
-      lineage?.challanId ||
+      /challan/i.test(String((order as any).convertedToType || "")) ||
       (order.convertedToInvoiceNo &&
         (order.convertedToInvoiceNo.startsWith("DC-") ||
           order.convertedToInvoiceNo.startsWith("CHAL-"))),
@@ -1868,7 +1795,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     const isFullyConverted = isInvoiceConverted || availableStages.length === 0;
 
     return {
-      lineage,
       isInvoiceConverted,
       isChallanConverted,
       availableStages,
@@ -1988,13 +1914,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     }
     try {
       setIsActionLoading(true);
-      const currentLineage = findDocumentLineage(order.orderNo);
-      const existingChallans: DeliveryChallanRecord[] = JSON.parse(
-        localStorage.getItem("yaa_crm_delivery_challans") || "[]",
-      ).filter((c: any) => !isMockChallan(c));
-      let challanNo =
-        currentLineage?.challanNo ||
-        "";
+      let challanNo = "";
 
       let didBackendConvertCreateChallan = false;
       let apiChallanId = "";
@@ -2212,60 +2132,11 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
       const convertedOrderMap = new Map<string, string>();
 
-      openOrdersToConvert.forEach((order, idx) => {
-        const currentLineage = findDocumentLineage(order.orderNo);
-        const invNo =
-          currentLineage?.invoiceNo ||
-          "";
+      openOrdersToConvert.forEach((order) => {
+        const invNo = "";
 
         convertedOrderMap.set(order.id, invNo);
         convertedOrderMap.set(order.orderNo, invNo);
-
-        const newSale: SaleTransaction = {
-          id: `sale_${Date.now()}_${idx}`,
-          invoiceNo: invNo,
-          referenceNo: order.orderNo,
-          saleDate: new Date().toISOString().split("T")[0],
-          dueDate: order.dueDate,
-          customerId: order.customerId,
-          customerName: order.partyName,
-          customerCompany: order.customerCompany,
-          customerPhone: order.customerPhone,
-          customerEmail: order.customerEmail,
-          billingAddress: order.billingAddress,
-          shippingAddress: order.shippingAddress || order.billingAddress,
-          items: order.items,
-          subtotal: order.subtotal,
-          withGst: order.withGst,
-          gstType: order.gstType,
-          cgst: order.cgst,
-          sgst: order.sgst,
-          igst: order.igst,
-          totalDiscount: order.discount || 0,
-          totalTax: order.taxAmount || 0,
-          shippingCharges: 0,
-          otherCharges: 0,
-          grandTotal: order.amount,
-          paidAmount: order.advanceAmount || 0,
-          balance: order.balance,
-          paymentMethod: (order.paymentType as any) || "Credit",
-          paymentTerms: "15 Days",
-          paymentStatus:
-            order.balance <= 0
-              ? "Paid"
-              : (order.advanceAmount || 0) > 0
-                ? "Partial"
-                : "Unpaid",
-          saleStatus: "Confirmed",
-          createdBy: "Sales Representative",
-          salesperson: "Sales Rep",
-          notes: `Bulk converted from Sale Order ${order.orderNo}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        saveSale(newSale);
-        syncConvertedInvoiceToStorage(newSale);
 
         recordDocumentConversion({
           fromType: "Order",
@@ -3443,9 +3314,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                                                   p.productCode ||
                                                   "PRD"}
                                               </span>
-                                              {p.unit && (
-                                                <span>• {p.unit}</span>
-                                              )}
+                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -4119,7 +3988,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const excelRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = resolveDocumentConvertedAt("Order", o);
+      const convertedAt = ((o as any).convertedAt || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         date: isoToDdmmyyyy(o.orderDate),
@@ -4195,7 +4064,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
 
     const printRows = filteredOrders.map((o) => {
       const createdDt = formatDateTime(o.createdAt);
-      const convertedAt = resolveDocumentConvertedAt("Order", o);
+      const convertedAt = ((o as any).convertedAt || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         orderNo: o.orderNo,
@@ -4585,10 +4454,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                     const isConvertOpen = activeConvertDropdownId === item.id;
                     const isActionOpen = activeDropdownId === item.id;
                     const createdDt = formatDateTime(item.createdAt);
-                    const convertedAt = resolveDocumentConvertedAt(
-                      "Order",
-                      item,
-                    );
+                    const convertedAt = (item as any).convertedAt || null;
                     const convertedDt = formatDateTime(convertedAt);
                     const resolvedCustomerCode =
                       (item as any).customerCode ||
@@ -4603,18 +4469,6 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             c.name.trim().toLowerCase() ===
                               item.partyName.trim().toLowerCase()),
                       )?.customerCode ||
-                      localCustomers.find(
-                        (c) =>
-                          (item.customerId && c.id === item.customerId) ||
-                          (c.phone &&
-                            item.customerPhone &&
-                            c.phone === item.customerPhone) ||
-                          (c.name &&
-                            item.partyName &&
-                            c.name.trim().toLowerCase() ===
-                              item.partyName.trim().toLowerCase()),
-                      )?.customerCode ||
-                      findDocumentLineage(item.orderNo)?.customerCode ||
                       "";
 
                     return (

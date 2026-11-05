@@ -23,9 +23,13 @@ export function usePaginatedDropdown<T>({
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // The server's total for the current search (when it reports one), so a dropdown can say "10 of 57".
+  const [totalRecords, setTotalRecords] = useState<number | undefined>(undefined);
 
   const isFetchingRef = useRef(false);
   const activeSearchRef = useRef('');
+  // Latest request wins: an older response (for example one started before a record was added) must never overwrite a newer one.
+  const requestIdRef = useRef(0);
 
   // Callers usually pass inline closures (fetchPage / getId), which are new on every render.
   // Reading them through refs keeps executeFetch / handleSearch / loadInitial identities stable, so
@@ -40,7 +44,9 @@ export function usePaginatedDropdown<T>({
   // Core fetch function
   const executeFetch = useCallback(
     async (targetPage: number, targetSearch: string, isAppend = false) => {
-      if (isFetchingRef.current) return;
+      // "Load more" waits for the running fetch; a first page / refresh / new search starts right away and supersedes it.
+      if (isAppend && isFetchingRef.current) return;
+      const requestId = ++requestIdRef.current;
       isFetchingRef.current = true;
 
       if (targetPage === 1) {
@@ -56,8 +62,8 @@ export function usePaginatedDropdown<T>({
           search: targetSearch,
         });
 
-        // Ensure response corresponds to current active search
-        if (targetSearch !== activeSearchRef.current) {
+        // Ignore a response that was superseded by a newer request, or that belongs to an older search.
+        if (requestId !== requestIdRef.current || targetSearch !== activeSearchRef.current) {
           return;
         }
 
@@ -74,6 +80,8 @@ export function usePaginatedDropdown<T>({
           return [...prev, ...filteredNew];
         });
 
+        setTotalRecords(typeof result.totalRecords === 'number' ? result.totalRecords : undefined);
+
         // Determine if more records are available
         if (typeof result.hasNextPage === 'boolean') {
           setHasMore(result.hasNextPage);
@@ -87,9 +95,11 @@ export function usePaginatedDropdown<T>({
       } catch (err) {
         console.warn('usePaginatedDropdown fetch error:', err);
       } finally {
-        isFetchingRef.current = false;
-        setIsLoading(false);
-        setIsLoadingMore(false);
+        if (requestId === requestIdRef.current) {
+          isFetchingRef.current = false;
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
       }
     },
     [limit]
@@ -139,6 +149,7 @@ export function usePaginatedDropdown<T>({
     isLoading,
     isLoadingMore,
     hasMore,
+    totalRecords,
     searchQuery,
     handleSearch,
     loadMore,

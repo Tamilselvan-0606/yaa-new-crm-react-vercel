@@ -944,6 +944,9 @@ export const Header: React.FC<HeaderProps> = ({
     if (path.startsWith('/payments') || currentTab === 'payments') return 'Payments';
     if (path.startsWith('/subscriptions') || currentTab === 'subscriptions') return 'Subscriptions';
     if (path.startsWith('/reminders') || currentTab === 'reminders') return 'Reminders';
+    if (path.startsWith('/announcements/new')) return 'Create Announcement';
+    if (path.startsWith('/announcements/templates')) return 'Announcement Templates';
+    if (path.startsWith('/announcements') || currentTab === 'announcements') return 'Announcements';
     if (path.startsWith('/reports') || currentTab === 'reports') return 'Reports & Analytics';
     if (path.startsWith('/employees') || currentTab === 'employees') return 'Employees';
     if (path.startsWith('/settings') || currentTab === 'settings') return 'Settings';

@@ -384,6 +384,9 @@ describe('Zod Module-Wide Schema Numeric Negative Validation', () => {
         city: 'Coimbatore',
         state: 'Tamil Nadu',
         pincode: '641001',
+        whatsappNumber: '9876543210',
+        gstNumber: '33AAAAA0000A1Z5',
+        panNumber: 'AAAAA0000A',
         creditLimit: 100000,
       });
       assert.equal(valid.success, true);
@@ -396,6 +399,9 @@ describe('Zod Module-Wide Schema Numeric Negative Validation', () => {
         city: 'Coimbatore',
         state: 'Tamil Nadu',
         pincode: '641001',
+        whatsappNumber: '9876543210',
+        gstNumber: '33AAAAA0000A1Z5',
+        panNumber: 'AAAAA0000A',
         creditLimit: -1,
       });
       assert.equal(invalid.success, false);
@@ -408,6 +414,9 @@ describe('Zod Module-Wide Schema Numeric Negative Validation', () => {
         city: 'Coimbatore',
         state: 'Tamil Nadu',
         pincode: '641001',
+        whatsappNumber: '9876543210',
+        gstNumber: '33AAAAA0000A1Z5',
+        panNumber: 'AAAAA0000A',
       });
       assert.equal(invalidEmail.success, false, 'Email must be mandatory');
 

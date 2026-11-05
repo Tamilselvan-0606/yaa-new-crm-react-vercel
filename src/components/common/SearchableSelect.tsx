@@ -1,3 +1,4 @@
+import { DropdownCountBar } from './DropdownCountBar';
 import { useDebounce } from 'use-debounce';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -37,6 +38,10 @@ export interface SearchableSelectProps {
   staticOptions?: SearchableOption[];
   onAddNew?: () => void;
   addNewText?: string;
+  /** Opt in to a count strip at the top of the list, e.g. { singular: 'product', plural: 'products' }. */
+  countLabel?: { singular: string; plural: string };
+  /** Total records on the server (or matching the search), when known. */
+  totalCount?: number;
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -62,6 +67,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   staticOptions = [],
   onAddNew,
   addNewText = 'Add New',
+  countLabel,
+  totalCount,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -351,6 +358,17 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
             }}
             className={`bg-white rounded-xl border border-slate-200/90 shadow-2xl shadow-slate-900/15 overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs flex flex-col ${menuClassName}`}
           >
+            {countLabel && (
+              <DropdownCountBar
+                singular={countLabel.singular}
+                plural={countLabel.plural}
+                shown={normalizedOptions.length}
+                total={totalCount}
+                searching={!!searchTerm.trim() && isTyping}
+                hasMore={hasMore}
+              />
+            )}
+
             {/* Options List Container */}
             <div
               onScroll={handleListScroll}

@@ -35,6 +35,8 @@ import { baseClient } from '../api/baseApi';
 import { CreatePlatformLeadRequest, UpdatePlatformLeadRequest } from '../api/platform/leadTypes';
 import { retryWithRefreshedToken } from '../api/tokenRefresh';
 import { clearApiCache } from '../api/queryCache';
+import { branchApi } from '../api/platform/branchApi';
+import { subOrganizationApi } from '../api/platform/subOrganizationApi';
 
 export { authApi };
 export type { ApiUser, ApiLoginResponse };
@@ -319,6 +321,70 @@ class ApiService {
     return `Your ${hit.kind} is ${String(hit.status).toLowerCase().startsWith('suspend') ? 'suspended' : 'inactive'}. Please contact your administrator.`;
   }
 
+  /**
+   * A branch admin or sub-organization admin works in the module of their own branch / sub-organization (Client or
+   * Sales Management), not in every module the organization has. The type (1 = Client, 2 = Sales; 3 = both is left
+   * as it is) comes from the login profile or, when it is not there, from the branch / sub-organization record,
+   * and replaces the organization's type for this user.
+   */
+  private async applyScopedSuite(appUser: User, apiUser: any): Promise<void> {
+    if (appUser.role !== 'BRANCH_ADMIN' && appUser.role !== 'SUB_ORG_ADMIN') return;
+    const pick = (v: unknown): 1 | 2 | undefined => {
+      const t = String(v ?? '').trim().toLowerCase();
+      if (t === '1' || t.includes('client')) return 1;
+      if (t === '2' || t.includes('sale')) return 2;
+      return undefined;
+    };
+    const membership = apiUser?.memberships?.[0];
+    let type: 1 | 2 | undefined;
+    if (appUser.role === 'SUB_ORG_ADMIN') {
+      type = pick(
+        apiUser?.subOrganizationType ??
+          apiUser?.subOrganization?.subOrganizationType ??
+          membership?.subOrganization?.subOrganizationType
+      );
+      const subId = apiUser?.subOrganizationId || membership?.subOrganizationId;
+      if (!type && subId) {
+        try {
+          const res = await subOrganizationApi.getSubOrganizationById(subId, appUser.organizationId);
+          const item: any = res?.data;
+          type = pick(item?.subOrganizationType ?? item?.organizationType);
+        } catch {
+          /* keep the organization's own type */
+        }
+      }
+    } else {
+      type = pick(apiUser?.branchType ?? apiUser?.branch?.branchType ?? membership?.branch?.branchType);
+    }
+    if (!type && appUser.role === 'BRANCH_ADMIN') {
+      const branchId = apiUser?.accessibleBranchIds?.[0] || membership?.branchId || apiUser?.branchId;
+      if (branchId) {
+        try {
+          const res = await branchApi.getBranchById(branchId, appUser.organizationId);
+          const item: any = res?.data;
+          type = pick(item?.branchType ?? item?.organizationType);
+        } catch {
+          /* keep the organization's own type */
+        }
+      }
+    }
+    if (!type) return;
+
+    const name = type === 1 ? 'CLIENT_MANAGEMENT' : 'SALE_MANAGEMENT';
+    const view = type === 1 ? 'Client Management' : 'Sales Management';
+    (appUser as any).organizationType = type;
+    (appUser as any).organizationTypeName = name;
+    if ((appUser as any).organization) {
+      (appUser as any).organization.organizationType = type;
+      (appUser as any).organization.organizationTypeName = name;
+    }
+    localStorage.setItem('user_organization_type', String(type));
+    localStorage.setItem('user_organization_type_name', name);
+    localStorage.setItem('active_org_type_view', view);
+    localStorage.setItem('active_org_type_orgsuperadmin', view);
+    window.dispatchEvent(new CustomEvent('orgTypeChanged', { detail: view }));
+  }
+
   // Auth: Delegated to centralized src/api/auth/authApi.ts
   async login(email: string, password?: string): Promise<{ success: boolean; token: string; user: User }> {
     const data = await authApi.login({ email, password });
@@ -345,6 +411,7 @@ class ApiService {
       clearApiCache();
       this.setToken(token);
       this.setUserId(appUser.id);
+      await this.applyScopedSuite(appUser, userObj);
       localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
       return {
         success: true,
@@ -413,6 +480,7 @@ class ApiService {
       if (userObj && (userObj.id || userObj.email)) {
         const appUser = this.mapApiUserToAppUser(userObj);
         if (appUser?.id) this.setUserId(appUser.id);
+        await this.applyScopedSuite(appUser, userObj);
         localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(appUser));
         return appUser;
       }

@@ -108,7 +108,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     name: 'Yaa Creations',
     taxId: '27AABCA1234F1Z8',
     pan: 'ABCDE1234F',
-    address: 'Plot No 42, Silicon Valley High-Tech Zone, Madhapur, Hyderabad, TG 500081',
+    address: 'No.108 Marutham Paradise Apartment, Urapakkam, Chennai,',
     email: 'billing@yaacreations.com',
     phone: '+91 98765 43210',
   });
@@ -1184,29 +1184,29 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </h2>
             </div>
             <div className="flex items-center gap-2">
-            {!(isSuperAdmin && !isOrgSuperAdmin) && (
-              <button
-                type="button"
-                onClick={() => setIsAddClientModalOpen(true)}
-                className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
-              >
-                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                Add Client
-              </button>
-            )}
-            {selectedCustomer && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCustomer(null);
-                  setClientSearchQuery('');
-                  setIsClientDropdownOpen(false);
-                }}
-                className="h-8 px-3.5 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98]"
-              >
-                Clear
-              </button>
-            )}
+              {!(isSuperAdmin && !isOrgSuperAdmin) && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddClientModalOpen(true)}
+                  className="h-8 px-3.5 bg-white hover:bg-slate-50 text-[#33077C] border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98] inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                  Add Client
+                </button>
+              )}
+              {selectedCustomer && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCustomer(null);
+                    setClientSearchQuery('');
+                    setIsClientDropdownOpen(false);
+                  }}
+                  className="h-8 px-3.5 bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98]"
+                >
+                  Clear
+                </button>
+              )}
             </div>
           </div>
 

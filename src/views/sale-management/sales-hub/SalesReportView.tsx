@@ -30,7 +30,8 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import { useSalesManagementStore } from '../../../store/useSalesManagementStore';
+import { SaleTransaction } from '../../../store/useSalesManagementStore';
+import { commerceInvoiceApi, mapApiInvoiceToSaleTransaction } from '../../../api/commerce/invoiceApi';
 import { salesReportApi, SalesReportSummary } from '../../../api/commerce/salesReportApi';
 import { Button } from '../../../components/common/Button';
 import { Badge } from '../../../components/common/Badge';
@@ -42,8 +43,6 @@ import { formatDate } from '../utils/dateUtils';
 const CHART_COLORS = ['#4309A2', '#7C3AED', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#EC4899'];
 
 export const SalesReportView: React.FC = () => {
-  const { sales, salesReturns, stocks } = useSalesManagementStore();
-
   // Date Filter State
   const [timeRange, setTimeRange] = useState<'today' | 'this_week' | 'this_month' | 'this_year' | 'custom'>('this_month');
   const [customStartDate, setCustomStartDate] = useState(
@@ -54,7 +53,7 @@ export const SalesReportView: React.FC = () => {
   );
 
 
-  // Server-side KPI summary (falls back to in-browser computation until loaded)
+  // Server-side KPI summary (zero until the API responds)
   const [apiSummary, setApiSummary] = useState<SalesReportSummary | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -78,33 +77,32 @@ export const SalesReportView: React.FC = () => {
     };
   }, [timeRange, customStartDate, customEndDate]);
 
-  // Filter sales based on chosen range
-  const filteredSales = useMemo(() => {
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
-
-    return sales.filter((s) => {
-      if (timeRange === 'today') return s.saleDate === todayStr;
-      if (timeRange === 'this_week') {
-        const weekAgo = new Date(Date.now() - 7 * 86400000);
-        return new Date(s.saleDate) >= weekAgo;
-      }
-      if (timeRange === 'this_month') {
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        return new Date(s.saleDate) >= monthStart;
-      }
-      if (timeRange === 'this_year') {
-        const yearStart = new Date(now.getFullYear(), 0, 1);
-        return new Date(s.saleDate) >= yearStart;
-      }
-      if (timeRange === 'custom') {
-        const start = customStartDate <= customEndDate ? customStartDate : customEndDate;
-        const end = customStartDate <= customEndDate ? customEndDate : customStartDate;
-        return s.saleDate >= start && s.saleDate <= end;
-      }
-      return true;
-    });
-  }, [sales, timeRange, customStartDate, customEndDate]);
+  // Invoices for the chosen range, fetched from the Commerce API (nothing is read from browser storage)
+  const [filteredSales, setFilteredSales] = useState<SaleTransaction[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const params =
+      timeRange === 'custom'
+        ? {
+            from: customStartDate <= customEndDate ? customStartDate : customEndDate,
+            to: customStartDate <= customEndDate ? customEndDate : customStartDate,
+          }
+        : { period: timeRange };
+    commerceInvoiceApi
+      .getInvoices({ ...params, pagination_required: false, page_size: 500, sortOrder: 'desc' })
+      .then((res) => {
+        if (cancelled) return;
+        setFilteredSales(
+          res?.success && Array.isArray(res.data) ? res.data.map(mapApiInvoiceToSaleTransaction) : [],
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setFilteredSales([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange, customStartDate, customEndDate]);
 
   // Overall Financial KPIs
   const kpis = useMemo(() => {
@@ -112,10 +110,6 @@ export const SalesReportView: React.FC = () => {
     const totalDiscount = filteredSales.reduce((acc, s) => acc + s.totalDiscount, 0);
     const totalTax = filteredSales.reduce((acc, s) => acc + s.totalTax, 0);
     const netSales = filteredSales.reduce((acc, s) => acc + (s.subtotal - s.totalDiscount), 0);
-    const totalReturns = salesReturns.reduce((acc, r) => acc + r.returnAmount, 0);
-    // Fallback only (until the API summary loads): preserves negative profit (net loss)
-    const fallbackCost = filteredSales.reduce((acc, s) => acc + s.subtotal * 0.55, 0);
-    const totalProfit = netSales - fallbackCost - (totalReturns * 0.45);
     const outstandingAmount = filteredSales.reduce((acc, s) => acc + s.balance, 0);
 
     if (apiSummary) {
@@ -130,16 +124,18 @@ export const SalesReportView: React.FC = () => {
       };
     }
 
+    // Until the API summary loads: totals from the fetched invoices; returns / profit are not
+    // available from invoices alone, so they stay at 0.
     return {
       totalSales,
       netSales,
       totalDiscount,
       totalTax,
-      totalReturns,
-      totalProfit,
+      totalReturns: 0,
+      totalProfit: 0,
       outstandingAmount,
     };
-  }, [filteredSales, salesReturns, apiSummary]);
+  }, [filteredSales, apiSummary]);
 
   // Chart 1: Sales Trend
   const trendData = useMemo(() => {
@@ -188,13 +184,13 @@ export const SalesReportView: React.FC = () => {
     const map: Record<string, number> = {};
     filteredSales.forEach((s) => {
       s.items.forEach((it) => {
-        const stk = stocks.find((st) => st.productId === it.productId);
-        const cat = stk?.category || 'General Sales';
+        // Invoice line items carry no category from the API
+        const cat = (it as any).category || 'General Sales';
         map[cat] = (map[cat] || 0) + it.total;
       });
     });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [filteredSales, stocks]);
+  }, [filteredSales]);
 
   // Chart 5: Payment Method Distribution
   const paymentMethodData = useMemo(() => {

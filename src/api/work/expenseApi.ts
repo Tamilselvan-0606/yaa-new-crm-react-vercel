@@ -155,8 +155,6 @@ export const mapApiExpenseToUi = (apiExp: ApiExpense): UiExpenseItem => {
       (apiExp as any).billImage ||
       (apiExp as any).fileUrl ||
       (apiExp as any).documentUrl ||
-      (typeof window !== 'undefined' && apiExp.id ? localStorage.getItem(`crm_exp_receipt_${apiExp.id}`) : '') ||
-      (typeof window !== 'undefined' && apiExp.expenseNo ? localStorage.getItem(`crm_exp_receipt_${apiExp.expenseNo}`) : '') ||
       '',
     notes: apiExp.notes || '',
     status: 'Paid',

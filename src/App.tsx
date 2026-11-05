@@ -26,6 +26,10 @@ import { SubscriptionsView } from './views/subscriptions/SubscriptionsView';
 import { SubscriptionPlansView } from './views/subscriptions/SubscriptionPlansView';
 import { OrganizationSubscriptionsView } from './views/subscriptions/OrganizationSubscriptionsView';
 import { RemindersView } from './views/reminders/RemindersView';
+import { AnnouncementsView } from './views/announcements/AnnouncementsView';
+import { CreateAnnouncementView } from './views/announcements/CreateAnnouncementView';
+import { InboxAnnouncementsView } from './views/announcements/InboxAnnouncementsView';
+import { AnnouncementTemplatesView } from './views/announcements/AnnouncementTemplatesView';
 import { EmployeesView } from './views/employees/EmployeesView';
 import { ReportsView } from './views/reports/ReportsView';
 import { AiCopilotView } from './views/ai-copilot/AiCopilotView';
@@ -130,6 +134,10 @@ const MainLayout: React.FC = () => {
               <Route path="/sales" element={<Navigate to="/sales/new" replace />} />
               <Route path="/sales/new" element={<NewInvoiceView />} />
               <Route path="/sales/invoices" element={<InvoicesView />} />
+              <Route path="/reminders" element={<RemindersView />} />
+              <Route path="/announcements" element={<AnnouncementsView />} />
+              <Route path="/announcements/new" element={<CreateAnnouncementView />} />
+              <Route path="/announcements/templates" element={<AnnouncementTemplatesView />} />
               <Route path="/settings" element={<SettingsView />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
@@ -195,6 +203,7 @@ const MainLayout: React.FC = () => {
               <Route path="/payments" element={<PaymentsView />} />
               <Route path="/subscriptions" element={<SubscriptionsView />} />
               <Route path="/reminders" element={<RemindersView />} />
+              <Route path="/announcements" element={<InboxAnnouncementsView />} />
               <Route path="/ai-copilot" element={<AiCopilotView />} />
 
               {/* Admin Protected Views */}

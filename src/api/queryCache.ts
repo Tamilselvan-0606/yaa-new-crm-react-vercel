@@ -94,6 +94,10 @@ const POLICIES: PolicyRule[] = [
   { prefix: '/platform/invoices', ttl: 30, tags: ['PlatformInvoice'] },
   { prefix: '/platform/payments', ttl: 30, tags: ['Payment'] },
   { prefix: '/platform/dashboard', ttl: 60, tags: ['PlatformDashboard'], deep: true },
+  // Platform Administrator announcements: the list and a single record. A send or delete clears them at once.
+  // (The organization inbox and the recipient count are live: see BYPASS_PREFIXES.)
+  { prefix: '/platform/announcements', ttl: 60, tags: ['Announcement'] },
+  { prefix: '/platform/announcement-templates', ttl: 300, tags: ['AnnouncementTemplate'] },
 ];
 
 /** Never cached: must always be live (stock availability, money owed, files, notifications, auth). */
@@ -104,6 +108,8 @@ const BYPASS_PREFIXES = [
   '/admin-notifications',
   '/commerce/stocks', // stock list, batches, ledger, low-stock: availability must be exact
   '/commerce/collections', // amounts due, follow-ups, history
+  '/platform/announcements/inbox', // read / unread state of the organization's announcements
+  '/platform/announcements/recipient-count',
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -192,6 +198,8 @@ const MUTATION_RULES: MutationRule[] = [
   { prefix: '/platform/leads', primary: ['Lead'], related: ['PlatformDashboard'], convertRelated: ['PlatformClient', 'Organization'] },
   { prefix: '/subscriptions', primary: ['ClientSubscription'], related: ['ClientProduct', 'PlatformClient', 'PlatformInvoice', 'PlatformDashboard'] },
   { prefix: '/platform/organization-subscriptions', primary: ['OrgSubscription'], related: ['Organization', 'SubscriptionPlan', 'PlatformDashboard'] },
+  { prefix: '/platform/announcements', primary: ['Announcement'], related: [] },
+  { prefix: '/platform/announcement-templates', primary: ['AnnouncementTemplate'], related: [] },
   { prefix: '/platform/quotes', primary: ['PlatformQuote'], related: ['PlatformDashboard'], convertRelated: ['PlatformProformaInvoice', 'PlatformInvoice'] },
   { prefix: '/platform/proforma-invoices', primary: ['PlatformProformaInvoice'], related: ['PlatformDashboard'], convertRelated: ['PlatformQuote', 'PlatformInvoice'] },
   { prefix: '/platform/invoices', primary: ['PlatformInvoice'], related: ['Payment', 'PlatformClient', 'ClientSubscription', 'PlatformDashboard'] },

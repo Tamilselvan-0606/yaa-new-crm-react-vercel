@@ -27,7 +27,6 @@ import {
   Download,
 } from 'lucide-react';
 import {
-  useSalesManagementStore,
   PurchaseReturn,
   PurchaseReturnItem,
   PurchaseReturnStatus,
@@ -52,7 +51,7 @@ import {
   ensureValidUuid,
   UUID_REGEX,
 } from '../../../api/commerce/purchaseReturnApi';
-import { workPurchaseOrderApi, stockApi, baseApi } from '../../../api';
+import { workPurchaseOrderApi, mapApiPurchaseOrderToUi, stockApi, baseApi } from '../../../api';
 import { productApi, ApiProduct } from '../../../api/commerce/productApi';
 import { SearchableSelect } from '../../../components/common/SearchableSelect';
 import { FormLabel, FORM_INPUT_CLS, FORM_INPUT_DISABLED_CLS, FORM_SELECT_CLS, FORM_TEXTAREA_CLS, handleNonNegativeKeyDown } from '../utils/formUtils';
@@ -273,17 +272,6 @@ export const PurchaseReturnView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
-  const {
-    purchases,
-    purchaseReturns,
-    suppliers,
-    stocks,
-    savePurchaseReturn,
-    setPurchaseReturnsList,
-    deletePurchaseReturn,
-    updatePurchaseOrderStatus,
-  } = useSalesManagementStore();
-
   // Inline validation state and double-submit guards
   const retErr = useFieldErrors();
   const saveGuard = useSubmitGuard();
@@ -307,6 +295,8 @@ export const PurchaseReturnView: React.FC = () => {
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   const [availableProducts, setAvailableProducts] = useState<ApiProduct[]>([]);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  // Purchase bills offered in the "Purchase Order" picker, loaded from the API each time the form opens
+  const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
 
   // Deduplication refs for fetch
   const isFetchingRef = useRef(false);
@@ -412,6 +402,22 @@ export const PurchaseReturnView: React.FC = () => {
     }
   }, [isCreateModalOpen, handleProductSearch]);
 
+  useEffect(() => {
+    if (!isCreateModalOpen) return;
+    let cancelled = false;
+    workPurchaseOrderApi
+      .getPurchaseOrders({ limit: 100, pagination_required: false })
+      .then((res) => {
+        if (!cancelled) setPurchases(Array.isArray(res?.data) ? res.data.map(mapApiPurchaseOrderToUi) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setPurchases([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateModalOpen]);
+
   // Product options: searched API products plus items already on this return
   const productOptions = useMemo(() => {
     const map = new Map<string, { value: string; label: string; subLabel?: string; badge?: string }>();
@@ -507,11 +513,6 @@ export const PurchaseReturnView: React.FC = () => {
     }
   }, [location.state, navigate, location.pathname]);
 
-  // Keep store purchaseReturns in ref to avoid re-triggering fetchPurchaseReturns
-  const purchaseReturnsRef = useRef(purchaseReturns);
-  useEffect(() => {
-    purchaseReturnsRef.current = purchaseReturns;
-  }, [purchaseReturns]);
 
   // ---------------------------------------------------------
   // 2. Fetch Purchase Returns from Commerce API with deduplication
@@ -563,30 +564,22 @@ export const PurchaseReturnView: React.FC = () => {
             setTotalApiRecords(mappedReturns.length);
             setTotalApiPages(Math.ceil(mappedReturns.length / pageSize) || 1);
           }
-
-          // Sync local store with the API records
-          if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All' && appliedRefundStatus === 'All') {
-            setPurchaseReturnsList(mappedReturns);
-          }
         } else {
           setIsApiConnected(true);
           setLiveReturns([]);
           setTotalApiRecords(0);
           setTotalApiPages(1);
-          if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All' && appliedRefundStatus === 'All') {
-            setPurchaseReturnsList([]);
-          }
         }
       } catch (err: any) {
         const errMsg =
           err?.response?.data?.error?.message ||
           err?.response?.data?.message ||
           err?.message ||
-          'Offline fallback mode';
-        console.warn('Commerce Purchase Returns API unavailable, falling back to local store:', errMsg);
+          'Failed to load purchase returns from the API';
+        console.warn('Commerce Purchase Returns API unavailable:', errMsg);
         setIsApiConnected(false);
         setApiErrorMessage(errMsg);
-        setLiveReturns(purchaseReturnsRef.current);
+        setLiveReturns([]);
         setTotalApiRecords(null);
         setTotalApiPages(null);
       } finally {
@@ -594,7 +587,7 @@ export const PurchaseReturnView: React.FC = () => {
         setIsApiLoading(false);
       }
     },
-    [currentPage, pageSize, appliedSearch, appliedStatus, appliedRefundStatus, setPurchaseReturnsList]
+    [currentPage, pageSize, appliedSearch, appliedStatus, appliedRefundStatus]
   );
 
   // Initial and reactive fetch on filter change
@@ -638,7 +631,7 @@ export const PurchaseReturnView: React.FC = () => {
   // Effective Display Records & Summary Metrics
   // ---------------------------------------------------------
   const effectiveReturns = useMemo(() => {
-    const sourceList = liveReturns.length > 0 || isApiConnected ? liveReturns : purchaseReturns;
+    const sourceList = liveReturns;
 
     if (isApiConnected && totalApiRecords !== null) {
       return sourceList;
@@ -660,10 +653,10 @@ export const PurchaseReturnView: React.FC = () => {
 
       return matchesSearch && matchesStatus && matchesRefund;
     });
-  }, [liveReturns, purchaseReturns, isApiConnected, totalApiRecords, appliedSearch, appliedStatus, appliedRefundStatus]);
+  }, [liveReturns, isApiConnected, totalApiRecords, appliedSearch, appliedStatus, appliedRefundStatus]);
 
   const localSummary = useMemo(() => {
-    const all = liveReturns.length > 0 ? liveReturns : purchaseReturns;
+    const all = liveReturns;
     const totalCount = totalApiRecords !== null ? totalApiRecords : all.length;
     const pendingCount = all.filter((r) => r.returnStatus === 'Requested').length;
     const approvedCount = all.filter(
@@ -679,7 +672,7 @@ export const PurchaseReturnView: React.FC = () => {
       completedCount,
       returnAmount,
     };
-  }, [liveReturns, purchaseReturns, totalApiRecords]);
+  }, [liveReturns, totalApiRecords]);
   const summary = apiSummary ?? localSummary;
 
   // Pagination calculation
@@ -707,16 +700,14 @@ export const PurchaseReturnView: React.FC = () => {
     if (chosenPurchase) {
       return { id: chosenPurchase.supplierId, name: chosenPurchase.supplierName };
     }
-    const sup = suppliers.find((s) => s.id === selectedSupplierId);
-    if (sup) return { id: sup.id, name: sup.name };
     return { id: selectedSupplierId, name: selectedSupplierName };
-  }, [chosenPurchase, suppliers, selectedSupplierId, selectedSupplierName]);
+  }, [chosenPurchase, selectedSupplierId, selectedSupplierName]);
 
   // Quantity of a product already returned against the chosen purchase bill (other, non-cancelled returns).
   const getAlreadyReturnedQty = (productId: string, productName: string): number => {
     if (!chosenPurchase) return 0;
     const all = new Map<string, PurchaseReturn>();
-    [...purchaseReturns, ...liveReturns].forEach((r) => all.set(r.id, r));
+    liveReturns.forEach((r) => all.set(r.id, r));
     let total = 0;
     all.forEach((r) => {
       if (editingReturn && r.id === editingReturn.id) return;
@@ -817,11 +808,10 @@ export const PurchaseReturnView: React.FC = () => {
 
   const handleProductSelect = (index: number, productId: string) => {
     const foundApi = availableProducts.find((p) => p.id === productId);
-    const foundStock = stocks.find((s) => s.id === productId || s.productId === productId);
     const foundOption = productOptions.find((o) => o.value === productId);
 
-    const name = foundApi?.productName || (foundApi as any)?.name || foundStock?.productName || foundOption?.label || '';
-    const price = foundApi?.purchasePrice ?? (foundApi as any)?.costPrice ?? foundStock?.unitCost ?? foundStock?.unitPrice ?? 0;
+    const name = foundApi?.productName || (foundApi as any)?.name || foundOption?.label || '';
+    const price = foundApi?.purchasePrice ?? (foundApi as any)?.costPrice ?? 0;
 
     retErr.clearError(`items.${index}.product`);
     retErr.clearError(`items.${index}.price`);
@@ -1101,7 +1091,6 @@ export const PurchaseReturnView: React.FC = () => {
           }
         }
 
-        savePurchaseReturn(updatedReturn);
         toast.success(`Purchase return ${updatedReturn.returnNo} updated successfully!`);
       } else {
         // CREATE MODE
@@ -1200,7 +1189,6 @@ export const PurchaseReturnView: React.FC = () => {
           }
         }
 
-        savePurchaseReturn(newReturn);
 
         // If this return originated from a Purchase Bill, update the PO status to 'Returned' now
         if (originatingPurchaseId) {
@@ -1211,7 +1199,6 @@ export const PurchaseReturnView: React.FC = () => {
           } catch (poStatusErr) {
             console.warn('API purchase order status update warning:', poStatusErr);
           }
-          updatePurchaseOrderStatus(originatingPurchaseId, 'Returned' as any);
           setOriginatingPurchaseId(null);
         }
 
@@ -1311,7 +1298,6 @@ export const PurchaseReturnView: React.FC = () => {
         stockDeducted,
         updatedAt: new Date().toISOString(),
       };
-      savePurchaseReturn(updated);
       toast.success(`Purchase return ${pret.returnNo} marked as ${nextStatus}`);
       fetchPurchaseReturns(true);
     } catch (err: any) {
@@ -1374,7 +1360,6 @@ export const PurchaseReturnView: React.FC = () => {
       if (UUID_REGEX.test(deleteTargetReturn.id)) {
         await commercePurchaseReturnApi.deletePurchaseReturn(deleteTargetReturn.id);
       }
-      deletePurchaseReturn(deleteTargetReturn.id);
       toast.success(`Purchase return "${deleteTargetReturn.returnNo}" deleted successfully.`);
       setIsDeleteModalOpen(false);
       setDeleteTargetReturn(null);
@@ -1442,8 +1427,6 @@ export const PurchaseReturnView: React.FC = () => {
 
   // Print & Download Debit Note via universal printUtils
   const buildDebitNotePrintOptions = (pret: PurchaseReturn): DocumentPrintOptions => {
-    const matchedSup = suppliers.find((s) => s.id === pret.supplierId || s.name === pret.supplierName);
-
     return {
       docTypeTitle: 'DEBIT NOTE / PURCHASE RETURN',
       docNo: pret.returnNo,
@@ -1453,10 +1436,6 @@ export const PurchaseReturnView: React.FC = () => {
       referenceNo: pret.purchaseNo,
       partyTitle: 'Supplier / Vendor',
       partyName: pret.supplierName,
-      partyPhone: (matchedSup as any)?.phone || (matchedSup as any)?.mobile,
-      partyEmail: (matchedSup as any)?.email,
-      partyAddress: (matchedSup as any)?.billingAddress || (matchedSup as any)?.address,
-      partyGstin: (matchedSup as any)?.gstNumber,
       extraMeta: [
         { label: 'Original Purchase Bill', value: pret.purchaseNo || 'N/A' },
         { label: 'Refund Method / Status', value: pret.refundStatus },

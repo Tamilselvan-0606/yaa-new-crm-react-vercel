@@ -45,7 +45,6 @@ import {
   Receipt,
 } from "lucide-react";
 import {
-  useSalesManagementStore,
   PurchaseOrder,
   PurchaseProductItem,
   PurchaseStatus,
@@ -76,6 +75,7 @@ import {
 } from "../../../api";
 import {
   workPaymentOutApi,
+  mapApiPaymentOutToUi,
   mapUiToCreatePaymentOutPayload,
 } from "../../../api/work/paymentOutApi";
 import { useDispatch } from "react-redux";
@@ -506,22 +506,6 @@ export const PurchaseOrderView: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
-  const {
-    purchases,
-    suppliers,
-    stocks,
-    savePurchase,
-    setPurchasesList,
-    deletePurchase,
-    updatePurchasePayment,
-    paymentOuts = [],
-    savePaymentOut,
-    purchaseReturns = [],
-    savePurchaseReturn,
-    updatePurchaseRequestStatus,
-    purchaseRequests,
-  } = useSalesManagementStore();
-
   // Inline validation state (one error map per form / modal) and double-submit guards
   const formErr = useFieldErrors(); // purchase bill form
   const formPayErr = useFieldErrors(); // "Record Payment" modal inside the bill form
@@ -935,7 +919,7 @@ export const PurchaseOrderView: React.FC = () => {
     }
   }, []);
 
-  // Merged Suppliers list (API + Store fallback)
+  // Suppliers list (API only)
   const mergedSuppliers = useMemo(() => {
     const map = new Map<
       string,
@@ -949,18 +933,8 @@ export const PurchaseOrderView: React.FC = () => {
         paymentTerms: s.paymentTerms,
       });
     });
-    suppliers.forEach((s) => {
-      if (!map.has(s.id)) {
-        map.set(s.id, {
-          id: s.id,
-          name: s.name,
-          supplierCode: s.supplierCode,
-          paymentTerms: s.paymentTerms,
-        });
-      }
-    });
     return Array.from(map.values());
-  }, [availableSuppliers, suppliers]);
+  }, [availableSuppliers]);
 
   // Product options (from the products API)
   const productOptions = useMemo(() => {
@@ -1012,17 +986,12 @@ export const PurchaseOrderView: React.FC = () => {
     return Array.from(map.values());
   }, [availableProducts, formData.items]);
 
-  // Combined Eligible Purchase Requests (API + Store fallback)
+  // Eligible Purchase Requests (API only)
   // Only shows pending/approved purchase requests that have not yet been converted into purchase bills
   const eligiblePurchaseRequests = useMemo(() => {
     const map = new Map<string, PurchaseRequest>();
     availableRequests.forEach((r) => {
       map.set(r.id, r);
-    });
-    purchaseRequests.forEach((r) => {
-      if (!map.has(r.id)) {
-        map.set(r.id, r);
-      }
     });
 
     const editingMatch =
@@ -1059,7 +1028,7 @@ export const PurchaseOrderView: React.FC = () => {
         rawStatus === ""
       );
     });
-  }, [availableRequests, purchaseRequests, selectedRequestId, editingPurchase]);
+  }, [availableRequests, selectedRequestId, editingPurchase]);
 
   // Current selected purchase request details
   const selectedPurchaseRequest = useMemo(() => {
@@ -1271,11 +1240,6 @@ export const PurchaseOrderView: React.FC = () => {
   // Deduplication & Sync Refs (prevents multiple redundant API calls)
   const isFetchingRef = useRef(false);
   const lastFetchKeyRef = useRef("");
-  const purchasesRef = useRef(purchases);
-  purchasesRef.current = purchases;
-  useEffect(() => {
-    purchasesRef.current = purchases;
-  }, [purchases]);
 
   // Fetch Purchase Orders from Work API with deduplication
   const fetchPurchaseOrders = useCallback(
@@ -1326,37 +1290,22 @@ export const PurchaseOrderView: React.FC = () => {
             setTotalApiRecords(mapped.length);
             setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
           }
-
-          if (
-            currentPage === 1 &&
-            !appliedSearch.trim() &&
-            appliedPurchaseStatus === "All"
-          ) {
-            setPurchasesList(mapped);
-          }
         } else {
           setIsApiConnected(true);
           setLivePurchases([]);
           setTotalApiRecords(0);
           setTotalApiPages(1);
-          if (
-            currentPage === 1 &&
-            !appliedSearch.trim() &&
-            appliedPurchaseStatus === "All"
-          ) {
-            setPurchasesList([]);
-          }
         }
       } catch (err: any) {
         const errMsg =
           err?.response?.data?.error?.message ||
           err?.response?.data?.message ||
           err?.message ||
-          "Work API unavailable, falling back to local store";
+          "Failed to load purchase bills from the API";
         console.warn("Work Purchase Orders API unavailable:", errMsg);
         setIsApiConnected(false);
         setApiErrorMessage(errMsg);
-        setLivePurchases(purchasesRef.current);
+        setLivePurchases([]);
         setTotalApiRecords(null);
         setTotalApiPages(null);
       } finally {
@@ -1369,7 +1318,6 @@ export const PurchaseOrderView: React.FC = () => {
       pageSize,
       appliedSearch,
       appliedPurchaseStatus,
-      setPurchasesList,
     ],
   );
 
@@ -1431,7 +1379,7 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Summary Metrics
   const localSummary = useMemo(() => {
-    const pool = isApiConnected ? livePurchases : purchases;
+    const pool = livePurchases;
     const totalAmount = pool.reduce((acc, p) => acc + (p.grandTotal || 0), 0);
     const todayStr = new Date().toISOString().split("T")[0];
     const todayPurchases = pool.filter((p) => p.purchaseDate === todayStr);
@@ -1457,7 +1405,7 @@ export const PurchaseOrderView: React.FC = () => {
       paidCount,
       completedCount,
     };
-  }, [isApiConnected, livePurchases, purchases, totalApiRecords]);
+  }, [livePurchases, totalApiRecords]);
   const summary = useMemo(() => {
     if (apiSummary) {
       const returnDeduction = Number(apiSummary.totalPurchaseReturnAmount || 0);
@@ -1575,7 +1523,7 @@ export const PurchaseOrderView: React.FC = () => {
     setPurchaseType(hasLinkedPr ? "with_request" : "without_request");
     let matchedPrId = "";
     if (hasLinkedPr) {
-      const allRequests = [...availableRequests, ...purchaseRequests];
+      const allRequests = availableRequests;
       const match =
         po.notes?.match(/PR-\d+-\d+/i) ||
         po.purchaseInvoiceNo?.match(/PR-\d+-\d+/i);
@@ -2148,21 +2096,6 @@ export const PurchaseOrderView: React.FC = () => {
         }
       });
 
-      // 2. Store inventory stocks
-      const matchingStock = stocks.find((s) => s.productId === productId);
-      if (matchingStock?.batches && Array.isArray(matchingStock.batches)) {
-        matchingStock.batches.forEach((b) => {
-          if (b.batchNo && !batchMap.has(b.batchNo)) {
-            batchMap.set(b.batchNo, {
-              batchNo: b.batchNo,
-              expDate: b.expDate,
-              costPrice: b.costPrice,
-              sellingPrice: b.sellingPrice,
-            });
-          }
-        });
-      }
-
       // 3. Catalog products (availableProducts)
       const matchingProd = availableProducts.find((p) => p.id === productId);
       if (matchingProd) {
@@ -2195,7 +2128,7 @@ export const PurchaseOrderView: React.FC = () => {
       }
 
       // 4. Historical batches from purchase bills
-      const allPurchases = [...livePurchases, ...purchases];
+      const allPurchases = livePurchases;
       allPurchases.forEach((po) => {
         po.items?.forEach((it) => {
           if (
@@ -2241,7 +2174,7 @@ export const PurchaseOrderView: React.FC = () => {
 
       return options;
     },
-    [availableBatches, stocks, availableProducts, livePurchases, purchases],
+    [availableBatches, availableProducts, livePurchases],
   );
 
   const findBatchDetails = useCallback(
@@ -2253,12 +2186,6 @@ export const PurchaseOrderView: React.FC = () => {
           b.batchNo.toLowerCase() === batchNo.toLowerCase(),
       );
       if (fromApi) return fromApi;
-
-      const matchingStock = stocks.find((s) => s.productId === productId);
-      const fromStock = matchingStock?.batches?.find(
-        (b) => b.batchNo.toLowerCase() === batchNo.toLowerCase(),
-      );
-      if (fromStock) return fromStock;
 
       const matchingProd = availableProducts.find((p) => p.id === productId);
       const prodBatches =
@@ -2274,7 +2201,7 @@ export const PurchaseOrderView: React.FC = () => {
 
       return null;
     },
-    [availableBatches, stocks, availableProducts],
+    [availableBatches, availableProducts],
   );
 
   const handleItemBatchChange = (index: number, batchVal: string) => {
@@ -2510,6 +2437,28 @@ export const PurchaseOrderView: React.FC = () => {
     isInitial?: boolean;
   }
 
+  // Payment vouchers of the bill being edited, loaded from GET /work/payments-out
+  const [billPayments, setBillPayments] = useState<PaymentOut[]>([]);
+  useEffect(() => {
+    const billNo = editingPurchase?.purchaseNo;
+    if (!editingPurchase?.id || !billNo) {
+      setBillPayments([]);
+      return;
+    }
+    let cancelled = false;
+    workPaymentOutApi
+      .getPaymentsOut({ search: billNo, limit: 100, pagination_required: false })
+      .then((res) => {
+        if (!cancelled) setBillPayments(Array.isArray(res?.data) ? res.data.map(mapApiPaymentOutToUi) : []);
+      })
+      .catch(() => {
+        if (!cancelled) setBillPayments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editingPurchase?.id, editingPurchase?.purchaseNo, editingPurchase?.paidAmount]);
+
   // Payment History records for current editing purchase bill
   const matchingPaymentHistory: PurchasePaymentHistoryItem[] = useMemo(() => {
     if (!editingPurchase && formData.paidAmount <= 0) return [];
@@ -2520,8 +2469,8 @@ export const PurchaseOrderView: React.FC = () => {
     const purchaseRefInv =
       editingPurchase?.purchaseInvoiceNo || formData.purchaseInvoiceNo;
 
-    // 1. Gather all matching vouchers from React store
-    const storeMatches = (paymentOuts || []).filter((pm) => {
+    // 1. Matching payment vouchers, exactly as the Payment Out API returned them
+    const apiMatches = billPayments.filter((pm) => {
       if (pm.status === "Cancelled") return false;
       const matchId = purchaseRefId && pm.purchaseId === purchaseRefId;
       const matchNo =
@@ -2537,37 +2486,9 @@ export const PurchaseOrderView: React.FC = () => {
       return Boolean(matchId || matchNo || matchPoNo || matchInv);
     });
 
-    // 2. Also check localStorage in case store not yet refreshed
-    let localMatches: any[] = [];
-    try {
-      const raw = localStorage.getItem("yaa_crm_payments_out");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          localMatches = parsed.filter((pm: any) => {
-            if (pm.status === "Cancelled") return false;
-            const matchId = purchaseRefId && pm.purchaseId === purchaseRefId;
-            const matchNo =
-              purchaseRefNo &&
-              (pm.purchaseNo === purchaseRefNo ||
-                pm.referenceNo === purchaseRefNo);
-            const matchPoNo =
-              purchaseRefPoNo &&
-              (pm.purchaseNo === purchaseRefPoNo ||
-                pm.referenceNo === purchaseRefPoNo);
-            const matchInv =
-              purchaseRefInv &&
-              (pm.referenceNo === purchaseRefInv ||
-                pm.purchaseNo === purchaseRefInv);
-            return Boolean(matchId || matchNo || matchPoNo || matchInv);
-          });
-        }
-      }
-    } catch {}
-
     // Deduplicate by ID
     const voucherMap = new Map<string, PurchasePaymentHistoryItem>();
-    [...storeMatches, ...localMatches].forEach((pm) => {
+    apiMatches.forEach((pm) => {
       voucherMap.set(pm.id, {
         id: pm.id,
         paymentNo: pm.paymentNo || pm.id,
@@ -2617,7 +2538,7 @@ export const PurchaseOrderView: React.FC = () => {
     formData.purchaseInvoiceNo,
     formData.purchaseDate,
     formData.paymentMethod,
-    paymentOuts,
+    billPayments,
   ]);
 
   const handleOpenRecordPaymentModal = () => {
@@ -2876,7 +2797,7 @@ export const PurchaseOrderView: React.FC = () => {
 
         // Auto-generate Payment Out voucher if new payment was recorded during edit
         const prevPaid = Number(editingPurchase.paidAmount || 0);
-        const existingVouchersSum = (paymentOuts || [])
+        const existingVouchersSum = billPayments
           .filter(
             (pm) =>
               pm.status !== "Cancelled" &&
@@ -2888,8 +2809,6 @@ export const PurchaseOrderView: React.FC = () => {
 
         if (finalPaid > basePaidBenchmark) {
           const deltaAmount = finalPaid - basePaidBenchmark;
-          let apiVoucherId = `po_pm_${Date.now()}`;
-          let apiVoucherNo = '';
 
           if (UUID_REGEX.test(updatedPo.supplierId)) {
             try {
@@ -2909,10 +2828,6 @@ export const PurchaseOrderView: React.FC = () => {
                     `Payment for ${updatedPo.purchaseNo}`,
                 }),
               );
-              if (pRes?.data?.id) {
-                apiVoucherId = pRes.data.id;
-                apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
-              }
             } catch (pErr) {
               console.warn(
                 "API Payment Out creation on purchase bill edit warning:",
@@ -2921,35 +2836,8 @@ export const PurchaseOrderView: React.FC = () => {
             }
           }
 
-          const paymentVoucher: PaymentOut = {
-            id: apiVoucherId,
-            paymentNo: apiVoucherNo,
-            paymentDate:
-              formPaymentDetails.date ||
-              formData.purchaseDate ||
-              new Date().toISOString().split("T")[0],
-            supplierId: updatedPo.supplierId,
-            supplierName: updatedPo.supplierName,
-            purchaseId: updatedPo.id,
-            purchaseNo: updatedPo.purchaseNo,
-            amount: deltaAmount,
-            paymentMode: (formData.paymentMethod as any) || "Bank Transfer",
-            paymentType: (formData.paymentMethod as any) || "Bank Transfer",
-            referenceNo:
-              formPaymentDetails.transactionId ||
-              formData.purchaseInvoiceNo ||
-              updatedPo.purchaseNo,
-            status: "Completed",
-            notes:
-              formPaymentDetails.remarks ||
-              `Payment recorded on update of purchase bill ${updatedPo.purchaseNo}`,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          savePaymentOut(paymentVoucher);
         }
 
-        savePurchase(updatedPo);
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === updatedPo.id ? updatedPo : p)),
         );
@@ -3008,8 +2896,6 @@ export const PurchaseOrderView: React.FC = () => {
 
         // Record payment voucher in Work Payment Out API & local store if initial payment was specified
         if (finalPaid > 0) {
-          let apiVoucherId = `po_pm_${Date.now()}`;
-          let apiVoucherNo = '';
 
           if (UUID_REGEX.test(createdPo.supplierId)) {
             try {
@@ -3028,10 +2914,6 @@ export const PurchaseOrderView: React.FC = () => {
                     `Initial payment for ${createdPo.purchaseNo}`,
                 }),
               );
-              if (pRes?.data?.id) {
-                apiVoucherId = pRes.data.id;
-                apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
-              }
             } catch (pErr) {
               console.warn(
                 "API Payment Out creation on purchase bill create warning:",
@@ -3040,35 +2922,8 @@ export const PurchaseOrderView: React.FC = () => {
             }
           }
 
-          const paymentVoucher: PaymentOut = {
-            id: apiVoucherId,
-            paymentNo: apiVoucherNo,
-            paymentDate:
-              formPaymentDetails.date ||
-              formData.purchaseDate ||
-              new Date().toISOString().split("T")[0],
-            supplierId: createdPo.supplierId,
-            supplierName: createdPo.supplierName,
-            purchaseId: createdPo.id,
-            purchaseNo: createdPo.purchaseNo,
-            amount: finalPaid,
-            paymentMode: (formData.paymentMethod as any) || "Bank Transfer",
-            paymentType: (formData.paymentMethod as any) || "Bank Transfer",
-            referenceNo:
-              formPaymentDetails.transactionId ||
-              formData.purchaseInvoiceNo ||
-              createdPo.purchaseNo,
-            status: "Completed",
-            notes:
-              formPaymentDetails.remarks ||
-              `Initial payment recorded on creation of purchase bill ${createdPo.purchaseNo}`,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          savePaymentOut(paymentVoucher);
         }
 
-        savePurchase(createdPo);
         setLivePurchases((prev) => [createdPo, ...prev]);
 
         // If created directly in an inwarded state (Approved or Received), inward stock into Commerce API
@@ -3135,7 +2990,8 @@ export const PurchaseOrderView: React.FC = () => {
               statusErr,
             );
           }
-          updatePurchaseRequestStatus(originatingRequestId, "Purchase Created");
+          // The request list must be re-read from the API the next time the form opens
+          hasLoadedFormMasterDataRef.current = false;
           setOriginatingRequestId(null);
         }
 
@@ -3256,7 +3112,6 @@ export const PurchaseOrderView: React.FC = () => {
         ...po,
         purchaseStatus: newStatus as any,
       };
-      savePurchase(updated);
       setLivePurchases((prev) =>
         prev.map((p) => (p.id === po.id ? updated : p)),
       );
@@ -3317,7 +3172,6 @@ export const PurchaseOrderView: React.FC = () => {
 
       if (res && res.data) {
         const mapped = mapApiPurchaseOrderToUi(res.data);
-        savePurchase(mapped);
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === po.id ? mapped : p)),
         );
@@ -3336,7 +3190,6 @@ export const PurchaseOrderView: React.FC = () => {
           ...po,
           purchaseStatus: newStatus as any,
         };
-        savePurchase(updated);
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === po.id ? updated : p)),
         );
@@ -3393,7 +3246,6 @@ export const PurchaseOrderView: React.FC = () => {
     setDeletePoError(null);
 
     if (!UUID_REGEX.test(deleteTargetPo.id)) {
-      deletePurchase(deleteTargetPo.id);
       setLivePurchases((prev) =>
         prev.filter((p) => p.id !== deleteTargetPo.id),
       );
@@ -3406,7 +3258,6 @@ export const PurchaseOrderView: React.FC = () => {
 
     try {
       await workPurchaseOrderApi.deletePurchaseOrder(deleteTargetPo.id);
-      deletePurchase(deleteTargetPo.id);
       setLivePurchases((prev) =>
         prev.filter((p) => p.id !== deleteTargetPo.id),
       );
@@ -3469,8 +3320,6 @@ export const PurchaseOrderView: React.FC = () => {
 
     try {
       // 1. If backend supplier ID is valid UUID, create live Payment Out in Work API
-      let apiVoucherId = `po_pm_${Date.now()}`;
-      let apiVoucherNo = '';
       if (UUID_REGEX.test(selectedPurchase.supplierId)) {
         try {
           const pRes = await workPaymentOutApi.createPaymentOut(
@@ -3485,65 +3334,13 @@ export const PurchaseOrderView: React.FC = () => {
                 `Payment for ${selectedPurchase.purchaseNo}. ${recordNotes || ""}`.trim(),
             }),
           );
-          if (pRes?.data?.id) {
-            apiVoucherId = pRes.data.id;
-            apiVoucherNo = pRes.data.paymentNo || apiVoucherNo;
-          }
         } catch (apiErr) {
           console.warn("API Payment Out creation warning:", apiErr);
         }
       }
 
-      // 2. Record payment voucher in store for accounts payable ledger and audit history
-      const paymentVoucher: PaymentOut = {
-        id: apiVoucherId,
-        paymentNo: apiVoucherNo,
-        paymentDate: new Date().toISOString().split("T")[0],
-        supplierId: selectedPurchase.supplierId,
-        supplierName: selectedPurchase.supplierName,
-        purchaseId: selectedPurchase.id,
-        purchaseNo: selectedPurchase.purchaseNo,
-        amount: recordAmount,
-        paymentMode: recordMethod as any,
-        paymentType: recordMethod as any,
-        referenceNo: recordNotes || selectedPurchase.purchaseNo,
-        status: "Completed",
-        notes: recordNotes || `Payment for ${selectedPurchase.purchaseNo}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      savePaymentOut(paymentVoucher);
 
-      // 3. Update purchase order payment and state
-      updatePurchasePayment(
-        selectedPurchase.id,
-        recordAmount,
-        recordMethod,
-        recordNotes,
-      );
-
-      setLivePurchases((prev) =>
-        prev.map((p) => {
-          if (p.id === selectedPurchase.id) {
-            const newPaid = Math.min(
-              p.grandTotal,
-              (p.paidAmount || 0) + recordAmount,
-            );
-            const newBal = Math.max(0, p.grandTotal - newPaid);
-            const newStatus: PurchasePaymentStatus =
-              newBal <= 0 ? "Paid" : newPaid > 0 ? "Partial" : "Unpaid";
-            return {
-              ...p,
-              paidAmount: newPaid,
-              balance: newBal,
-              paymentStatus: newStatus,
-              hasManualPayment: true,
-            };
-          }
-          return p;
-        }),
-      );
-
+      // The bill's paid amount, balance and status are re-read from the API below.
       toast.success(
         `Payment of ₹${recordAmount.toLocaleString("en-IN")} recorded for ${selectedPurchase.purchaseNo}`,
       );
@@ -3568,12 +3365,7 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Filtered Purchases (Reflects API data)
   const displayedPurchases = useMemo(() => {
-    let base: PurchaseOrder[];
-    if (isApiConnected) {
-      base = livePurchases;
-    } else {
-      base = purchases;
-    }
+    const base: PurchaseOrder[] = livePurchases;
 
     return base.filter((p) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -3605,7 +3397,6 @@ export const PurchaseOrderView: React.FC = () => {
   }, [
     isApiConnected,
     livePurchases,
-    purchases,
     appliedSearch,
     appliedPurchaseStatus,
     appliedPaymentStatus,
@@ -4314,6 +4105,7 @@ export const PurchaseOrderView: React.FC = () => {
                                   options={productOptions}
                                   placeholder="Select Product..."
                                   searchPlaceholder="Search product..."
+                                  countLabel={{ singular: "product", plural: "products" }}
                                   emptyText={
                                     isSearchingProducts
                                       ? "Searching products..."
@@ -6530,12 +6322,7 @@ export const PurchaseOrderView: React.FC = () => {
                                     (po.purchaseStatus as string)?.toLowerCase() === "converted" ||
                                     (po.status as string)?.toLowerCase() === "returned" ||
                                     (po.status as string)?.toLowerCase() === "converted" ||
-                                    (Array.isArray(purchaseReturns) &&
-                                      purchaseReturns.some(
-                                        (ret: any) =>
-                                          (ret.purchaseId && ret.purchaseId === po.id) ||
-                                          (ret.purchaseNo && po.purchaseNo && ret.purchaseNo === po.purchaseNo)
-                                      ))
+                                    false
                                   ) && {
                                     label: "Convert to Return",
                                     variant: "return",

@@ -45,7 +45,6 @@ import {
   Download,
 } from 'lucide-react';
 import {
-  useSalesManagementStore,
   PaymentOut,
   PaymentOutMode,
   PurchaseOrder,
@@ -89,16 +88,6 @@ const PERIOD_FILTER_OPTIONS = [
 ];
 
 export const PaymentOutView: React.FC = () => {
-  const {
-    paymentOuts,
-    suppliers,
-    purchases,
-    savePaymentOut,
-    setPaymentOutsList,
-    deletePaymentOut,
-    updatePurchasePayment,
-  } = useSalesManagementStore();
-
   // Live Work Payments Out API State
   const [livePayments, setLivePayments] = useState<PaymentOut[]>([]);
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -136,10 +125,6 @@ export const PaymentOutView: React.FC = () => {
   // Deduplication & Sync Refs (prevents multiple redundant API calls)
   const isFetchingRef = useRef(false);
   const lastFetchKeyRef = useRef('');
-  const paymentOutsRef = useRef(paymentOuts);
-  useEffect(() => {
-    paymentOutsRef.current = paymentOuts;
-  }, [paymentOuts]);
 
   // On-demand loader for registered suppliers & purchases (loaded only when opening form modals)
   const hasLoadedFormMasterDataRef = useRef(false);
@@ -170,7 +155,7 @@ export const PaymentOutView: React.FC = () => {
   }, []);
 
 
-  // Merged Suppliers list (API + Store fallback)
+  // Suppliers list (API only)
   const mergedSuppliers = useMemo(() => {
     const map = new Map<string, { id: string; name: string; supplierCode?: string; payable?: number }>();
     availableSuppliers.forEach((s) => {
@@ -181,28 +166,15 @@ export const PaymentOutView: React.FC = () => {
         payable: Number(s.payable ?? (s as any).payableAmount ?? 0),
       });
     });
-    suppliers.forEach((s) => {
-      if (!map.has(s.id)) {
-        map.set(s.id, {
-          id: s.id,
-          name: s.name,
-          supplierCode: s.supplierCode,
-          payable: s.payable || 0,
-        });
-      }
-    });
     return Array.from(map.values());
-  }, [availableSuppliers, suppliers]);
+  }, [availableSuppliers]);
 
-  // Merged Purchases list (API + Store fallback)
+  // Purchases list (API only)
   const mergedPurchases = useMemo(() => {
     const map = new Map<string, PurchaseOrder>();
     availablePurchases.forEach((p) => map.set(p.id, p));
-    purchases.forEach((p) => {
-      if (!map.has(p.id)) map.set(p.id, p);
-    });
     return Array.from(map.values());
-  }, [availablePurchases, purchases]);
+  }, [availablePurchases]);
 
   // Fetch Payments Out from Work API with deduplication
   const fetchPaymentsOut = useCallback(
@@ -249,10 +221,6 @@ export const PaymentOutView: React.FC = () => {
             setTotalApiRecords(mapped.length);
             setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
           }
-
-          if (currentPage === 1 && !appliedSearch.trim() && appliedStatus === 'All') {
-            setPaymentOutsList(mapped);
-          }
         } else {
           setIsApiConnected(true);
           setLivePayments([]);
@@ -264,11 +232,11 @@ export const PaymentOutView: React.FC = () => {
           err?.response?.data?.error?.message ||
           err?.response?.data?.message ||
           err?.message ||
-          'Work API unavailable, falling back to local cache';
+          'Failed to load payments out from the API';
         console.warn('Work Payments Out API unavailable:', errMsg);
         setIsApiConnected(false);
         setApiErrorMessage(errMsg);
-        setLivePayments(paymentOutsRef.current);
+        setLivePayments([]);
         setTotalApiRecords(null);
         setTotalApiPages(null);
       } finally {
@@ -276,7 +244,7 @@ export const PaymentOutView: React.FC = () => {
         setIsApiLoading(false);
       }
     },
-    [currentPage, pageSize, appliedSearch, appliedStatus, setPaymentOutsList]
+    [currentPage, pageSize, appliedSearch, appliedStatus]
   );
 
   // Initial and reactive fetch on filter change
@@ -437,82 +405,8 @@ export const PaymentOutView: React.FC = () => {
   const watchPurchaseId = watch('purchaseId');
   const watchReceiptImage = watch('receiptImage');
 
-  // Active pool of records: merges live API payments, local store payment vouchers,
-  // and any purchase bills with recorded paidAmount not yet represented by a voucher
-  const activePool = useMemo(() => {
-    const baseList = isApiConnected ? livePayments : paymentOuts;
-    const map = new Map<string, PaymentOut>();
-
-    baseList.forEach((p) => map.set(p.id, p));
-
-    // Include local store vouchers (e.g. recorded from Purchase Bills) if not already in baseList
-    if (isApiConnected) {
-      paymentOuts.forEach((localPm) => {
-        if (map.has(localPm.id)) return;
-        const duplicateInApi = baseList.some(
-          (apiPm) =>
-            (localPm.purchaseNo &&
-              (apiPm.purchaseNo === localPm.purchaseNo ||
-                apiPm.referenceNo === localPm.purchaseNo ||
-                apiPm.notes?.includes(localPm.purchaseNo))) &&
-            Math.abs(Number(apiPm.amount || 0) - Number(localPm.amount || 0)) < 0.01
-        );
-        if (!duplicateInApi) {
-          map.set(localPm.id, localPm);
-        }
-      });
-    }
-
-    // Ensure every Purchase Bill with a paidAmount > 0 is reflected in Payment Out
-    const currentVouchers = Array.from(map.values());
-    mergedPurchases.forEach((po) => {
-      const paidAmt = Number(po.paidAmount || 0);
-      if (paidAmt <= 0 || po.purchaseStatus === 'Cancelled') return;
-
-      const linkedVouchersSum = currentVouchers
-        .filter((pm) => {
-          if (pm.status === 'Cancelled') return false;
-          const matchId = po.id && pm.purchaseId === po.id;
-          const matchNo =
-            po.purchaseNo &&
-            (pm.purchaseNo === po.purchaseNo ||
-              pm.referenceNo === po.purchaseNo ||
-              pm.notes?.includes(po.purchaseNo));
-          const matchInv =
-            po.purchaseInvoiceNo &&
-            (pm.referenceNo === po.purchaseInvoiceNo ||
-              pm.purchaseNo === po.purchaseInvoiceNo);
-          return Boolean(matchId || matchNo || matchInv);
-        })
-        .reduce((sum, pm) => sum + (Number(pm.amount) || 0), 0);
-
-      if (paidAmt > linkedVouchersSum + 0.01) {
-        const delta = Math.round((paidAmt - linkedVouchersSum) * 100) / 100;
-        const synthId = `po_pm_bill_${po.id}`;
-        const cleanNo = (po.purchaseNo || po.id || 'BILL').replace(/[^a-zA-Z0-9_-]/g, '');
-        map.set(synthId, {
-          id: synthId,
-          paymentNo: `PV-${cleanNo.slice(-8).toUpperCase()}`,
-          paymentDate: po.purchaseDate || new Date().toISOString().split('T')[0],
-          supplierId: po.supplierId,
-          supplierName: po.supplierName || 'Supplier',
-          supplierCode: po.supplierCode || '',
-          purchaseId: po.id,
-          purchaseNo: po.purchaseNo,
-          amount: delta,
-          paymentMode: (po.paymentMethod as PaymentOutMode) || 'Bank Transfer',
-          paymentType: po.paymentMethod || 'Bank Transfer',
-          referenceNo: po.purchaseInvoiceNo || po.purchaseNo,
-          notes: `Payment recorded on purchase bill ${po.purchaseNo}`,
-          status: 'Completed',
-          createdAt: po.createdAt || new Date().toISOString(),
-          updatedAt: po.updatedAt || new Date().toISOString(),
-        });
-      }
-    });
-
-    return Array.from(map.values());
-  }, [isApiConnected, livePayments, paymentOuts, mergedPurchases]);
+  // Active pool of records: only the payment vouchers returned by the API
+  const activePool = livePayments;
 
   // Open Edit Payment Modal (Cancelled payments cannot be edited as per Swagger docs)
   // Open detail view with fresh data (GET /payments-out/:id)
@@ -764,10 +658,8 @@ export const PaymentOutView: React.FC = () => {
           updatedItem.supplierName = supplierObj.name;
         }
 
-        savePaymentOut(updatedItem);
-        if (data.purchaseId && numAmount > 0) {
-          updatePurchasePayment(data.purchaseId, numAmount, data.paymentMode, data.notes);
-        }
+        // The bill balance used for the amount limit must be re-read from the API next time
+        hasLoadedFormMasterDataRef.current = false;
         setLivePayments((prev) => prev.map((p) => (p.id === editingPaymentId ? updatedItem : p)));
         toast.success(`Payment voucher ${updatedItem.paymentNo} updated successfully!`);
       } else {
@@ -798,10 +690,7 @@ export const PaymentOutView: React.FC = () => {
           createdItem.supplierName = supplierObj.name;
         }
 
-        savePaymentOut(createdItem);
-        if (data.purchaseId && numAmount > 0) {
-          updatePurchasePayment(data.purchaseId, numAmount, data.paymentMode, data.notes);
-        }
+        hasLoadedFormMasterDataRef.current = false;
         setLivePayments((prev) => [createdItem, ...prev]);
         toast.success(`Payment ${createdItem.paymentNo} recorded successfully!`);
       }
@@ -847,15 +736,9 @@ export const PaymentOutView: React.FC = () => {
     if (!deleteTargetPayment) return;
     setIsDeletingPayment(true);
     setDeletePaymentError(null);
-    const existing = activePool.find((p) => p.id === deleteTargetPayment.id);
     try {
       await workPaymentOutApi.deletePaymentOut(deleteTargetPayment.id);
-      const cancelledPayment: PaymentOut = {
-        ...(existing || deleteTargetPayment),
-        status: 'Cancelled',
-        updatedAt: new Date().toISOString(),
-      };
-      savePaymentOut(cancelledPayment);
+      hasLoadedFormMasterDataRef.current = false;
       setLivePayments((prev) =>
         prev.map((p) => (p.id === deleteTargetPayment.id ? { ...p, status: 'Cancelled' } : p))
       );

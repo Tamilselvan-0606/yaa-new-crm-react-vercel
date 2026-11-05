@@ -34,6 +34,15 @@ export interface ApiSupplier {
   accountNumber?: string | null;
   ifscCode?: string | null;
   branchName?: string | null;
+  /** The server's names for the bank details (the older accountNumber / ifscCode above are kept for old data). */
+  bankAccountNumber?: string | null;
+  ifsc?: string | null;
+  alternatePhone?: string | null;
+  /** Display names of the saved location (the ids are above). */
+  countryName?: string | null;
+  stateName?: string | null;
+  districtName?: string | null;
+  cityName?: string | null;
   status: 'Active' | 'Inactive' | 'Blocked' | string;
   notes?: string | null;
   totalPurchase?: number;
@@ -122,6 +131,9 @@ export interface CreateSupplierPayload {
   cityId?: string;
   pincode: string;
   paymentTerms?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  ifsc?: string;
   status?: string;
 }
 
@@ -143,5 +155,8 @@ export interface UpdateSupplierPayload {
   cityId?: string;
   pincode?: string;
   paymentTerms?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  ifsc?: string;
   status?: string;
 }

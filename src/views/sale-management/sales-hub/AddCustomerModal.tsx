@@ -54,11 +54,9 @@ import {
 } from "../../../api/commerce/salesRepresentativeApi";
 import { collectionApi } from "../../../api/commerce/collectionApi";
 import {
-  useSalesManagementStore,
   SalesCustomer,
   CustomerType,
   CustomerStatus,
-  SalesRepresentative,
 } from "../../../store/useSalesManagementStore";
 import { toast } from "../../../utils/toast";
 import { store } from "../../../store/store";
@@ -104,25 +102,14 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   onClose,
   onCustomerCreated,
 }) => {
-  const {
-    saveCustomer,
-    assignCustomerSalesRep,
-    salesRepresentatives,
-    setSalesRepresentativesList,
-  } = useSalesManagementStore();
   const { isSubmitting, runOnce } = useSubmitGuard();
   const [liveSalesReps, setLiveSalesReps] = useState<ApiSalesRepresentative[]>(
     [],
   );
   const [isSalesRepsLoading, setIsSalesRepsLoading] = useState(false);
 
-  // Available sales representatives (active API list prioritized, fallback to central store)
-  const availableSalesReps = useMemo(() => {
-    if (liveSalesReps && liveSalesReps.length > 0) {
-      return liveSalesReps;
-    }
-    return salesRepresentatives || [];
-  }, [liveSalesReps, salesRepresentatives]);
+  // Available sales representatives (API list only)
+  const availableSalesReps = liveSalesReps;
 
   const {
     register,
@@ -167,30 +154,22 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   // Guards: never run two rep loads at once, and do not re-fetch on every open once loaded.
   const isFetchingRepsRef = useRef(false);
   const hasLoadedRepsRef = useRef(false);
+  // A refresh requested while a load is running (e.g. right after adding a rep) runs once more when that load ends.
+  const reloadAfterFetchRef = useRef(false);
 
   const loadSalesReps = async (forceRefresh = false) => {
-    if (isFetchingRepsRef.current) return;
+    if (isFetchingRepsRef.current) {
+      if (forceRefresh) reloadAfterFetchRef.current = true;
+      return;
+    }
     if (!forceRefresh && hasLoadedRepsRef.current) return;
     isFetchingRepsRef.current = true;
     setIsSalesRepsLoading(true);
     try {
-      const res = await salesRepresentativeApi.getList({
-        limit: 200,
-      });
+      const res = await salesRepresentativeApi.getList({ limit: 200 }, { fresh: true });
       if (res && res.success && Array.isArray(res.data)) {
         hasLoadedRepsRef.current = true;
         setLiveSalesReps(res.data);
-        const mappedReps: SalesRepresentative[] = res.data.map((r) => ({
-          id: r.id,
-          name: r.name,
-          mobile: r.mobile,
-          email: r.email,
-          designation: r.designation,
-          status: r.status,
-          createdAt: r.createdAt || new Date().toISOString(),
-          updatedAt: r.updatedAt || new Date().toISOString(),
-        }));
-        setSalesRepresentativesList(mappedReps);
       } else if (res && Array.isArray((res as any).data)) {
         setLiveSalesReps((res as any).data);
       }
@@ -199,6 +178,10 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
     } finally {
       isFetchingRepsRef.current = false;
       setIsSalesRepsLoading(false);
+      if (reloadAfterFetchRef.current) {
+        reloadAfterFetchRef.current = false;
+        loadSalesReps(true);
+      }
     }
   };
 
@@ -213,7 +196,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         creditLimit: 0,
         openingBalance: 0,
       });
-      loadSalesReps();
+      // Every time the form opens, read the live list so a representative added elsewhere is included.
+      loadSalesReps(true);
     } else {
       clearErrors();
     }
@@ -406,17 +390,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
             } catch (assignErr) {
               console.warn("Assign sales rep error:", assignErr);
             }
-            assignCustomerSalesRep(
-              created.id,
-              data.salesRepresentativeId,
-              "Primary",
-              undefined,
-              undefined,
-              created.salesRepresentativeName,
-            );
           }
 
-          saveCustomer(created);
           store.dispatch(
             baseApi.util.invalidateTags([
               { type: "Customer", id: "LIST" },
@@ -592,6 +567,11 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   availableReps={availableSalesReps}
                   isLoading={isSalesRepsLoading}
                   onRefreshReps={() => loadSalesReps(true)}
+                  onRepCreated={(rep) =>
+                    setLiveSalesReps((prev) =>
+                      prev.some((r) => r.id === rep.id) ? prev : [rep as ApiSalesRepresentative, ...prev],
+                    )
+                  }
                   placeholder="Select Sales Representative"
                 />
                 {errors.salesRepresentativeId && (

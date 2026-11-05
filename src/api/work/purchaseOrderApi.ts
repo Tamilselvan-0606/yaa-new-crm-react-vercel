@@ -103,49 +103,12 @@ export const mapApiPurchaseOrderToUi = (
   // Determine status & payment status
   const normalizedStatus = (apiPo.status as PurchaseStatus) || 'Pending';
 
-  // Check if we have an existing local record with payments recorded or vouchers
-  let existingPaid = 0;
-  let existingPaymentMethod: any = 'Bank Transfer';
-  let existingPaymentTerms = 'Net 30 Days';
-  try {
-    // 1. Check official accounts payable payment vouchers from Payment Out
-    const rawPayments = localStorage.getItem('yaa_crm_payments_out');
-    let hasVouchers = false;
-    if (rawPayments) {
-      const parsedPm = JSON.parse(rawPayments);
-      if (Array.isArray(parsedPm)) {
-        const pmForPo = parsedPm.filter(
-          (pm: any) => pm.status !== 'Cancelled' && (pm.purchaseId === apiPo.id || (apiPo.poNo && pm.purchaseNo === apiPo.poNo))
-        );
-        if (pmForPo.length > 0) {
-          existingPaid = pmForPo.reduce((sum: number, pm: any) => sum + (Number(pm.amount) || 0), 0);
-          hasVouchers = true;
-          if (pmForPo[0].paymentMode) existingPaymentMethod = pmForPo[0].paymentMode;
-        }
-      }
-    }
+  // Payment details come from the API response only (never from records saved in the browser).
+  const existingPaid = 0;
+  const existingPaymentMethod: any = (apiPo as any).paymentMethod || (apiPo as any).paymentMode || 'Bank Transfer';
+  const existingPaymentTerms = (apiPo as any).paymentTerms || 'Net 30 Days';
 
-    // 2. Check stored purchase orders
-    const rawStored = localStorage.getItem('yaa_crm_purchase_orders');
-    if (rawStored) {
-      const parsed = JSON.parse(rawStored);
-      if (Array.isArray(parsed)) {
-        const found = parsed.find((p: any) => p.id === apiPo.id || (apiPo.poNo && p.purchaseNo === apiPo.poNo));
-        if (found) {
-          if (!hasVouchers) {
-            // Only consider paid if explicitly entered/recorded
-            if (found.hasManualPayment || (Number(found.paidAmount || 0) > 0 && Number(found.paidAmount || 0) < effectiveGrandTotal)) {
-              existingPaid = Number(found.paidAmount || 0);
-            }
-          }
-          if (found.paymentMethod) existingPaymentMethod = found.paymentMethod;
-          if (found.paymentTerms) existingPaymentTerms = found.paymentTerms;
-        }
-      }
-    }
-  } catch {}
-
-  // The API tracks what was paid; the browser-stored amount is only a fallback for older records
+  // The API tracks what was paid
   const apiPaid =
     apiPo.totalPaidAmount !== undefined && apiPo.totalPaidAmount !== null
       ? Number(apiPo.totalPaidAmount)

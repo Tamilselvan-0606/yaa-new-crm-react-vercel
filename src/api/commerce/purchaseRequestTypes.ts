@@ -9,9 +9,23 @@ export interface ApiPurchaseRequestItem {
   remarks?: string;
 }
 
+/** The supplier attached to a request, as the API returns it. */
+export interface ApiPurchaseRequestSupplier {
+  id: string;
+  supplierCode?: string | null;
+  supplierName?: string | null;
+  /** Some responses use `name`; both are read. */
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+}
+
 export interface ApiPurchaseRequest {
   id: string;
   requestNo: string;
+  supplierId?: string | null;
+  supplier?: ApiPurchaseRequestSupplier | null;
   requestDate: string;
   requestedBy: string;
   department: string;
@@ -100,6 +114,7 @@ export interface PurchaseRequestDeleteResponse {
 }
 
 export interface CreatePurchaseRequestPayload {
+  supplierId?: string;
   requestNo?: string;
   requestDate?: string;
   requestedBy: string;
@@ -123,6 +138,8 @@ export interface CreatePurchaseRequestPayload {
 }
 
 export interface UpdatePurchaseRequestPayload {
+  /** Only sent when the user picked a different supplier. */
+  supplierId?: string;
   department?: string;
   requiredDate?: string;
   priority?: string;

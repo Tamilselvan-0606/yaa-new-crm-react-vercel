@@ -143,8 +143,12 @@ export function calculateCustomerOutstanding(
   const custCodeLower = (customer.customerCode || '').trim().toLowerCase();
 
   const matchesCustomer = (targetId?: string, targetName?: string, targetCode?: string) => {
-    if (targetId && targetId === custId) return true;
-    if (custId && targetId && String(targetId).toLowerCase() === String(custId).toLowerCase()) return true;
+    // The id is the only reliable link between a customer and a document. When the document carries an id that is
+    // not this customer's, it belongs to someone else, even if the name or code is the same: names repeat, and codes
+    // such as CUST-0001 are reused after a customer is deleted and added again. Without this a brand-new customer
+    // inherited an older customer's sales.
+    if (targetId && custId) return String(targetId).toLowerCase() === String(custId).toLowerCase();
+    // Old records saved without any id can only be matched by name or code.
     if (custNameLower && targetName && targetName.trim().toLowerCase() === custNameLower) return true;
     if (custCodeLower && targetCode && targetCode.trim().toLowerCase() === custCodeLower) return true;
     return false;

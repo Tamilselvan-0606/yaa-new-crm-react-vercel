@@ -27,21 +27,23 @@ export const mapApiSupplierToSupplier = (apiSup: ApiSupplier): Supplier => {
     whatsappNumber: apiSup.whatsapp || '',
     email: apiSup.email || '',
     address: apiSup.address || '',
-    city: apiSup.city || '',
-    state: apiSup.state || '',
-    country: apiSup.country || 'India',
+    // The master names (…Name) are what the location pickers match on, so prefer them.
+    city: apiSup.cityName || apiSup.city || '',
+    state: apiSup.stateName || apiSup.state || '',
+    country: apiSup.countryName || apiSup.country || 'India',
     countryId: apiSup.countryId || undefined,
     stateId: apiSup.stateId || undefined,
     districtId: apiSup.districtId || undefined,
     cityId: apiSup.cityId || undefined,
+    district: apiSup.districtName || '',
     pincode: apiSup.pincode || '',
     gstNumber: apiSup.gstNumber || '',
     panNumber: apiSup.panNumber || '',
     paymentTerms: apiSup.paymentTerms || 'Net 30 Days',
     creditLimit: Number(apiSup.creditLimit) || 0,
     bankName: apiSup.bankName || '',
-    accountNumber: apiSup.accountNumber || '',
-    ifscCode: apiSup.ifscCode || '',
+    accountNumber: apiSup.bankAccountNumber ?? apiSup.accountNumber ?? '',
+    ifscCode: apiSup.ifsc ?? apiSup.ifscCode ?? '',
     branchName: apiSup.branchName || '',
     status: (apiSup.status as SupplierStatus) || 'Active',
     notes: apiSup.notes || '',
@@ -51,6 +53,21 @@ export const mapApiSupplierToSupplier = (apiSup: ApiSupplier): Supplier => {
     createdAt: apiSup.createdAt || new Date().toISOString(),
     updatedAt: apiSup.updatedAt || new Date().toISOString(),
   };
+};
+
+/**
+ * The bank details as the API names them (bankName, bankAccountNumber, ifsc). Empty values are left out, like the
+ * other optional fields. The form calls them accountNumber / ifscCode.
+ */
+export const bankFieldsForPayload = (v: { bankName?: string | null; accountNumber?: string | null; ifscCode?: string | null }) => {
+  const out: { bankName?: string; bankAccountNumber?: string; ifsc?: string } = {};
+  const bank = v.bankName?.trim();
+  if (bank) out.bankName = bank;
+  const account = v.accountNumber?.trim();
+  if (account) out.bankAccountNumber = account;
+  const ifsc = v.ifscCode?.trim().toUpperCase();
+  if (ifsc) out.ifsc = ifsc;
+  return out;
 };
 
 /**
@@ -78,6 +95,7 @@ export const mapSupplierToPayload = (sup: Supplier | Partial<Supplier>): CreateS
   if (sup.gstNumber?.trim()) payload.gstNumber = sup.gstNumber.trim().toUpperCase();
   if (sup.panNumber?.trim()) payload.panNumber = sup.panNumber.trim().toUpperCase();
   if (sup.paymentTerms?.trim()) payload.paymentTerms = sup.paymentTerms.trim();
+  Object.assign(payload, bankFieldsForPayload(sup));
 
   return payload;
 };

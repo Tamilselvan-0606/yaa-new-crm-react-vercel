@@ -49,33 +49,14 @@ export const STORAGE_KEYS = {
 // 1. Lineage Storage & Query Helpers
 // =========================================================================
 
-export const getStoredLineages = (): SalesDocumentLineage[] => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.DOCUMENT_LINEAGE);
-    if (!raw) return [];
-    const parsed: SalesDocumentLineage[] = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    // Sanitize: clean up invalid entries where estimateNo was set to single digit IDs
-    return parsed.filter((item) => {
-      if (!item || typeof item !== 'object') return false;
-      if (item.estimateNo && /^[0-9]$/.test(item.estimateNo.trim())) {
-        item.estimateNo = undefined;
-      }
-      return true;
-    });
-  } catch (err) {
-    console.warn('Failed to parse sales document lineage from storage:', err);
-    return [];
-  }
-};
+// Document "converted from / to" history is NOT kept on the client any more (neither in the browser's storage nor in
+// memory): screens show what the API returns for each record (status, convertedAt, convertedToInvoiceNo, ...). The
+// helpers stay so existing callers keep compiling, but they hold and return nothing, so every lineage-derived badge,
+// customer-code fallback and converted-date fallback resolves to the API data only.
+export const getStoredLineages = (): SalesDocumentLineage[] => [];
 
-export const persistLineages = (lineages: SalesDocumentLineage[]): void => {
-  try {
-    localStorage.setItem(STORAGE_KEYS.DOCUMENT_LINEAGE, JSON.stringify(lineages));
-    window.dispatchEvent(new CustomEvent('yaa_crm_lineage_updated', { detail: lineages }));
-  } catch (err) {
-    console.error('Failed to save sales document lineage to storage:', err);
-  }
+export const persistLineages = (_lineages: SalesDocumentLineage[]): void => {
+  /* intentionally not stored */
 };
 
 /**

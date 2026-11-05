@@ -165,15 +165,13 @@ export const SalesReturnView: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const {
-    sales,
-    setSalesList,
     saveSalesReturn,
     updateSalesReturnStatus: updateStoreReturnStatus,
     deleteSalesReturn: deleteStoreSalesReturn,
-    customers,
-    setCustomersList,
-    paymentIns = [],
   } = useSalesManagementStore();
+  // Customers and invoices shown in the UI come only from the Commerce API
+  const [customers, setCustomers] = useState<SalesCustomer[]>([]);
+  const [sales, setSalesList] = useState<SaleTransaction[]>([]);
 
   // API & List State
   const [salesReturns, setSalesReturns] = useState<SalesReturn[]>([]);
@@ -356,11 +354,11 @@ export const SalesReturnView: React.FC = () => {
       .getCustomers({ pagination_required: false })
       .then((res) => {
         if (res?.success && Array.isArray(res.data)) {
-          setCustomersList(res.data.map(mapApiCustomerToSalesCustomer));
+          setCustomers(res.data.map(mapApiCustomerToSalesCustomer));
         }
       })
       .catch((e) => console.warn('Customers load notice in SalesReturn:', e));
-  }, [setCustomersList]);
+  }, []);
 
   // Payment-In rows of the ledger come from the API (the same source as the Payment-In page), not from
   // the local store: the store can hold stale or local-only copies that the server never had.
@@ -393,7 +391,7 @@ export const SalesReturnView: React.FC = () => {
     } catch (e) {
       console.warn('Invoices fetch failed in SalesReturn:', e);
     }
-  }, [setSalesList]);
+  }, []);
 
   useEffect(() => {
     if (isCreateModalOpen) {
@@ -619,7 +617,7 @@ export const SalesReturnView: React.FC = () => {
 
     // 3. Payments In (if selected)
     if (selectedTxType === 'All Transaction' || selectedTxType === 'Payment-In') {
-      (livePaymentIns ?? paymentIns ?? []).forEach((p, index) => {
+      (livePaymentIns ?? []).forEach((p, index) => {
         const amt = Number(p?.receivedAmount ?? 0) || 0;
         records.push({
           id: p?.id || `pay_${index}`,
@@ -638,7 +636,7 @@ export const SalesReturnView: React.FC = () => {
 
     // Sort by date desc
     return records.sort((a, b) => (b.date > a.date ? 1 : -1));
-  }, [salesReturns, sales, paymentIns, livePaymentIns, selectedTxType]);
+  }, [salesReturns, sales, livePaymentIns, selectedTxType]);
 
   // Filter Transactions by search and type
   const filteredTransactions = useMemo(() => {

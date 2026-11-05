@@ -35,23 +35,7 @@ export const mapApiPaymentOutToUi = (apiPout: ApiPaymentOut): PaymentOut => {
   let inferredPurchaseNo: string | undefined = poMatch ? poMatch[0].toUpperCase() : undefined;
   let inferredPurchaseId: string | undefined = undefined;
 
-  try {
-    const rawStoredPos = localStorage.getItem('yaa_crm_purchase_orders');
-    if (rawStoredPos) {
-      const parsedPos = JSON.parse(rawStoredPos);
-      if (Array.isArray(parsedPos)) {
-        const matchedPo = parsedPos.find(
-          (p: any) =>
-            (inferredPurchaseNo && (p.purchaseNo === inferredPurchaseNo || p.poNo === inferredPurchaseNo)) ||
-            (rawRef && (p.purchaseNo === rawRef || p.poNo === rawRef || p.purchaseInvoiceNo === rawRef))
-        );
-        if (matchedPo) {
-          inferredPurchaseId = matchedPo.id;
-          inferredPurchaseNo = matchedPo.purchaseNo || matchedPo.poNo || inferredPurchaseNo;
-        }
-      }
-    }
-  } catch {}
+  // The purchase bill is identified from the API response only (its reference / notes), never from browser-stored bills.
 
   return {
     id: apiPout.id,

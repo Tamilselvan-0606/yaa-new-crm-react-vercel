@@ -375,15 +375,32 @@ export const OrganizationView: React.FC = () => {
     return { items, total: res.pagination?.totalRecords || items.length };
   };
 
+  const matchesSearch = (o: OrganizationItem, term: string) => {
+    const q = term.trim().toLowerCase();
+    if (!q) return true;
+    return [o.name, o.code, o.organizationType, o.location, o.industry, o.subscriptionPlan]
+      .some((v) => (v || '').toString().toLowerCase().includes(q));
+  };
+
   // Fetch Organizations or Sub-Organizations strictly scoped to the active suite
   const loadOrganizations = async (page = currentPage, limit = pageSize, search = appliedSearch, status = appliedStatus) => {
     setIsLoading(true);
     try {
-      const { items, total } = isSubOrgMode
-        ? await fetchSubOrganizations(page, limit, search, status)
-        : await fetchOrganizations(page, limit, search, status);
-      setOrganizations(items);
-      setTotalRecords(total);
+      const fetchPage = (pg: number, lim: number, term: string) =>
+        isSubOrgMode ? fetchSubOrganizations(pg, lim, term, status) : fetchOrganizations(pg, lim, term, status);
+
+      if (search.trim()) {
+        // With a search, read the records once (up to 100) and filter and page them here. Filtering only the rows of
+        // the current server page hid every match that sat on another page (page 1 empty, page 2 full).
+        const all = await fetchPage(1, 100, '');
+        const matched = all.items.filter((o) => matchesSearch(o, search));
+        setOrganizations(matched.slice((page - 1) * limit, page * limit));
+        setTotalRecords(matched.length);
+      } else {
+        const { items, total } = await fetchPage(page, limit, '');
+        setOrganizations(items);
+        setTotalRecords(total);
+      }
     } catch (err: any) {
       console.error('Failed to load organizations:', err);
       showToast(
@@ -849,15 +866,7 @@ export const OrganizationView: React.FC = () => {
     }
   };
 
-  const searchedOrgs = organizations.filter(
-    (o) =>
-      o.name.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      o.code.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      (o.organizationType && o.organizationType.toLowerCase().includes(appliedSearch.toLowerCase())) ||
-      o.location.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      o.industry.toLowerCase().includes(appliedSearch.toLowerCase()) ||
-      (o.subscriptionPlan && o.subscriptionPlan.toLowerCase().includes(appliedSearch.toLowerCase()))
-  );
+  const searchedOrgs = organizations; // already searched and paged in loadOrganizations
 
   const filteredOrgs = appliedStatus === 'All'
     ? searchedOrgs

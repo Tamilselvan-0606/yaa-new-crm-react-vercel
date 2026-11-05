@@ -44,7 +44,6 @@ import {
   Download,
 } from 'lucide-react';
 import {
-  useSalesManagementStore,
   PurchaseRequest,
   PurchaseRequestItem,
   PurchaseRequestPriority,
@@ -108,17 +107,6 @@ const isoToDdmmyyyy = (iso?: string): string => {
 
 export const PurchaseRequestView: React.FC = () => {
   const navigate = useNavigate();
-  const {
-    purchaseRequests,
-    stocks,
-    suppliers,
-    savePurchaseRequest,
-    setPurchaseRequestsList,
-    deletePurchaseRequest,
-    updatePurchaseRequestStatus,
-    savePurchase,
-  } = useSalesManagementStore();
-
   // Live Commerce API State
   const [liveRequests, setLiveRequests] = useState<PurchaseRequest[]>([]);
   const [isApiLoading, setIsApiLoading] = useState(false);
@@ -254,9 +242,6 @@ export const PurchaseRequestView: React.FC = () => {
             setTotalApiRecords(mapped.length);
             setTotalApiPages(Math.ceil(mapped.length / pageSize) || 1);
           }
-
-          // Sync with local store
-          setPurchaseRequestsList(mapped);
         } else {
           setIsApiConnected(true);
           setLiveRequests([]);
@@ -269,7 +254,7 @@ export const PurchaseRequestView: React.FC = () => {
           err?.response?.data?.message ||
           err?.message ||
           'Failed to load purchase requests from API';
-        console.warn('Commerce Purchase Request API call failed, falling back to local store:', errMsg);
+        console.warn('Commerce Purchase Request API call failed:', errMsg);
         setIsApiConnected(false);
         setApiErrorMessage(errMsg);
       } finally {
@@ -277,7 +262,7 @@ export const PurchaseRequestView: React.FC = () => {
         setIsApiLoading(false);
       }
     },
-    [currentPage, pageSize, appliedSearch, appliedStatus, appliedPriority, setPurchaseRequestsList]
+    [currentPage, pageSize, appliedSearch, appliedStatus, appliedPriority]
   );
 
   // Trigger API fetch on query changes
@@ -485,18 +470,7 @@ export const PurchaseRequestView: React.FC = () => {
       }
     });
 
-    // 2. Local store fallback
-    (suppliers || []).forEach((s) => {
-      if (s.id && !map.has(s.id)) {
-        map.set(s.id, {
-          id: s.id,
-          name: s.name || (s as any).company || 'Supplier',
-          supplierCode: s.supplierCode,
-        });
-      }
-    });
-
-    // 3. Keep selected supplier if editing an existing request
+    // 2. Keep selected supplier if editing an existing request
     if (selectedFormSupplierId && selectedFormSupplierName && !map.has(selectedFormSupplierId)) {
       map.set(selectedFormSupplierId, {
         id: selectedFormSupplierId,
@@ -505,7 +479,7 @@ export const PurchaseRequestView: React.FC = () => {
     }
 
     return Array.from(map.values());
-  }, [apiSuppliers, suppliers, selectedFormSupplierId, selectedFormSupplierName]);
+  }, [apiSuppliers, selectedFormSupplierId, selectedFormSupplierName]);
   // Combined Product Options (API products + Inventory stocks)
   const productOptions = useMemo(() => {
     const map = new Map<
@@ -547,57 +521,17 @@ export const PurchaseRequestView: React.FC = () => {
       }
     });
 
-    stocks.forEach((stk) => {
-      if (!map.has(stk.productId)) {
-        map.set(stk.productId, {
-          value: stk.productId,
-          label: stk.productName,
-          subLabel: stk.sku ? `SKU: ${stk.sku} • In Stock: ${stk.inStock || 0}` : `In Stock: ${stk.inStock || 0}`,
-          badge: stk.sku || undefined,
-          unitCost: Number(stk.unitCost || 0),
-          openingStock: Number(stk.inStock || 0),
-        });
-      }
-    });
-
     return Array.from(map.values());
-  }, [availableProducts, requestItems, stocks]);
+  }, [availableProducts, requestItems]);
 
 
-  // Local fallback filter if API is offline
-  const filteredLocalRequests = useMemo(() => {
-    return purchaseRequests.filter((r) => {
-      const q = appliedSearch.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        r.requestNo.toLowerCase().includes(q) ||
-        r.requestedBy.toLowerCase().includes(q) ||
-        r.department.toLowerCase().includes(q) ||
-        r.items.some((it) => it.productName.toLowerCase().includes(q));
-
-      const matchesStatus =
-        appliedStatus === 'All' || r.status.toLowerCase() === appliedStatus.toLowerCase();
-
-      const matchesPriority =
-        appliedPriority === 'All' || r.priority.toLowerCase() === appliedPriority.toLowerCase();
-
-      return matchesSearch && matchesStatus && matchesPriority;
-    });
-  }, [purchaseRequests, appliedSearch, appliedStatus, appliedPriority]);
-
-  // Deciding which list to show: live API data if connected, otherwise local store
-  const displayRequests = useMemo(() => {
-    if (isApiConnected) {
-      return liveRequests;
-    }
-    return filteredLocalRequests;
-  }, [isApiConnected, liveRequests, filteredLocalRequests]);
+  // Rows shown come only from the API response
+  const displayRequests = liveRequests;
 
   // Summary Metrics
   const localSummary = useMemo(() => {
-    const listToAnalyze = isApiConnected ? liveRequests : purchaseRequests;
-    const totalCount =
-      isApiConnected && totalApiRecords !== null ? totalApiRecords : listToAnalyze.length;
+    const listToAnalyze = liveRequests;
+    const totalCount = totalApiRecords !== null ? totalApiRecords : listToAnalyze.length;
     const draftCount = listToAnalyze.filter((r) => r.status === 'Draft').length;
     const pendingCount = listToAnalyze.filter(
       (r) => r.status === 'Pending Approval' || r.status === 'Submitted'
@@ -616,7 +550,7 @@ export const PurchaseRequestView: React.FC = () => {
       rejectedCount,
       completedCount,
     };
-  }, [isApiConnected, liveRequests, purchaseRequests, totalApiRecords]);
+  }, [liveRequests, totalApiRecords]);
   const summary = apiSummary ?? localSummary;
 
   // Open Create Modal
@@ -657,11 +591,11 @@ export const PurchaseRequestView: React.FC = () => {
         : [
             {
               id: `pr_item_${Date.now()}`,
-              productId: availableProducts[0]?.id || stocks[0]?.productId || ensureValidUuid(),
-              productName: availableProducts[0]?.productName || stocks[0]?.productName || 'General Item',
-              currentStock: availableProducts[0]?.openingStock ?? stocks[0]?.inStock ?? 0,
+              productId: availableProducts[0]?.id || '',
+              productName: availableProducts[0]?.productName || '',
+              currentStock: availableProducts[0]?.openingStock ?? 0,
               requestedQuantity: 1,
-              estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? stocks[0]?.unitCost ?? 0,
+              estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? 0,
               requiredDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
               remarks: '',
             },
@@ -693,11 +627,11 @@ export const PurchaseRequestView: React.FC = () => {
         : [
             {
               id: `pr_item_${Date.now()}`,
-              productId: availableProducts[0]?.id || stocks[0]?.productId || ensureValidUuid(),
-              productName: availableProducts[0]?.productName || stocks[0]?.productName || 'General Item',
-              currentStock: availableProducts[0]?.openingStock ?? stocks[0]?.inStock ?? 0,
+              productId: availableProducts[0]?.id || '',
+              productName: availableProducts[0]?.productName || '',
+              currentStock: availableProducts[0]?.openingStock ?? 0,
               requestedQuantity: 1,
-              estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? stocks[0]?.unitCost ?? 0,
+              estimatedUnitPrice: availableProducts[0]?.purchasePrice ?? 0,
               requiredDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
               remarks: '',
             },
@@ -730,19 +664,6 @@ export const PurchaseRequestView: React.FC = () => {
         copy[index].productName = targetProd.productName;
         copy[index].currentStock = targetProd.openingStock ?? 0;
         copy[index].estimatedUnitPrice = targetProd.purchasePrice ?? 0;
-        return copy;
-      });
-      return;
-    }
-
-    const targetStock = stocks.find((s) => s.productId === prodId || s.id === prodId);
-    if (targetStock) {
-      setRequestItems((prev) => {
-        const copy = [...prev];
-        copy[index].productId = targetStock.productId;
-        copy[index].productName = targetStock.productName;
-        copy[index].currentStock = targetStock.inStock ?? 0;
-        copy[index].estimatedUnitPrice = targetStock.unitCost ?? 0;
         return copy;
       });
       return;
@@ -819,6 +740,15 @@ export const PurchaseRequestView: React.FC = () => {
           items: requestItems,
         });
 
+        // The supplier is sent only when the user picked a different one (nothing else about it changes).
+        if (
+          data.supplierId &&
+          data.supplierId !== (editingRequest.supplierId || '') &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.supplierId)
+        ) {
+          updatePayload.supplierId = data.supplierId;
+        }
+
         const res = await commercePurchaseRequestApi.updatePurchaseRequest(
           editingRequest.id,
           updatePayload
@@ -826,7 +756,6 @@ export const PurchaseRequestView: React.FC = () => {
 
         if (res && res.success && res.data) {
           const mapped = mapApiPurchaseRequestToUi(res.data);
-          savePurchaseRequest(mapped);
           toast.success(`Purchase request ${mapped.requestNo} updated successfully.`);
         } else {
           throw new Error('The purchase request could not be updated. Please try again.');
@@ -835,6 +764,7 @@ export const PurchaseRequestView: React.FC = () => {
         // CREATE API: POST /commerce/purchase-requests
         const createPayload = mapUiToCreatePayload(
           {
+            supplierId: data.supplierId || undefined,
             requestNo: data.requestNo,
             requestDate,
             requestedBy: data.requestedBy,
@@ -851,9 +781,6 @@ export const PurchaseRequestView: React.FC = () => {
 
         if (res && res.success && res.data) {
           const mapped = mapApiPurchaseRequestToUi(res.data);
-          mapped.supplierId = data.supplierId || undefined;
-          mapped.supplierName = data.supplierName || undefined;
-          savePurchaseRequest(mapped);
           toast.success(`Purchase request ${mapped.requestNo} created successfully!`);
         } else {
           throw new Error('The purchase request could not be created. Please try again.');
@@ -908,7 +835,6 @@ export const PurchaseRequestView: React.FC = () => {
     setDeleteRequestError(null);
     try {
       await commercePurchaseRequestApi.deletePurchaseRequest(deleteTargetRequest.id);
-      deletePurchaseRequest(deleteTargetRequest.id);
       toast.success(`Purchase request "${deleteTargetRequest.requestNo}" deleted successfully.`);
       setIsDeleteModalOpen(false);
       setDeleteTargetRequest(null);
@@ -990,7 +916,6 @@ export const PurchaseRequestView: React.FC = () => {
         status: 'Rejected',
         rejectionReason: rejectionReason.trim(),
       });
-      updatePurchaseRequestStatus(targetActionRequest.id, 'Rejected', rejectionReason.trim());
       toast.success(`Request ${targetActionRequest.requestNo} rejected.`);
       setRejectionModalOpen(false);
       loadPurchaseRequests(true);
@@ -1047,7 +972,6 @@ export const PurchaseRequestView: React.FC = () => {
         orgId
       );
 
-      updatePurchaseRequestStatus(target.id, 'Approved', undefined, approverName);
       toast.success(`Purchase request ${target.requestNo} approved successfully!`);
 
       // Update selectedRequest in place if modal is still open
@@ -1070,21 +994,20 @@ export const PurchaseRequestView: React.FC = () => {
   };
 
   // Total records & paginated items
-  const totalCount =
-    isApiConnected && totalApiRecords !== null ? totalApiRecords : filteredLocalRequests.length;
+  const totalCount = totalApiRecords !== null ? totalApiRecords : liveRequests.length;
 
   const paginatedRequests = useMemo(() => {
-    const list = isApiConnected ? liveRequests : filteredLocalRequests;
+    const list = liveRequests;
     if (list.length > pageSize) {
       const start = (currentPage - 1) * pageSize;
       return list.slice(start, start + pageSize);
     }
     return list;
-  }, [isApiConnected, liveRequests, filteredLocalRequests, currentPage, pageSize]);
+  }, [liveRequests, currentPage, pageSize]);
 
   // Export Purchase Requests to Excel
   const handleExportExcel = () => {
-    const listToExport = isApiConnected && liveRequests.length > 0 ? liveRequests : filteredLocalRequests;
+    const listToExport = liveRequests;
     if (listToExport.length === 0) {
       toast.error('No purchase request records available to export.');
       return;
@@ -1212,7 +1135,7 @@ export const PurchaseRequestView: React.FC = () => {
 
   // Print Table Report for Purchase Requests
   const handlePrintTableReport = () => {
-    const listToPrint = isApiConnected && liveRequests.length > 0 ? liveRequests : filteredLocalRequests;
+    const listToPrint = liveRequests;
     if (listToPrint.length === 0) {
       toast.info('No purchase requests available to print.');
       return;
@@ -2107,6 +2030,25 @@ export const PurchaseRequestView: React.FC = () => {
                 </span>
               </div>
             </div>
+
+            {(selectedRequest.supplierName || selectedRequest.supplierId) && (
+              <div className="p-4 bg-white rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Supplier</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-900 text-sm">{selectedRequest.supplierName || 'Supplier'}</span>
+                  {selectedRequest.supplierCode && (
+                    <span className="rounded-md bg-purple-50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#33077C]">{selectedRequest.supplierCode}</span>
+                  )}
+                </div>
+                {(selectedRequest.supplierPhone || selectedRequest.supplierEmail || selectedRequest.supplierAddress) && (
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1.5 text-slate-600">
+                    {selectedRequest.supplierPhone && <div><span className="text-slate-400">Phone: </span><span className="font-medium text-slate-800">{selectedRequest.supplierPhone}</span></div>}
+                    {selectedRequest.supplierEmail && <div className="break-all"><span className="text-slate-400">Email: </span><span className="font-medium text-slate-800">{selectedRequest.supplierEmail}</span></div>}
+                    {selectedRequest.supplierAddress && <div><span className="text-slate-400">Address: </span><span className="font-medium text-slate-800">{selectedRequest.supplierAddress}</span></div>}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
               <div className="overflow-x-auto max-w-full">

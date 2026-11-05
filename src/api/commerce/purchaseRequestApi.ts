@@ -56,6 +56,8 @@ export const mapApiItemToUiItem = (
   };
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Maps raw ApiPurchaseRequest from backend to UI PurchaseRequest model
  */
@@ -83,6 +85,12 @@ export const mapApiPurchaseRequestToUi = (
     priority: (apiPR.priority as PurchaseRequestPriority) || 'Medium',
     status: (apiPR.status as PurchaseRequestStatus) || 'Pending Approval',
     items,
+    supplierId: apiPR.supplierId || apiPR.supplier?.id || undefined,
+    supplierName: apiPR.supplier?.supplierName || apiPR.supplier?.name || undefined,
+    supplierCode: apiPR.supplier?.supplierCode || undefined,
+    supplierPhone: apiPR.supplier?.phone || undefined,
+    supplierEmail: apiPR.supplier?.email || undefined,
+    supplierAddress: apiPR.supplier?.address || undefined,
     notes: apiPR.notes || '',
     organizationId: apiPR.organizationId,
     totalEstimatedAmount: apiPR.totalEstimatedAmount ?? totalCalculated,
@@ -100,6 +108,7 @@ export const mapApiPurchaseRequestToUi = (
  */
 export const mapUiToCreatePayload = (
   data: {
+    supplierId?: string;
     requestNo?: string;
     requestDate?: string;
     requestedBy: string;
@@ -112,6 +121,8 @@ export const mapUiToCreatePayload = (
   items: PurchaseRequestItem[]
 ): CreatePurchaseRequestPayload => {
   return {
+    // Only a real supplier id is sent; a name alone is never turned into one.
+    supplierId: data.supplierId && UUID_RE.test(data.supplierId) ? data.supplierId : undefined,
     requestNo: data.requestNo?.trim() || undefined,
     requestDate: data.requestDate || new Date().toISOString().split('T')[0],
     requestedBy: data.requestedBy.trim(),
@@ -147,6 +158,7 @@ export const sanitizeCommercePurchaseRequestUpdatePayload = (
   payload: Record<string, any>
 ): UpdatePurchaseRequestPayload => {
   const allowedKeys: (keyof UpdatePurchaseRequestPayload)[] = [
+    'supplierId',
     'department',
     'requiredDate',
     'priority',

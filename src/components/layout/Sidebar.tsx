@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAnnouncementUnread } from '../../hooks/useAnnouncementUnread';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useActiveOrgType } from '../../hooks/useActiveOrgType';
@@ -14,6 +15,7 @@ import {
   CreditCard,
   Repeat,
   Bell,
+  Megaphone,
   BarChart3,
   ChevronDown,
   X,
@@ -78,6 +80,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   collapsed = false,
 }) => {
   const { currentUser, role, isAdmin, isSuperAdmin, isOrgSuperAdmin, unreadRemindersCount } = useAuth();
+  // Organization users receive announcements from the Platform Administrator; the badge shows the unread ones.
+  const unreadAnnouncements = useAnnouncementUnread(!!currentUser && !isSuperAdmin);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -353,6 +357,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     salesHubNavItem,
     saleReportNavItem,
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, count: unreadRemindersCount },
+    { id: 'announcements', path: '/announcements', label: 'Announcements', icon: Megaphone, count: unreadAnnouncements },
   ];
 
   // Client Management Suite Menu Items (Remaining modules)
@@ -400,6 +405,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'payments', path: '/payments', label: 'Payments', icon: CreditCard, adminOnly: false },
     { id: 'subscriptions', path: '/subscriptions', label: 'Subscriptions', icon: Repeat, adminOnly: false },
     { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, adminOnly: false, count: unreadRemindersCount },
+    { id: 'announcements', path: '/announcements', label: 'Announcements', icon: Megaphone, adminOnly: false, count: unreadAnnouncements },
     { id: 'reports', path: '/reports', label: 'Reports & Analytics', icon: BarChart3, adminOnly: true },
   ];
 
@@ -429,6 +435,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     { id: 'subscription-plans', path: '/subscription-plans', label: 'Subscription Plans', icon: Sparkles },
     { id: 'organization-subscriptions', path: '/organization-subscriptions', label: 'Organization Subscriptions', icon: Repeat },
+    { id: 'reminders', path: '/reminders', label: 'Reminders', icon: Bell, count: unreadRemindersCount },
+    { id: 'announcements', path: '/announcements', label: 'Announcements', icon: Megaphone },
   ];
 
   // Dynamic visible items based on logged in user role & organization type
@@ -480,6 +488,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         'sm-sales-hub',
         'sm-reports',
         'reminders',
+        'announcements',
       ];
       const items = isSaleManagement
         ? salesManagementNavItems

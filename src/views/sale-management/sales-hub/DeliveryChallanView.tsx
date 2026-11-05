@@ -1,3 +1,5 @@
+import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
+import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
@@ -101,12 +103,8 @@ import {
   mapApiCustomerToSalesCustomer,
 } from '../../../api';
 import {
-  syncConvertedInvoiceToStorage,
   recordDocumentConversion,
-  findDocumentLineage,
-  resolveDocumentConvertedAt,
   initializeWorkflowIntegrity,
-  getStoredLineages,
   isMockChallan,
 } from '../../../utils/salesDocumentWorkflow';
 import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
@@ -464,10 +462,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
   const {
-    customers: localCustomers,
-    stocks: localStocks,
-    saveCustomer: saveCustomerLocal,
-    saveSale,
     setCustomersList,
     setStocksList,
   } = useSalesManagementStore();
@@ -477,33 +471,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   }, []);
 
   // Delivery Challan State with LocalStorage Cache (purging any mock records)
-  const [challans, setChallans] = useState<DeliveryChallanRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem('yaa_crm_delivery_challans');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter((c: any) => !isMockChallan(c));
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem('yaa_crm_delivery_challans', JSON.stringify(cleaned));
-          }
-          return cleaned;
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
-  });
+  const [challans, setChallans] = useState<DeliveryChallanRecord[]>([]);
 
   const persistChallans = (updated: DeliveryChallanRecord[]) => {
-    const cleaned = updated.filter((c) => !isMockChallan(c));
-    setChallans(cleaned);
-    try {
-      localStorage.setItem('yaa_crm_delivery_challans', JSON.stringify(cleaned));
-    } catch (e) {
-      console.error('Failed to save delivery challans', e);
-    }
+    setChallans(updated.filter((c) => !isMockChallan(c)));
   };
 
   // Master Data Cache
@@ -621,7 +592,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const isFetchingProductsRef = useRef(false);
 
-  // Fetch live products with multi-source fallback (Commerce products, client products, stocks, localStorage)
+  // Fetch live products with multi-source fallback (Commerce products, client products, stocks)
   const fetchLiveProducts = useCallback(async (searchQuery?: string) => {
     if (isFetchingProductsRef.current) return;
     isFetchingProductsRef.current = true;
@@ -705,21 +676,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         }
       }
 
-      // 5. Fifth attempt: fallback to local storage
-      if (prods.length === 0) {
-        try {
-          const localSaved = localStorage.getItem('yaa_crm_inventory_stocks');
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              prods = parsed;
-            }
-          }
-        } catch (locErr) {
-          console.warn('localStorage stock load fallback error:', locErr);
-        }
-      }
-
       if (prods.length > 0) {
         setLiveProducts((prev) => {
           const map = new Map<string, ApiProduct>();
@@ -788,7 +744,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     try {
       const custRes = await customerApi.getCustomers({ pagination_required: false, page_size: 100 });
       const rawCust = unpackProducts(custRes);
-      if (rawCust.length > 0) {
+      {
         const mapped = rawCust.map(mapApiCustomerToSalesCustomer);
         setLiveCustomers(mapped);
         setCustomersList(mapped);
@@ -841,70 +797,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     fetchLiveProducts(trimmed);
   }, [fetchLiveProducts]);
 
-  // Helper to recover and merge converted challans from lineage and local store
-  const recoverLineageChallans = useCallback((existingList: DeliveryChallanRecord[]): DeliveryChallanRecord[] => {
-    const list = [...existingList];
-    try {
-      const lineages = getStoredLineages();
-      const ordersRaw = localStorage.getItem('yaa_crm_sale_orders');
-      const orders: any[] = ordersRaw ? JSON.parse(ordersRaw) : [];
-
-      lineages.forEach((lin) => {
-        if (!lin.challanNo || lin.challanId === 'dc_1' || lin.challanId === 'dc_2') return;
-        const alreadyExists = list.some(
-          (c) => c.challanNo.toLowerCase() === lin.challanNo?.toLowerCase()
-        );
-        if (alreadyExists) return;
-
-        const linkedOrder = orders.find(
-          (o: any) =>
-            (lin.orderNo && o.orderNo === lin.orderNo) ||
-            (lin.orderId && o.id === lin.orderId)
-        );
-
-        if (!linkedOrder || !Array.isArray(linkedOrder.items) || linkedOrder.items.length === 0) {
-          return;
-        }
-
-        const recovered: DeliveryChallanRecord = {
-          id: lin.challanId || `dc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          challanNo: lin.challanNo,
-          referenceNo: linkedOrder.orderNo || lin.orderNo,
-          invoiceDate: linkedOrder.orderDate || new Date().toISOString().split('T')[0],
-          dueDate: linkedOrder.dueDate || '',
-          customerId: linkedOrder.customerId || lin.customerId || '',
-          partyName: linkedOrder.partyName || lin.partyName || 'Customer',
-          customerPhone: linkedOrder.customerPhone,
-          customerEmail: linkedOrder.customerEmail,
-          customerCompany: linkedOrder.customerCompany,
-          billingAddress: linkedOrder.billingAddress || '',
-          shippingAddress: linkedOrder.shippingAddress || linkedOrder.billingAddress,
-          items: linkedOrder.items,
-          subtotal: linkedOrder.subtotal || 0,
-          withGst: linkedOrder.withGst,
-          gstType: linkedOrder.gstType,
-          cgst: linkedOrder.cgst,
-          sgst: linkedOrder.sgst,
-          igst: linkedOrder.igst,
-          discount: linkedOrder.discount || 0,
-          taxAmount: linkedOrder.taxAmount || 0,
-          amount: linkedOrder.amount || lin.grandTotal || 0,
-          balance: linkedOrder.balance || lin.grandTotal || 0,
-          status: 'Open',
-          notes: `Converted from Sale Order ${linkedOrder.orderNo}`,
-          createdAt: linkedOrder.createdAt || lin.createdAt || new Date().toISOString(),
-          updatedAt: linkedOrder.updatedAt || lin.updatedAt || new Date().toISOString(),
-        };
-        if (!isMockChallan(recovered)) {
-          list.push(recovered);
-        }
-      });
-    } catch (e) {
-      console.warn('Failed to recover lineage challans:', e);
-    }
-    return list;
-  }, []);
-
   // Fetch Delivery Challans from Live Backend API
   const isFetchingChallansRef = useRef(false);
   const fetchDeliveryChallans = useCallback(async (overrides?: {
@@ -939,48 +831,26 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           .map((item) => mapApiDeliveryChallanToRecord(item))
           .filter((c) => !isMockChallan(c));
 
-        // Enrich with converted status from document lineage if converted downstream
-        const enriched = apiRecords.map((c) => {
-          const lin = findDocumentLineage(c.challanNo) || (c.referenceNo ? findDocumentLineage(c.referenceNo) : null);
-          return {
-            ...c,
-            convertedToInvoiceNo: c.convertedToInvoiceNo || lin?.invoiceNo,
-            status: lin?.invoiceNo ? ('Converted' as const) : c.status,
-          };
-        });
+        const enriched = apiRecords;
 
         persistChallans(enriched);
         setApiSummary(res.summary ?? null);
         setTotalApiRecords(res.pagination?.totalRecords ?? enriched.length);
         setTotalApiPages(res.pagination?.totalPages ?? Math.max(1, Math.ceil(enriched.length / pageSize)));
         setIsApiConnected(true);
-      } else {
-        const localSavedRaw = localStorage.getItem('yaa_crm_delivery_challans');
-        const localSaved: DeliveryChallanRecord[] = localSavedRaw
-          ? JSON.parse(localSavedRaw).filter((c: any) => !isMockChallan(c))
-          : [];
-        persistChallans(localSaved);
-        setTotalApiRecords(localSaved.length);
-        setTotalApiPages(Math.max(1, Math.ceil(localSaved.length / pageSize)));
       }
     } catch (err: any) {
-      console.warn('Could not reach Commerce Delivery Challans API, using offline cache:', err);
+      console.warn('Could not reach Commerce Delivery Challans API:', err);
       setIsApiConnected(false);
-      try {
-        const localSavedRaw = localStorage.getItem('yaa_crm_delivery_challans');
-        const localSaved: DeliveryChallanRecord[] = localSavedRaw ? JSON.parse(localSavedRaw) : [];
-        const recovered = recoverLineageChallans(localSaved);
-        persistChallans(recovered);
-        setTotalApiRecords(recovered.length);
-        setTotalApiPages(Math.max(1, Math.ceil(recovered.length / pageSize)));
-      } catch (fallbackErr) {
-        console.error('Fallback delivery challan recovery error:', fallbackErr);
-      }
+      persistChallans([]);
+      setApiSummary(null);
+      setTotalApiRecords(0);
+      setTotalApiPages(1);
     } finally {
       setIsApiLoading(false);
       isFetchingChallansRef.current = false;
     }
-  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod, recoverLineageChallans]);
+  }, [page, pageSize, appliedSearch, appliedStatus, appliedPeriod]);
 
   useEffect(() => {
     fetchDeliveryChallans();
@@ -1033,8 +903,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
         openingBalance: c.openingBalance || 0,
       }));
     }
-    return localCustomers;
-  }, [liveCustomers, localCustomers]);
+    return [] as typeof liveCustomers;
+  }, [liveCustomers]);
 
   // Helper to extract batches for a product
   const getBatchesForProduct = useCallback((
@@ -1119,36 +989,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       }
     });
 
-    // 3. Fallback from local store stocks
-    if (map.size === 0 && Array.isArray(localStocks)) {
-      localStocks.forEach((s) => {
-        const pid = String((s as any).productId || s.id || "");
-        if (pid && !map.has(pid)) {
-          map.set(pid, {
-            id: s.id,
-            productId: pid,
-            productName: s.productName || (s as any).name || 'Unnamed Product',
-            sku: s.sku || (s as any).itemCode || '',
-            unitPrice: Number(s.unitPrice ?? (s as any).salePrice ?? (s as any).sellingPrice ?? (s as any).price ?? 0),
-            unit: s.unit || 'PCS',
-            taxPercent: 5,
-            hsnCode: (s as any).hsnCode || '',
-            category: s.category || '',
-            imageUrl: (s as any).images?.[0] || (s as any).image || (s as any).imageUrl || '',
-            batches: s.batches || [],
-          });
-        }
-      });
-    }
-
-    return Array.from(map.values()).filter((s: any) => {
+    return attachStockQty(Array.from(map.values()), liveStocks).filter((s: any) => {
       const pid = String(s.productId || s.id || "").trim();
       const name = String(s.productName || "").trim();
       if (!pid && !name) return false;
       if (pid.startsWith("mock_")) return false;
       return true;
     });
-  }, [liveProducts, liveStocks, localStocks, getBatchesForProduct]);
+  }, [liveProducts, liveStocks, getBatchesForProduct]);
 
   const productOptions = useMemo(() => {
     return allStockItems.map((s: any) => ({
@@ -1162,6 +1010,26 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
   }, [allStockItems]);
 
   // Filter products for the active row popover
+  // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
+  // reflects what the last saved document changed (the stock endpoint is never cached).
+  useEffect(() => {
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    let cancelled = false;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        const raw = unpackProducts(res);
+        if (raw.length > 0) setLiveStocks(raw.map(mapApiStockToInventoryStockItem));
+      })
+      .catch(() => {
+        /* keep the quantities already shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openProductDropdownRow]);
+
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
     if (!q) return allStockItems;
@@ -1750,18 +1618,12 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
   // Determine conversion status for Delivery Challan
   const getChallanStages = (challan: DeliveryChallanRecord) => {
-    const challanNoClean = challan.challanNo?.trim();
-    const lineage = challanNoClean ? findDocumentLineage(challanNoClean, 'Challan') : undefined;
-
     const isInvoiceConverted = Boolean(
-      lineage?.invoiceNo ||
-      lineage?.invoiceId ||
       challan.status === 'Converted' ||
       (challan.convertedToInvoiceNo && challan.convertedToInvoiceNo.startsWith('INV-'))
     );
 
     return {
-      lineage,
       isInvoiceConverted,
       isFullyConverted: isInvoiceConverted,
     };
@@ -1958,55 +1820,11 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
       const convertedChallanMap = new Map<string, string>();
 
-      openChallansToConvert.forEach((challan, idx) => {
-        const currentLineage = findDocumentLineage(challan.challanNo);
-        const invNo =
-          currentLineage?.invoiceNo ||
-          '';
+      openChallansToConvert.forEach((challan) => {
+        const invNo = '';
 
         convertedChallanMap.set(challan.id, invNo);
         convertedChallanMap.set(challan.challanNo, invNo);
-
-        const newSale: SaleTransaction = {
-          id: `sale_${Date.now()}_${idx}`,
-          invoiceNo: invNo,
-          referenceNo: challan.challanNo,
-          saleDate: new Date().toISOString().split('T')[0],
-          dueDate: challan.dueDate,
-          customerId: challan.customerId,
-          customerName: challan.partyName,
-          customerCompany: challan.customerCompany,
-          customerPhone: challan.customerPhone,
-          customerEmail: challan.customerEmail,
-          billingAddress: challan.billingAddress,
-          shippingAddress: challan.shippingAddress || challan.billingAddress,
-          items: challan.items,
-          subtotal: challan.subtotal,
-          withGst: challan.withGst,
-          gstType: challan.gstType,
-          cgst: challan.cgst,
-          sgst: challan.sgst,
-          igst: challan.igst,
-          totalDiscount: challan.discount || 0,
-          totalTax: challan.taxAmount || 0,
-          shippingCharges: 0,
-          otherCharges: 0,
-          grandTotal: challan.amount,
-          paidAmount: 0,
-          balance: challan.amount,
-          paymentMethod: 'Cash',
-          paymentTerms: '15 Days',
-          paymentStatus: 'Unpaid',
-          saleStatus: 'Confirmed',
-          createdBy: 'Sales Representative',
-          salesperson: 'Sales Rep',
-          notes: `Bulk converted from Delivery Challan ${challan.challanNo}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        saveSale(newSale);
-        syncConvertedInvoiceToStorage(newSale);
 
         recordDocumentConversion({
           fromType: 'Challan',
@@ -2128,7 +1946,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     const excelRows = challans.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
-      const convertedAt = resolveDocumentConvertedAt('Challan', c);
+      const convertedAt = (((c as any).convertedAt) || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         date: isoToDdmmyyyy(c.invoiceDate),
@@ -2184,7 +2002,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
 
     const printRows = challans.map((c) => {
       const createdDt = formatDateTime(c.createdAt);
-      const convertedAt = resolveDocumentConvertedAt('Challan', c);
+      const convertedAt = (((c as any).convertedAt) || null);
       const convertedDt = formatDateTime(convertedAt);
       return {
         challanNo: c.challanNo,
@@ -2925,7 +2743,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                                               <span className="font-mono text-slate-600">
                                                 SKU: {p.sku || p.productCode || "PRD"}
                                               </span>
-                                              {p.unit && <span>• {p.unit}</span>}
+                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -3918,7 +3736,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   const challanStages = getChallanStages(item);
                   const isActionOpen = activeDropdownId === item.id;
                   const createdDt = formatDateTime(item.createdAt);
-                  const convertedAt = resolveDocumentConvertedAt('Challan', item);
+                  const convertedAt = (((item as any).convertedAt) || null);
                   const convertedDt = formatDateTime(convertedAt);
                   const resolvedCustomerCode =
                     (item as any).customerCode ||
@@ -3928,13 +3746,6 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                         (c.phone && item.customerPhone && c.phone === item.customerPhone) ||
                         (c.name && item.partyName && c.name.trim().toLowerCase() === item.partyName.trim().toLowerCase())
                     )?.customerCode ||
-                    localCustomers.find(
-                      (c) =>
-                        (item.customerId && c.id === item.customerId) ||
-                        (c.phone && item.customerPhone && c.phone === item.customerPhone) ||
-                        (c.name && item.partyName && c.name.trim().toLowerCase() === item.partyName.trim().toLowerCase())
-                    )?.customerCode ||
-                    findDocumentLineage(item.challanNo)?.customerCode ||
                     '';
 
                   return (

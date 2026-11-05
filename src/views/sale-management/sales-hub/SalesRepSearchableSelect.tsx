@@ -57,6 +57,8 @@ export interface SalesRepSearchableSelectProps {
   availableReps?: (ApiSalesRepresentative | SalesRepresentative)[];
   isLoading?: boolean;
   onRefreshReps?: () => void;
+  /** Called with the new representative right after it is created, so the parent list can include it at once. */
+  onRepCreated?: (rep: ApiSalesRepresentative | SalesRepresentative) => void;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
@@ -68,6 +70,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
   availableReps = [],
   isLoading = false,
   onRefreshReps,
+  onRepCreated,
   disabled = false,
   placeholder = "Select Sales Representative",
   className = "",
@@ -86,11 +89,10 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
   const fetchPage = useCallback(
     async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
       try {
-        const res = await salesRepresentativeApi.getList({
-          page,
-          limit,
-          search: search || undefined,
-        });
+        const res = await salesRepresentativeApi.getList(
+          { page, limit, search: search || undefined },
+          { fresh: true },
+        );
         const data = res?.data || [];
         const hasNextPage = (res as any)?.pagination?.hasNextPage ?? (data.length >= limit);
         return {
@@ -126,6 +128,7 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
     loadMore,
     loadInitial,
     refresh,
+    setItems,
   } = usePaginatedDropdown<ApiSalesRepresentative | SalesRepresentative>({
     fetchPage,
     limit: 10,
@@ -338,6 +341,9 @@ export const SalesRepSearchableSelect: React.FC<SalesRepSearchableSelectProps> =
         };
 
         saveSalesRepresentative(repData);
+        // Show it in the open list and in the parent's list immediately; the refresh below then confirms it from the server.
+        setItems((prev) => [repData, ...prev.filter((r) => r.id !== repData.id)]);
+        onRepCreated?.(repData);
         store.dispatch(
           baseApi.util.invalidateTags([
             { type: "SalesRepresentative", id: "LIST" },

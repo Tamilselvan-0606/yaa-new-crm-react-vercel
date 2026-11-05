@@ -131,16 +131,18 @@ export const salesRepresentativeApi = {
    * List all sales representatives with performance metrics
    * GET /commerce/sales-representatives
    */
-  getList: async (params?: SalesRepListParams): Promise<SalesRepListResponse> => {
+  getList: async (params?: SalesRepListParams, options?: { fresh?: boolean }): Promise<SalesRepListResponse> => {
     const queryParams: Record<string, any> = {};
     if (params?.page) queryParams.page = params.page;
     if (params?.limit) queryParams.limit = params.limit;
     if (params?.search?.trim()) queryParams.search = params.search.trim();
     if (params?.status && params.status !== 'ALL') queryParams.status = params.status;
 
+    // `fresh`: pickers must see a representative added a moment ago, so they skip the 2-minute response cache.
+    // (`timeout: 0` is axios's default, so it changes nothing else; any extra config makes the request non-cacheable.)
     const response = await baseClient.get<SalesRepListResponse>(
       '/commerce/sales-representatives',
-      { params: queryParams }
+      options?.fresh ? { params: queryParams, timeout: 0 } : { params: queryParams }
     );
     return response.data;
   },

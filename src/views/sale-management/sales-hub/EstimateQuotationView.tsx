@@ -1,3 +1,5 @@
+import { ProductStockLabel } from "../../../components/common/ProductStockLabel";
+import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
 import React, {
@@ -120,10 +122,7 @@ import {
   syncConvertedChallanToStorage,
   syncQuotationStatusInStorage,
   initializeWorkflowIntegrity,
-  findDocumentLineage,
-  isMockChallan,
 } from "../../../utils/salesDocumentWorkflow";
-import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
 import { SaleTransaction } from "../../../store/useSalesManagementStore";
 import {
   isValidIndianPhone,
@@ -524,9 +523,6 @@ export const EstimateQuotationView: React.FC = () => {
   const companyProfile = useCompanyDocumentProfile();
   const navigate = useNavigate();
   const {
-    quotations,
-    customers,
-    stocks,
     saveQuotation,
     setQuotationsList,
     deleteQuotation,
@@ -534,9 +530,9 @@ export const EstimateQuotationView: React.FC = () => {
     convertQuotationToSale,
     saveSale,
     saveCustomer,
-    setCustomersList,
-    setStocksList,
   } = useSalesManagementStore();
+  // Customers shown in the UI come only from the Commerce customers API
+  const [customers, setCustomers] = useState<SalesCustomer[]>([]);
 
   useEffect(() => {
     initializeWorkflowIntegrity();
@@ -852,9 +848,9 @@ export const EstimateQuotationView: React.FC = () => {
         console.warn("Commerce Quotations API notice:", err);
         setIsApiConnected(false);
         setApiErrorMessage(err.message || "Commerce API not reachable");
-        setLiveQuotations(quotations);
-        setTotalApiRecords(quotations.length);
-        setTotalApiPages(Math.max(1, Math.ceil(quotations.length / size)));
+        setLiveQuotations([]);
+        setTotalApiRecords(0);
+        setTotalApiPages(1);
       } finally {
         if (currentRequestId === fetchRequestIdRef.current) {
           setIsApiLoading(false);
@@ -863,12 +859,6 @@ export const EstimateQuotationView: React.FC = () => {
     },
     [appliedSearch, appliedStatus, appliedPeriod, page, pageSize],
   );
-
-  // Keep quotationsRef synced
-  const quotationsRef = useRef(quotations);
-  useEffect(() => {
-    quotationsRef.current = quotations;
-  }, [quotations]);
 
 
 
@@ -938,55 +928,6 @@ export const EstimateQuotationView: React.FC = () => {
     appliedStatus,
     appliedPeriod,
   ]);
-
-  // Auto-purge legacy mock quotations and mock grocery stocks on mount (Runs ONCE)
-  useEffect(() => {
-    try {
-      const rawStocks = localStorage.getItem("yaa_crm_inventory_stocks");
-      if (rawStocks) {
-        const parsed = JSON.parse(rawStocks);
-        if (Array.isArray(parsed)) {
-          const cleaned = parsed.filter(
-            (s) =>
-              !String(s.productId || s.id).startsWith("PROD_10") &&
-              !String(s.id).startsWith("stk_") &&
-              !String(s.productName || "").includes("Aashirvaad") &&
-              !String(s.productName || "").includes("India Gate") &&
-              !String(s.productName || "").includes("Fortune Sunlite") &&
-              !String(s.productName || "").includes("Tata Salt") &&
-              !String(s.productName || "").includes("Amul Pure Cow Ghee"),
-          );
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem(
-              "yaa_crm_inventory_stocks",
-              JSON.stringify(cleaned),
-            );
-          }
-        }
-      }
-
-      const rawQuot = localStorage.getItem("yaa_crm_sale_quotations");
-      if (rawQuot) {
-        const parsedQ = JSON.parse(rawQuot);
-        if (Array.isArray(parsedQ)) {
-          const cleanedQ = parsedQ.filter(
-            (q) =>
-              q.id !== "quot-1" &&
-              q.quotationNo !== "EST-001" &&
-              q.partyName !== "Keerthivasan",
-          );
-          if (cleanedQ.length !== parsedQ.length) {
-            localStorage.setItem(
-              "yaa_crm_sale_quotations",
-              JSON.stringify(cleanedQ),
-            );
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Storage purge error:", e);
-    }
-  }, []);
 
   // Live Products loading state & fetch function
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
@@ -1082,7 +1023,7 @@ export const EstimateQuotationView: React.FC = () => {
       .then((res) => {
         if (isMounted && res.data && Array.isArray(res.data)) {
           const mapped = res.data.map(mapApiCustomerToSalesCustomer);
-          setCustomersList(mapped);
+          setCustomers(mapped);
         }
       })
       .catch((err) => console.warn("Customer load error:", err));
@@ -1109,7 +1050,7 @@ export const EstimateQuotationView: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [viewMode, setCustomersList, liveProducts.length, fetchLiveProducts]);
+  }, [viewMode, liveProducts.length, fetchLiveProducts]);
 
   // Clean products list: live products from Commerce API + inventory stocks + stock batches
   const availableProducts = useMemo(() => {
@@ -1143,7 +1084,7 @@ export const EstimateQuotationView: React.FC = () => {
       return numMatch ? parseFloat(numMatch[1]) : 0;
     };
 
-    const sourceStocks = liveStocks.length > 0 ? liveStocks : stocks;
+    const sourceStocks = liveStocks;
 
     const getBatchesForProduct = (
       productId: string,
@@ -1296,7 +1237,7 @@ export const EstimateQuotationView: React.FC = () => {
       }
     });
 
-    return list.filter((s) => {
+    return attachStockQty(list, sourceStocks).filter((s) => {
       const pid = String(s.productId || s.id || "");
       const name = String(s.productName || "").toLowerCase();
       if (pid.startsWith("PROD_10") || pid.startsWith("stk_")) return false;
@@ -1312,9 +1253,30 @@ export const EstimateQuotationView: React.FC = () => {
       }
       return true;
     });
-  }, [liveProducts, liveStocks, stocks, liveBatches]);
+  }, [liveProducts, liveStocks, liveBatches]);
 
   // Filter products for the active row dropdown
+  // The quantity shown in each product row is read live: refresh the stock whenever a product dropdown opens, so it
+  // reflects what the last saved document changed (the stock endpoint is never cached).
+  useEffect(() => {
+    if (openProductDropdownRow === null || openProductDropdownRow === undefined) return;
+    let cancelled = false;
+    stockApi
+      .getStocks({ pagination_required: false, page_size: 100 })
+      .then((res) => {
+        if (cancelled) return;
+        if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+          setLiveStocks(res.data.map(mapApiStockToInventoryStockItem));
+        }
+      })
+      .catch(() => {
+        /* keep the quantities already shown */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openProductDropdownRow]);
+
   const matchingProducts = useMemo(() => {
     const q = productSearchQuery.toLowerCase().trim();
     if (!q) return availableProducts;
@@ -1347,66 +1309,7 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Displayed quotations: Instant filtering for search, status, and period across live or local data
   const displayQuotations = useMemo(() => {
-    const baseList = isApiConnected ? liveQuotations : quotations;
-    const enrichedList = baseList.map((item) => {
-      const quotationNoClean = item.quotationNo?.trim();
-      const estimateIdClean = item.id?.trim();
-
-      const lineage = quotationNoClean
-        ? findDocumentLineage(quotationNoClean, "Estimate")
-        : estimateIdClean && !/^\d+$/.test(estimateIdClean)
-          ? findDocumentLineage(estimateIdClean, "Estimate")
-          : undefined;
-
-      // Strictly verify that the found lineage actually belongs to this estimate
-      const isLineageForThisEstimate = Boolean(
-        lineage &&
-        ((quotationNoClean &&
-          lineage.estimateNo &&
-          lineage.estimateNo.toLowerCase() === quotationNoClean.toLowerCase()) ||
-         (estimateIdClean &&
-          lineage.estimateId &&
-          lineage.estimateId.toLowerCase() === estimateIdClean.toLowerCase()))
-      );
-
-      const isConvertedInLineage = Boolean(
-        isLineageForThisEstimate &&
-        lineage &&
-        (lineage.invoiceNo ||
-          lineage.orderNo ||
-          lineage.proformaNo ||
-          lineage.challanNo),
-      );
-
-      const localStoreMatch = (quotations || []).find(
-        (q) =>
-          (q.id && q.id === item.id) ||
-          (q.quotationNo && q.quotationNo === item.quotationNo),
-      );
-      const isConvertedInStore = localStoreMatch?.status === "Converted";
-
-      const effectiveStatus =
-        item.status === "Converted" ||
-        isConvertedInLineage ||
-        (!isApiConnected && isConvertedInStore)
-          ? ("Converted" as const)
-          : item.status;
-
-      return {
-        ...item,
-        status: effectiveStatus,
-        convertedToInvoiceNo:
-          isConvertedInLineage && lineage
-            ? (lineage.invoiceNo ||
-               lineage.orderNo ||
-               lineage.challanNo ||
-               lineage.proformaNo ||
-               item.convertedToInvoiceNo)
-            : item.status === "Converted"
-              ? item.convertedToInvoiceNo
-              : undefined,
-      };
-    });
+    const enrichedList = liveQuotations;
 
     return enrichedList.filter((item) => {
       const q = appliedSearch.toLowerCase().trim();
@@ -1431,9 +1334,7 @@ export const EstimateQuotationView: React.FC = () => {
       return matchesSearch && matchesStatus && matchesPeriod;
     });
   }, [
-    isApiConnected,
     liveQuotations,
-    quotations,
     appliedSearch,
     appliedStatus,
     appliedPeriod,
@@ -1759,12 +1660,7 @@ export const EstimateQuotationView: React.FC = () => {
       } else if (!item.unit || item.unit === "NONE") {
         item.unit = "PCS";
       }
-      if (prod.taxPercent !== undefined && prod.taxPercent !== null) {
-        item.taxPercent = Number(prod.taxPercent);
-      } else if (prod.taxRate && String(prod.taxRate).includes("@")) {
-        const match = String(prod.taxRate).match(/@\s*(\d+)%/);
-        if (match) item.taxPercent = Number(match[1]);
-      }
+      // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto an estimate line.
       if (prod.hsnCode) {
         item.hsnCode = prod.hsnCode;
       }
@@ -1876,12 +1772,7 @@ export const EstimateQuotationView: React.FC = () => {
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (
-            (prod as any).taxPercent !== undefined &&
-            (prod as any).taxPercent !== null
-          ) {
-            item.taxPercent = (prod as any).taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto an estimate line.
           if ((prod as any).hsnCode) {
             item.hsnCode = (prod as any).hsnCode;
           }
@@ -1923,12 +1814,7 @@ export const EstimateQuotationView: React.FC = () => {
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (
-            (matched as any).taxPercent !== undefined &&
-            (matched as any).taxPercent !== null
-          ) {
-            item.taxPercent = (matched as any).taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto an estimate line.
           if ((matched as any).hsnCode) {
             item.hsnCode = (matched as any).hsnCode;
           }
@@ -1968,12 +1854,7 @@ export const EstimateQuotationView: React.FC = () => {
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (
-            (matched as any).taxPercent !== undefined &&
-            (matched as any).taxPercent !== null
-          ) {
-            item.taxPercent = (matched as any).taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto an estimate line.
           if ((matched as any).hsnCode) {
             item.hsnCode = (matched as any).hsnCode;
           }
@@ -2228,7 +2109,7 @@ export const EstimateQuotationView: React.FC = () => {
           ? formData.billingAddress.trim()
           : undefined,
         items: validItems as any,
-        withGst: true,
+        withGst: validItems.some((it) => Number(it.taxPercent) > 0),
         gstType: calculatedGstType,
         notes:
           formData.notes && formData.notes.trim()
@@ -2315,58 +2196,7 @@ export const EstimateQuotationView: React.FC = () => {
       ) {
         return;
       }
-      // Local fallback
-      const fallbackQuotation: SaleQuotation = {
-        id: editingQuotation ? editingQuotation.id : `quot_${Date.now()}`,
-        quotationNo:
-          formData.quotationNo || "",
-        referenceNo: formData.referenceNo || "",
-        date: formData.date,
-        validUntil: formData.validUntil,
-        customerId: formData.customerId || `cust_${Date.now()}`,
-        partyName: formData.partyName,
-        customerPhone: formData.customerPhone,
-        customerEmail: formData.customerEmail,
-        customerCompany: formData.customerCompany,
-        billingAddress: formData.billingAddress,
-        items: validItems,
-        subtotal: rawSubtotal,
-        withGst: true,
-        gstType: "intra_state",
-        discount: totalDiscount,
-        taxAmount: totalTax,
-        amount: grandTotal,
-        balance: grandTotal,
-        status: editingQuotation ? editingQuotation.status : "Open",
-        convertedToType: editingQuotation
-          ? editingQuotation.convertedToType
-          : undefined,
-        convertedToId: editingQuotation
-          ? editingQuotation.convertedToId
-          : undefined,
-        convertedToInvoiceNo: editingQuotation
-          ? editingQuotation.convertedToInvoiceNo
-          : undefined,
-        convertedAt: editingQuotation
-          ? editingQuotation.convertedAt
-          : undefined,
-        notes: formData.notes,
-        terms: formData.terms,
-        createdAt: editingQuotation
-          ? editingQuotation.createdAt
-          : new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      saveQuotation(fallbackQuotation);
-      if (tabs.length > 1) {
-        const remainingTabs = tabs.filter((t) => t.id !== activeTabId);
-        setTabs(remainingTabs);
-        const nextActive = remainingTabs[remainingTabs.length - 1];
-        setActiveTabId(nextActive.id);
-        setFormData(nextActive.formData);
-      } else {
-        setViewMode("list");
-      }
+      return;
     } finally {
       setIsSubmitting(false);
     }
@@ -2375,29 +2205,7 @@ export const EstimateQuotationView: React.FC = () => {
 
   // Helper to determine converted status for each document stage
   const getQuotationStages = (quot: SaleQuotation) => {
-    const quotationNoClean = quot.quotationNo?.trim();
-    const estimateIdClean = quot.id?.trim();
-    const lineage = quotationNoClean
-      ? findDocumentLineage(quotationNoClean, "Estimate")
-      : estimateIdClean && !/^\d+$/.test(estimateIdClean)
-        ? findDocumentLineage(estimateIdClean, "Estimate")
-        : undefined;
-
-    const isLineageForThisEstimate = Boolean(
-      lineage &&
-      ((quotationNoClean &&
-        lineage.estimateNo &&
-        lineage.estimateNo.toLowerCase() === quotationNoClean.toLowerCase()) ||
-       (estimateIdClean &&
-        lineage.estimateId &&
-        lineage.estimateId.toLowerCase() === estimateIdClean.toLowerCase()))
-    );
-
-    const activeLineage = isLineageForThisEstimate ? lineage : undefined;
-
     const isInvoiceConverted = Boolean(
-      activeLineage?.invoiceNo ||
-      activeLineage?.invoiceId ||
       quot.convertedToType === "Invoice" ||
       (quot.status === "Converted" &&
         quot.convertedToInvoiceNo &&
@@ -2405,8 +2213,6 @@ export const EstimateQuotationView: React.FC = () => {
     );
 
     const isOrderConverted = Boolean(
-      activeLineage?.orderNo ||
-      activeLineage?.orderId ||
       quot.convertedToType === "Order" ||
       (quot.status === "Converted" &&
         quot.convertedToInvoiceNo &&
@@ -2415,8 +2221,6 @@ export const EstimateQuotationView: React.FC = () => {
     );
 
     const isChallanConverted = Boolean(
-      activeLineage?.challanNo ||
-      activeLineage?.challanId ||
       quot.convertedToType === "Challan" ||
       quot.convertedToType === "DeliveryChallan" ||
       (quot.status === "Converted" &&
@@ -2426,8 +2230,6 @@ export const EstimateQuotationView: React.FC = () => {
     );
 
     const isProformaConverted = Boolean(
-      activeLineage?.proformaNo ||
-      activeLineage?.proformaId ||
       quot.convertedToType === "Proforma" ||
       (quot.status === "Converted" &&
         quot.convertedToInvoiceNo &&
@@ -2466,11 +2268,11 @@ export const EstimateQuotationView: React.FC = () => {
     ].filter((s) => !s.isConverted);
 
     const isFullyConverted =
-      (quot.status === "Converted" || Boolean(activeLineage)) &&
+      quot.status === "Converted" &&
       (isInvoiceConverted || isGenericConverted || availableStages.length === 0);
 
     return {
-      lineage: activeLineage,
+      lineage: undefined,
       isInvoiceConverted,
       isOrderConverted,
       isChallanConverted,
@@ -2903,14 +2705,7 @@ export const EstimateQuotationView: React.FC = () => {
           `Quotation ${quot.quotationNo} successfully converted to Sale Order${newOrder.orderNo ? ` ${newOrder.orderNo}` : ''}!`,
         );
       } else if (convertType === "Challan") {
-        const currentLineage = findDocumentLineage(quot.quotationNo);
-        const existingChallans: DeliveryChallanRecord[] = JSON.parse(
-          localStorage.getItem("yaa_crm_delivery_challans") || "[]",
-        ).filter((c: any) => !isMockChallan(c));
-        const finalDocNo =
-          apiConvertedDocNo ||
-          currentLineage?.challanNo ||
-          "";
+        const finalDocNo = apiConvertedDocNo || "";
 
         let resolvedCustomerId = quot.customerId;
         if (!resolvedCustomerId || !UUID_REGEX.test(resolvedCustomerId)) {
@@ -4440,7 +4235,7 @@ export const EstimateQuotationView: React.FC = () => {
                                               <span className="font-mono text-slate-600">
                                                 SKU: {p.sku || (p as any).productCode || "PRD"}
                                               </span>
-                                              {p.unit && <span>• {p.unit}</span>}
+                                              <ProductStockLabel qty={p.stockQty} unit={p.unit} />
                                               {p.hsnCode && (
                                                 <span className="text-slate-400 font-mono text-[10px]">
                                                   • HSN: {p.hsnCode}
@@ -5229,8 +5024,7 @@ export const EstimateQuotationView: React.FC = () => {
                     ) || prev.stateOfSupply
                   : prev.stateOfSupply,
               }));
-              saveCustomer(newCust);
-              setCustomersList([
+              setCustomers([
                 newCust,
                 ...customers.filter((c) => c.id !== newCust.id),
               ]);
@@ -5505,11 +5299,11 @@ export const EstimateQuotationView: React.FC = () => {
               columns={[
                 { label: "ESTIMATE NO.", align: "center", minWidth: "140px" },
                 { label: "CUSTOMER NAME", align: "left", minWidth: "200px" },
+                { label: "STATUS", align: "center", minWidth: "110px" },
                 { label: "CREATED DATE & TIME", align: "left", minWidth: "140px" },
                 { label: "CONVERTED DATE & TIME", align: "left", minWidth: "140px" },
                 { label: "AMOUNT", align: "right", minWidth: "120px" },
                 { label: "BALANCE", align: "right", minWidth: "120px" },
-                { label: "STATUS", align: "center", minWidth: "110px" },
                 { label: "ACTIONS", align: "center", minWidth: "190px" },
               ]}
             />
@@ -5594,11 +5388,6 @@ export const EstimateQuotationView: React.FC = () => {
                           <span className="inline-flex items-center px-3 py-1 rounded-lg bg-purple-50 text-[#33077C] border border-purple-300 font-mono text-sm sm:text-base font-extrabold tracking-tight shadow-2xs">
                             {item.quotationNo || "—"}
                           </span>
-                          <DocumentLineageBadges
-                            docRef={item.quotationNo}
-                            currentType="Estimate"
-                            className="justify-center"
-                          />
                         </div>
                       </td>
 
@@ -5619,6 +5408,28 @@ export const EstimateQuotationView: React.FC = () => {
                             {item.customerPhone}
                           </div>
                         )}
+                      </td>
+
+                      {/* Status (kept next to the customer so it is visible without scrolling sideways) */}
+                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
+                        <div className="flex items-center justify-center">
+                          {item.status === "Open" ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                              Open
+                            </span>
+                          ) : item.status === "Converted" ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Converted
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              {item.status}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 3. Created Date & Time */}
@@ -5669,28 +5480,6 @@ export const EstimateQuotationView: React.FC = () => {
                         {item.balance.toLocaleString("en-IN", {
                           minimumFractionDigits: 2,
                         })}
-                      </td>
-
-                      {/* 6. Status Pill with Dot */}
-                      <td className="py-3.5 px-3 sm:px-4 text-center border-r border-slate-200 whitespace-nowrap align-middle">
-                        <div className="flex items-center justify-center">
-                          {item.status === "Open" ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200/80">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                              Open
-                            </span>
-                          ) : item.status === "Converted" ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              Converted
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                              {item.status}
-                            </span>
-                          )}
-                        </div>
                       </td>
 
                       {/* 7. Actions */}
