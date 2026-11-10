@@ -155,8 +155,26 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
             className="opacity-50"
           />
 
+          {/* Data pulses travelling along the network lines */}
+          <g className="al-reduce-hide">
+            <circle r="3" fill="#c4b5fd" filter="url(#neonGlowPurple)">
+              <animateMotion dur="5s" repeatCount="indefinite" path="M 60 480 C 180 360, 320 380, 580 430" />
+            </circle>
+            <circle r="2.5" fill="#7dd3fc" filter="url(#neonGlowCyan)">
+              <animateMotion dur="6.5s" begin="-2s" repeatCount="indefinite" path="M 100 240 C 260 280, 420 360, 620 420" />
+            </circle>
+            <circle r="3" fill="#c4b5fd" filter="url(#neonGlowPurple)">
+              <animateMotion dur="5.5s" begin="-1s" repeatCount="indefinite" path="M 860 430 C 1040 380, 1180 280, 1380 320" />
+            </circle>
+            <circle r="2.5" fill="#7dd3fc" filter="url(#neonGlowCyan)">
+              <animateMotion dur="7s" begin="-3.5s" repeatCount="indefinite" path="M 820 440 C 1060 480, 1220 580, 1400 640" />
+            </circle>
+          </g>
+
           {/* Left Glowing Node Dot */}
-          <circle cx="95" cy="475" r="7" fill="#818cf8" filter="url(#neonGlowCyan)" />
+          <circle cx="95" cy="475" r="7" fill="#818cf8" filter="url(#neonGlowCyan)">
+            <animate attributeName="opacity" values="1;0.45;1" dur="3s" repeatCount="indefinite" />
+          </circle>
           <circle cx="95" cy="475" r="3" fill="#ffffff" />
 
           {/* Far Left Tiny Dot */}
@@ -164,6 +182,7 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
 
           {/* Left User Avatar Node 1 */}
           <g transform="translate(250, 360)">
+            <animateTransform attributeName="transform" type="translate" values="250 360;253 350;250 360" dur="7s" begin="0s" repeatCount="indefinite" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" keyTimes="0;0.5;1" />
             <circle cx="26" cy="26" r="24" fill="rgba(30, 41, 77, 0.6)" stroke="rgba(129, 140, 248, 0.3)" strokeWidth="1.2" />
             <circle cx="26" cy="20" r="5.5" fill="rgba(165, 180, 252, 0.7)" />
             <path
@@ -177,6 +196,7 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
 
           {/* Left Tiny Accent Node */}
           <g transform="translate(325, 335)">
+            <animateTransform attributeName="transform" type="translate" values="325 335;328 328;325 335" dur="5.5s" begin="-1.5s" repeatCount="indefinite" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" keyTimes="0;0.5;1" />
             <circle cx="14" cy="14" r="13" fill="rgba(30, 41, 77, 0.4)" stroke="rgba(168, 85, 247, 0.2)" strokeWidth="1" />
             <circle cx="14" cy="10" r="3" fill="rgba(192, 132, 252, 0.5)" />
             <path
@@ -190,6 +210,7 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
 
           {/* Right User Avatar Node 1 (Top Right) */}
           <g transform="translate(1040, 270)">
+            <animateTransform attributeName="transform" type="translate" values="1040 270;1043 260;1040 270" dur="6.5s" begin="-2s" repeatCount="indefinite" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" keyTimes="0;0.5;1" />
             <circle cx="26" cy="26" r="26" fill="rgba(30, 41, 77, 0.65)" stroke="rgba(129, 140, 248, 0.35)" strokeWidth="1.2" />
             <circle cx="26" cy="20" r="5.5" fill="rgba(165, 180, 252, 0.75)" />
             <path
@@ -202,11 +223,14 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
           </g>
 
           {/* Right Glowing Node Dot (Far Right) */}
-          <circle cx="1280" cy="270" r="8" fill="#a855f7" filter="url(#neonGlowPurple)" />
+          <circle cx="1280" cy="270" r="8" fill="#a855f7" filter="url(#neonGlowPurple)">
+            <animate attributeName="opacity" values="1;0.45;1" dur="3.6s" begin="-1s" repeatCount="indefinite" />
+          </circle>
           <circle cx="1280" cy="270" r="3.5" fill="#ffffff" />
 
           {/* Right User Avatar Node 2 (Lower Right) */}
           <g transform="translate(1210, 475)">
+            <animateTransform attributeName="transform" type="translate" values="1210 475;1213 467;1210 475" dur="7.5s" begin="-3s" repeatCount="indefinite" calcMode="spline" keySplines="0.45 0 0.55 1;0.45 0 0.55 1" keyTimes="0;0.5;1" />
             <circle cx="22" cy="22" r="21" fill="rgba(30, 41, 77, 0.5)" stroke="rgba(56, 189, 248, 0.25)" strokeWidth="1" />
             <circle cx="22" cy="17" r="4.5" fill="rgba(125, 211, 252, 0.65)" />
             <path
@@ -222,12 +246,25 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
           <circle cx="1115" cy="405" r="4" fill="#38bdf8" opacity="0.8" />
           <circle cx="1288" cy="710" r="3" fill="#818cf8" opacity="0.5" />
         </svg>
+
+        {/* Soft twinkling starfield */}
+        {[
+          ['12%', '18%', 2, 0], ['26%', '72%', 1.5, 1.2], ['38%', '12%', 1.5, 2.1], ['47%', '84%', 2, 0.6],
+          ['63%', '16%', 1.5, 1.8], ['72%', '78%', 2, 0.3], ['86%', '40%', 1.5, 2.4], ['92%', '12%', 2, 1.1],
+          ['8%', '52%', 1.5, 0.9], ['55%', '90%', 1.5, 1.6],
+        ].map(([left, top, size, delay], i) => (
+          <span
+            key={i}
+            className="al-star absolute rounded-full bg-white"
+            style={{ left: left as string, top: top as string, width: size as number, height: size as number, animationDelay: `${delay}s` }}
+          />
+        ))}
       </div>
 
       {/* ========================================================================= */}
       {/* 3. Central Interactive Loading Core (Logo Emblem + Typography + Progress) */}
       {/* ========================================================================= */}
-      <div className="relative z-10 flex flex-col items-center justify-center px-4 max-w-md w-full text-center">
+      <div className="al-rise relative z-10 flex flex-col items-center justify-center px-4 max-w-md w-full text-center">
         {/* Central Triad Network Emblem */}
         <div className="relative w-36 h-36 sm:w-40 sm:h-40 flex items-center justify-center mb-8">
           {/* Animated Ambient Outer Halo */}
@@ -266,6 +303,11 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
               filter="url(#emblemGlow)"
               className="opacity-90"
             />
+            {/* Slow orbit ring + spark circling the emblem */}
+            <g className="al-spin">
+              <circle cx="80" cy="84" r="60" fill="none" stroke="rgba(167,139,250,0.35)" strokeWidth="1" strokeDasharray="2 7" strokeLinecap="round" />
+              <circle cx="80" cy="24" r="2.8" fill="#ffffff" filter="url(#emblemGlow)" />
+            </g>
             {/* Inner Ring Glow */}
             <circle
               cx="80"
@@ -319,7 +361,7 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
         </div>
 
         {/* Primary Title */}
-        <h1 className="text-xl sm:text-2xl font-medium tracking-normal text-white mb-5 antialiased drop-shadow-sm">
+        <h1 className="al-title text-xl sm:text-2xl font-semibold tracking-tight mb-5 antialiased">
           {message}
         </h1>
 
@@ -327,7 +369,7 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
         <div className="w-[260px] sm:w-[320px] h-2 bg-slate-800/80 rounded-full overflow-hidden p-0 relative border border-slate-700/50 shadow-inner mb-4">
           {/* Animated Gradient Bar Fill */}
           <div
-            className="h-full rounded-full app-loader-progress-bar"
+            className="h-full rounded-full app-loader-progress-bar relative overflow-hidden"
             style={{
               background: 'linear-gradient(90deg, #d946ef 0%, #a855f7 50%, #38bdf8 100%)',
               boxShadow: '0 0 14px rgba(168, 85, 247, 0.8), 0 0 22px rgba(56, 189, 248, 0.5)',
@@ -339,6 +381,11 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
         <p className="text-xs sm:text-[13px] text-slate-400 font-normal antialiased tracking-wide">
           {subMessage}
         </p>
+        <div className="mt-3 flex items-center gap-1.5" aria-hidden="true">
+          <span className="al-dot" />
+          <span className="al-dot" style={{ animationDelay: '0.2s' }} />
+          <span className="al-dot" style={{ animationDelay: '0.4s' }} />
+        </div>
       </div>
 
       {/* Global Embedded Styles for the Smooth Shimmer Animation */}
@@ -362,11 +409,43 @@ export const AppLoader: React.FC<AppLoaderProps> = ({
           animation: appLoaderSweep 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
         }
 
+        .app-loader-progress-bar::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.55) 50%, transparent 80%);
+          transform: translateX(-100%);
+          animation: appLoaderShine 1.6s ease-in-out infinite;
+        }
+        @keyframes appLoaderShine { to { transform: translateX(100%); } }
+
+        @keyframes alSpin { to { transform: rotate(360deg); } }
+        .al-spin { transform-origin: 80px 84px; animation: alSpin 14s linear infinite; }
+
+        @keyframes alTwinkle { 0%,100% { opacity: .15; transform: scale(1); } 50% { opacity: .9; transform: scale(1.6); } }
+        .al-star { opacity: .15; animation: alTwinkle 3.4s ease-in-out infinite; }
+
+        @keyframes alRise { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
+        .al-rise { animation: alRise .7s cubic-bezier(.2,.8,.2,1) both; }
+
+        @keyframes alSheen { to { background-position: 200% center; } }
+        .al-title {
+          color: transparent;
+          background-image: linear-gradient(90deg, #ffffff 0%, #ffffff 35%, #c4b5fd 50%, #7dd3fc 60%, #ffffff 75%, #ffffff 100%);
+          background-size: 200% auto;
+          -webkit-background-clip: text;
+          background-clip: text;
+          animation: alSheen 5s linear infinite;
+        }
+
+        @keyframes alDot { 0%,80%,100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+        .al-dot { width: 5px; height: 5px; border-radius: 9999px; background: #a78bfa; animation: alDot 1.2s ease-in-out infinite; }
+
         @media (prefers-reduced-motion: reduce) {
-          .app-loader-progress-bar {
-            width: 100%;
-            animation: none;
-          }
+          .app-loader-progress-bar { width: 100%; animation: none; }
+          .app-loader-progress-bar::after, .al-spin, .al-star, .al-rise, .al-title, .al-dot { animation: none; }
+          .al-title { color: #fff; background: none; }
+          .al-reduce-hide { display: none; }
         }
       `}</style>
     </div>

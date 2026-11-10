@@ -2,6 +2,8 @@ import { ProductStockLabel } from "../../../components/common/ProductStockLabel"
 import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
+import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
+import { getConversionState, resolveConvertedTarget } from "../../../utils/salesDocumentWorkflow";
 import React, {
   useState,
   useMemo,
@@ -1571,12 +1573,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       } else if (!item.unit || item.unit === "NONE") {
         item.unit = "PCS";
       }
-      if (prod.taxPercent !== undefined && prod.taxPercent !== null) {
-        item.taxPercent = Number(prod.taxPercent);
-      } else if (prod.taxRate && String(prod.taxRate).includes("@")) {
-        const match = String(prod.taxRate).match(/@\s*(\d+)%/);
-        if (match) item.taxPercent = Number(match[1]);
-      }
+      // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto a proforma line.
       if (prod.hsnCode) {
         item.hsnCode = prod.hsnCode;
       }
@@ -1688,9 +1685,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (prod.taxPercent !== undefined && prod.taxPercent !== null) {
-            item.taxPercent = prod.taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto a proforma line.
           if (prod.hsnCode) {
             item.hsnCode = prod.hsnCode;
           }
@@ -1732,9 +1727,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (matched.taxPercent !== undefined && matched.taxPercent !== null) {
-            item.taxPercent = matched.taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto a proforma line.
           if (matched.hsnCode) {
             item.hsnCode = matched.hsnCode;
           }
@@ -1774,9 +1767,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
           } else if (!item.unit || item.unit === "NONE") {
             item.unit = "PCS";
           }
-          if (matched.taxPercent !== undefined && matched.taxPercent !== null) {
-            item.taxPercent = matched.taxPercent;
-          }
+          // GST is applied only when the user picks a GST rate for the line. A product's own tax rate is NOT copied onto a proforma line.
           if (matched.hsnCode) {
             item.hsnCode = matched.hsnCode;
           }
@@ -2260,20 +2251,18 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       },
     ].filter((s) => !s.isConverted);
 
-    const isFullyConverted =
-      isInvoiceConverted ||
-      (proforma.status === "Converted" &&
-        !isOrderConverted &&
-        !isChallanConverted) ||
-      availableStages.length === 0;
+    // A document converts once. When the server reports it converted, no further conversion is offered: every Convert
+    // button, menu item, dialog and guard on this page reads these flags.
+    const isFullyConverted = getConversionState(proforma).isFullyConverted || isInvoiceConverted;
+    const remainingStages = isFullyConverted ? [] : availableStages;
 
     return {
       lineage,
       isInvoiceConverted,
       isOrderConverted,
       isChallanConverted,
-      availableStages,
-      availableCount: availableStages.length,
+      availableStages: remainingStages,
+      availableCount: remainingStages.length,
       isFullyConverted,
     };
   };
@@ -2420,13 +2409,15 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       try {
         const payload = mapSaleOrderRecordToPayload(newOrder, true);
         const orderRes = await commerceSaleOrderApi.createOrder(payload);
-        if (orderRes.data?.orderNo) {
-          convertedNo = orderRes.data.orderNo;
-          newOrder.orderNo = convertedNo;
-          if (orderRes.data.id) newOrder.id = orderRes.data.id;
+        if (!orderRes.data?.orderNo) {
+          throw new Error("The server did not confirm the new sale order. Nothing was converted.");
         }
+        convertedNo = orderRes.data.orderNo;
+        newOrder.orderNo = convertedNo;
+        if (orderRes.data.id) newOrder.id = orderRes.data.id;
       } catch (orderApiErr) {
-        console.warn("API order creation notice:", orderApiErr);
+        // No sale order exists, so the proforma must not be marked Converted: the outer handler shows the error.
+        throw orderApiErr;
       }
 
       // Proforma invoices can only be converted to Invoice via /convert API.
@@ -2435,7 +2426,11 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         try {
           await commerceProformaApi.updateStatus(proforma.id, "Converted");
         } catch (statusErr) {
-          console.warn("API proforma updateStatus notice:", statusErr);
+          toast.error(
+            `Sale Order ${convertedNo} was created, but the proforma could not be marked Converted. Please refresh and check it.`,
+          );
+          fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+          return;
         }
       }
 
@@ -2462,20 +2457,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
         ]),
       );
 
-      const convertedTimestamp = new Date().toISOString();
-      setLiveProformas((prev) =>
-        prev.map((p) =>
-          p.id === proforma.id || p.proformaNo === proforma.proformaNo
-            ? {
-                ...p,
-                status: "Converted" as const,
-                convertedToInvoiceNo: convertedNo,
-                convertedAt: convertedTimestamp,
-              }
-            : p,
-        ),
-      );
-
+      // The list is re-read from the server below: what the proforma shows comes from the server, not from this screen.
       toast.success(
         `Proforma ${proforma.proformaNo} converted to Sale Order${convertedNo ? ` ${convertedNo}` : ''}!`,
       );
@@ -2564,10 +2546,35 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       try {
         const payload = mapDeliveryChallanRecordToPayload(newChallan, true);
         const res = await commerceDeliveryChallanApi.createChallan(payload);
-        if (res?.data?.challanNo) newChallan.challanNo = res.data.challanNo;
+        if (!res?.data?.challanNo) {
+          throw new Error("The server did not confirm the new delivery challan. Nothing was converted.");
+        }
+        newChallan.challanNo = res.data.challanNo;
+        if (res.data.id) newChallan.id = res.data.id;
       } catch (cErr) {
-        console.warn("Backend createChallan notice:", cErr);
+        // No challan exists, so the proforma must not be reported as converted: the outer handler shows the error.
+        throw cErr;
       }
+
+      // Creating the challan does not change the proforma. Tell the server it was converted.
+      if (UUID_REGEX.test(proforma.id)) {
+        try {
+          await commerceProformaApi.updateStatus(proforma.id, "Converted");
+        } catch (statusErr) {
+          toast.error(
+            `Delivery Challan ${newChallan.challanNo} was created, but the proforma could not be marked Converted. Please refresh and check it.`,
+          );
+          fetchProformas(page, pageSize, appliedSearch, appliedStatus, appliedPeriod);
+          return;
+        }
+      }
+      dispatch(
+        baseApi.util.invalidateTags([
+          { type: "ProformaInvoice", id: proforma.id },
+          { type: "ProformaInvoice", id: "LIST" },
+          { type: "DeliveryChallan", id: "LIST" },
+        ]),
+      );
 
       syncConvertedChallanToStorage(newChallan);
       recordDocumentConversion({
@@ -4564,7 +4571,7 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
       filename: `Proforma_Invoices_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Proforma Invoices",
       title: "YAA CREATIONS CRM - PROFORMA INVOICE REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${displayProformas.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Proformas: ${displayProformas.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         {
           header: "Proforma No.",
@@ -5004,6 +5011,14 @@ export const ProformaInvoiceView: React.FC<ProformaInvoiceViewProps> = ({
                           <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-[#33077C] border border-purple-200/80 font-mono text-xs font-bold">
                             {item.proformaNo || "—"}
                           </span>
+                          <DocumentLineageBadges
+                            docRef={item.proformaNo}
+                            currentType="Proforma"
+                            sourceDocNo={item.referenceNo}
+                            targetDocNo={resolveConvertedTarget(item)?.no}
+                            targetDocType={resolveConvertedTarget(item)?.type}
+                            className="justify-center"
+                          />
                         </div>
                       </td>
 

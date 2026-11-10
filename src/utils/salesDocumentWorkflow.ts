@@ -64,13 +64,69 @@ export const persistLineages = (_lineages: SalesDocumentLineage[]): void => {
  */
 export const inferDocType = (docRef?: string | null): SalesDocType | undefined => {
   if (!docRef || !docRef.trim()) return undefined;
+  // A document number is "<PREFIX>-<year>-<seq>". Requiring the dash keeps an ordinary reference such as "SOFA-12" or
+  // "DCR/44" from being mistaken for a sale order or a challan.
   const clean = docRef.trim().toUpperCase();
-  if (clean.startsWith('EST-') || clean.startsWith('QT-') || clean.startsWith('EST') || clean.startsWith('QUOT')) return 'Estimate';
-  if (clean.startsWith('PRO-') || clean.startsWith('PI-') || clean.startsWith('PRO')) return 'Proforma';
-  if (clean.startsWith('SO-') || clean.startsWith('ORD-') || clean.startsWith('SO')) return 'Order';
-  if (clean.startsWith('DC-') || clean.startsWith('CHAL-') || clean.startsWith('DC')) return 'Challan';
-  if (clean.startsWith('INV-') || clean.startsWith('INV')) return 'Invoice';
+  if (/^(EST|QT|QUOT)-/.test(clean)) return 'Estimate';
+  if (/^(PRO|PI)-/.test(clean)) return 'Proforma';
+  if (/^(SO|ORD)-/.test(clean)) return 'Order';
+  if (/^(DC|CHAL)-/.test(clean)) return 'Challan';
+  if (/^INV-/.test(clean)) return 'Invoice';
   return undefined;
+};
+
+/** The document kind named by the API's `convertedToType` (the values differ a little between endpoints). */
+export const docTypeFromApiType = (type?: string | null): SalesDocType | undefined => {
+  const t = (type || '').toString().trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (!t) return undefined;
+  if (t === 'invoice' || t === 'salesinvoice' || t === 'saleinvoice') return 'Invoice';
+  if (t === 'order' || t === 'saleorder' || t === 'salesorder') return 'Order';
+  if (t === 'challan' || t === 'deliverychallan') return 'Challan';
+  if (t === 'proforma' || t === 'proformainvoice') return 'Proforma';
+  if (t === 'estimate' || t === 'quotation' || t === 'quote') return 'Estimate';
+  return undefined;
+};
+
+/**
+ * Has the SERVER converted this document? One rule for every sales-document page (estimate, proforma, sale order, challan).
+ *
+ * "Converted" is the server's status, or a destination the server recorded (a converted-to id or document number). A document
+ * the server reports as open, cancelled or expired is not converted, whatever a stale field says. Nothing on the screen (a
+ * clicked button, a local patch) can make a document count as converted: the lists are re-read from the server after a
+ * conversion, and this is evaluated on that record.
+ *
+ * The API stores ONE destination per document and no per-line quantities, so a document is either converted or not here.
+ * Partial and one-to-many conversions cannot be represented by the server record, so they are not simulated.
+ */
+export const getConversionState = (doc?: {
+  status?: string | null;
+  convertedToType?: string | null;
+  convertedToId?: string | null;
+  convertedToInvoiceNo?: string | null;
+} | null): { isFullyConverted: boolean; target?: { type: SalesDocType; no: string } } => {
+  const status = (doc?.status || '').toString().trim().toLowerCase();
+  if (['open', 'cancelled', 'canceled', 'expired'].includes(status)) return { isFullyConverted: false };
+  const target = resolveConvertedTarget(doc);
+  const recorded = status === 'converted' || !!target || !!(doc?.convertedToId || '').toString().trim();
+  return { isFullyConverted: recorded, target };
+};
+
+/**
+ * The document this one was converted into, read only from what the server returned for THIS record
+ * (`convertedToType` + `convertedToInvoiceNo`, which holds the destination's document number whatever its kind).
+ * Returns nothing when the server reports no conversion, so a document never claims a destination it does not have.
+ */
+export const resolveConvertedTarget = (doc?: {
+  convertedToType?: string | null;
+  convertedToInvoiceNo?: string | null;
+  status?: string | null;
+} | null): { type: SalesDocType; no: string } | undefined => {
+  const no = (doc?.convertedToInvoiceNo || '').toString().trim();
+  if (!no) return undefined;
+  // A document the server reports as open / cancelled / expired is not converted, whatever a stale field says.
+  if (['open', 'cancelled', 'canceled', 'expired'].includes((doc?.status || '').toString().trim().toLowerCase())) return undefined;
+  const type = docTypeFromApiType(doc?.convertedToType) ?? inferDocType(no);
+  return type ? { type, no } : undefined;
 };
 
 const LINEAGE_KEYS: Record<SalesDocType, readonly [keyof SalesDocumentLineage, keyof SalesDocumentLineage]> = {

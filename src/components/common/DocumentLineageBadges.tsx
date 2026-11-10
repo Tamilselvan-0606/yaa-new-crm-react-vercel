@@ -14,6 +14,9 @@ interface DocumentLineageBadgesProps {
   className?: string;
   sourceDocNo?: string;
   sourceDocType?: SalesDocType;
+  /** The document this one was converted INTO, as the API reports it (shown as a "To" badge). */
+  targetDocNo?: string | null;
+  targetDocType?: SalesDocType;
   compact?: boolean;
 }
 
@@ -23,6 +26,8 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
   className = '',
   sourceDocNo,
   sourceDocType,
+  targetDocNo,
+  targetDocType,
   compact = false,
 }) => {
   const navigate = useNavigate();
@@ -48,7 +53,7 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
   }, [resolveLineage]);
 
   // If no lineage and no explicit sourceDocNo, return null
-  if (!lineage && !sourceDocNo) return null;
+  if (!lineage && !sourceDocNo && !targetDocNo) return null;
 
   // For Estimate, ensure the lineage actually belongs to this estimate
   if (currentType === 'Estimate' && lineage && docRef) {
@@ -62,15 +67,27 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
     }
   }
 
+  // Estimate (0) -> Proforma (1) -> Order (2) -> Challan (3) -> Invoice (4)
+  const orderRank: Record<SalesDocType, number> = { Estimate: 0, Proforma: 1, Order: 2, Challan: 3, Invoice: 4 };
+
   const resolvedSourceDocNo = sourceDocNo?.trim();
-  const effectiveSourceType = sourceDocType || inferDocType(resolvedSourceDocNo);
-  const effectiveSourceDocNo = resolvedSourceDocNo;
+  const inferredSourceType = sourceDocType || inferDocType(resolvedSourceDocNo);
+  // A "From" reference must be an EARLIER document. A reference that names a later (or the same) kind is not a source.
+  const effectiveSourceType =
+    inferredSourceType && orderRank[inferredSourceType] < orderRank[currentType] ? inferredSourceType : undefined;
+  const effectiveSourceDocNo = effectiveSourceType ? resolvedSourceDocNo : undefined;
+
+  // The destination, from the API. It must be a LATER document than this one.
+  const resolvedTargetNo = targetDocNo?.toString().trim();
+  const inferredTargetType = resolvedTargetNo ? targetDocType || inferDocType(resolvedTargetNo) : undefined;
+  const effectiveTargetType = inferredTargetType && orderRank[inferredTargetType] > orderRank[currentType] ? inferredTargetType : undefined;
+  const effectiveTargetNo = effectiveTargetType ? resolvedTargetNo : undefined;
 
   const est = lineage?.estimateNo || (effectiveSourceType === 'Estimate' ? effectiveSourceDocNo : undefined);
-  const pi = lineage?.proformaNo || (effectiveSourceType === 'Proforma' ? effectiveSourceDocNo : undefined);
-  const so = lineage?.orderNo || (effectiveSourceType === 'Order' ? effectiveSourceDocNo : undefined);
-  const dc = lineage?.challanNo || (effectiveSourceType === 'Challan' ? effectiveSourceDocNo : undefined);
-  const inv = lineage?.invoiceNo || (effectiveSourceType === 'Invoice' ? effectiveSourceDocNo : undefined);
+  const pi = lineage?.proformaNo || (effectiveSourceType === 'Proforma' ? effectiveSourceDocNo : undefined) || (effectiveTargetType === 'Proforma' ? effectiveTargetNo : undefined);
+  const so = lineage?.orderNo || (effectiveSourceType === 'Order' ? effectiveSourceDocNo : undefined) || (effectiveTargetType === 'Order' ? effectiveTargetNo : undefined);
+  const dc = lineage?.challanNo || (effectiveSourceType === 'Challan' ? effectiveSourceDocNo : undefined) || (effectiveTargetType === 'Challan' ? effectiveTargetNo : undefined);
+  const inv = lineage?.invoiceNo || (effectiveSourceType === 'Invoice' ? effectiveSourceDocNo : undefined) || (effectiveTargetType === 'Invoice' ? effectiveTargetNo : undefined);
 
   const items: Array<{
     type: SalesDocType;
@@ -81,15 +98,6 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
     isDownstream: boolean;
     color: string;
   }> = [];
-
-  // Determine hierarchy order: Estimate (0) -> Proforma (1) -> Order (2) -> Challan (3) -> Invoice (4)
-  const orderRank: Record<SalesDocType, number> = {
-    Estimate: 0,
-    Proforma: 1,
-    Order: 2,
-    Challan: 3,
-    Invoice: 4,
-  };
 
   const currentRank = orderRank[currentType];
 
@@ -167,12 +175,12 @@ export const DocumentLineageBadges: React.FC<DocumentLineageBadgesProps> = ({
           key={`${item.type}_${item.docNo}`}
           type="button"
           onClick={() => navigate(item.path)}
-          title={`Click to view linked ${item.type}: ${item.docNo}`}
+          title={`${item.isUpstream ? 'Created from' : item.isDownstream ? 'Converted to' : 'Linked'} ${item.type}: ${item.docNo} (click to open)`}
           className={`inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-bold border transition-all cursor-pointer shadow-2xs select-none ${item.color}`}
         >
           {item.isUpstream && <span className="text-[8.5px] opacity-70 font-semibold uppercase tracking-tight">From</span>}
           {item.isDownstream && <span className="text-[8.5px] opacity-70 font-semibold uppercase tracking-tight">To</span>}
-          <span>
+          <span className="truncate max-w-[150px] sm:max-w-[190px]">
             {item.label}: {item.docNo}
           </span>
           <ExternalLink className="w-2.5 h-2.5 opacity-60 ml-0.5 shrink-0" />

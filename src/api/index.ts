@@ -14,6 +14,7 @@ export * from './platform/subscriptionPlanTypes';
 export * from './platform/organizationSubscriptionApi';
 export * from './platform/organizationSubscriptionTypes';
 export * from './platform/quoteApi';
+export * from './platform/superAdminDetailsApi';
 export * from './platform/quoteTypes';
 export * from './platform/proformaInvoiceApi';
 export * from './platform/proformaInvoiceTypes';
@@ -222,3 +223,5 @@ export * from './commerce/collectionApi';
 export * from './commerce/salesDashboardTypes';
 export * from './commerce/salesDashboardApi';
 export * from './ai/aiApi';
+
+export * from './ai/productImageApi';

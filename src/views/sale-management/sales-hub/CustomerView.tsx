@@ -2103,7 +2103,7 @@ export const CustomerView: React.FC = () => {
       filename: `Customers_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Customers ",
       title: "YAA CREATIONS CRM - CUSTOMER  DIRECTORY",
-      subtitle: `Total Customers: ${filteredCustomers.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Total Customers: ${filteredCustomers.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         {
@@ -5332,6 +5332,16 @@ export const CustomerView: React.FC = () => {
       <Modal
         isOpen={isBulkUploadModalOpen}
         onClose={() => {
+          if (!isProcessingBulkUpload) {
+            setIsBulkUploadModalOpen(false);
+            setBulkFile(null);
+            setBulkParsedCustomers([]);
+            setBulkUploadResult(null);
+          }
+        }}
+        headerGradient
+        showBackIcon
+        onBack={() => {
           if (!isProcessingBulkUpload) {
             setIsBulkUploadModalOpen(false);
             setBulkFile(null);

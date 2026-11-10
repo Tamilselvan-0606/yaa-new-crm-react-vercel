@@ -39,6 +39,7 @@ import {
   Save,
   ArrowLeft,
   FileSpreadsheet,
+  Upload,
   Loader2,
   Eye,
   AlertCircle,
@@ -106,6 +107,9 @@ export const DEFAULT_COMMERCE_UNITS: Array<{
   shortCode: string;
   status: number;
 }> = [];
+
+import { AiProductImageAssist } from "./AiProductImageAssist";
+import { ProductBulkUploadModal } from "./ProductBulkUploadModal";
 
 export interface ProductFormValues {
   itemType: "Product" | "Service";
@@ -804,6 +808,10 @@ export const SubcategorySelectField: React.FC<SubcategorySelectProps> = ({
 export const InventoryProductsView: React.FC = () => {
   // Categories List State (dynamically populated via commerce category API)
   const [categories, setCategories] = useState<string[]>([]);
+  // Categories with their ids (the AI suggests an id of an existing category; the form itself works with names).
+  const [masterCategories, setMasterCategories] = useState<{ id: string; name: string }[]>([]);
+  // "Suggested by AI: …" notice, shown until the modal closes.
+  const [aiFilledNotice, setAiFilledNotice] = useState("");
 
   // Master Subcategories List State (dynamically populated via commerce subcategory master API)
   const [masterSubcategories, setMasterSubcategories] = useState<
@@ -852,6 +860,7 @@ export const InventoryProductsView: React.FC = () => {
 
   // Split Button Dropdown Menu State
   const [isBulkMenuOpen, setIsBulkMenuOpen] = useState(false);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const bulkMenuRef = useRef<HTMLDivElement>(null);
 
   // Quick Unit Modal
@@ -1013,6 +1022,11 @@ export const InventoryProductsView: React.FC = () => {
         sortOrder: "asc",
       });
       if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+        setMasterCategories(
+          res.data
+            .map((c) => ({ id: c.id, name: (c.categoryName || c.name || "").trim() }))
+            .filter((c) => c.id && c.name),
+        );
         const catNames = res.data
           .map((c) => c.categoryName || c.name || "")
           .filter((n) => n.trim() !== "");
@@ -1615,6 +1629,10 @@ export const InventoryProductsView: React.FC = () => {
     getValues,
     setValue,
   ]);
+
+  useEffect(() => {
+    if (!isModalOpen) setAiFilledNotice("");
+  }, [isModalOpen]);
 
   const handleOpenAddModal = (
     defaultType?: "Product" | "Service" | React.MouseEvent,
@@ -3128,7 +3146,7 @@ export const InventoryProductsView: React.FC = () => {
       filename: `Inventory_Products_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Products",
       title: "YAA CREATIONS CRM - PRODUCTS INVENTORY",
-      subtitle: `Total Items: ${filteredProducts.length} | Generated: ${new Date().toLocaleDateString("en-IN")}`,
+      subtitle: `Total Items: ${filteredProducts.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         { header: "Type", key: "itemType", align: "center", width: 12 },
@@ -3282,6 +3300,16 @@ export const InventoryProductsView: React.FC = () => {
             Excel Report
           </Button>
 
+          <Button
+            variant="secondary"
+            size="md"
+            className="flex-1 sm:flex-initial justify-center"
+            onClick={() => setIsBulkUploadOpen(true)}
+            icon={<Upload className="w-4 h-4 text-[#33077C]" />}
+          >
+            Bulk Upload
+          </Button>
+
           {/* SPLIT BUTTON WITH BULK ACTIONS DROPDOWN (BRAND THEME #33077C) */}
           <div
             ref={bulkMenuRef}
@@ -3347,6 +3375,19 @@ export const InventoryProductsView: React.FC = () => {
                   <span>Bulk Active</span>
                 </button>
 
+                {/* Bulk Upload Items (Excel) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBulkMenuOpen(false);
+                    setIsBulkUploadOpen(true);
+                  }}
+                  className="w-full px-3 py-2.5 text-left text-xs sm:text-[13px] font-semibold text-slate-700 hover:bg-purple-50/60 hover:text-[#33077C] rounded-xl flex items-center gap-2.5 cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span>Bulk Upload Items</span>
+                </button>
+
                 {/* 5. Bulk Update Items (Opens full screen) */}
                 <button
                   type="button"
@@ -3361,6 +3402,17 @@ export const InventoryProductsView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <ProductBulkUploadModal
+        isOpen={isBulkUploadOpen}
+        onClose={() => setIsBulkUploadOpen(false)}
+        onUploaded={async () => {
+          // The new products, categories and subcategories come from the server
+          fetchLiveCategories();
+          fetchLiveSubcategories();
+          await loadProducts(true);
+        }}
+      />
 
       {/* 3. Search Bar & Dropdown Filter Row */}
       <SearchBar
@@ -4052,6 +4104,49 @@ export const InventoryProductsView: React.FC = () => {
                     </button>
                   )}
                   <FormError message={errors.itemImage?.message} showIcon />
+                  {formData.itemType === "Product" && (itemImageState || formData.itemImage) && !isUploadingImage && (
+                    <AiProductImageAssist
+                      image={itemImageState || formData.itemImage}
+                      productId={editingProduct?.id}
+                      current={{
+                        productName: formData.productName || "",
+                        description: formData.description || "",
+                        category: formData.category || "",
+                        subcategory: formData.subcategory || "",
+                        unit: formData.unit || "",
+                      }}
+                      masters={{
+                        categories: masterCategories,
+                        subcategories: masterSubcategories.map((sc) => ({
+                          id: sc.id,
+                          name: sc.subcategory || sc.name || "",
+                          categoryName: sc.category || sc.categoryName,
+                        })),
+                        units: allAvailableUnits.map((u) => ({ id: u.id, name: u.name, shortCode: u.shortCode })),
+                      }}
+                      onApply={(values, labels) => {
+                        const { baseUnitId, unit, category, subcategory, ...rest } = values;
+                        const next: Partial<ProductFormValues> = { ...rest };
+                        if (category !== undefined) {
+                          next.category = category;
+                          next.subcategory = subcategory ?? "";
+                        }
+                        if (unit !== undefined) {
+                          next.unit = unit;
+                          next.baseUnitId = baseUnitId;
+                          const u = allAvailableUnits.find((x) => x.id === baseUnitId);
+                          if (u) setSelectedBaseUnit(formatUnitOption(u));
+                        }
+                        setFormData(next);
+                        setAiFilledNotice(labels.join(", "));
+                      }}
+                    />
+                  )}
+                  {aiFilledNotice && (
+                    <p className="text-[11px] font-semibold text-[#33077C] mt-1">
+                      Suggested by AI: {aiFilledNotice}. Please review before saving.
+                    </p>
+                  )}
                 </div>
               </div>
 

@@ -172,6 +172,17 @@ import { AddCustomerModal } from "./AddCustomerModal";
 import { AddItemModal } from "../inventory/AddItemModal";
 
 import { formatDate } from '../utils/dateUtils';
+import { SplitPaymentSection, makeSplitRowId } from "../purchase/SplitPaymentSection";
+import {
+  SALES_SPLIT_PAYMENT_METHODS,
+  activeSplitRows,
+  newSplitRow,
+  rowAmount,
+  splitRowToPaymentFields,
+  summarizeSplit,
+  validateSplit,
+  SplitPaymentRow,
+} from "../../../utils/splitPayments";
 // Helper functions for dd/mm/yyyy <-> YYYY-MM-DD
 const isoToDdmmyyyy = (iso?: string): string => {
   if (!iso) return "";
@@ -818,7 +829,7 @@ export const SalesView: React.FC = () => {
           const uPrice = Number(it.unitPrice ?? it.price ?? 0);
           const pPrice = Number(it.purchasePrice ?? it.cost ?? 0);
           const dPct = Number(it.discountPercent ?? 0);
-          const tPct = Number(it.taxPercent ?? (convertData.withGst !== false ? 18 : 0));
+          const tPct = Number(it.taxPercent ?? 0);
           const lineRes = calculateLineItem(
             {
               quantity: qty,
@@ -860,7 +871,7 @@ export const SalesView: React.FC = () => {
           salesPrice: 0,
           unitPrice: 0,
           discountPercent: 0,
-          taxPercent: 18,
+          taxPercent: 0,
           total: 0,
         });
       }
@@ -967,6 +978,10 @@ export const SalesView: React.FC = () => {
 
   // Modals
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  // Split payment (Single / Split mode in the Billing Summary) for a NEW invoice
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [newSplitRow(makeSplitRowId())]);
+  const [splitShowErrors, setSplitShowErrors] = useState(false);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isPaymentHistoryModalOpen, setIsPaymentHistoryModalOpen] =
@@ -1785,7 +1800,7 @@ export const SalesView: React.FC = () => {
       salesPrice: 0,
       unitPrice: 0,
       discountPercent: 0,
-      taxPercent: 18,
+      taxPercent: 0,
       total: 0,
     };
 
@@ -2523,10 +2538,8 @@ export const SalesView: React.FC = () => {
             `Product "${prod.name}" has no default Sale Price configured.`,
           );
         }
-        item.taxPercent =
-          item.taxPercent !== undefined && item.taxPercent !== null
-            ? item.taxPercent
-            : parseTaxRate(prod.taxRate || (prod as any).taxPercent, 18);
+        // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
+        item.taxPercent = item.taxPercent ?? 0;
         const lineRes = calculateLineItem(
           {
             quantity: item.quantity || 1,
@@ -2661,7 +2674,7 @@ export const SalesView: React.FC = () => {
       batch: "",
       quantity: 1,
       unitPrice: 0,
-      taxPercent: 18,
+      taxPercent: 0,
       discountPercent: 0,
       discountAmount: 0,
       discountType: "amount",
@@ -2743,6 +2756,7 @@ export const SalesView: React.FC = () => {
 
   // Immediately clamp paid amount if invoice grand total is reduced below current paid amount
   useEffect(() => {
+    if (isSplitMode) return; // split entries are checked (and shown) by the split section instead
     const currentPaid = Number(formData.paidAmount) || 0;
     if (calculatedTotals.grandTotal >= 0 && currentPaid > calculatedTotals.grandTotal) {
       setFormData((prev) => ({
@@ -2761,7 +2775,51 @@ export const SalesView: React.FC = () => {
               ],
       }));
     }
-  }, [calculatedTotals.grandTotal]);
+  }, [calculatedTotals.grandTotal, isSplitMode]);
+
+  // Split payment: live totals and validation for the entries (a new invoice starts with nothing paid)
+  const splitSummary = summarizeSplit(calculatedTotals.grandTotal, 0, splitRows);
+  const splitValidation = validateSplit(calculatedTotals.grandTotal, 0, splitRows, SALES_SPLIT_PAYMENT_METHODS);
+
+  // Every time the form opens (or another invoice is edited) it starts in Single mode with one empty entry
+  useEffect(() => {
+    setIsSplitMode(false);
+    setSplitRows([newSplitRow(makeSplitRowId())]);
+    setSplitShowErrors(false);
+  }, [isFormModalOpen, editingSale?.id]);
+
+  // The invoice's paid amount and payment list follow the split entries, so the balance updates on every keystroke
+  useEffect(() => {
+    if (!isSplitMode) return;
+    const active = activeSplitRows(splitRows);
+    setFormData((prev) => ({
+      ...prev,
+      paidAmount: splitSummary.totalPaid,
+      paymentMethod: active.length > 0 ? (active[0].method as any) : prev.paymentMethod,
+      paymentSplits:
+        active.length > 0
+          ? active.map((r) => ({ id: r.id, method: r.method as any, amount: rowAmount(r), referenceNo: r.reference.trim() }))
+          : [{ id: "ps_1", method: prev.paymentMethod || "Bank Transfer", amount: 0, referenceNo: "" }],
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSplitMode, splitRows]);
+
+  const switchPaymentMode = (split: boolean) => {
+    if (split === isSplitMode) return;
+    if (split) {
+      // carry over what was typed in the single field as the first entry
+      const carried = Math.max(0, Number(formData.paidAmount) || 0);
+      const m = formData.paymentSplits[0]?.method || formData.paymentMethod;
+      setSplitRows([
+        {
+          ...newSplitRow(makeSplitRowId(), (SALES_SPLIT_PAYMENT_METHODS as string[]).includes(m as string) ? (m as any) : "Cash"),
+          amount: carried > 0 ? String(carried) : "",
+        },
+      ]);
+      setSplitShowErrors(false);
+    }
+    setIsSplitMode(split);
+  };
 
   // Generate Invoice Handler (Creates invoice on backend and local store)
   // Available stock of the line's chosen batch (null when stock data is not loaded for it).
@@ -2867,6 +2925,11 @@ export const SalesView: React.FC = () => {
   };
 
   const generateInvoiceInner = async (): Promise<boolean> => {
+    // Split payments are checked first so the message appears next to the entries
+    if (isSplitMode) {
+      setSplitShowErrors(true);
+      if (!splitValidation.ok) return false;
+    }
     lastCheckStockRef.current = true;
     // Stock may have changed since the form was opened: refetch each distinct product once, then
     // run the full validation (every line) against the fresh batch stock.
@@ -3059,6 +3122,8 @@ export const SalesView: React.FC = () => {
 
           let paymentFailed = false;
           let paymentFailureReason = "";
+          let splitSaved = 0;
+          const splitToRecord = isSplitMode ? activeSplitRows(splitRows) : [];
           try {
             const payInPayload: any = {
               date:
@@ -3078,7 +3143,22 @@ export const SalesView: React.FC = () => {
             if (UUID_REGEX.test(savedApiSale.id)) {
               payInPayload.invoiceId = savedApiSale.id;
             }
-            await commercePaymentInApi.createPaymentIn(payInPayload);
+            if (isSplitMode) {
+              // One receipt per split entry, sent one at a time and never retried: if one fails the rest are not sent.
+              for (const row of splitToRecord) {
+                const fields = splitRowToPaymentFields(row, savedApiSale.invoiceNo);
+                await commercePaymentInApi.createPaymentIn({
+                  ...payInPayload,
+                  paymentType: normalizeCommercePaymentType(fields.paymentType),
+                  receivedAmount: fields.amount,
+                  referenceNo: fields.referenceNo || payInPayload.referenceNo,
+                  notes: fields.notes,
+                });
+                splitSaved += 1;
+              }
+            } else {
+              await commercePaymentInApi.createPaymentIn(payInPayload);
+            }
           } catch (payInErr) {
             console.warn("commercePaymentInApi.createPaymentIn notice:", payInErr);
             paymentFailed = true;
@@ -3101,7 +3181,7 @@ export const SalesView: React.FC = () => {
 
           if (paymentFailed) {
             toast.warning(
-              `Invoice ${savedApiSale.invoiceNo} was generated, but the initial payment could not be recorded${paymentFailureReason ? `: ${paymentFailureReason}` : "."} You can add the payment from the invoice without re-creating it.`,
+              `Invoice ${savedApiSale.invoiceNo} was generated, but ${isSplitMode ? `only ${splitSaved} of ${splitToRecord.length} split payments were recorded` : "the initial payment could not be recorded"}${paymentFailureReason ? `: ${paymentFailureReason}` : "."} You can add the payment from the invoice without re-creating it.`,
               { duration: 8000 }
             );
           }
@@ -4110,7 +4190,7 @@ export const SalesView: React.FC = () => {
       filename: `Sales_Invoices_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sales Invoices",
       title: "YAA CREATIONS CRM - SALES INVOICES & ORDERS REPORT",
-      subtitle: `Filter: ${appliedSaleStatus} | Total Invoices: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedSaleStatus} | Total Invoices: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Invoice No", key: "invoiceNo", align: "center", width: 16 },
@@ -5722,6 +5802,42 @@ export const SalesView: React.FC = () => {
 
                       {/* 5. Paid Amount & Balance Due */}
                       <div className="pt-2 border-t border-slate-100 space-y-3">
+                        {!editingSale && (
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="font-semibold text-emerald-700">Payment Received</span>
+                            <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" aria-label="Payment mode">
+                              <button
+                                type="button"
+                                onClick={() => switchPaymentMode(false)}
+                                className={`px-2.5 py-1 text-[11px] font-bold cursor-pointer transition-colors ${!isSplitMode ? "bg-[#33077C] text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                Single Payment
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => switchPaymentMode(true)}
+                                className={`px-2.5 py-1 text-[11px] font-bold cursor-pointer transition-colors border-l border-slate-200 ${isSplitMode ? "bg-[#33077C] text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                              >
+                                Split Payment
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {isSplitMode && !editingSale ? (
+                          <SplitPaymentSection
+                            rows={splitRows}
+                            onChange={setSplitRows}
+                            summary={splitSummary}
+                            alreadyPaid={0}
+                            validation={splitValidation}
+                            showErrors={splitShowErrors}
+                            disabled={isActionLoading}
+                            extraError={formErrors.paidAmount}
+                            methods={SALES_SPLIT_PAYMENT_METHODS}
+                          />
+                        ) : (
+                          <>
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-emerald-700">
                             Paid Amount:
@@ -5822,6 +5938,9 @@ export const SalesView: React.FC = () => {
                           </div>
                         </div>
                         <FormError message={formErrors.paidAmount || formErrors.paymentMethod} className="justify-end" />
+
+                          </>
+                        )}
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
                           <span className="font-bold text-slate-800">Total Balance:</span>

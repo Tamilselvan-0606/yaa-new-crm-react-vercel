@@ -286,3 +286,33 @@ export interface BulkUpdateProductsResponse {
     message: string;
   };
 }
+
+
+export interface ProductBulkUploadError {
+  row: number;
+  field?: string;
+  message: string;
+}
+
+export interface ProductBulkUploadResult {
+  totalRows: number;
+  successfulRows: number;
+  failedRows: number;
+  createdProducts: number;
+  reusedCategories?: number;
+  createdCategories?: number;
+  reusedSubcategories?: number;
+  createdSubcategories?: number;
+  /** Same counts as totalRows / createdProducts / failedRows (the API sends both). */
+  total?: number;
+  created?: number;
+  failed?: number;
+  errors: ProductBulkUploadError[];
+}
+
+export interface ProductBulkUploadResponse {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  data: ProductBulkUploadResult;
+}

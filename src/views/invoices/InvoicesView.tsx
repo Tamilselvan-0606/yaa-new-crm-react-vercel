@@ -63,6 +63,11 @@ import {
   platformClientApi,
   subOrganizationApi,
 } from '../../api';
+import {
+  useGetDefaultSuperAdminDetailQuery,
+  useGetSuperAdminDetailByIdQuery,
+  getDocSuperAdminDetailId,
+} from '../../api/platform/superAdminDetailsApi';
 
 interface InvoicesViewProps {
   isProforma?: boolean;
@@ -225,6 +230,13 @@ const mapApiProformaToSavedInvoice =(api: ProformaInvoiceApiItem): SavedInvoice 
   };
 };
 
+// Newest first, even if the server returns them oldest first (latest created, then highest number).
+const newestFirst = <T extends { createdAt?: string; invoiceNumber?: string }>(list: T[]): T[] =>
+  [...list].sort((a, b) => {
+    const diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    return diff || String(b.invoiceNumber || '').localeCompare(String(a.invoiceNumber || ''), undefined, { numeric: true });
+  });
+
 const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
   const latestPayment = api.payments && api.payments.length > 0 ? api.payments[api.payments.length - 1] : undefined;
 
@@ -302,7 +314,7 @@ const mapApiInvoiceToSavedInvoice = (api: InvoiceApiItem): SavedInvoice => {
 
 export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }) => {
   const navigate = useNavigate();
-  const { showToast, isSuperAdmin, currentUser } = useAuth();
+  const { showToast, isSuperAdmin, isOrgSuperAdmin, currentUser } = useAuth();
   const { addInvoice: addStandardInvoice, deleteInvoice: deleteStandardInvoice } = useInvoiceStore();
   const { addProformaInvoice, deleteProformaInvoice } = useProformaInvoiceStore();
 
@@ -439,6 +451,16 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
       cancelled = true;
     };
   }, [viewingDocId, isProforma]);
+  // Platform administrator: "Billing From" comes from the company-details API (RTK Query, tag SuperAdminDetail),
+  // fetched only while an invoice / proforma view is open.
+  const isPlatformAdmin = isSuperAdmin && !isOrgSuperAdmin;
+  const defaultSellerQuery = useGetDefaultSuperAdminDetailQuery(undefined, { skip: !isPlatformAdmin || !viewingDocId });
+  const viewDocSellerId = getDocSuperAdminDetailId(viewingInvoice);
+  const sellerByIdQuery = useGetSuperAdminDetailByIdQuery(viewDocSellerId, {
+    skip: !isPlatformAdmin || !viewingDocId || !viewDocSellerId,
+  });
+  const sellerDetail = sellerByIdQuery.data?.data || defaultSellerQuery.data?.data;
+  const sellerLogoUrl = sellerDetail?.logoUrl || null;
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionDropdownPos, setActionDropdownPos] = useState<{
     top?: number;
@@ -501,7 +523,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
 
         const res = await proformaInvoiceApi.getProformaInvoices(params);
         if (res.data) {
-          const mapped = res.data.map(mapApiProformaToSavedInvoice);
+          const mapped = newestFirst(res.data.map(mapApiProformaToSavedInvoice));
           setLiveProformas(mapped);
           setProformaTotalRecords(res.pagination?.totalRecords ?? mapped.length);
         }
@@ -548,7 +570,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
 
         const res = await invoiceApi.getInvoices(params);
         if (res.data) {
-          const mapped = res.data.map(mapApiInvoiceToSavedInvoice);
+          const mapped = newestFirst(res.data.map(mapApiInvoiceToSavedInvoice));
           setLiveInvoices(mapped);
           setInvoicesTotalRecords(res.pagination?.totalRecords ?? mapped.length);
         }
@@ -962,7 +984,21 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
   // 1. FULL PAGE INVOICE DETAIL VIEW (Matching Reference Document Layout)
   // =========================================================================
   if (viewingInvoice) {
-    const activeInvoice = viewingInvoice;
+    const activeInvoice: SavedInvoice =
+      isPlatformAdmin && sellerDetail
+        ? {
+            ...viewingInvoice,
+            company: {
+              ...viewingInvoice.company,
+              name: sellerDetail.companyName || '',
+              taxId: sellerDetail.gstNumber || '',
+              pan: sellerDetail.panNumber || '',
+              address: sellerDetail.address || '',
+              email: sellerDetail.email || '',
+              phone: sellerDetail.phoneNumber || '',
+            },
+          }
+        : viewingInvoice;
 
     const handlePrintInvoicePdf = async () => {
       try {
@@ -1145,23 +1181,23 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             {/* Left: Invoice Number, Date & Reference Details */}
             <div className="text-left space-y-1.5 text-xs sm:text-sm shrink-0">
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-36">
+                <span className="text-slate-500 font-medium w-48 shrink-0">
                   {isProforma ? 'Proforma Invoice Number:' : 'Invoice Number:'}
                 </span>
                 <span className="font-bold text-slate-900">{activeInvoice.invoiceNumber}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-36">
+                <span className="text-slate-500 font-medium w-48 shrink-0">
                   {isProforma ? 'Proforma Invoice Date:' : 'Invoice Date:'}
                 </span>
                 <span className="font-semibold text-slate-800">{formatDate(activeInvoice.invoiceDate)}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-28">Due Date:</span>
+                <span className="text-slate-500 font-medium w-48 shrink-0">Due Date:</span>
                 {activeInvoice.dueDate && <span className="font-semibold text-slate-800">{formatDate(activeInvoice.dueDate)}</span>}
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-slate-500 font-medium w-28">Reference:</span>
+                <span className="text-slate-500 font-medium w-48 shrink-0">Reference:</span>
                 {activeInvoice.referenceNumbers && activeInvoice.referenceNumbers.length > 0 && (
                   <span className="font-bold text-slate-800">{activeInvoice.referenceNumbers.join(', ')}</span>
                 )}
@@ -1196,7 +1232,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
             {/* Right: Company Logo */}
             <div className="flex items-center sm:justify-end print:justify-end gap-4 min-w-0 flex-1">
               <img
-                src="/yaa-creations-logo.png"
+                src={(isPlatformAdmin && sellerLogoUrl) || "/yaa-creations-logo.png"}
                 alt={activeInvoice.company.name}
                 className="h-16 sm:h-20 object-contain max-w-[280px]"
               />
@@ -1545,10 +1581,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ isProforma = false }
               <div className="invoice-signature-section w-full max-w-sm flex flex-col items-end pt-2">
                 {/* Authentic Authorized Signature & Seal Stamp */}
                 <div className="text-right space-y-2 shrink-0 w-full">
-                  <div className="flex items-center justify-end gap-2 text-xs text-slate-600 font-semibold">
-                    <span className="text-slate-400">Date of Signing:</span>
-                    <span className="font-bold text-slate-900">{activeInvoice.invoiceDate}</span>
-                  </div>
 
                   {/* Hand-drawn Cursive Signature SVG graphic */}
                   <div className="flex justify-end py-1">

@@ -64,6 +64,7 @@ export const PLATFORM_TAG_TYPES = [
   'Setting',
   'Payment',
   'PlatformQuote',
+  'SuperAdminDetail',
   'PlatformProformaInvoice',
   'PlatformInvoice',
   'PlatformDashboard',

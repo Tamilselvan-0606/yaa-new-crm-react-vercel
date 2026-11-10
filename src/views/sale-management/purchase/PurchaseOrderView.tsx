@@ -147,6 +147,15 @@ import {
 import { useNavigate, useLocation } from "react-router-dom";
 
 import { formatDate } from "../utils/dateUtils";
+import { SplitPaymentSection, makeSplitRowId } from "./SplitPaymentSection";
+import {
+  activeSplitRows,
+  newSplitRow,
+  splitRowToPaymentFields,
+  summarizeSplit,
+  validateSplit,
+  SplitPaymentRow,
+} from "../../../utils/splitPayments";
 const UNIT_OPTIONS = [
   "NONE",
   "PCS",
@@ -616,6 +625,11 @@ export const PurchaseOrderView: React.FC = () => {
     transactionId: "",
     remarks: "",
   });
+
+  // Split payment (Single / Split mode in the Billing Summary). In an existing bill the rows are ADDITIONAL payments.
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [splitRows, setSplitRows] = useState<SplitPaymentRow[]>(() => [newSplitRow(makeSplitRowId())]);
+  const [splitShowErrors, setSplitShowErrors] = useState(false);
 
   // Quick Add Product Modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -2412,6 +2426,7 @@ export const PurchaseOrderView: React.FC = () => {
 
   // Auto-clamp paidAmount if Grand Total changes (e.g. items edited or removed)
   useEffect(() => {
+    if (isSplitMode) return; // the split rows are checked (and shown) by the split section instead
     if (formData.paidAmount > calculatedTotals.grandTotal) {
       setFormData((prev) => ({
         ...prev,
@@ -2423,7 +2438,44 @@ export const PurchaseOrderView: React.FC = () => {
         paidAmount: 0,
       }));
     }
-  }, [calculatedTotals.grandTotal, formData.paidAmount]);
+  }, [calculatedTotals.grandTotal, formData.paidAmount, isSplitMode]);
+
+  // Split payment: what was already paid on this bill, the live totals and the validation
+  const splitAlreadyPaid = editingPurchase ? Number(editingPurchase.paidAmount || 0) : 0;
+  const splitSummary = summarizeSplit(calculatedTotals.grandTotal, splitAlreadyPaid, splitRows);
+  const splitValidation = validateSplit(calculatedTotals.grandTotal, splitAlreadyPaid, splitRows);
+
+  // Every time the form opens (or another bill is edited) it starts in Single mode with one empty entry
+  useEffect(() => {
+    setIsSplitMode(false);
+    setSplitRows([newSplitRow(makeSplitRowId())]);
+    setSplitShowErrors(false);
+  }, [isFormModalOpen, editingPurchase?.id]);
+
+  // The bill's paid amount follows the split entries, so the totals and balance update on every keystroke
+  useEffect(() => {
+    if (!isSplitMode) return;
+    setFormData((prev) =>
+      prev.paidAmount === splitSummary.totalPaid
+        ? prev
+        : {
+            ...prev,
+            paidAmount: splitSummary.totalPaid,
+            paymentMethod: splitSummary.newPayments > 0 ? prev.paymentMethod || "Cash" : prev.paymentMethod,
+          },
+    );
+  }, [isSplitMode, splitSummary.totalPaid, splitSummary.newPayments]);
+
+  const switchPaymentMode = (split: boolean) => {
+    if (split === isSplitMode) return;
+    if (split) {
+      // carry over what was typed in the single field as the first entry
+      const carried = Math.max(0, Number(formData.paidAmount || 0) - splitAlreadyPaid);
+      setSplitRows([{ ...newSplitRow(makeSplitRowId(), (formData.paymentMethod as any) === "UPI" ? "UPI" : "Cash"), amount: carried > 0 ? String(carried) : "" }]);
+      setSplitShowErrors(false);
+    }
+    setIsSplitMode(split);
+  };
 
   interface PurchasePaymentHistoryItem {
     id: string;
@@ -2726,7 +2778,67 @@ export const PurchaseOrderView: React.FC = () => {
     [quickProductForm],
   );
 
+  /**
+   * Records each split entry as its own Payments Out record against this bill and supplier (the bill API has no payment
+   * list). Entries are sent one at a time and NEVER retried: if one fails the rest are not sent and the caller is told
+   * how many were saved, so nothing is paid twice.
+   */
+  const recordSplitPayments = async (
+    po: PurchaseOrder,
+  ): Promise<{ total: number; saved: number; failed?: string }> => {
+    const rows = activeSplitRows(splitRows);
+    let saved = 0;
+    if (!UUID_REGEX.test(po.supplierId)) {
+      return { total: rows.length, saved, failed: "The supplier of this bill is not valid for recording payments." };
+    }
+    for (const row of rows) {
+      const fields = splitRowToPaymentFields(row, po.purchaseNo);
+      try {
+        await workPaymentOutApi.createPaymentOut(
+          mapUiToCreatePaymentOutPayload({
+            supplierId: po.supplierId,
+            purchaseOrderId: po.id,
+            paymentType: fields.paymentType,
+            amount: fields.amount,
+            referenceNo: fields.referenceNo,
+            notes: fields.notes,
+          }),
+        );
+        saved += 1;
+      } catch (e) {
+        dispatch(
+          baseApi.util.invalidateTags([
+            { type: "PaymentOut", id: "LIST" },
+            { type: "PurchaseOrder", id: "LIST" },
+            { type: "PurchaseBill", id: "LIST" },
+            { type: "SupplierLedger" },
+            { type: "Supplier", id: "LIST" },
+          ]),
+        );
+        return { total: rows.length, saved, failed: getApiErrorMessage(e, "A payment could not be saved.") };
+      }
+    }
+    dispatch(
+      baseApi.util.invalidateTags([
+        { type: "PaymentOut", id: "LIST" },
+        { type: "PurchaseOrder", id: "LIST" },
+        { type: "PurchaseBill", id: "LIST" },
+        { type: "SupplierLedger" },
+        { type: "Supplier", id: "LIST" },
+      ]),
+    );
+    return { total: rows.length, saved };
+  };
+
+  const splitOutcomeMessage = (poNo: string, o: { total: number; saved: number; failed?: string }) =>
+    `Purchase bill ${poNo} was saved, but only ${o.saved} of ${o.total} payments were recorded. ${o.failed} Record the remaining payments from the bill (Record Payment). Nothing was retried.`;
+
   const performSavePurchase = async (_status: PurchaseStatus = "Pending") => {
+    // Split payments are checked first so the message appears next to the entries
+    if (isSplitMode) {
+      setSplitShowErrors(true);
+      if (!splitValidation.ok) return;
+    }
     // Validate BEFORE any API call, voucher creation or stock adjustment.
     // Missing suppliers / products are never replaced by "the first available" record.
     if (!validatePurchaseBeforeSave()) {
@@ -2743,6 +2855,7 @@ export const PurchaseOrderView: React.FC = () => {
       finalBalance <= 0 ? "Paid" : finalPaid > 0 ? "Partial" : "Unpaid";
 
     setIsSubmitting(true);
+    let splitOutcome: { total: number; saved: number; failed?: string } | null = null;
 
     try {
       if (editingPurchase) {
@@ -2807,7 +2920,7 @@ export const PurchaseOrderView: React.FC = () => {
           .reduce((sum, pm) => sum + (Number(pm.amount) || 0), 0);
         const basePaidBenchmark = Math.max(prevPaid, existingVouchersSum);
 
-        if (finalPaid > basePaidBenchmark) {
+        if (!isSplitMode && finalPaid > basePaidBenchmark) {
           const deltaAmount = finalPaid - basePaidBenchmark;
 
           if (UUID_REGEX.test(updatedPo.supplierId)) {
@@ -2838,12 +2951,18 @@ export const PurchaseOrderView: React.FC = () => {
 
         }
 
+        if (isSplitMode) splitOutcome = await recordSplitPayments(updatedPo);
+
         setLivePurchases((prev) =>
           prev.map((p) => (p.id === updatedPo.id ? updatedPo : p)),
         );
-        toast.success(
-          `Purchase order ${updatedPo.purchaseNo} updated successfully!`,
-        );
+        if (splitOutcome?.failed) {
+          toast.error(splitOutcomeMessage(updatedPo.purchaseNo, splitOutcome));
+        } else {
+          toast.success(
+            `Purchase order ${updatedPo.purchaseNo} updated successfully!`,
+          );
+        }
         setIsFormModalOpen(false);
         fetchPurchaseOrders(true);
       } else {
@@ -2854,7 +2973,8 @@ export const PurchaseOrderView: React.FC = () => {
             dueDate: formData.dueDate,
             expectedDeliveryDate: formData.dueDate,
             discount: calculatedTotals.discount,
-            paidAmount: finalPaid,
+            // In split mode the payments are recorded one by one after the bill is saved
+            paidAmount: isSplitMode ? 0 : finalPaid,
             notes: formData.notes,
           },
           formData.items,
@@ -2895,7 +3015,7 @@ export const PurchaseOrderView: React.FC = () => {
         };
 
         // Record payment voucher in Work Payment Out API & local store if initial payment was specified
-        if (finalPaid > 0) {
+        if (!isSplitMode && finalPaid > 0) {
 
           if (UUID_REGEX.test(createdPo.supplierId)) {
             try {
@@ -2923,6 +3043,8 @@ export const PurchaseOrderView: React.FC = () => {
           }
 
         }
+
+        if (isSplitMode) splitOutcome = await recordSplitPayments(createdPo);
 
         setLivePurchases((prev) => [createdPo, ...prev]);
 
@@ -2995,9 +3117,13 @@ export const PurchaseOrderView: React.FC = () => {
           setOriginatingRequestId(null);
         }
 
-        toast.success(
-          `Purchase order ${createdPo.purchaseNo} created successfully!`,
-        );
+        if (splitOutcome?.failed) {
+          toast.error(splitOutcomeMessage(createdPo.purchaseNo, splitOutcome));
+        } else {
+          toast.success(
+            `Purchase order ${createdPo.purchaseNo} created successfully!`,
+          );
+        }
         setIsFormModalOpen(false);
         fetchPurchaseOrders(true);
       }
@@ -3473,7 +3599,7 @@ export const PurchaseOrderView: React.FC = () => {
       filename: `Purchase_Bills_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Purchase Bills",
       title: "YAA CREATIONS CRM - PURCHASE ORDERS & BILLS DIRECTORY",
-      subtitle: `Total Purchase Orders: ${displayedPurchases.length} | Generated: ${new Date().toLocaleDateString("en-IN")}`,
+      subtitle: `Total Purchase Orders: ${displayedPurchases.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         { header: "PO #", key: "purchaseNo", align: "center", width: 16 },
@@ -5006,6 +5132,39 @@ export const PurchaseOrderView: React.FC = () => {
 
                       {/* 5. Paid to Supplier & Balance Payable */}
                       <div className="pt-2 border-t border-slate-100 space-y-3">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-semibold text-emerald-700">Paid to Supplier</span>
+                          <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden" role="group" aria-label="Payment mode">
+                            <button
+                              type="button"
+                              onClick={() => switchPaymentMode(false)}
+                              className={`px-2.5 py-1 text-[11px] font-bold cursor-pointer transition-colors ${!isSplitMode ? "bg-[#33077C] text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              Single Payment
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => switchPaymentMode(true)}
+                              className={`px-2.5 py-1 text-[11px] font-bold cursor-pointer transition-colors border-l border-slate-200 ${isSplitMode ? "bg-[#33077C] text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                            >
+                              Split Payment
+                            </button>
+                          </div>
+                        </div>
+
+                        {isSplitMode ? (
+                          <SplitPaymentSection
+                            rows={splitRows}
+                            onChange={setSplitRows}
+                            summary={splitSummary}
+                            alreadyPaid={splitAlreadyPaid}
+                            validation={splitValidation}
+                            showErrors={splitShowErrors}
+                            disabled={isSubmitting}
+                            extraError={formErr.errors.paidAmount}
+                          />
+                        ) : (
+                          <>
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-emerald-700">
                             Paid to Supplier:
@@ -5089,6 +5248,9 @@ export const PurchaseOrderView: React.FC = () => {
                           />
                         </div>
 
+                          </>
+                        )}
+
                         <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-sm">
                           <span className="font-bold text-slate-800">
                             Total Balance:
@@ -5118,6 +5280,12 @@ export const PurchaseOrderView: React.FC = () => {
 
               {/* Bottom Actions */}
               <div className="pt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-end gap-4 border-t border-slate-100">
+                {isSplitMode ? (
+                  <div className="text-[11px] text-slate-500 max-w-xs">
+                    Split payment: enter each payment in the Billing Summary. Each one is saved as its own payment when you save the bill.
+                  </div>
+                ) : (
+                <>
                 {/* Left side: Payment section */}
                 <div className="flex flex-col items-start gap-1">
                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -5144,6 +5312,9 @@ export const PurchaseOrderView: React.FC = () => {
                     )}
                   </Button>
                 </div>
+
+                </>
+                )}
 
                 {/* Right side: Cancel & Save Purchase Bill */}
                 <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3">

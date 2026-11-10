@@ -551,7 +551,7 @@ export const SubcategoryView: React.FC = () => {
       filename: `Subcategories_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Subcategories',
       title: 'YAA CREATIONS CRM - PRODUCT SUBCATEGORIES DIRECTORY',
-      subtitle: `Total Subcategories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Subcategories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Code', key: 'code', align: 'center', width: 16 },

@@ -10,6 +10,36 @@ import { fetchOrganizationDocumentProfile } from '../hooks/useCompanyDocumentPro
  * Provides dedicated printing and PDF downloading functions for Tables, Ledgers, Reports, and Document Receipts.
  */
 
+/** A date in a printed document / PDF is always DD/MM/YYYY. Turns "2026-11-05" or "2026-11-05T10:00:00Z" into "05/11/2026". Anything else is returned unchanged. */
+export function formatPdfDate(value: unknown): string {
+  if (typeof value !== 'string') return value == null ? '' : String(value);
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/.exec(value.trim());
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : value;
+}
+
+/** Today's date as DD/MM/YYYY (local time). */
+export function pdfToday(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+function withDdMmYyyyDates(o: DocumentPrintOptions): DocumentPrintOptions {
+  return {
+    ...o,
+    docDate: formatPdfDate(o.docDate),
+    dueDate: o.dueDate ? formatPdfDate(o.dueDate) : o.dueDate,
+    extraMeta: o.extraMeta?.map((m) => ({ ...m, value: formatPdfDate(m.value) })),
+  };
+}
+
+/** Table reports: every ISO date cell becomes DD/MM/YYYY. */
+export function withDdMmYyyyTable(o: PrintTableOptions): PrintTableOptions {
+  const fix = (row?: Record<string, any>) =>
+    row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k, typeof v === 'string' ? formatPdfDate(v) : v]));
+  return { ...o, data: o.data.map((r) => fix(r)!), summaryRow: fix(o.summaryRow) };
+}
+
 export interface PrintColumn {
   header: string;
   key: string;
@@ -39,7 +69,8 @@ export interface PrintTableOptions {
 /**
  * Generates and prints a clean, beautifully styled tabular report in an isolated print window.
  */
-export function printTableReport({
+export function printTableReport(rawOptions: PrintTableOptions): void {
+  const {
   title,
   subtitle,
   companyName = 'Yaa Creations Inc.',
@@ -50,18 +81,14 @@ export function printTableReport({
   metrics,
   orientation = 'landscape',
   footerNote = 'Confidential & Proprietary • Generated automatically by YAA CRM',
-}: PrintTableOptions): void {
+  } = withDdMmYyyyTable(rawOptions);
   const printWindow = window.open('', '_blank', 'width=1100,height=850');
   if (!printWindow) {
     toast.warning('Please allow popups in your browser to print reports.');
     return;
   }
 
-  const currentDate = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
+  const currentDate = pdfToday();
   const currentTime = new Date().toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -505,7 +532,8 @@ export interface DocumentPrintOptions {
  * Fills any company fields the caller did not supply from the organization API profile
  * (no hardcoded fallbacks).
  */
-export async function withCompanyProfile(options: DocumentPrintOptions): Promise<DocumentPrintOptions> {
+export async function withCompanyProfile(rawOptions: DocumentPrintOptions): Promise<DocumentPrintOptions> {
+  const options = withDdMmYyyyDates(rawOptions);
   try {
     const p = await fetchOrganizationDocumentProfile();
     return {
@@ -831,7 +859,7 @@ export async function printBusinessDocument(rawOptions: DocumentPrintOptions): P
 
           <!-- 6. Bottom Notice -->
           <div style="margin-top: 18px; padding-top: 8px; border-top: 1px dashed #e2e8f0; text-align: center; color: #94a3b8; font-size: 9.5px;">
-            This is a computer-generated business document issued via YAA CRM. Generated on ${new Date().toLocaleDateString('en-IN')} at ${new Date().toLocaleTimeString('en-IN')}.
+            This is a computer-generated business document issued via YAA CRM. Generated on ${pdfToday()} at ${new Date().toLocaleTimeString('en-IN')}.
           </div>
         </div>
 
@@ -875,9 +903,10 @@ export async function downloadBusinessDocument(
  * Direct Table Report PDF Downloader (Does NOT open print dialog)
  */
 export async function downloadTableReport(
-  options: PrintTableOptions,
+  rawOptions: PrintTableOptions,
   filename?: string
 ): Promise<void> {
+  const options = withDdMmYyyyTable(rawOptions);
   const blob = await pdf(React.createElement(TableReportPDF, { options }) as any).toBlob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

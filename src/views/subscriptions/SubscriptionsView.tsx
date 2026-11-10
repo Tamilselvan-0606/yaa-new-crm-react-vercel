@@ -12,7 +12,6 @@ import {
 } from '../../types';
 import {
   Sparkles,
-  UserPlus,
   Repeat,
   Building2,
   Boxes,
@@ -1468,7 +1467,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 variant="primary"
                 size="md"
                 onClick={() => handleOpenAssignSubscription()}
-                icon={<UserPlus className="w-4 h-4 text-white" />}
+                icon={<Plus className="w-4 h-4" strokeWidth={2.5} />}
               >
                 Assign Subscription
               </Button>

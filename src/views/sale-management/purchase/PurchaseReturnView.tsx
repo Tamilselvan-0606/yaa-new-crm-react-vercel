@@ -1401,7 +1401,7 @@ export const PurchaseReturnView: React.FC = () => {
       filename: `Purchase_Returns_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Purchase Returns',
       title: 'YAA CREATIONS CRM - PURCHASE RETURNS & DEBIT DIRECTORY',
-      subtitle: `Total Returns: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Returns: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Return #', key: 'returnNo', align: 'center', width: 18 },

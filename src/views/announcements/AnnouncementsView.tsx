@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Eye, Trash2, Megaphone, Paperclip, Download, FileText, Check } from 'lucide-react';
+import { Plus, Eye, Trash2, Megaphone, Paperclip, Download, ArrowRight, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Button } from '../../components/common/Button';
 import { Modal } from '../../components/common/Modal';
@@ -141,10 +141,11 @@ export const AnnouncementsView: React.FC = () => {
             variant="secondary"
             size="md"
             onClick={() => navigate('/announcements/templates')}
-            icon={<FileText className="w-4 h-4 text-slate-500" />}
+            icon={<ArrowRight className="w-4 h-4 text-slate-500" />}
+            iconPosition="right"
             className="w-full sm:w-auto justify-center"
           >
-            Templates
+            Template
           </Button>
           <Button
             variant="primary"

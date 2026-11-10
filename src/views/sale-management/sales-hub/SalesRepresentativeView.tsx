@@ -918,7 +918,7 @@ export const SalesRepresentativeView: React.FC = () => {
       filename: `Sales_Reps_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sales Representatives",
       title: "YAA CREATIONS CRM - SALES REPRESENTATIVES DIRECTORY",
-      subtitle: `Total Reps: ${reps.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Total Reps: ${reps.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         {

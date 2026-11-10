@@ -106,6 +106,7 @@ import {
   initializeWorkflowIntegrity,
 } from "../../../utils/salesDocumentWorkflow";
 import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
+import { getConversionState, resolveConvertedTarget } from "../../../utils/salesDocumentWorkflow";
 import {
   FormLabel,
   FORM_INPUT_CLS,
@@ -1175,7 +1176,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
     handleItemChange(index, "category", product.category || "");
     handleItemChange(index, "hsnCode", product.hsnCode || "");
     handleItemChange(index, "unitPrice", Number(product.unitPrice || 0));
-    handleItemChange(index, "taxPercent", Number(product.taxPercent || 0));
+    // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
     setOpenProductDropdownRow(null);
   };
 
@@ -1408,7 +1409,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
           target.category = foundStock.category;
           target.sku = foundStock.sku;
           target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || "";
-          target.taxPercent = (foundStock as any).taxPercent ?? 5;
+          // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
         }
       }
 
@@ -1792,13 +1793,16 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       },
     ].filter((s) => !s.isConverted);
 
-    const isFullyConverted = isInvoiceConverted || availableStages.length === 0;
+    // A document converts once. When the server reports it converted, no further conversion is offered: every Convert
+    // button, menu item, dialog and guard on this page reads these flags.
+    const isFullyConverted = getConversionState(order).isFullyConverted || isInvoiceConverted;
+    const remainingStages = isFullyConverted ? [] : availableStages;
 
     return {
       isInvoiceConverted,
       isChallanConverted,
-      availableStages,
-      availableCount: availableStages.length,
+      availableStages: remainingStages,
+      availableCount: remainingStages.length,
       isFullyConverted,
     };
   };
@@ -1900,8 +1904,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       toast.error(blocker);
       return;
     }
-    if (getOrderStages(order).isChallanConverted) {
-      toast.info(`Sale order ${order.orderNo} is already converted to a delivery challan.`);
+    const orderStagesNow = getOrderStages(order);
+    if (orderStagesNow.isFullyConverted || orderStagesNow.isChallanConverted) {
+      toast.info(`Sale order ${order.orderNo} is already converted.`);
       return;
     }
     const shortages = await findConversionStockShortages([order]);
@@ -1936,8 +1941,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             didBackendConvertCreateChallan = true;
           }
         } catch (apiErr) {
-          console.warn("API convertOrder to challan notice:", apiErr);
+          // Nothing was converted: stop here instead of creating a separate challan by hand.
+          toast.error(getApiErrorMessage(apiErr, "Failed to convert to delivery challan. Nothing was converted."));
+          return;
         }
+      }
+
+      if (!didBackendConvertCreateChallan) {
+        toast.error("The server did not confirm the conversion, so the sale order was left as it was.");
+        return;
       }
 
       let resolvedCustomerId = order.customerId;
@@ -2122,7 +2134,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
             `Successfully converted ${convertedCount} Sale Orders to Sale Invoices!`,
           );
         } catch (apiErr) {
-          console.warn("API bulkConvertOrders warning:", apiErr);
+          // Let the outer handler show the error and keep the dialog open (the list is refetched below only on success).
+          throw apiErr;
         }
       } else {
         toast.success(
@@ -3884,6 +3897,8 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                   )}
                 </div>
 
+                {/* Not offered when the order being edited is already converted (the server says so) */}
+                {!(activeTab.editingOrder && getOrderStages(activeTab.editingOrder).isFullyConverted) && (
                 <Button
                   variant="secondary"
                   size="md"
@@ -3901,6 +3916,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                 >
                   Save & Convert to Sale
                 </Button>
+                )}
 
                 {/* Save Button (CRM Primary Theme #33077C) */}
                 <Button
@@ -4008,7 +4024,7 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
       filename: `Sale_Orders_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Sale Orders",
       title: "YAA CREATIONS CRM - SALES ORDER REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Orders: ${filteredOrders.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         {
           header: "Created Date & Time",
@@ -4485,6 +4501,9 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                             <DocumentLineageBadges
                               docRef={item.orderNo}
                               currentType="Order"
+                              sourceDocNo={item.referenceNo}
+                              targetDocNo={resolveConvertedTarget(item)?.no}
+                              targetDocType={resolveConvertedTarget(item)?.type}
                               className="justify-center"
                             />
                           </div>
@@ -4568,11 +4587,15 @@ export const SaleOrderView: React.FC<SaleOrderViewProps> = ({
                         <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap text-center align-middle">
                           <div className="flex items-center justify-center">
                             {orderStages.isFullyConverted ||
-                            item.status === "Converted" ||
-                            item.status === "Completed" ? (
+                            item.status === "Converted" ? (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                                 Converted
+                              </span>
+                            ) : item.status === "Completed" ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                                Completed
                               </span>
                             ) : item.status === "Cancelled" ? (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">

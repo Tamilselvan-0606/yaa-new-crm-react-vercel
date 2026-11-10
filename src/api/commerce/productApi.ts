@@ -1,5 +1,6 @@
 import { baseClient, baseApi } from '../baseApi';
 import { resolveBaseUnitId } from './unitApi';
+import type { ProductBulkUploadResponse } from './productTypes';
 import {
   ApiProduct,
   ProductFilterParams,
@@ -555,6 +556,22 @@ export const productApi = {
       '/commerce/products/bulk',
       payload
     );
+    return response.data;
+  },
+
+  /**
+   * Bulk upload products from an Excel (.xlsx) workbook
+   * POST /commerce/products/bulk-upload (multipart/form-data, field "file")
+   * The organization comes from the x-organization-id header the shared client already sends.
+   */
+  bulkUploadProducts: async (file: File | Blob): Promise<ProductBulkUploadResponse> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await baseClient.post<ProductBulkUploadResponse>('/commerce/products/bulk-upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      // A large workbook takes longer than a normal call
+      timeout: 120000,
+    });
     return response.data;
   },
 };

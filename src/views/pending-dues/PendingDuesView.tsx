@@ -332,7 +332,7 @@ export const PendingDuesView: React.FC = () => {
       filename: `Pending_Dues_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Pending Dues',
       title: 'YAA CREATIONS CRM - CUSTOMER PENDING DUES & RECEIVABLES',
-      subtitle: `Total Invoices: ${filteredDues.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Invoices: ${filteredDues.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Invoice #', key: 'invoiceNo', align: 'center', width: 16 },

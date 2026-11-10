@@ -108,6 +108,7 @@ import {
   isMockChallan,
 } from '../../../utils/salesDocumentWorkflow';
 import { DocumentLineageBadges } from '../../../components/common/DocumentLineageBadges';
+import { getConversionState, resolveConvertedTarget } from '../../../utils/salesDocumentWorkflow';
 import { FormLabel, FORM_INPUT_CLS, getFormInputCls, handleNumberOnlyKeyDown, handleNonNegativeKeyDown } from '../utils/formUtils';
 import { normalizeIndianPhoneTo10Digits } from '../../../utils/validation';
 import { FormError } from '../../../components/common/FormError';
@@ -1062,7 +1063,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
     handleItemChange(index, 'category', product.category || '');
     handleItemChange(index, 'hsnCode', product.hsnCode || '');
     handleItemChange(index, 'unitPrice', Number(product.unitPrice || 0));
-    handleItemChange(index, 'taxPercent', Number(product.taxPercent || 0));
+    // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
     setOpenProductDropdownRow(null);
   };
 
@@ -1091,7 +1092,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           unit: 'PCS',
           unitPrice: 0,
           discountPercent: 0,
-          taxPercent: 5,
+          taxPercent: 0,
           total: 0,
         },
       ] as ExtendedChallanItem[],
@@ -1293,7 +1294,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           target.category = foundStock.category;
           target.sku = foundStock.sku;
           target.hsnCode = foundStock.hsnCode || (target as any).hsnCode || '';
-          target.taxPercent = (foundStock as any).taxPercent ?? 5;
+          // GST is applied only when the user picks a GST rate for the line; a product's own tax rate is not copied onto the line.
         }
       }
 
@@ -1331,7 +1332,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
           unit: 'PCS',
           unitPrice: 0,
           discountPercent: 0,
-          taxPercent: 5,
+          taxPercent: 0,
           total: 0,
         },
       ],
@@ -1623,9 +1624,10 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       (challan.convertedToInvoiceNo && challan.convertedToInvoiceNo.startsWith('INV-'))
     );
 
+    // A document converts once. When the server reports it converted, no further conversion is offered.
     return {
       isInvoiceConverted,
-      isFullyConverted: isInvoiceConverted,
+      isFullyConverted: getConversionState(challan).isFullyConverted || isInvoiceConverted,
     };
   };
 
@@ -1812,7 +1814,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
             toast.warning(`${failedCount} delivery challan(s) could not be converted.`);
           }
         } catch (apiErr) {
-          console.warn('API bulkConvertChallans warning:', apiErr);
+          // Let the outer handler show the error and keep the dialog open.
+          throw apiErr;
         }
       } else {
         toast.success(`Converted ${openChallansToConvert.length} delivery challans to Sales Invoices!`);
@@ -1968,7 +1971,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
       filename: `Delivery_Challans_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Delivery Challans',
       title: 'YAA CREATIONS CRM - DELIVERY CHALLAN REPORT',
-      subtitle: `Filter: ${appliedPeriod} | Total Records: ${challans.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Records: ${challans.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: 'Created Date & Time', key: 'createdDt', align: 'center', width: 22 },
         { header: 'Converted Date & Time', key: 'convertedDt', align: 'center', width: 22 },
@@ -3392,6 +3395,8 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                   )}
                 </div>
 
+                {/* Not offered when the challan being edited is already converted (the server says so) */}
+                {!(activeTab.editingChallan && getChallanStages(activeTab.editingChallan).isFullyConverted) && (
                 <Button
                   variant="secondary"
                   size="md"
@@ -3409,6 +3414,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                 >
                   Save & Convert to Sale
                 </Button>
+                )}
 
                 {/* Save Button (CRM Primary Theme #33077C) */}
                 <Button
@@ -3757,7 +3763,14 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       <td className="py-3.5 px-3 font-bold text-slate-800 text-center border-r border-slate-200 whitespace-nowrap align-middle">
                         <div className="flex flex-col items-center justify-center gap-1">
                           <span>{item.challanNo || item.referenceNo}</span>
-                          <DocumentLineageBadges docRef={item.challanNo} currentType="Challan" className="justify-center" />
+                          <DocumentLineageBadges
+                            docRef={item.challanNo}
+                            currentType="Challan"
+                            sourceDocNo={item.referenceNo}
+                            targetDocNo={resolveConvertedTarget(item)?.no}
+                            targetDocType={resolveConvertedTarget(item)?.type}
+                            className="justify-center"
+                          />
                         </div>
                       </td>
 
@@ -3818,10 +3831,15 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                       {/* 6. STATUS */}
                       <td className="py-3.5 px-3 border-r border-slate-200 whitespace-nowrap text-center align-middle">
                         <div className="flex items-center justify-center">
-                          {challanStages.isFullyConverted || item.status === 'Converted' || item.status === 'Delivered' ? (
+                          {challanStages.isFullyConverted || item.status === 'Converted' ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                               Converted
+                            </span>
+                          ) : item.status === 'Delivered' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                              Delivered
                             </span>
                           ) : item.status === 'Cancelled' ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
@@ -3885,7 +3903,7 @@ export const DeliveryChallanView: React.FC<DeliveryChallanViewProps> = ({
                               {
                                 label: 'Convert to Sales Invoice',
                                 variant: 'invoice',
-                                disabled: challanStages.isFullyConverted,
+                                hidden: challanStages.isFullyConverted,
                                 onClick: () => handleConvertExistingToSale(item),
                               },
                               {

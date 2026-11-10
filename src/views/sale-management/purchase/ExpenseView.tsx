@@ -1078,7 +1078,7 @@ export const ExpenseView: React.FC = () => {
       filename: `Expenses_Ledger_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Expenses',
       title: 'YAA CREATIONS CRM - OPERATING EXPENSES DIRECTORY',
-      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Records: ${totalApiRecords ?? expenses.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Expense #', key: 'expenseNo', align: 'center', width: 16 },

@@ -463,7 +463,7 @@ export const CategoryView: React.FC = () => {
       filename: `Categories_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Categories',
       title: 'YAA CREATIONS CRM - PRODUCT CATEGORIES DIRECTORY',
-      subtitle: `Total Categories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Categories: ${dataToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Code', key: 'code', align: 'center', width: 16 },

@@ -1074,7 +1074,7 @@ export const StocksView: React.FC = () => {
       filename: `Stocks_Inventory_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Stock Levels",
       title: "YAA CREATIONS CRM - INVENTORY & WAREHOUSE STOCK DIRECTORY",
-      subtitle: `Total SKUs: ${displayedStocks.length} | Generated: ${new Date().toLocaleDateString("en-IN")}`,
+      subtitle: `Total SKUs: ${displayedStocks.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         { header: "SKU Code", key: "sku", align: "center", width: 14 },

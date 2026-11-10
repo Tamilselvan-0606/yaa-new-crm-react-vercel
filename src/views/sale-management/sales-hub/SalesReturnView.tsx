@@ -706,7 +706,7 @@ export const SalesReturnView: React.FC = () => {
       filename: `Sales_Return_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Sales Return',
       title: 'YAA CREATIONS CRM - SALES RETURN & TRANSACTION REPORT',
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${filteredTransactions.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${filteredTransactions.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'srNo', align: 'center', width: 8 },
         { header: 'Date', key: 'date', align: 'center', width: 15 },

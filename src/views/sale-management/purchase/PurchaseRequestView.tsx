@@ -372,6 +372,8 @@ export const PurchaseRequestView: React.FC = () => {
   const { runOnce: runSaveOnce } = useSubmitGuard();
   const { runOnce: runStatusOnce } = useSubmitGuard();
   const { runOnce: runDeleteOnce } = useSubmitGuard();
+  // One key per save attempt; kept after a network failure with no answer so a retry cannot create a second record
+  const idempotencyKeyRef = useRef<string | null>(null);
   const [rejectionError, setRejectionError] = useState<string | null>(null);
 
   // Cross-field / line rules that live outside React Hook Form (dates + items).
@@ -777,9 +779,11 @@ export const PurchaseRequestView: React.FC = () => {
           requestItems
         );
 
-        const res = await commercePurchaseRequestApi.createPurchaseRequest(createPayload);
+        if (!idempotencyKeyRef.current) idempotencyKeyRef.current = ensureValidUuid();
+        const res = await commercePurchaseRequestApi.createPurchaseRequest(createPayload, idempotencyKeyRef.current);
 
         if (res && res.success && res.data) {
+          idempotencyKeyRef.current = null;
           const mapped = mapApiPurchaseRequestToUi(res.data);
           toast.success(`Purchase request ${mapped.requestNo} created successfully!`);
         } else {
@@ -792,6 +796,8 @@ export const PurchaseRequestView: React.FC = () => {
       loadPurchaseRequests(true);
     } catch (err: any) {
       console.warn('Purchase request API save error:', err);
+      // A definite answer from the server ends this attempt; no answer keeps the key so a retry is safe
+      if (err?.response) idempotencyKeyRef.current = null;
       // Keep the modal open with everything the user entered; show backend field errors inline.
       const apiFields = extractApiFieldErrors(err);
       const mapped: Record<string, string> = {};
@@ -1043,7 +1049,7 @@ export const PurchaseRequestView: React.FC = () => {
       filename: `Purchase_Requests_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Purchase Requests',
       title: 'YAA CREATIONS CRM - PURCHASE REQUESTS & REQUISITIONS',
-      subtitle: `Total Requests: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Requests: ${listToExport.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Request #', key: 'requestNo', align: 'center', width: 14 },

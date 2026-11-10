@@ -915,7 +915,7 @@ export const PaymentOutView: React.FC = () => {
       filename: `Payment_Out_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Vendor Payments',
       title: 'YAA CREATIONS CRM - PAYMENT OUT & VENDOR DISBURSEMENTS',
-      subtitle: `Total Payments: ${filteredPayments.length} | Generated: ${new Date().toLocaleDateString('en-IN')}`,
+      subtitle: `Total Payments: ${filteredPayments.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'sNo', align: 'center', width: 8 },
         { header: 'Voucher #', key: 'paymentNo', align: 'center', width: 16 },

@@ -875,7 +875,7 @@ export const SupplierView: React.FC = () => {
       filename: `Suppliers_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Suppliers Master",
       title: "YAA CREATIONS CRM - SUPPLIERS & VENDORS DIRECTORY",
-      subtitle: `Total Suppliers: ${displaySuppliers.length} | Generated: ${new Date().toLocaleDateString("en-IN")}`,
+      subtitle: `Total Suppliers: ${displaySuppliers.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "sNo", align: "center", width: 8 },
         {

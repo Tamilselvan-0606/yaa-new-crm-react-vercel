@@ -2,6 +2,8 @@ import { ProductStockLabel } from "../../../components/common/ProductStockLabel"
 import { attachStockQty } from "../../../utils/stockDisplay";
 import { CommonTableHead } from '../../../components/common/CommonTableHead';
 import { CustomerSearchableSelect } from '../../../components/common/paginated-select';
+import { DocumentLineageBadges } from "../../../components/common/DocumentLineageBadges";
+import { getConversionState, resolveConvertedTarget } from "../../../utils/salesDocumentWorkflow";
 import React, {
   useState,
   useMemo,
@@ -2267,9 +2269,10 @@ export const EstimateQuotationView: React.FC = () => {
       },
     ].filter((s) => !s.isConverted);
 
-    const isFullyConverted =
-      quot.status === "Converted" &&
-      (isInvoiceConverted || isGenericConverted || availableStages.length === 0);
+    // A document converts once. When the server reports it converted, no further conversion is offered: every Convert
+    // button, menu item, dialog and guard on this page reads these flags.
+    const isFullyConverted = getConversionState(quot).isFullyConverted;
+    const remainingStages = isFullyConverted ? [] : availableStages;
 
     return {
       lineage: undefined,
@@ -2278,8 +2281,8 @@ export const EstimateQuotationView: React.FC = () => {
       isChallanConverted,
       isProformaConverted,
       isGenericConverted,
-      availableStages,
-      availableCount: availableStages.length,
+      availableStages: remainingStages,
+      availableCount: remainingStages.length,
       isFullyConverted,
     };
   };
@@ -2480,6 +2483,16 @@ export const EstimateQuotationView: React.FC = () => {
           );
           return;
         }
+        // Any other failure: nothing was converted. Say so and stop. (It used to carry on, create a separate document
+        // through the normal create API and mark the estimate Converted on screen only.)
+        toast.error(getApiErrorMessage(apiErr, `Failed to convert quotation to ${convertType}. Nothing was converted.`));
+        return;
+      }
+
+      // Converted only when the server confirmed it.
+      if (!didBackendConvertCreateDoc) {
+        toast.error("The server did not confirm the conversion, so the estimate was left as it was.");
+        return;
       }
 
       if (convertType === "Proforma") {
@@ -3051,7 +3064,7 @@ export const EstimateQuotationView: React.FC = () => {
       filename: `Estimates_Quotations_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Estimates & Quotations",
       title: "YAA CREATIONS CRM - ESTIMATE & QUOTATION REPORT",
-      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${appliedPeriod} | Total Quotations: ${displayQuotations.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         {
           header: "Estimate No.",
@@ -5388,6 +5401,13 @@ export const EstimateQuotationView: React.FC = () => {
                           <span className="inline-flex items-center px-3 py-1 rounded-lg bg-purple-50 text-[#33077C] border border-purple-300 font-mono text-sm sm:text-base font-extrabold tracking-tight shadow-2xs">
                             {item.quotationNo || "—"}
                           </span>
+                          <DocumentLineageBadges
+                            docRef={item.quotationNo}
+                            currentType="Estimate"
+                            targetDocNo={resolveConvertedTarget(item)?.no}
+                            targetDocType={resolveConvertedTarget(item)?.type}
+                            className="justify-center"
+                          />
                         </div>
                       </td>
 

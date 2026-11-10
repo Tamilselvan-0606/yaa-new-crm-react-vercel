@@ -11,6 +11,7 @@ import {
   Circle,
 } from '@react-pdf/renderer';
 import { SavedInvoice } from '../../store/useInvoiceStore';
+import { formatDate } from '../../views/sale-management/utils/dateUtils';
 
 const styles = StyleSheet.create({
   page: {
@@ -433,13 +434,13 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
                 {isProforma ? 'Proforma Invoice Date' : 'Invoice Date'}
               </Text>
               <Text style={styles.headerMetaColon}>:</Text>
-              <Text style={styles.headerMetaValue}>{activeInvoice.invoiceDate}</Text>
+              <Text style={styles.headerMetaValue}>{formatDate(activeInvoice.invoiceDate)}</Text>
             </View>
             {activeInvoice.dueDate ? (
               <View style={styles.headerMetaItem}>
                 <Text style={styles.headerMetaLabel}>Due Date</Text>
                 <Text style={styles.headerMetaColon}>:</Text>
-                <Text style={styles.headerMetaValue}>{activeInvoice.dueDate}</Text>
+                <Text style={styles.headerMetaValue}>{formatDate(activeInvoice.dueDate)}</Text>
               </View>
             ) : null}
             {activeInvoice.referenceNumbers && activeInvoice.referenceNumbers.length > 0 ? (
@@ -692,10 +693,6 @@ export const InvoicePDFDocument: React.FC<InvoicePDFDocumentProps> = ({ invoice,
 
           {/* Signature Block */}
           <View style={styles.signCol}>
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 6 }}>
-              <Text style={{ fontSize: 8.5, color: '#64748B', marginRight: 4 }}>Date of Signing:</Text>
-              <Text style={{ fontSize: 8.5, fontFamily: 'Helvetica-Bold', color: '#0F172A' }}>{activeInvoice.invoiceDate}</Text>
-            </View>
             <View style={styles.signSvgBox}>
               <Svg viewBox="0 0 200 60">
                 <Path

@@ -11,6 +11,7 @@ import {
   Circle,
 } from '@react-pdf/renderer';
 import { Quotation } from '../../views/quotes/QuotesView';
+import { formatDate } from '../../views/sale-management/utils/dateUtils';
 
 const styles = StyleSheet.create({
   page: {
@@ -372,13 +373,13 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
             <View style={styles.headerMetaItem}>
               <Text style={styles.headerMetaLabel}>{documentTitle} Date</Text>
               <Text style={styles.headerMetaColon}>:</Text>
-              <Text style={styles.headerMetaValue}>{quotation.date}</Text>
+              <Text style={styles.headerMetaValue}>{formatDate(quotation.date)}</Text>
             </View>
             {quotation.expiryDate ? (
               <View style={styles.headerMetaItem}>
                 <Text style={styles.headerMetaLabel}>Expiry Date</Text>
                 <Text style={styles.headerMetaColon}>:</Text>
-                <Text style={styles.headerMetaValue}>{quotation.expiryDate}</Text>
+                <Text style={styles.headerMetaValue}>{formatDate(quotation.expiryDate)}</Text>
               </View>
             ) : null}
             {quotation.referenceNumber ? (
@@ -555,10 +556,6 @@ export const EstimatePDFDocument: React.FC<EstimatePDFDocumentProps> = ({
         <View style={[styles.bottomGrid, { justifyContent: 'flex-end' }]}>
           {/* Signature Block */}
           <View style={styles.signCol}>
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 6 }}>
-              <Text style={{ fontSize: 8.5, color: '#64748B', marginRight: 4 }}>Date of Signing:</Text>
-              <Text style={{ fontSize: 8.5, fontFamily: 'Helvetica-Bold', color: '#0F172A' }}>{quotation.date}</Text>
-            </View>
             <View style={styles.signSvgBox}>
               <Svg viewBox="0 0 200 60">
                 <Path

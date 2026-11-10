@@ -244,7 +244,7 @@ export const SalesReportView: React.FC = () => {
       filename: `Sales_Executive_Report_${new Date().toISOString().split('T')[0]}`,
       sheetName: 'Sales Ledger',
       title: 'YAA CREATIONS CRM - DETAILED SALES TRANSACTIONS AUDIT',
-      subtitle: `Time Range: ${timeRange.toUpperCase()} | Total Sales: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Time Range: ${timeRange.toUpperCase()} | Total Sales: ${filteredSales.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: '#', key: 'srNo', align: 'center', width: 8 },
         { header: 'Date', key: 'date', align: 'center', width: 15 },

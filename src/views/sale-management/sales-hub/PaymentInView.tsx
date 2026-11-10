@@ -1063,7 +1063,7 @@ export const PaymentInView: React.FC = () => {
         <div class="footer">
           <div>
             <div>Generated electronically via CRM Sales Hub.</div>
-            <div style="margin-top:4px;">Date: ${new Date().toLocaleDateString()}</div>
+            <div style="margin-top:4px;">Date: ${new Date().toLocaleDateString('en-GB')}</div>
           </div>
           <div class="sign">
             <div>Authorized Signatory</div>
@@ -1494,7 +1494,7 @@ export const PaymentInView: React.FC = () => {
       filename: `Payment_In_Report_${new Date().toISOString().split("T")[0]}`,
       sheetName: "Payment Receipts",
       title: "YAA CREATIONS CRM - PAYMENT-IN REPORT",
-      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString()}`,
+      subtitle: `Filter: ${selectedPeriod} | Total Records: ${paymentIns.length} | Generated: ${new Date().toLocaleDateString('en-GB')}`,
       columns: [
         { header: "#", key: "srNo", align: "center", width: 8 },
         { header: "Date", key: "date", align: "center", width: 15 },

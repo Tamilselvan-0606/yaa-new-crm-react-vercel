@@ -1,6 +1,5 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { SearchableSelect, SearchableOption } from '../SearchableSelect';
-import { usePaginatedDropdown } from '../../../hooks/usePaginatedDropdown';
 import { supplierApi, ApiSupplier } from '../../../api/commerce/supplierApi';
 
 export interface SupplierSearchableSelectProps {
@@ -33,42 +32,27 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
   triggerClassName = '',
   size = 'md',
 }) => {
-  const fetchPage = useCallback(
-    async ({ page, limit, search }: { page: number; limit: number; search: string }) => {
-      const res = await supplierApi.getSuppliers({
-        page,
-        limit,
-        page_no: page,
-        page_size: limit,
-        pagination_required: true,
-        search: search || undefined,
+  // The supplier list is loaded ONCE when the page / form opens; typing in the search box filters that list on the
+  // screen and never calls the API again.
+  const [items, setItems] = useState<ApiSupplier[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    supplierApi
+      .getSuppliers({ page_size: 100, pagination_required: false })
+      .then((res) => {
+        if (!cancelled) setItems(res?.data || []);
+      })
+      .catch((err) => console.warn('Supplier dropdown load error:', err))
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
       });
-
-      const data = res?.data || [];
-      const pagination = res?.pagination;
-
-      return {
-        data,
-        hasNextPage: pagination?.hasNextPage ?? (data.length >= limit),
-        totalRecords: pagination?.totalRecords,
-      };
-    },
-    []
-  );
-
-  const {
-    items,
-    isLoading,
-    isLoadingMore,
-    hasMore,
-    handleSearch,
-    loadMore,
-    loadInitial,
-  } = usePaginatedDropdown<ApiSupplier>({
-    fetchPage,
-    limit: 10,
-    getId: (s) => s.id,
-  });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const options: SearchableOption[] = useMemo(() => {
     return items.map((s) => ({
@@ -110,12 +94,7 @@ export const SupplierSearchableSelect: React.FC<SupplierSearchableSelectProps> =
       options={options}
       selectedItem={selectedItemOption}
       staticOptions={staticOptions}
-      onOpen={loadInitial}
-      onSearch={handleSearch}
-      onLoadMore={loadMore}
-      hasMore={hasMore}
       isLoading={isLoading}
-      isLoadingMore={isLoadingMore}
       onAddNew={onAddNewSupplier}
       addNewText="Add New Supplier"
       placeholder={placeholder}

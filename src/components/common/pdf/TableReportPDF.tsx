@@ -6,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { PrintTableOptions } from '../../../utils/printUtils';
+import { PrintTableOptions, pdfToday } from '../../../utils/printUtils';
 
 const styles = StyleSheet.create({
   page: {
@@ -187,7 +187,7 @@ export const TableReportPDF: React.FC<{ options: PrintTableOptions }> = ({ optio
             <Text style={styles.reportTitle}>{title}</Text>
             {subtitle ? <Text style={styles.reportSubtitle}>{subtitle}</Text> : null}
             <Text style={styles.generatedDate}>
-              Generated on {new Date().toLocaleDateString('en-IN')} at {new Date().toLocaleTimeString('en-IN')}
+              Generated on {pdfToday()} at {new Date().toLocaleTimeString('en-IN')}
             </Text>
           </View>
         </View>

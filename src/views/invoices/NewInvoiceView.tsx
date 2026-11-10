@@ -52,6 +52,15 @@ import {
   getStoredOrganizationId,
   quoteApi,
 } from '../../api';
+import {
+  useGetDefaultSuperAdminDetailQuery,
+  useGetSuperAdminDetailByIdQuery,
+  useUpdateSuperAdminDetailMutation,
+  getDocSuperAdminDetailId,
+  getApiErrorMessage,
+  type SuperAdminDetail,
+  type UpdateSuperAdminDetailRequest,
+} from '../../api/platform/superAdminDetailsApi';
 
 interface BankAccount {
   id: string;
@@ -113,6 +122,73 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     phone: '+91 98765 43210',
   });
   const [isEditingCompany, setIsEditingCompany] = useState(false);
+
+  // Platform administrator: seller ("Sale Configuration") details come from the company-details API
+  // (RTK Query, tag SuperAdminDetail). This screen only mounts for a new / edited invoice, so it is fetched then.
+  const isPlatformAdmin = isSuperAdmin && !isOrgSuperAdmin;
+  const [isSavingCompany, setIsSavingCompany] = useState(false);
+  const companyLogoFileRef = useRef<HTMLInputElement>(null);
+  const [updateSuperAdminDetail] = useUpdateSuperAdminDetailMutation();
+  const defaultSellerQuery = useGetDefaultSuperAdminDetailQuery(undefined, { skip: !isPlatformAdmin });
+  const defaultSeller: SuperAdminDetail | undefined = defaultSellerQuery.data?.data;
+  const superAdminDetailId = defaultSeller?.id || null;
+
+  const applySuperAdminDetail = (d: SuperAdminDetail) => {
+    setCompanyDetails({
+      name: d.companyName || '',
+      taxId: d.gstNumber || '',
+      pan: d.panNumber || '',
+      address: d.address || '',
+      email: d.email || '',
+      phone: d.phoneNumber || '',
+    });
+    if (d.logoUrl) setCompanyLogo(d.logoUrl);
+  };
+
+  // Fill the card when the cached default company changes (not over an invoice being edited / duplicated)
+  useEffect(() => {
+    if (defaultSeller && !invoiceToEdit && !invoiceToDuplicate) applySuperAdminDetail(defaultSeller);
+  }, [defaultSeller]);
+
+  const handleCompanyLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('error', 'Logo Too Large', 'Logo must be 2 MB or smaller.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      if (ev.target?.result) setCompanyLogo(ev.target.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveSuperAdminCompany = async (): Promise<boolean> => {
+    if (!isPlatformAdmin || !superAdminDetailId) return true;
+    setIsSavingCompany(true);
+    try {
+      const payload: UpdateSuperAdminDetailRequest = {
+        companyName: companyDetails.name.trim(),
+        gstNumber: (companyDetails.taxId || '').trim(),
+        panNumber: ((companyDetails as any).pan || '').trim(),
+        phoneNumber: (companyDetails.phone || '').trim(),
+        email: (companyDetails.email || '').trim(),
+        address: (companyDetails.address || '').trim(),
+      };
+      if (companyLogo.startsWith('data:')) payload.logoUrl = companyLogo;
+      await updateSuperAdminDetail({ id: superAdminDetailId, payload }).unwrap();
+      showToast('success', 'Company Details Updated', 'Sale configuration saved successfully.');
+      return true;
+    } catch (e) {
+      showToast('error', 'Update Failed', getApiErrorMessage(e, 'Could not update company details.'));
+      return false;
+    } finally {
+      setIsSavingCompany(false);
+    }
+  };
+
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedProductSuite, setSelectedProductSuite] = useState<string>('Yaa connect');
   const [isCompanyProductDropdownOpen, setIsCompanyProductDropdownOpen] = useState(false);
@@ -581,8 +657,21 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
     );
   });
 
-  // Section 2: Line Items / Products Breakdown (starts empty, user adds items on demand)
-  const [items, setItems] = useState<SaleItem[]>([]);
+  // Section 2: Line Items / Products Breakdown (defaults to one empty line item)
+  const [items, setItems] = useState<SaleItem[]>([
+    {
+      id: `item-${Date.now()}`,
+      name: '',
+      description: '',
+      hsnCode: '998314',
+      qty: 1,
+      taxPercent: 18,
+      unitPrice: 0,
+      discountPercent: 0,
+      discount: 0,
+      discountType: 'amount',
+    },
+  ]);
 
   // Discount type state: global for all rows
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
@@ -920,10 +1009,17 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
             </div>
             <button
               type="button"
-              onClick={() => setIsEditingCompany(!isEditingCompany)}
+              disabled={isSavingCompany}
+              onClick={async () => {
+                if (isEditingCompany && isPlatformAdmin) {
+                  if (await saveSuperAdminCompany()) setIsEditingCompany(false);
+                  return;
+                }
+                setIsEditingCompany(!isEditingCompany);
+              }}
               className="h-8 px-3.5 bg-white hover:bg-slate-100 text-slate-800 border border-transparent rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all duration-200 cursor-pointer select-none active:scale-[0.98]"
             >
-              {isEditingCompany ? 'Done' : 'Edit'}
+              {isSavingCompany ? 'Saving...' : isEditingCompany ? 'Done' : 'Edit'}
             </button>
           </div>
 
@@ -977,11 +1073,30 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company Logo</label>
                     <div className="mt-1.5 flex items-center gap-3">
                       <img
-                        src="/yaa-creations-logo.png"
-                        alt="Yaa Creations Logo"
+                        src={companyLogo}
+                        alt="Company Logo"
                         className="h-10 object-contain border border-slate-200 rounded-lg p-1 bg-white"
                       />
-                      <span className="text-xs text-slate-500 font-medium">Yaa Creations Logo</span>
+                      {isPlatformAdmin ? (
+                        <>
+                          <input
+                            ref={companyLogoFileRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={handleCompanyLogoFile}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => companyLogoFileRef.current?.click()}
+                            className="px-3 py-1.5 text-xs font-bold text-[#33077C] bg-purple-50 hover:bg-purple-100 rounded-lg cursor-pointer"
+                          >
+                            Change Logo
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-xs text-slate-500 font-medium">Yaa Creations Logo</span>
+                      )}
                     </div>
                   </div>
                   <div>
@@ -1356,30 +1471,14 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
       {/* 2ND SECTION: SALE PRODUCTS / INVOICE ITEMS BREAKDOWN */}
       {/* ========================================================================= */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
-        <div className="px-8 py-5 border-b border-slate-100 flex items-center justify-between bg-white">
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center border border-[#33077C]/20 shadow-2xs">
-              <FileSpreadsheet className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                Products, Services & Line Items
-              </h2>
-              <p className="text-xs text-slate-400">Configure deliverables, tax rates, unit pricing, and project scope</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleAddItem}
-            className="inline-flex items-center justify-center font-bold rounded-xl transition-all duration-200 cursor-pointer select-none bg-[#33077C] hover:bg-[#432eb5] text-white shadow-md hover:shadow-lg active:scale-[0.98] h-11 px-5 text-sm gap-2"
-          >
-            <Plus className="w-4 h-4" strokeWidth={2.5} />
-            <span>Add Line Item</span>
-          </button>
+        <div className="px-6 lg:px-8 pt-6">
+          <label className="text-xs sm:text-[13px] font-bold text-slate-700 block">
+            Add Items &amp; Pricing Details
+          </label>
         </div>
 
         {/* Line Items Table with Roomy Rows & Requested Column Headers */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mt-2">
+        <div style={{ borderRadius: '4px' }} className="bg-white !rounded-[4px] border border-slate-200 shadow-sm mt-3 mx-6 lg:mx-8">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm table-fixed min-w-[1040px] border-collapse border border-slate-200">
               <colgroup>
@@ -1395,7 +1494,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
               </colgroup>
               <thead>
                 <tr className="bg-[#33077C] border-b border-[#33077C]/30 text-[11px] font-bold uppercase tracking-wider text-white">
-                  <th rowSpan={2} className="px-5 py-3 text-left border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Item / Service Name</th>
+                  <th rowSpan={2} className="px-5 py-3 text-left border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Projects</th>
                   <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">HSN Code</th>
                   <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">Qty</th>
                   <th rowSpan={2} className="px-2 py-3 text-center border border-[#33077C]/30 bg-[#33077C] text-white align-middle">GST (%)</th>
@@ -1415,7 +1514,7 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 {items.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="py-8 text-center text-sm text-slate-400 font-medium bg-slate-50/20">
-                      No line items added
+                      No items added yet. Click "+ Add Item" below to add line items.
                     </td>
                   </tr>
                 ) : (
@@ -1440,45 +1539,13 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                               className="w-full h-10 px-3.5 bg-slate-50/70 hover:bg-white focus:bg-white border border-slate-200 hover:border-slate-300 focus:border-[#4309A2] focus:ring-3 focus:ring-[#4309A2]/10 rounded-xl text-xs font-semibold text-slate-800 placeholder:font-normal placeholder:text-slate-400 outline-none transition-all shadow-2xs"
                             />
 
-                            {/* Description Preview & Edit trigger */}
-                            <div className="min-h-[22px] flex items-center">
-                              {item.description ? (
-                                <div
-                                  onClick={() => {
-                                    setDescriptionModalItem({
-                                      id: item.id,
-                                      name: item.name,
-                                      description: item.description,
-                                    });
-                                    setTempDescription(item.description);
-                                  }}
-                                  className="group inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50/80 hover:bg-amber-100/90 border border-amber-200/80 rounded-lg text-xs text-amber-900 font-medium cursor-pointer transition-all max-w-[260px] truncate shadow-2xs"
-                                  title="Click to edit description"
-                                >
-                                  <FileText className="w-3.5 h-3.5 text-[#4309A2] shrink-0" />
-                                  <span className="truncate max-w-[210px] italic text-[11px] text-amber-900">
-                                    {item.description}
-                                  </span>
-                                  <Pencil className="w-3 h-3 text-amber-600 opacity-60 group-hover:opacity-100 shrink-0 ml-0.5" />
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDescriptionModalItem({
-                                      id: item.id,
-                                      name: item.name,
-                                      description: '',
-                                    });
-                                    setTempDescription('');
-                                  }}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-slate-400 hover:text-[#4309A2] hover:bg-orange-50/60 rounded-lg transition-all cursor-pointer"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  <span>Add Description</span>
-                                </button>
-                              )}
-                            </div>
+                            <input
+                              type="text"
+                              placeholder="+ Add Description (optional)..."
+                              value={item.description || ''}
+                              onChange={(e) => updateItem(item.id, 'description', e.target.value)}
+                              className="w-full px-2 py-0.5 text-[11px] text-slate-500 placeholder:text-slate-400 bg-transparent border-0 focus:ring-0 outline-none"
+                            />
                           </div>
                         </td>
 
@@ -1586,200 +1653,27 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
           </div>
         </div>
 
+        <div className="px-6 lg:px-8 pt-4 pb-6">
+          <button
+            type="button"
+            onClick={handleAddItem}
+            style={{ borderRadius: '4px' }}
+            className="h-11 px-6 bg-[#33077C] hover:bg-[#4309A2] text-white !rounded-[4px] text-xs sm:text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg active:scale-[0.98] cursor-pointer"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Add Item</span>
+          </button>
+        </div>
+
         {/* ========================================================================= */}
-        {/* BILLING FOOTER: BANK PAYMENT DETAILS (LEFT) & INVOICE SUMMARY (RIGHT) */}
+        {/* BILLING FOOTER: INVOICE SUMMARY */}
         {/* ========================================================================= */}
         <div className="p-6 lg:p-8 bg-[#F8FAFC] border-t border-slate-100">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* ===================================================================== */}
-            {/* LEFT CARD: Bank Payment Details (7 cols) */}
-            {/* ===================================================================== */}
-            <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
-              {/* Header */}
-              <div className="px-7 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40">
-                <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-[#33077C]/10 text-[#33077C] flex items-center justify-center border border-[#33077C]/20 shadow-2xs">
-                    <Landmark className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900 tracking-tight">
-                      Bank Payment Details
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-0.5">Select receiving account for invoice settlements</p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsAddBankModalOpen(true)}
-                  className="inline-flex items-center justify-center gap-2 h-11 px-5 bg-[#33077C] hover:bg-[#432eb5] active:scale-[0.98] border border-transparent rounded-xl text-sm font-bold text-white shadow-md hover:shadow-lg transition-all cursor-pointer shrink-0"
-                >
-                  <Plus className="w-4 h-4" strokeWidth={2.5} />
-                  <span>Add Bank</span>
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="p-7 space-y-6 flex-1">
-                {bankAccounts.length === 0 ? (
-                  <div className="py-6 text-center text-sm text-slate-400 font-medium">
-                    No bank accounts found
-                  </div>
-                ) : (
-                  <>
-                    {/* Select Receiving Bank (Custom Roomy Dropdown) */}
-                    <div className="relative" ref={bankDropdownRef}>
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
-                        Select Receiving Bank Account
-                      </label>
-
-                      {/* Trigger Button */}
-                      <button
-                        type="button"
-                        onClick={() => setIsBankDropdownOpen(!isBankDropdownOpen)}
-                        className="w-full h-12 px-4 bg-white hover:bg-slate-50/70 border border-slate-200 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer shadow-2xs focus:border-[#4309A2] focus:ring-4 focus:ring-[#4309A2]/10"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-7 h-7 rounded-lg bg-orange-50 text-[#4309A2] flex items-center justify-center shrink-0 border border-orange-100">
-                            <Landmark className="w-3.5 h-3.5" />
-                          </div>
-                          <div className="truncate">
-                            <span className="text-sm font-bold text-slate-900">
-                              {selectedBank?.bankName || 'Select Bank Account'}
-                            </span>
-                            {selectedBank && (
-                              <span className="text-xs text-slate-500 font-medium ml-2">
-                                &bull;&bull;&bull;&bull;{selectedBank.accountNumber.slice(-4)} {selectedBank.branchName ? `(${selectedBank.branchName})` : ''}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <ChevronDown
-                          className={`w-4 h-4 text-slate-400 transition-transform duration-200 shrink-0 ml-2 ${isBankDropdownOpen ? 'rotate-180 text-[#4309A2]' : ''
-                            }`}
-                        />
-                      </button>
-
-                      {/* Custom Dropdown Popup Menu */}
-                      {isBankDropdownOpen && (
-                        <div className="absolute left-0 top-full mt-2 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 w-full space-y-1 animate-in fade-in zoom-in-95 duration-100">
-                          <div className="px-3 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
-                            <span>Configured Accounts</span>
-                            <span>{bankAccounts.length} Available</span>
-                          </div>
-
-                          <div className="max-h-64 overflow-y-auto space-y-1 pt-1">
-                            {bankAccounts.map((b) => {
-                              const isSelected = b.id === selectedBankId;
-                              return (
-                                <button
-                                  key={b.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedBankId(b.id);
-                                    setIsBankDropdownOpen(false);
-                                    showToast('success', 'Bank Selected', `Receiving bank set to ${b.bankName}.`);
-                                  }}
-                                  className={`w-full text-left p-3 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-3 ${isSelected
-                                    ? 'bg-[#E8F8F0] border border-emerald-200/80 text-[#00A859]'
-                                    : 'hover:bg-slate-50 border border-transparent text-slate-800'
-                                    }`}
-                                >
-                                  <div className="flex items-center gap-3.5 min-w-0">
-                                    <div
-                                      className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 border ${isSelected
-                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                        : 'bg-orange-50 text-[#4309A2] border-orange-100'
-                                        }`}
-                                    >
-                                      <Landmark className="w-4 h-4" />
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-bold truncate">
-                                        {b.bankName}
-                                      </div>
-                                      <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
-                                        A/C: <span className="font-semibold text-slate-700">&bull;&bull;&bull;&bull;{b.accountNumber.slice(-4)}</span> {b.branchName ? `• ${b.branchName}` : ''}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {isSelected && (
-                                    <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
-                                      <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                    </div>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-
-                          {/* Quick Add Bank Footer Button */}
-                          <div className="pt-1.5 border-t border-slate-100">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsBankDropdownOpen(false);
-                                setIsAddBankModalOpen(true);
-                              }}
-                              className="w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold text-[#4309A2] hover:bg-orange-50/70 border border-dashed border-orange-200 transition-all cursor-pointer flex items-center gap-2"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>Add New Bank Account</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Active Bank Details */}
-                    {selectedBank && (
-                      <div className="pt-2">
-                        <div className="space-y-3.5 text-[13px]">
-                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                            <span className="font-bold text-slate-800">Bank Name</span>
-                            <span className="text-slate-700">: {selectedBank.bankName}</span>
-                          </div>
-                          <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                            <span className="font-bold text-slate-800">Account Number</span>
-                            <span className="text-slate-700">: {selectedBank.accountNumber}</span>
-                          </div>
-                          {selectedBank.ifscCode && (
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">IFSC Code</span>
-                              <span className="text-slate-700">: {selectedBank.ifscCode}</span>
-                            </div>
-                          )}
-                          {selectedBank.branchName && (
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Branch Name</span>
-                              <span className="text-slate-700">: {selectedBank.branchName}</span>
-                            </div>
-                          )}
-                          {selectedBank.accountName && (
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">Beneficiary Name</span>
-                              <span className="text-slate-700">: {selectedBank.accountName}</span>
-                            </div>
-                          )}
-                          {selectedBank.upiId && (
-                            <div className="grid grid-cols-[140px_1fr] gap-2 items-center">
-                              <span className="font-bold text-slate-800">UPI ID</span>
-                              <span className="text-slate-700">: {selectedBank.upiId}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* ===================================================================== */}
             {/* RIGHT CARD: Invoice Summary (5 cols) */}
             {/* ===================================================================== */}
-            <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
+            <div className="lg:col-span-5 lg:col-start-8 bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col">
               {/* Header */}
               <div className="px-7 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40">
                 <div className="flex items-center gap-3.5">
@@ -2244,140 +2138,6 @@ export const NewInvoiceView: React.FC<NewInvoiceViewProps> = ({ isProforma = fal
                 Close
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL: ADD NEW BANK ACCOUNT */}
-      {/* ========================================================================= */}
-      {isAddBankModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-6xl w-full max-h-[92dvh] flex flex-col overflow-hidden">
-            {/* Modal Header */}
-            <div
-              className="px-4 sm:px-6 py-3.5 sm:py-4.5 flex items-center justify-between text-white shrink-0 z-10 shadow-md"
-              style={{ background: '#33077C' }}
-            >
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsAddBankModalOpen(false)}
-                  className="p-1.5 -ml-1 rounded-xl transition-all cursor-pointer flex items-center justify-center text-white hover:bg-white/20 active:scale-95"
-                  title="Go back"
-                >
-                  <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
-                </button>
-                <div>
-                  <h3 className="text-base font-bold text-white">Add New Bank Account</h3>
-                  <p className="text-xs text-white/90 font-medium">Add payment settlement bank details for invoices</p>
-                </div>
-              </div>
-            </div>
-
-            <form noValidate onSubmit={handleSaveNewBank} className="p-4 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto flex-1">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    Bank Name <span className="text-rose-500 font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Axis Bank Ltd"
-                    value={newBank.bankName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, bankName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    Account Holder Name <span className="text-rose-500 font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Yaa Creations"
-                    value={newBank.accountName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, accountName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    Account Number <span className="text-rose-500 font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="918020012345678"
-                    value={newBank.accountNumber || ''}
-                    onChange={(e) => setNewBank({ ...newBank, accountNumber: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    IFSC / SWIFT <span className="text-rose-500 font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="UTIB0000123"
-                    value={newBank.ifscCode || ''}
-                    onChange={(e) => setNewBank({ ...newBank, ifscCode: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs uppercase"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    Branch Name
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Indiranagar, Bangalore"
-                    value={newBank.branchName || ''}
-                    onChange={(e) => setNewBank({ ...newBank, branchName: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-600 mb-1.5">
-                    UPI ID (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. company@axis"
-                    value={newBank.upiId || ''}
-                    onChange={(e) => setNewBank({ ...newBank, upiId: e.target.value })}
-                    className="w-full h-11 px-3.5 bg-white border border-[#E2E8F0] rounded-xl text-sm font-medium text-slate-800 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all shadow-2xs"
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 sm:pt-6 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsAddBankModalOpen(false)}
-                  className="w-full sm:w-auto h-10 px-4.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-sm font-bold shadow-2xs transition-all duration-200 cursor-pointer select-none active:scale-[0.98] flex items-center justify-center gap-2"
-                >
-                  <X className="w-4 h-4 text-slate-500 stroke-[2.2]" />
-                  <span>Cancel</span>
-                </button>
-                <button
-                  type="submit"
-                  className="w-full sm:w-auto h-10 px-5.5 bg-[#33077C] hover:bg-[#4309A2] text-white text-sm font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98]"
-                >
-                  <Check className="w-4 h-4 text-white stroke-[2.5]" />
-                  <span>Save Bank Account</span>
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

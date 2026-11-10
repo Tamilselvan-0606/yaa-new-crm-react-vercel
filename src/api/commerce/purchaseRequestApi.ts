@@ -408,11 +408,13 @@ export const commercePurchaseRequestApi = {
    * POST /commerce/purchase-requests
    */
   createPurchaseRequest: async (
-    payload: CreatePurchaseRequestPayload
+    payload: CreatePurchaseRequestPayload,
+    idempotencyKey?: string
   ): Promise<PurchaseRequestSingleResponse> => {
     const response = await baseClient.post<PurchaseRequestSingleResponse>(
       '/commerce/purchase-requests',
-      payload
+      payload,
+      idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined
     );
     return response.data;
   },

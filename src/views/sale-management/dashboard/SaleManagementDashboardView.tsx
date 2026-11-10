@@ -338,6 +338,16 @@ export const SaleManagementDashboardView: React.FC = () => {
     };
   }, [modulesData]);
 
+  // A loss or negative margin is shown as 0, never as a negative figure
+  const displayGrossMarginPercent = Math.max(
+    0,
+    Number(modulesData?.saleReport?.grossMarginPercent ?? reportAnalytics.grossProfitMargin) || 0,
+  );
+  const displayGrossProfit = Math.max(
+    0,
+    Number(modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit) || 0,
+  );
+
   const paymentStatusDistribution = [
     { name: 'Fully Paid', value: paymentStatusCounts.paid, color: '#10B981' },
     { name: 'Partial', value: paymentStatusCounts.partial, color: '#F59E0B' },
@@ -667,17 +677,13 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-amber-600 tracking-tight">
-                  {modulesData?.saleReport?.grossMarginPercent !== undefined
-                    ? modulesData.saleReport.grossMarginPercent
-                    : reportAnalytics.grossProfitMargin}
+                  {displayGrossMarginPercent}
                   %
                 </h3>
                 <div className="flex items-center justify-between mt-1 text-xs">
                   <span className="text-slate-500 font-medium">
                     Profit: ₹
-                    {(
-                      modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit
-                    ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    {displayGrossProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                   <span className="text-purple-700 font-bold flex items-center gap-0.5">
                     Dues <ArrowRight className="w-3 h-3" />
@@ -1062,9 +1068,7 @@ export const SaleManagementDashboardView: React.FC = () => {
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-amber-600 tracking-tight">
-                  {modulesData?.saleReport?.grossMarginPercent !== undefined
-                    ? modulesData.saleReport.grossMarginPercent
-                    : reportAnalytics.grossProfitMargin}
+                  {displayGrossMarginPercent}
                   %
                 </h3>
                 <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
@@ -1093,9 +1097,7 @@ export const SaleManagementDashboardView: React.FC = () => {
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-emerald-700 tracking-tight">
                   ₹
-                  {(
-                    modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit
-                  ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  {displayGrossProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                 </h3>
                 <div className="flex items-center justify-between mt-1 text-xs text-slate-500">
                   <span>Total profit earned</span>
@@ -1700,9 +1702,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-500">Gross Margin:</span>
                   <span className="font-bold text-emerald-600">
-                    {modulesData?.saleReport?.grossMarginPercent !== undefined
-                      ? modulesData.saleReport.grossMarginPercent
-                      : reportAnalytics.grossProfitMargin}
+                    {displayGrossMarginPercent}
                     % Profit
                   </span>
                 </div>
@@ -1710,9 +1710,7 @@ export const SaleManagementDashboardView: React.FC = () => {
                   <span className="text-slate-500">Gross Profit (₹):</span>
                   <span className="font-bold text-slate-900">
                     ₹
-                    {(
-                      modulesData?.saleReport?.grossProfit ?? reportAnalytics.grossProfit
-                    ).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    {displayGrossProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">

@@ -6,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { DocumentPrintOptions, numberToWordsIndian } from '../../../utils/printUtils';
+import { DocumentPrintOptions, numberToWordsIndian, pdfToday } from '../../../utils/printUtils';
 
 const styles = StyleSheet.create({
   page: {
@@ -648,7 +648,7 @@ export const BusinessPDFDocument: React.FC<{ options: DocumentPrintOptions }> = 
         {/* 6. Footer Notice */}
         <View style={styles.footer} fixed>
           <Text>
-            Computer-generated document via YAA CRM. Issued on {new Date().toLocaleDateString('en-IN')}.
+            Computer-generated document via YAA CRM. Issued on {pdfToday()}.
           </Text>
           <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>

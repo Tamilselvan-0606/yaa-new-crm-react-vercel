@@ -2136,7 +2136,7 @@ export const SaleManagementReportsView: React.FC = () => {
       await downloadTableReport(
         {
           title: currentReportData.title || currentReportMeta.label,
-          subtitle: `Date Range: ${formattedDateRange} | Generated on ${new Date().toLocaleDateString('en-IN')}`,
+          subtitle: `Date Range: ${formattedDateRange} | Generated on ${new Date().toLocaleDateString('en-GB')}`,
           columns,
           data,
           metrics,
